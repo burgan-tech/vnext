@@ -92,7 +92,8 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 - Pipeline steps do NOT call EF `Include` directly — includes are applied at load time:
   `GetActiveAsync` → `GetResultAsync` → `FindByIdentifierAsync` → `EfCoreInstanceRepository.WithDetailsAsync()`
   (`DataList` or latest-only under `WorkflowExecution:LatestOnlyInstanceLoading`, plus
-  `Include(ChildCorrelations.Where(!IsCompleted))`, split queries).
+  `Include(ChildCorrelations.Where(!IsCompleted))`, split queries; under latest-only the tracked
+  finder joins the ≤1 latest row and loads open correlations explicitly — two commands, no jsonb repeat).
 - `GetResultAsync(includeDetails: false)` is lean; history paths use `AsNoTracking` + filtered includes.
 - Post-commit settlement (`FindForPostCommitSettlementAsync(id, includeLatestData)`) always loads open
   correlations; add a new `LatestData` reader to `PostCommitParentMutationService.NeedsLatestDataForSettle`,
@@ -202,7 +203,7 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   (`CallerScopeHash`) only. Never read `currentUser.Roles` directly — use `currentUser.ResolveCallerRoles(headers)`.
 - Batch: one evaluator per instance/schema; pass every surface the same `AuthorizationRequestContext`.
 - `queryRoles` is ANSWERED (by `authorize?queryRoles=true`), not enforced on read paths — do not add
-  the gate back. `authorize` decides queryRoles at the deepest active subflow leaf only (no chain AND; a parent restricts via `subFlow.overrides.states.<state>.queryRoles`); `?ack=true` is the long-poll ack pre-flight.
+  the gate back. `authorize` decides queryRoles at the deepest active subflow leaf only (no chain AND; a parent restricts via `subFlow.overrides.states.<state>.queryRoles`); a child not created yet (`reason: instance-not-found`) makes the parent the leaf; `?ack=true` is the long-poll ack pre-flight.
 - The `queryRoles` gate reads the instance's OWN `CurrentState`, never `EffectiveState`.
 - `transition.roles` is not enforced at execution, by design — do not "fix" it. `cancel`/`exit` are
   parent-retained. Under `morph-idm` a non-blank `role` header replaces the service's answer.
@@ -291,7 +292,8 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
 - `S`: completion → output mapping → `ResumePipelineAsync` from `ClearBusyOnResumeStep` (79).
   `P`: correlation complete, no parent resume. On resume failure the correlation is reverted in a new UoW.
 - Runtime child calls force `sync=true` and set `SuppressResponseEnrichment` (identity-only answer) —
-  never read attributes off a sub-start or forward response.
+  never read attributes off a sub-start or forward response. A sync one still carries
+  `currentState`/`effectiveState`, copied from the pipeline's instance — never a reload (`docs/runtime/execution-type.md`).
 - Completion window: child terminal while parent correlation open ⇒ state function shows parent transitions.
 - Terminal events carry the settling request's headers (deny floor, `ApplyToResume` default on):
   `docs/runtime/event-publish-modes.md#carried-headers-on-sub-item-terminal-events`.
@@ -339,6 +341,9 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
   (`InstanceDataBuffer`, outside the EF navigation) and flushed at Finish, SubFlow handoff or fault; a
   non-Finish rest faults (`Instance:100046`); a `none` parent needs `none` S children (`Instance:100044`);
   `/retry` → 409. Full guide: `docs/runtime/history-mode.md`.
+- `Instances.ModifiedAt`: never rely on Aether's audit interceptor (null-only), nor on `OwnsStatus`. Stamp on a write the
+  hop makes (`Instance.ChangeState` when it moves, else `DeferModifiedAtStamp` → `TransitionSettlement`; `Complete/Cancel/Fault`;
+  updateData via `AppendAsync(touchInstance)`); a new `ExecuteUpdate` on `Instances` must set it. Full guide: `docs/runtime/instance-filtering-and-queries.md`.
 
 ## Related Instance Access (scripts)
 

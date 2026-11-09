@@ -55,8 +55,9 @@ public sealed class SetBusyStep(
             return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
-        // Admission (Reserve/TakeOver) flipped the ROW under its status lock, in its own
-        // RequiresNew DbContext — so this pipeline's aggregate can still read Active. Settlement's
+        // Admission (TakeOver, or an accept the job re-enters pre-reserved) flipped the ROW in its
+        // own RequiresNew DbContext — so this pipeline's aggregate can still read Active. (The sync
+        // reserve aligns the aggregate itself and arrives here Busy: TransitionPipeline.RunAsync.) Settlement's
         // owner guard reads context.Instance.IsBusy, so the in-memory aggregate MUST be aligned
         // here or the chain never settles back to Active (stranded Busy). No DB call: the row is
         // already Busy, and the status value simply rides along the next tracked flush.

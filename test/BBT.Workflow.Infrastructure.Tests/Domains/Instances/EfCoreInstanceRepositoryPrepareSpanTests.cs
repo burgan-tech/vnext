@@ -42,8 +42,15 @@ namespace BBT.Workflow.Domains.Instances;
 /// <c>InstanceDataVersioningTests</c> does for <c>InstanceDataWriteService</c>, sidesteps it.
 /// </para>
 /// </summary>
+[Collection(SpanCollection)]
 public sealed class EfCoreInstanceRepositoryPrepareSpanTests : IAsyncLifetime
 {
+    /// <summary>
+    /// The listener below counts spans process-wide by name, so a test class that drives the
+    /// repository's detailed finders in parallel would add to the count. Such classes join this collection.
+    /// </summary>
+    public const string SpanCollection = "instance-repository-spans";
+
     private PostgreSqlContainer _postgresContainer = null!;
     private string _connectionString = null!;
 

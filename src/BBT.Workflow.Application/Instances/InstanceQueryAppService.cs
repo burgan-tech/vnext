@@ -3922,6 +3922,8 @@ public sealed class InstanceQueryAppService(
                     Workflow = flowKey,
                     Title = leaf.Title ?? string.Empty,
                     Description = leaf.Description ?? string.Empty,
+                    DueBy = leaf.DueBy,
+                    Priority = leaf.Priority,
                     CreatedAt = candidate.CreatedAt,
                     VNext = true
                 });

@@ -341,6 +341,14 @@ auto-transition conditions and error-boundary rules:
 | `FanOut:ItemNotStarted` | The item was cancelled while still queueing for a concurrency slot, with no deadline or early stop to explain it. |
 | `FanOut:ItemFailed` | Fallback: the item's inner task failed (or threw) with no more specific fan-out-level code — the inner task's own error code, when it has one, passes through unchanged instead. |
 
+An item whose own `errorBoundary` lets the failure through with a non-blocking action (`Ignore` or
+`Log`) still reports what the inner task answered: its normalized code (for example
+`Task:DirectTrigger:<taskKey>:409`), its message and its response `data` — exactly as a failure
+without a boundary or after an `Abort` does. Up to v0.0.103 such an item arrived as
+`FanOut:ItemFailed` with a generic message, so an `OutputHandler` could not tell an expected refusal
+(`409`, `404`) from any other ignored failure (#1176). An `OutputHandler` that matched on
+`FanOut:ItemFailed` to detect ignored refusals should match the inner task's status code instead.
+
 **The recommended partial-failure pattern**: use `join.policy: "allSettled"` so the FanOut task
 itself always succeeds, write (or let the default output write)
 `{resultKey}Summary.{total,succeeded,failed,timedOut}` into instance data, then let the

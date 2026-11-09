@@ -243,6 +243,24 @@ public sealed class PipelineDirectives
     public void MarkContinuationEnqueued() => ContinuationEnqueued = true;
 
     /// <summary>
+    /// True when this hop changed no state and left its <c>Instances.ModifiedAt</c> stamp to the write
+    /// that closes it. Set by <c>ChangeStateStep</c>; cleared by the long-poll arm, which stamps the row
+    /// itself; read by <c>TransitionSettlement</c> and the post-commit handoff in <c>TransitionPipeline</c>,
+    /// which stamp the instance unless the Busy release flipped (it did not happen — the hop ends parked
+    /// in Busy or does not hold the status — or its CAS was lost).
+    /// </summary>
+    public bool ModifiedAtStampPending { get; private set; }
+
+    /// <summary>Marks that this hop's <c>ModifiedAt</c> stamp is left to the write that closes it.</summary>
+    public void DeferModifiedAtStamp() => ModifiedAtStampPending = true;
+
+    /// <summary>
+    /// Marks that a write closing this hop has stamped <c>ModifiedAt</c> itself (the long-poll arm), so
+    /// the settlement must not stamp it again.
+    /// </summary>
+    public void CloseModifiedAtStamp() => ModifiedAtStampPending = false;
+
+    /// <summary>
     /// Enqueues a post-commit job to be executed after the distributed lock is released.
     /// Post-commit jobs are returned intact across the pipeline barrier for runner-owned execution
     /// after the distributed lock is released. They are used for side effects like remote calls

@@ -300,7 +300,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 ActionExecutionResult.Abort(executionError.ToError(), null, executionError))),
             cancellationToken);
 
-        return ConvertActionResult(actionResult, onExecuteTask, executionError, totalDurationMs);
+        return ConvertActionResult(actionResult, onExecuteTask, executionError, failedResult.Value?.Response, totalDurationMs);
     }
 
     /// <summary>
@@ -310,6 +310,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         ActionExecutionResult actionResult,
         OnExecuteTask onExecuteTask,
         ExecutionError executionError,
+        StandardTaskResponse? capturedResponse,
         long executionDurationMs)
     {
         if (actionResult.ShouldContinue)
@@ -322,9 +323,17 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 executionError.StatusCode,
                 executionDurationMs);
 
+            // TaskError stays null — a non-null TaskError without a BoundaryAction is what the
+            // pipeline faults on. The error travels in HandledError instead, and the captured
+            // response (non-null only under CaptureResponse, i.e. FanOut items) is kept so a
+            // handled business failure still hands its payload to the caller.
             return Result<TasksExecutionResult>.Ok(TasksExecutionResult.SuccessWithFailedTasks(
                 [summary],
-                executionDurationMs));
+                executionDurationMs) with
+            {
+                HandledError = executionError,
+                Response = capturedResponse
+            });
         }
 
         // Create boundary result for TasksExecutionResult
@@ -508,12 +517,20 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         // delta.JsonElement immediately, so constructing JsonData from a string would force a parse
         // of the payload we just serialized.
         var delta = JsonData.FromMaterializedObject(response.Data, JsonSerializerConstants.JsonOptions);
+
+        // A task of an updateData transition writes data that IS the instance's modification —
+        // updateData has no outcome write of its own — so its row stamps Instances.ModifiedAt, like
+        // updateData's request body does. Any other transition's task output rides on that
+        // transition's own outcome stamp.
+        var touchInstance = context.Workflow?.IsUpdateDataKey(context.Transition?.Key) == true;
         var persisted = await _instanceDataWriteService.AppendAsync(
-            context.Instance, delta, VersionStrategy.IncreasePatch, cancellationToken, context.Workflow);
+            context.Instance, delta, VersionStrategy.IncreasePatch, cancellationToken, context.Workflow, touchInstance);
 
         // The service refreshed the aggregate it was given (the snapshot). Nothing else to do:
         // the live aggregate in the pipeline scope is fixed up by EF when it shares the
-        // DbContext, and synced from the snapshot at the step boundary otherwise.
+        // DbContext, and synced from the snapshot at the step boundary otherwise — its data, not its
+        // ModifiedAt. That is deliberate: the stamp is already in the database, and copying it onto the
+        // tracked live aggregate would mark the column dirty and send a second UPDATE for it.
         _ = persisted;
     }
 

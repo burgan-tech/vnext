@@ -362,6 +362,72 @@ public sealed class TaskExecutionEngineTests : IDisposable
             .AppendAsync(default!, default!, default, default);
     }
 
+    /// <summary>
+    /// updateData has no outcome write of its own, so every data row it writes — a task's output
+    /// included, not only the request body — stamps <c>Instances.ModifiedAt</c>. An updateData whose
+    /// change comes only from its task would otherwise leave the column where it was.
+    /// </summary>
+    [Fact]
+    public async Task Task_output_of_an_updateData_transition_stamps_the_instance()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        ArrangeSuccessfulExecution(task);
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnExecute, TaskExecutionOrigin.Flow,
+            CreateScriptContextFor("sync-data"), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _instanceDataWriteService.Received(1).AppendAsync(
+            Arg.Any<Instance>(), Arg.Any<JsonData>(), Arg.Any<VersionStrategy?>(),
+            Arg.Any<CancellationToken>(), Arg.Any<Definitions.Workflow?>(), touchInstance: true);
+    }
+
+    /// <summary>Any other transition's task output rides on that transition's own outcome stamp.</summary>
+    [Fact]
+    public async Task Task_output_of_an_ordinary_transition_does_not_stamp_the_instance()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        ArrangeSuccessfulExecution(task);
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnExecute, TaskExecutionOrigin.Flow,
+            CreateScriptContextFor("approve"), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _instanceDataWriteService.Received(1).AppendAsync(
+            Arg.Any<Instance>(), Arg.Any<JsonData>(), Arg.Any<VersionStrategy?>(),
+            Arg.Any<CancellationToken>(), Arg.Any<Definitions.Workflow?>(), touchInstance: false);
+    }
+
+    private static ScriptContext CreateScriptContextFor(string transitionKey)
+    {
+        const string json = """
+                            {
+                                "type": "F", "timeout": null, "labels": [], "functions": [], "features": [],
+                                "states": [ { "key": "state1", "stateType": "Intermediate", "transitions": [] } ],
+                                "sharedTransitions": [], "extensions": [],
+                                "startTransition": {"key": "start", "from": null, "target": "state1", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [], "view": null},
+                                "updateData": {"key": "sync-data", "target": "$self", "triggerType": "Manual", "versionStrategy": "Patch", "labels": []}
+                            }
+                            """;
+        var workflow = JsonSerializer.Deserialize<Definitions.Workflow>(json, new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+        })!;
+        workflow.SetReference(new Reference("test-flow", "test-domain", "sys-flows", "1.0.0"));
+
+        return new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
+            .SetRuntime(Substitute.For<IRuntimeInfoProvider>())
+            .SetWorkflow(workflow)
+            .SetTransition(Transition.Create(transitionKey, "state1", "$self", TriggerType.Manual, "Patch"))
+            .SetInstance(Instance.Create(Guid.NewGuid(), "test-flow", "1.0", "ctx-key"))
+            .Build();
+    }
+
     [Fact]
     public async Task ExecuteAsync_WithPreparedTask_Should_Bypass_Factory_And_Use_JournalTaskKey()
     {
@@ -423,6 +489,119 @@ public sealed class TaskExecutionEngineTests : IDisposable
         result.IsSuccess.ShouldBeTrue();
         result.Value!.Response.ShouldNotBeNull();
         result.Value.Response!.StatusCode.ShouldBe(200);
+    }
+
+    /// <summary>
+    /// Issue #1176: a business failure that the boundary Ignores keeps what the task answered. The
+    /// error rides in <c>HandledError</c> — never <c>TaskError</c>, which the pipeline faults on — and
+    /// the captured response (payload included) is carried forward instead of dropped.
+    /// </summary>
+    [Theory]
+    [InlineData(ErrorAction.Ignore)]
+    [InlineData(ErrorAction.Log)]
+    public async Task ExecuteAsync_WhenBoundaryLetsBusinessFailureThrough_KeepsErrorAndResponse_WithoutTaskError(
+        ErrorAction action)
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        ArrangeFailedExecution(task, statusCode: 409, message: "Instance is busy");
+        var errorBoundary = ErrorBoundary.WithRules(new ErrorHandlerRule
+        {
+            Action = action,
+            ErrorCodes = ["409"],
+            Priority = 1
+        });
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty), errorBoundary);
+        var options = new TaskEngineExecutionOptions { CaptureResponse = true, SuppressDataApply = true };
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnEntry, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), options, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        var value = result.Value!;
+        value.HasFailedTasks.ShouldBeTrue();
+        value.BoundaryAction.ShouldBeNull();
+        // TaskError stays null: with it set and no BoundaryAction the pipeline steps fault the instance.
+        value.TaskError.ShouldBeNull();
+        value.HandledError.ShouldNotBeNull();
+        value.HandledError!.StatusCode.ShouldBe(409);
+        value.HandledError.NormalizedError.Code.ShouldStartWith("Task:");
+        value.HandledError.NormalizedError.Code.ShouldEndWith(":mock-api:409");
+        value.HandledError.ErrorMessage.ShouldBe("Instance is busy");
+        value.Response.ShouldNotBeNull();
+        value.Response!.StatusCode.ShouldBe(409);
+    }
+
+    /// <summary>
+    /// The Ignore result carries the response only when the caller asked for capture — the same
+    /// opt-in as every other path.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_WhenBoundaryIgnoresFailure_WithoutCaptureResponse_DoesNotExposeResponse()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        ArrangeFailedExecution(task, statusCode: 404, message: "not found");
+        var errorBoundary = ErrorBoundary.WithRules(new ErrorHandlerRule
+        {
+            Action = ErrorAction.Ignore,
+            ErrorCodes = ["404"],
+            Priority = 1
+        });
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty), errorBoundary);
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnEntry, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), CancellationToken.None);
+
+        result.Value!.TaskError.ShouldBeNull();
+        result.Value.HandledError!.StatusCode.ShouldBe(404);
+        result.Value.Response.ShouldBeNull();
+    }
+
+    /// <summary>
+    /// A blocking action is untouched: Abort still reports through <c>TaskError</c> with a
+    /// <c>BoundaryAction</c>, and never through <c>HandledError</c>.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_WhenBoundaryAbortsFailure_ReportsTaskError_NotHandledError()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        ArrangeFailedExecution(task, statusCode: 500, message: "boom");
+        var errorBoundary = ErrorBoundary.WithRules(new ErrorHandlerRule
+        {
+            Action = ErrorAction.Abort,
+            ErrorCodes = ["500"],
+            Priority = 1
+        });
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty), errorBoundary);
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnEntry, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), CancellationToken.None);
+
+        result.Value!.TaskError.ShouldNotBeNull();
+        result.Value.BoundaryAction.ShouldNotBeNull();
+        result.Value.HandledError.ShouldBeNull();
+    }
+
+    private void ArrangeFailedExecution(WorkflowTask factoryTask, int statusCode, string message)
+    {
+        _taskFactory.CreateExecutionTaskAsync(Arg.Any<IReference>(), Arg.Any<CancellationToken>())
+            .Returns(Result<WorkflowTask>.Ok(factoryTask));
+
+        var executor = Substitute.For<ITaskExecutor>();
+        executor.ExecuteAsync(Arg.Any<TaskExecutorContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<StandardTaskResponse>.Ok(new StandardTaskResponse
+            {
+                IsSuccess = false,
+                StatusCode = statusCode,
+                ErrorMessage = message,
+                Data = new Dictionary<string, object> { ["reason"] = message }
+            }));
+        _executorRegistry.GetExecutor(Arg.Any<TaskType>())
+            .Returns(Result<ITaskExecutor>.Ok(executor));
+
+        UsePersistenceStrategy(new TrackingPersistenceStrategy(completionDelay: TimeSpan.Zero));
     }
 
     /// <summary>

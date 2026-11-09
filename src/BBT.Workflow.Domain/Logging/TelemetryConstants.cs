@@ -94,6 +94,13 @@ public static class TelemetryConstants
         /// </summary>
         public const string AuthDecision = "vnext.auth.decision";
 
+        /// <summary>
+        /// Set on a decision that was NOT taken at the instance the request descended to. Today only
+        /// <c>leaf-missing</c>: the active SubFlow's child could not be loaded yet, so the deepest existing
+        /// instance decided (vnext#1181). Absent on every ordinary decision.
+        /// </summary>
+        public const string AuthFallback = "vnext.auth.fallback";
+
         /// <summary>How many transition keys a filtering pass was asked about.</summary>
         public const string AuthKeysEvaluated = "vnext.auth.keys.evaluated";
 

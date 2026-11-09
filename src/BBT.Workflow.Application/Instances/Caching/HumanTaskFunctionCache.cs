@@ -23,7 +23,7 @@ public sealed class HumanTaskFunctionCache(
     /// to what the key covers — an entry written under the old meaning would otherwise be served
     /// under the new one for a whole TTL.
     /// </summary>
-    private const string ResponseShapeVersion = "v1";
+    private const string ResponseShapeVersion = "v2";
 
     private const string KeyPrefix = $"human-task:{ResponseShapeVersion}:";
 

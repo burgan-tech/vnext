@@ -127,6 +127,42 @@ public sealed class InstanceBusyManager(
     }
 
     /// <inheritdoc />
+    public async Task<BusyMarkOutcome> TryMarkBusyWithPropagationAsync(
+        Instance loaded, CancellationToken cancellationToken = default)
+    {
+        await using (var uow = uowManager.Begin(
+                         new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew }))
+        {
+            // No re-read: the overload above loads the row only to classify and to find the
+            // subflow, and the caller loaded exactly that a moment ago. The CAS's WHERE
+            // (Status = Active) stays the only authority, so a stale in-memory status changes
+            // nothing — the aggregate is deliberately not consulted before the CAS.
+            if (await instanceRepository.TryMarkBusyAsync(
+                    loaded.Id,
+                    cancellationToken,
+                    loaded.Subflow is null ? InstanceStatus.Busy : null))
+            {
+                await uow.CommitAsync(cancellationToken);
+            }
+            else
+            {
+                // Lost CAS — rare. Classify it the way the re-reading overload would have: a
+                // terminal or vanished row is Skipped, anything else (Busy) is AlreadyBusy.
+                var snapshot = await instanceRepository.GetExecutionSnapshotAsync(
+                    loaded.Id.ToString(), cancellationToken);
+                return snapshot is null || snapshot.IsTerminal
+                    ? BusyMarkOutcome.Skipped
+                    : BusyMarkOutcome.AlreadyBusy;
+            }
+        }
+
+        logger.InstanceMarkedBusy(loaded.Id);
+        await PropagateAndStampAsync(loaded, InstanceStatus.Busy, cancellationToken);
+
+        return BusyMarkOutcome.Marked;
+    }
+
+    /// <inheritdoc />
     public async Task<bool> TryReleaseAsync(
         Guid instanceId,
         CancellationToken cancellationToken = default,

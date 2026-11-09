@@ -39,13 +39,23 @@ public interface IInstanceDataWriteService
     /// publish path, system writes) pass <c>null</c> and the validation is skipped — the same
     /// outcome those paths already had when the definition was read from an ambient scope.
     /// </param>
+    /// <param name="touchInstance">
+    /// <c>true</c> when this append IS the instance's modification: a data row written by
+    /// <c>updateData</c> (its request body or one of its tasks' output), the one transition whose outcome
+    /// writes nothing to the instance row. The row's <c>EnteredAt</c> is then stamped as
+    /// <c>Instances.ModifiedAt</c> in the same batch and transaction as the insert, and a tracked
+    /// aggregate is left in sync. <c>false</c> (default) for an append made inside any other
+    /// transition: its own outcome stamps the instance once, so a per-append stamp would only add row
+    /// versions to the hottest table. A duplicate payload writes no row and stamps nothing.
+    /// </param>
     /// <returns>The persisted row, or <c>null</c> when the merge produced no content change.</returns>
     Task<InstanceData?> AppendAsync(
         Instance instance,
         JsonData delta,
         VersionStrategy? versionStrategy,
         CancellationToken cancellationToken = default,
-        Definitions.Workflow? workflow = null);
+        Definitions.Workflow? workflow = null,
+        bool touchInstance = false);
 
     /// <summary>
     /// Appends a row with an EXPLICIT, caller-authored version (the definition publish path):

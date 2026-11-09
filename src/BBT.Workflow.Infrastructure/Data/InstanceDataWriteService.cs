@@ -87,7 +87,8 @@ public sealed class InstanceDataWriteService(
         JsonData delta,
         VersionStrategy? versionStrategy,
         CancellationToken cancellationToken = default,
-        Definitions.Workflow? workflow = null)
+        Definitions.Workflow? workflow = null,
+        bool touchInstance = false)
     {
         // Before the gate: the master schema is loaded once (validation, x-encryption and x-storage all read it), and
         // the x-storage offload runs here — no binding I/O under the instance gate or the row lock, and the buffered
@@ -96,10 +97,14 @@ public sealed class InstanceDataWriteService(
         delta = await OffloadFilesAsync(instance, workflow, schema, delta, cancellationToken);
 
         using var gate = await InstanceWriteGate.AcquireAsync(instance.Id, cancellationToken);
+
+        // A buffered (history: none) append writes nothing yet; the flush happens at the instance's
+        // Finish, SubFlow handoff or fault, whose own outcome stamps it.
         if (instance.DataBuffer is { } buffer)
             return await AppendBufferedAsync(instance, buffer, delta, versionStrategy, schema, cancellationToken);
 
-        return await AppendCoreAsync(instance, delta, versionStrategy, schema, cancellationToken);
+        return await AppendCoreAsync(
+            instance, delta, versionStrategy, schema, cancellationToken, touchInstance: touchInstance);
     }
 
     /// <inheritdoc />
@@ -193,13 +198,15 @@ public sealed class InstanceDataWriteService(
         SchemaLoad schemaLoad,
         CancellationToken cancellationToken,
         Func<InstanceDataHeadRow?, string>? versionResolver = null,
-        Func<CancellationToken, Task>? afterPersist = null)
+        Func<CancellationToken, Task>? afterPersist = null,
+        bool touchInstance = false)
     {
         var context = await dbContextProvider.GetDbContextAsync();
 
         return await RunLockedAsync(context, instance.Id, cancellationToken, async head =>
         {
-            var row = await AppendLockedAsync(context, instance, head, delta, versionStrategy, schemaLoad, versionResolver, cancellationToken);
+            var row = await AppendLockedAsync(
+                context, instance, head, delta, versionStrategy, schemaLoad, versionResolver, touchInstance, cancellationToken);
 
             // Runs inside the row-lock transaction, so a flush and the caller's own save commit together.
             if (afterPersist is not null)
@@ -217,6 +224,7 @@ public sealed class InstanceDataWriteService(
         VersionStrategy? versionStrategy,
         SchemaLoad schemaLoad,
         Func<InstanceDataHeadRow?, string>? versionResolver,
+        bool touchInstance,
         CancellationToken cancellationToken)
     {
         var schema = ResolveSchema(schemaLoad, head);
@@ -271,7 +279,7 @@ public sealed class InstanceDataWriteService(
                 : head.LineMax + 1
         };
 
-        await PersistAsync(context, instance, row, demoteStaleLatest: head is not null, cancellationToken);
+        await PersistAsync(context, instance, row, demoteStaleLatest: head is not null, touchInstance, cancellationToken);
         return row;
     }
 
@@ -346,7 +354,8 @@ public sealed class InstanceDataWriteService(
                     : await ReadLineMaxAsync(context, instance.Id, version, cancellationToken) + 1
             };
 
-            await PersistAsync(context, instance, row, demoteStaleLatest: takesLatest && head is not null, cancellationToken);
+            await PersistAsync(
+                context, instance, row, demoteStaleLatest: takesLatest && head is not null, touchInstance: false, cancellationToken);
             return row;
         });
 
@@ -616,12 +625,18 @@ public sealed class InstanceDataWriteService(
     /// when the aggregate is tracked in THIS context, relationship fixup must see the row as
     /// persisted, or the next save would try to insert it again.
     /// </para>
+    /// <para>
+    /// With <paramref name="touchInstance"/> (updateData only, see
+    /// <see cref="IInstanceDataWriteService.AppendAsync"/>) a third statement stamps
+    /// <c>Instances.ModifiedAt</c> with the row's <c>EnteredAt</c>.
+    /// </para>
     /// </summary>
     private async Task PersistAsync(
         WorkflowDbContext context,
         Instance instance,
         InstanceData row,
         bool demoteStaleLatest,
+        bool touchInstance,
         CancellationToken cancellationToken)
     {
         var schema = SanitizeIdentifier(context.CurrentSchemaName ?? "public");
@@ -634,9 +649,10 @@ public sealed class InstanceDataWriteService(
 
         await using var batch = new NpgsqlBatch(connection, transaction);
 
+        NpgsqlBatchCommand? demote = null;
         if (demoteStaleLatest)
         {
-            var demote = new NpgsqlBatchCommand(
+            demote = new NpgsqlBatchCommand(
                 $"UPDATE \"{schema}\".\"InstancesData\" SET \"IsLatest\" = FALSE " +
                 $"WHERE \"InstanceId\" = $1 AND \"IsLatest\"");
             demote.Parameters.AddWithValue(row.InstanceId);
@@ -658,8 +674,19 @@ public sealed class InstanceDataWriteService(
         insert.Parameters.AddWithValue(row.EnteredAt);
         batch.BatchCommands.Add(insert);
 
-        var affected = await batch.ExecuteNonQueryAsync(cancellationToken);
-        if (demoteStaleLatest && affected > 1)
+        // Same round-trip and same transaction as the insert, and the instance row is already held
+        // FOR UPDATE by this writer (LockAndReadHeadAsync): no extra lock, no extra commit.
+        if (touchInstance)
+        {
+            var touch = new NpgsqlBatchCommand(
+                $"UPDATE \"{schema}\".\"Instances\" SET \"ModifiedAt\" = $2 WHERE \"Id\" = $1");
+            touch.Parameters.AddWithValue(row.InstanceId);
+            touch.Parameters.AddWithValue(row.EnteredAt);
+            batch.BatchCommands.Add(touch);
+        }
+
+        await batch.ExecuteNonQueryAsync(cancellationToken);
+        if (demote is { RecordsAffected: > 0 })
             logger.InstanceDataStaleLatestDemoted(row.InstanceId, row.VersionNo);
 
         // Persisted by hand, so tell the tracker so: Unchanged, never Added. When the aggregate is
@@ -675,6 +702,27 @@ public sealed class InstanceDataWriteService(
         // autocommit per hop (measured: once per start). Tell the tracker the column is in sync.
         if (demoteStaleLatest)
             AcknowledgeDemotedRows(context, row);
+
+        if (touchInstance)
+            AcknowledgeModifiedAt(context, instance, row.EnteredAt);
+    }
+
+    /// <summary>
+    /// Mirrors the batch's <c>ModifiedAt</c> write onto the caller's aggregate. When this context tracks
+    /// the aggregate the column is marked in sync: the value is already persisted, and leaving it
+    /// pending would make updateData's <c>ChangeState($self)</c> save — a no-op — send an UPDATE.
+    /// </summary>
+    private static void AcknowledgeModifiedAt(WorkflowDbContext context, Instance instance, DateTime modifiedAt)
+    {
+        instance.ModifiedAt = modifiedAt;
+
+        var entry = context.Entry(instance);
+        if (entry.State is not (EntityState.Unchanged or EntityState.Modified))
+            return;
+
+        var property = entry.Property(i => i.ModifiedAt);
+        property.OriginalValue = modifiedAt;
+        property.IsModified = false;
     }
 
     private static void AcknowledgeDemotedRows(WorkflowDbContext context, InstanceData inserted)

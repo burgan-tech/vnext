@@ -102,6 +102,38 @@ public class HandleLongPollTerminationStepTests
         await _jobRepository.Received(1).InsertAsync(Arg.Any<InstanceJob>(), true, Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// The arm's set-based UPDATE stamps Instances.ModifiedAt, so a same-state hop's pending stamp is
+    /// closed here and the settlement sends no second UPDATE for it.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_WhenItArms_ClosesAPendingModifiedAtStamp()
+    {
+        var workflow = CreateWorkflow(terminate: true);
+        var context = CreateContext(workflow, workflow.GetState("review").Value!);
+        context.Directives.DeferModifiedAtStamp();
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+        result.Value!.MutateDirectives!(context.Directives);
+
+        context.Directives.ModifiedAtStampPending.ShouldBeFalse();
+    }
+
+    /// <summary>No arm, no write: a pending stamp stays pending for the settlement.</summary>
+    [Fact]
+    public async Task ExecuteAsync_WhenItDoesNotArm_LeavesAPendingModifiedAtStamp()
+    {
+        var workflow = CreateWorkflow(terminate: false);
+        var context = CreateContext(workflow, workflow.GetState("review").Value!);
+        context.Directives.DeferModifiedAtStamp();
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+        result.Value!.MutateDirectives?.Invoke(context.Directives);
+
+        await _instanceRepository.DidNotReceiveWithAnyArgs().ArmLongPollAckAsync(default, default, default);
+        context.Directives.ModifiedAtStampPending.ShouldBeTrue();
+    }
+
     [Fact]
     public async Task ExecuteAsync_WhenAlreadyAwaitingAck_ShouldNotReArm()
     {

@@ -37,9 +37,32 @@ public sealed class InstanceCancellationServiceTests
         _uow.Setup(u => u.DisposeAsync()).Returns(ValueTask.CompletedTask);
         _uowManager.Setup(m => m.Begin(It.IsAny<UnitOfWorkOptions>())).Returns(_uow.Object);
         _instance.ChangeState(StateFactory.CreateDefault("state-a", StateType.Intermediate));
+        // The full cancellation path loads the aggregate; the state-transition path only probes.
         _instanceRepository
             .Setup(r => r.FindAsync(_instance.Id, true, It.IsAny<CancellationToken>()))
             .ReturnsAsync(_instance);
+        _instanceRepository
+            .Setup(r => r.FindLeanByIdAsync(_instance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(_instance);
+    }
+
+    [Fact]
+    public async Task ProcessStateTransitionsCancellation_probes_existence_without_the_detailed_load()
+    {
+        // Only the id is read from the instance: the detailed load (latest data + open
+        // correlations, three split queries) must not run on every hop that leaves a timed state.
+        _instanceJobRepository
+            .Setup(r => r.GetListActiveAsync(_instance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<InstanceJob>());
+
+        var result = await CreateService().ProcessStateTransitionsCancellationAsync(
+            _instance.Id, "state-a", new[] { "check" }, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        _instanceRepository.Verify(
+            r => r.FindLeanByIdAsync(_instance.Id, It.IsAny<CancellationToken>()), Times.Once);
+        _instanceRepository.Verify(
+            r => r.FindAsync(It.IsAny<Guid>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

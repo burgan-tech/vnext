@@ -373,6 +373,38 @@ public class TransitionPipelineTests
         executionOrder.ShouldContain(LifecycleOrder.OnEntry);
     }
 
+    /// <summary>
+    /// A hop that hands off (post-commit work, e.g. a SubFlow start) ends without a settlement, so no Busy
+    /// release closes it: a same-state hop's pending ModifiedAt stamp is applied at the handoff, and the
+    /// runner's commit sends it.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunAsync_WhenAHopHandsOff_AppliesOnlyAPendingModifiedAtStamp(bool pending)
+    {
+        var longAgo = new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        context.Target = CreateStateWithNotification("waiting-for-post-commit");
+        context.Instance.Busy();
+        context.Instance.ModifiedAt = longAgo;
+        context.Directives.EnqueuePostCommit(Substitute.For<IPostCommitJob>());
+        if (pending)
+            context.Directives.DeferModifiedAtStamp();
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        if (pending)
+            context.Instance.ModifiedAt.ShouldNotBe(longAgo);
+        else
+            context.Instance.ModifiedAt.ShouldBe(longAgo);
+    }
+
     [Fact]
     public async Task RunAsync_WhenPostCommitJobsAreQueued_ShouldReturnThemWithoutExecutingOrConsumingThem()
     {
@@ -1023,6 +1055,83 @@ public class TransitionPipelineTests
         result.IsSuccess.ShouldBeTrue();
         await _mockAdmissionService.DidNotReceive()
             .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_NormalReserveWon_ShouldMirrorBusyOntoTheTrackedAggregateWithoutAWrite()
+    {
+        // The reserve's CAS committed Busy in its own unit of work after the load. The pipeline must
+        // mirror it with the tracker aligned (AcceptPersistedBusyAsync) — leaving it to SetBusyStep's
+        // in-memory flip made the transition-record insert carry a second UPDATE of Status.
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        Received.InOrder(() =>
+        {
+            _mockAdmissionService.ReserveAsync(context, Arg.Any<CancellationToken>());
+            _mockInstanceRepository.AcceptPersistedBusyAsync(context.Instance, Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Fact]
+    public async Task RunAsync_NormalReserveLost_ShouldNotMirrorBusy()
+    {
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        _mockAdmissionService
+            .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Fail(WorkflowErrors.InstanceBusy(context.InstanceId, context.TransitionKey)));
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        await _mockInstanceRepository.DidNotReceive()
+            .AcceptPersistedBusyAsync(Arg.Any<Instance>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_SubFlowResumeOnBusyParent_ShouldSkipTheNoOpBusyConfirm()
+    {
+        // The parent of an S SubFlow is Busy for the subflow's lifetime: on a fresh load that reads
+        // Busy, the Active → Busy CAS cannot match, so it is not issued.
+        var context = CreateTransitionExecutionContext();
+        context.Instance.Busy();
+        context.Directives.MarkAsSubFlowResume(Guid.NewGuid());
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.OwnerReentry);
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _mockBusyMarker.DidNotReceive()
+            .MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_SubFlowResumeOnActiveParent_ShouldStillConfirmBusy()
+    {
+        var context = CreateTransitionExecutionContext();
+        context.Directives.MarkAsSubFlowResume(Guid.NewGuid());
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.OwnerReentry);
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _mockBusyMarker.Received(1)
+            .MarkBusyAsync(context.InstanceId, Arg.Any<CancellationToken>());
     }
 
     /// <summary>

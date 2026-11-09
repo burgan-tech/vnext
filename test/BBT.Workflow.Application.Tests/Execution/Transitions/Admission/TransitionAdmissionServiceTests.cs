@@ -173,12 +173,16 @@ public class TransitionAdmissionServiceTests
     {
         var context = CreateContext();
         _busyManager
-            .TryMarkBusyWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>())
+            .TryMarkBusyWithPropagationAsync(context.Instance, Arg.Any<CancellationToken>())
             .Returns(BusyMarkOutcome.Marked);
 
         var result = await CreateService().ReserveAsync(context, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
+        // The reserve hands over the aggregate the pipeline already loaded; the id overload (which
+        // re-reads the row before its CAS) is not used.
+        await _busyManager.DidNotReceive().TryMarkBusyWithPropagationAsync(
+            Arg.Any<Guid>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -187,7 +191,7 @@ public class TransitionAdmissionServiceTests
         // The authoritative check is the CAS's own WHERE clause: a competitor won the reserve race.
         var context = CreateContext();
         _busyManager
-            .TryMarkBusyWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>())
+            .TryMarkBusyWithPropagationAsync(context.Instance, Arg.Any<CancellationToken>())
             .Returns(BusyMarkOutcome.AlreadyBusy);
 
         var result = await CreateService().ReserveAsync(context, CancellationToken.None);
@@ -201,7 +205,7 @@ public class TransitionAdmissionServiceTests
     {
         var context = CreateContext();
         _busyManager
-            .TryMarkBusyWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>())
+            .TryMarkBusyWithPropagationAsync(context.Instance, Arg.Any<CancellationToken>())
             .Returns(BusyMarkOutcome.Skipped);
 
         var result = await CreateService().ReserveAsync(context, CancellationToken.None);
@@ -345,7 +349,7 @@ public class TransitionAdmissionServiceTests
         result.IsSuccess.ShouldBeTrue();
         await _busyManager.Received(1).MarkBusyWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>());
         await _busyManager.DidNotReceive().TryMarkBusyWithPropagationAsync(
-            Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+            Arg.Any<Instance>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -423,7 +427,7 @@ public class TransitionAdmissionServiceTests
         SetupAcquiredLock();
         var context = CreateContext();
         _busyManager
-            .TryMarkBusyWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>())
+            .TryMarkBusyWithPropagationAsync(context.Instance, Arg.Any<CancellationToken>())
             .Returns(BusyMarkOutcome.Marked);
 
         var seen = AcceptFlip.None;
@@ -500,7 +504,7 @@ public class TransitionAdmissionServiceTests
         seen.ShouldBe(AcceptFlip.None);
         await _busyManager.DidNotReceive().MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
         await _busyManager.DidNotReceive().TryMarkBusyWithPropagationAsync(
-            Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+            Arg.Any<Instance>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -523,7 +527,7 @@ public class TransitionAdmissionServiceTests
         await _busyManager.DidNotReceive().MarkBusyWithPropagationAsync(
             Arg.Any<Guid>(), Arg.Any<CancellationToken>());
         await _busyManager.DidNotReceive().TryMarkBusyWithPropagationAsync(
-            Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+            Arg.Any<Instance>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -580,7 +584,7 @@ public class TransitionAdmissionServiceTests
 
         seen.ShouldBe(AcceptFlip.None);
         await _busyManager.DidNotReceive().TryMarkBusyWithPropagationAsync(
-            Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+            Arg.Any<Instance>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -589,7 +593,7 @@ public class TransitionAdmissionServiceTests
         SetupAcquiredLock();
         var context = CreateContext();
         _busyManager
-            .TryMarkBusyWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>())
+            .TryMarkBusyWithPropagationAsync(context.Instance, Arg.Any<CancellationToken>())
             .Returns(BusyMarkOutcome.Marked);
 
         var result = await CreateService().AcceptAsync(
@@ -605,7 +609,7 @@ public class TransitionAdmissionServiceTests
         SetupAcquiredLock();
         var context = CreateContext();
         _busyManager
-            .TryMarkBusyWithPropagationAsync(context.InstanceId, Arg.Any<CancellationToken>())
+            .TryMarkBusyWithPropagationAsync(context.Instance, Arg.Any<CancellationToken>())
             .Returns(BusyMarkOutcome.Marked);
 
         await Should.ThrowAsync<InvalidOperationException>(() => CreateService().AcceptAsync(

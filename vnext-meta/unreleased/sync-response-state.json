@@ -1,0 +1,21 @@
+{
+  "releaseNote": {
+    "summary": "Sync start/transition responses carry currentState and effectiveState next to status, so a sync SubProcess task output can branch on the state the child came to rest in.",
+    "breaking": false,
+    "docs": []
+  },
+  "features": {
+    "engine": {
+      "syncResponseState": {
+        "since": "next",
+        "status": "stable",
+        "description": "currentState and effectiveState on sync start/transition responses (vnext#1182), next to status and effectiveStatus. Same names and values as metadata.currentState / metadata.effectiveState on the instance GET: the persisted columns, no SubFlow descent - not the state function's state, which is the active SubFlow leaf's. Also carried by the identity-only answer a runtime-internal sync call gets (cross-domain sub/instances/start, subflow forward relay), so a sync SubProcess task output holds the child's state: data.value.currentState on a same-domain start, data.currentState on a cross-domain one. Read from the instance the sync path already holds; no extra database read on any path. An async 202 does not carry them. Purely additive; the representation ETag of a sync response changes once because the body gained two fields, the state function body and ResponseShapeVersion are untouched.",
+        "apiEndpoints": [
+          "POST {domain}/workflows/{workflow}/instances/start",
+          "PATCH {domain}/workflows/{workflow}/instances/{instance}/transitions/{transition}",
+          "POST {domain}/workflows/{workflow}/sub/instances/start"
+        ]
+      }
+    }
+  }
+}
