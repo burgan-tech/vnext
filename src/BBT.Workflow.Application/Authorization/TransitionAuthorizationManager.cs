@@ -484,8 +484,11 @@ public sealed class TransitionAuthorizationManager(
         if (leafRole is PredefinedInstanceRoles.InstanceStarter
             or PredefinedInstanceRoles.PreviousUser
             or PredefinedInstanceRoles.InstanceBehalfOfStarter
-            or PredefinedInstanceRoles.PreviousBehalfOfUser
-            or PredefinedInstanceRoles.Everyone)
+            or PredefinedInstanceRoles.PreviousBehalfOfUser)
+            return false;
+
+        // $Everyone is trim-tolerant (IsEveryone), so a padded spelling must classify the same way here.
+        if (PredefinedInstanceRoles.IsEveryone(leafRole))
             return false;
 
         var dynamicGrant = DynamicRoleGrant.TryParse(leafRole);

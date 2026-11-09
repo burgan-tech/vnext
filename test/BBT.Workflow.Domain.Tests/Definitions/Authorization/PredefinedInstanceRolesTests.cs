@@ -41,7 +41,9 @@ public class PredefinedInstanceRolesTests
     [Theory]
     [InlineData("$Everyone", true)]
     [InlineData("$everyone", false)]
-    public void IsEveryone_IsOrdinal(string role, bool expected)
+    [InlineData(" $Everyone ", true)]
+    [InlineData(null, false)]
+    public void IsEveryone_IsOrdinal(string? role, bool expected)
     {
         Assert.Equal(expected, PredefinedInstanceRoles.IsEveryone(role));
     }

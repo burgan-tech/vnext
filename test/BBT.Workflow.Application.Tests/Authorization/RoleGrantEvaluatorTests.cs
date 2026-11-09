@@ -91,6 +91,9 @@ public sealed class RoleGrantEvaluatorTests
             """[{"role":"$Everyone","grant":"deny"}]""",
             """[{"role":"$Everyone","grant":"allow"}]""",
             """[{"allOf":[{"role":"$Everyone"},{"role":"maker"}],"grant":"allow"}]""",
+            // Padded spelling: IsEveryone trims, so both paths must treat it as $Everyone.
+            """[{"role":" $Everyone ","grant":"allow"}]""",
+            """[{"role":" $Everyone ","grant":"deny"}]""",
         };
         var roles = new string?[] { null, "", "maker", "MAKER", "blocked", "checker", "someone-else", " maker " };
 
@@ -575,6 +578,24 @@ public sealed class RoleGrantEvaluatorTests
         var evaluator = await _sut.CreateEvaluatorAsync(NewInstance(), null, null, grants, CancellationToken.None);
 
         evaluator.IsAnyRoleAllowed(null, grants).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task AllowPaddedEveryone_AdmitsARolelessCaller()
+    {
+        var grants = Grants("""[{"role":" $Everyone ","grant":"allow"}]""");
+        var evaluator = await _sut.CreateEvaluatorAsync(NewInstance(), null, null, grants, CancellationToken.None);
+
+        evaluator.IsAnyRoleAllowed(null, grants).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task DenyPaddedEveryone_RefusesARoledCaller()
+    {
+        var grants = Grants("""[{"role":" $Everyone ","grant":"deny"}]""");
+        var evaluator = await _sut.CreateEvaluatorAsync(NewInstance(), null, null, grants, CancellationToken.None);
+
+        evaluator.IsAnyRoleAllowed(["maker"], grants).ShouldBeFalse();
     }
 
     [Fact]
