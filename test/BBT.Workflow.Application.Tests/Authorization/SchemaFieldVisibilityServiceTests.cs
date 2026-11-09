@@ -172,6 +172,41 @@ public sealed class SchemaFieldVisibilityServiceTests
             .ShouldBeFalse();
     }
 
+    private async Task AssertHiddenFromStarterRoledAndRoleless(List<RoleGrant> grants)
+    {
+        var instance = Instance.Create(Guid.NewGuid(), "flow", "1.0.0", "key");
+        instance.CreatedBy = "actor-alice";
+
+        // The starter, a roled non-starter, and a role-less non-starter.
+        var callers = new (string Actor, string[]? Roles)[]
+        {
+            ("actor-alice", new[] { "teller" }),
+            ("actor-bob", new[] { "teller" }),
+            ("actor-bob", null),
+        };
+        foreach (var (actor, roles) in callers)
+        {
+            _currentUser.ActorUserName.Returns(actor);
+            SchemaFieldVisibilityService
+                .IsPathVisibleForCaller(grants, roles, await EvaluatorFor(instance, grants))
+                .ShouldBeFalse();
+        }
+    }
+
+    [Fact]
+    public async Task DenyEveryone_HidesFieldFromStarterRoledAndRoleless() =>
+        await AssertHiddenFromStarterRoledAndRoleless(
+            new List<RoleGrant> { Grant(PredefinedInstanceRoles.Everyone, "deny") });
+
+    [Fact]
+    public async Task DenyAndAllowInstanceStarter_HidesFieldFromEveryone() =>
+        // The documented workaround that $Everyone replaces: a deny and an allow on the same role.
+        await AssertHiddenFromStarterRoledAndRoleless(new List<RoleGrant>
+        {
+            Grant(PredefinedInstanceRoles.InstanceStarter, "allow"),
+            Grant(PredefinedInstanceRoles.InstanceStarter, "deny"),
+        });
+
     [Fact]
     public async Task PredefinedDeny_WinsEvenWhenCallerHoldsAnotherRole()
     {

@@ -417,7 +417,8 @@ public sealed class TransitionAuthorizationManager(
     /// Static comparison only: with no instance there is nothing for a predefined or identity-bound
     /// dynamic leaf to resolve against, so those leaves are <see cref="GrantMatch.No"/> here. A
     /// role-bound leaf is <see cref="GrantMatch.Unknown"/> for a caller with no roles, exactly as on
-    /// the instance-bound path.
+    /// the instance-bound path. <c>$Everyone</c> is the one identity leaf that needs nothing to
+    /// resolve against: it is <see cref="GrantMatch.Yes"/> here for every caller.
     /// </para>
     /// </remarks>
     public static bool EvaluateRolesStatic(
@@ -436,7 +437,8 @@ public sealed class TransitionAuthorizationManager(
         }
 
         return RoleGrantMatcher.Decide(roleGrants, leafRole =>
-            !IsRoleBound(leafRole) ? GrantMatch.No
+            PredefinedInstanceRoles.IsEveryone(leafRole) ? GrantMatch.Yes
+            : !IsRoleBound(leafRole) ? GrantMatch.No
             : normalized.Count == 0 ? GrantMatch.Unknown
             : MatchesAnyStatic(leafRole, normalized) ? GrantMatch.Yes
             : GrantMatch.No, defaultAllowWhenNoAllowGrant);

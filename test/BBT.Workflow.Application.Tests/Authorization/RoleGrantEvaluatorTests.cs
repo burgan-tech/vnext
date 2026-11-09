@@ -87,6 +87,10 @@ public sealed class RoleGrantEvaluatorTests
             """[{"allOf":[{"role":"maker"},{"role":"checker"}],"grant":"deny"}]""",
             """[{"anyOf":[{"role":"maker"},{"role":"checker"}],"grant":"deny"}]""",
             """[{"role":"maker","grant":"allow"},{"anyOf":[{"role":"blocked"},{"role":"checker"}],"grant":"deny"}]""",
+            // $Everyone is the one identity leaf that matches for every caller on both paths.
+            """[{"role":"$Everyone","grant":"deny"}]""",
+            """[{"role":"$Everyone","grant":"allow"}]""",
+            """[{"allOf":[{"role":"$Everyone"},{"role":"maker"}],"grant":"allow"}]""",
         };
         var roles = new string?[] { null, "", "maker", "MAKER", "blocked", "checker", "someone-else", " maker " };
 
@@ -517,5 +521,80 @@ public sealed class RoleGrantEvaluatorTests
             ["r1", "r2", "r3", "r4", "r5"], grants, instance, null, CancellationToken.None);
 
         await _repo.Received(1).GetLastCompletedManualTransitionAsync(instance.Id, Arg.Any<CancellationToken>());
+    }
+
+    // ── $Everyone: matches every caller, roled or not ────────────────────────────
+
+    private const string DenyEveryone = """[{"role":"$Everyone","grant":"deny"}]""";
+    private const string AllowEveryone = """[{"role":"$Everyone","grant":"allow"}]""";
+
+    [Fact]
+    public async Task DenyEveryone_RefusesARoledCaller()
+    {
+        var grants = Grants(DenyEveryone);
+        var evaluator = await _sut.CreateEvaluatorAsync(NewInstance(), null, null, grants, CancellationToken.None);
+
+        evaluator.IsAnyRoleAllowed(["teller"], grants).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task DenyEveryone_RefusesARolelessCaller()
+    {
+        var grants = Grants(DenyEveryone);
+        var evaluator = await _sut.CreateEvaluatorAsync(NewInstance(), null, null, grants, CancellationToken.None);
+
+        evaluator.IsAnyRoleAllowed(null, grants).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task DenyEveryone_RefusesTheStarter()
+    {
+        var instance = NewInstance();
+        instance.CreatedBy = "actor-alice";
+        _currentUser.ActorUserName.Returns("actor-alice");
+
+        var grants = Grants(DenyEveryone);
+        var evaluator = await _sut.CreateEvaluatorAsync(instance, null, null, grants, CancellationToken.None);
+
+        evaluator.IsAnyRoleAllowed(null, grants).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task DenyEveryone_RefusesACallerClaimingTheRoleName()
+    {
+        var grants = Grants(DenyEveryone);
+        var evaluator = await _sut.CreateEvaluatorAsync(NewInstance(), null, null, grants, CancellationToken.None);
+
+        evaluator.IsAnyRoleAllowed(["$Everyone"], grants).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task AllowEveryone_AdmitsARolelessCaller()
+    {
+        var grants = Grants(AllowEveryone);
+        var evaluator = await _sut.CreateEvaluatorAsync(NewInstance(), null, null, grants, CancellationToken.None);
+
+        evaluator.IsAnyRoleAllowed(null, grants).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task AllOfEveryoneAndRole_EqualsTheRole()
+    {
+        var grants = Grants("""[{"allOf":[{"role":"$Everyone"},{"role":"maker"}],"grant":"allow"}]""");
+        var evaluator = await _sut.CreateEvaluatorAsync(NewInstance(), null, null, grants, CancellationToken.None);
+
+        evaluator.IsAnyRoleAllowed(["maker"], grants).ShouldBeTrue();
+        evaluator.IsAnyRoleAllowed(["teller"], grants).ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task WithoutInstance_Everyone_IsYes()
+    {
+        var deny = Grants(DenyEveryone);
+        var allow = Grants(AllowEveryone);
+        var evaluator = await _sut.CreateEvaluatorAsync(null, null, null, deny, CancellationToken.None);
+
+        evaluator.IsAnyRoleAllowed(["teller"], deny).ShouldBeFalse();
+        evaluator.IsAnyRoleAllowed(null, allow).ShouldBeTrue();
     }
 }

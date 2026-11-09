@@ -210,6 +210,10 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
         if (string.IsNullOrWhiteSpace(grantRole))
             return null;
 
+        // $Everyone is every caller; nothing about the instance or the caller can make it No.
+        if (PredefinedInstanceRoles.IsEveryone(grantRole))
+            return true;
+
         if (string.Equals(grantRole, PredefinedInstanceRoles.InstanceStarter, StringComparison.Ordinal))
             return !string.IsNullOrEmpty(actorUserName) &&
                    string.Equals(actorUserName, instance.CreatedBy?.Trim(), StringComparison.Ordinal);
