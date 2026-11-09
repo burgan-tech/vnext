@@ -183,6 +183,11 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         // Embedded Script Services (needs IComponentCacheStore from Application layer)
         services.AddEmbeddedScriptServices();
 
+        // ScriptBase.PutFileAsync (needs IComponentCacheStore and IFileOffloadService from the Application
+        // layer). ScriptServices takes the writer as an optional dependency, so a host without it simply gets
+        // scripts whose PutFileAsync reports the writer as unavailable.
+        services.TryAddScoped<BBT.Workflow.Scripting.Functions.IScriptFileWriter, BBT.Workflow.Files.ScriptFileWriter>();
+
         // Notification channel resolver (needed by NotificationTaskExecutor in Application layer)
         services.AddNotificationChannelResolver();
 
