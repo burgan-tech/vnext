@@ -16,7 +16,7 @@ namespace BBT.Workflow.Tasks.Invocation.Local;
 /// </summary>
 public sealed class LocalDaprServiceTaskInvoker(
     DaprServiceInvocationClient daprInvocation,
-    ILogger<LocalDaprServiceTaskInvoker> logger) : ILocalTaskInvoker
+    ILogger<LocalDaprServiceTaskInvoker> logger) : ITypedLocalTaskInvoker<DaprServiceBinding>
 {
     /// <inheritdoc />
     public string TaskType => TaskTypes.DaprService;
@@ -36,6 +36,19 @@ public sealed class LocalDaprServiceTaskInvoker(
                 taskType: TaskTypes.DaprService);
         }
 
+        return await InvokeAsync(taskKey, typedBinding, traceContext, cancellationToken);
+    }
+
+    /// <summary>
+    /// The typed entry point: the orchestrator's local path hands the mapped binding object straight
+    /// here, skipping the JSON round trip the <see cref="JsonElement"/> overload exists for.
+    /// </summary>
+    public async Task<TaskInvocationResult> InvokeAsync(
+        string? taskKey,
+        DaprServiceBinding typedBinding,
+        TaskTraceContext? traceContext,
+        CancellationToken cancellationToken = default)
+    {
         var result = await DaprServiceInvocation.SendAsync(
             daprInvocation,
             typedBinding,

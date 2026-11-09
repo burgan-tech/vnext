@@ -126,9 +126,14 @@ public sealed class StateFunctionCache(
         // Scheduled-job changes deliberately do NOT participate (team decision, issue #864): a
         // same-state re-arm can leave the kind:"scheduled" transition entries stale behind a 304 —
         // accepted as a known gap; see the ETag doc.
+        // string[] overload, not params object[]: the counts and the incident flag used to be boxed
+        // on every poll. Each value is rendered with the same parameterless ToString() that
+        // string.Join(object[]) called, so the material — and therefore the ETag — is byte-identical
+        // (pinned by StateFunctionCacheTests.BuildKey_and_ComputeEtag_are_byte_identical_for_fixed_inputs).
         var material = string.Join('|',
+        [
             ResponseShapeVersion,
-            fingerprint.Id,
+            fingerprint.Id.ToString(),
             fingerprint.EffectiveState ?? string.Empty,
             fingerprint.Status.Code,
             // The client-visible status. The instance's own Status cannot move when the accept
@@ -140,12 +145,13 @@ public sealed class StateFunctionCache(
             BuildCallerHash(input),
             displayedState ?? string.Empty,
             displayedStatus ?? string.Empty,
-            fingerprint.CorrelationCount,
-            fingerprint.CompletedCorrelationCount,
+            fingerprint.CorrelationCount.ToString(),
+            fingerprint.CompletedCorrelationCount.ToString(),
             FormatTimestamp(fingerprint.LastCorrelationCompletedAt),
             FormatTimestamp(fingerprint.LastSubFlowStateChangedAt),
             // The body carries an incident block; the flag can flip without a state/status change.
-            fingerprint.HasActiveIncident);
+            fingerprint.HasActiveIncident.ToString()
+        ]);
 
         return Convert.ToHexStringLower(
             SHA256.HashData(Encoding.UTF8.GetBytes(material)))[..EtagLength];
@@ -159,8 +165,57 @@ public sealed class StateFunctionCache(
     private static string FormatTimestamp(DateTime? value) =>
         value?.ToString("O", CultureInfo.InvariantCulture) ?? string.Empty;
 
-    private string BuildCallerHash(GetInstanceStateInput input) =>
-        CallerScopeHash.Compute(currentUser, input.Role, input.Roles, input.Extensions, input.Headers, input.Version);
+    /// <summary>
+    /// The caller-scope hash of the last request seen by this (request-scoped) instance. One poll asks
+    /// for it up to four times — the key, the fast-path ETag, and on a build the response ETag and
+    /// the parent ETag — and the answer cannot change within a request, so it is computed once. The
+    /// memo is replaced as one reference, so a concurrent reader sees either the old or the new
+    /// snapshot, never a torn one.
+    /// </summary>
+    private CallerHashMemo? _callerHashMemo;
+
+    private string BuildCallerHash(GetInstanceStateInput input)
+    {
+        var memo = _callerHashMemo;
+        if (memo is not null && memo.Matches(input, currentUser))
+            return memo.Hash;
+
+        var hash = CallerScopeHash.Compute(
+            currentUser, input.Role, input.Roles, input.Extensions, input.Headers, input.Version);
+        _callerHashMemo = new CallerHashMemo(input, currentUser, hash);
+        return hash;
+    }
+
+    /// <summary>
+    /// Everything <see cref="CallerScopeHash.Compute"/> reads, captured by reference (the request's
+    /// collections) or by value (strings). A reassigned member or a different caller identity is a
+    /// miss; the collections are request-owned and not mutated in place after binding.
+    /// </summary>
+    private sealed class CallerHashMemo(GetInstanceStateInput input, ICurrentUser user, string hash)
+    {
+        private readonly GetInstanceStateInput _input = input;
+        private readonly string? _role = input.Role;
+        private readonly IReadOnlyList<string>? _roles = input.Roles;
+        private readonly string[]? _extensions = input.Extensions;
+        private readonly Dictionary<string, string?> _headers = input.Headers;
+        private readonly string? _version = input.Version;
+        private readonly string? _userId = user.Id;
+        private readonly string? _actorUserName = user.ActorUserName;
+        private readonly string? _userName = user.UserName;
+
+        public string Hash { get; } = hash;
+
+        public bool Matches(GetInstanceStateInput candidate, ICurrentUser user) =>
+            ReferenceEquals(_input, candidate)
+            && string.Equals(_role, candidate.Role, StringComparison.Ordinal)
+            && ReferenceEquals(_roles, candidate.Roles)
+            && ReferenceEquals(_extensions, candidate.Extensions)
+            && ReferenceEquals(_headers, candidate.Headers)
+            && string.Equals(_version, candidate.Version, StringComparison.Ordinal)
+            && string.Equals(_userId, user.Id, StringComparison.Ordinal)
+            && string.Equals(_actorUserName, user.ActorUserName, StringComparison.Ordinal)
+            && string.Equals(_userName, user.UserName, StringComparison.Ordinal);
+    }
 
     /// <inheritdoc />
     public async Task<StateFunctionCacheEntry?> GetAsync(string key, CancellationToken cancellationToken = default)

@@ -32,7 +32,8 @@ namespace BBT.Workflow.Domains.Instances;
 /// <list type="bullet">
 /// <item>With latest-only loading, <see cref="EfCoreInstanceRepository.FindByIdentifierAsync"/>
 /// loads the same aggregate (latest data row + open correlations) in two commands instead of the
-/// split query's three.</item>
+/// split query's three; so does the no-tracking <see cref="EfCoreInstanceRepository.FindByIdentifierAsReadOnlyAsync"/>
+/// behind the read endpoints, and the state function's combined load reads every correlation once.</item>
 /// <item><see cref="EfCoreInstanceRepository.AcceptPersistedBusyAsync"/> mirrors a Busy the CAS
 /// already committed without the next SaveChanges writing <c>Status</c> again.</item>
 /// </list>
@@ -118,6 +119,134 @@ public sealed class InstanceHopLoadShapeTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task LatestOnly_read_only_load_uses_two_commands_and_keeps_the_aggregate_shape()
+    {
+        // The read endpoints' load (GET instance, data/view/schema/master functions): was the split
+        // query's three commands, now the instance + latest row in one and the open correlations in
+        // a second — the same aggregate, still detached.
+        var seeded = await SeedAsync("read-only-latest");
+        var recorder = new CommandRecorder();
+        await using var ctx = CreateContext(recorder);
+        var repository = CreateRepository(ctx, latestOnly: true);
+
+        var loaded = await repository.FindByIdentifierAsReadOnlyAsync(seeded.Id.ToString(), CancellationToken.None);
+
+        loaded.ShouldNotBeNull();
+        recorder.Commands.Count.ShouldBe(2);
+        recorder.Commands[1].ShouldContain("\"InstancesCorrelations\"");
+        loaded!.DataList.Count.ShouldBe(1);
+        loaded.DataList.Single().IsLatest.ShouldBeTrue();
+        loaded.IsDataPartiallyLoaded.ShouldBeTrue();
+        loaded.ChildCorrelations.Count.ShouldBe(2);
+        loaded.ChildCorrelations.ShouldAllBe(c => !c.IsCompleted);
+        loaded.HasActiveSubFlow.ShouldBeTrue();
+        ctx.Entry(loaded).State.ShouldBe(EntityState.Detached);
+        ctx.ChangeTracker.Entries().ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task LatestOnly_read_only_load_resolves_a_key_identifier()
+    {
+        var seeded = await SeedAsync("read-only-by-key");
+        await using var ctx = CreateContext();
+        var repository = CreateRepository(ctx, latestOnly: true);
+
+        var loaded = await repository.FindByIdentifierAsReadOnlyAsync("read-only-by-key", CancellationToken.None);
+
+        loaded.ShouldNotBeNull();
+        loaded!.Id.ShouldBe(seeded.Id);
+        loaded.DataList.Count.ShouldBe(1);
+        loaded.ChildCorrelations.Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task Read_only_load_answers_null_for_an_unknown_identifier()
+    {
+        await SeedAsync("read-only-known");
+        await using var ctx = CreateContext();
+        var repository = CreateRepository(ctx, latestOnly: true);
+
+        (await repository.FindByIdentifierAsReadOnlyAsync(Guid.NewGuid().ToString(), CancellationToken.None))
+            .ShouldBeNull();
+        var (instance, all) = await repository.FindByIdentifierAsReadOnlyWithAllCorrelationsAsync(
+            "read-only-unknown", CancellationToken.None);
+        instance.ShouldBeNull();
+        all.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Full_history_read_only_load_keeps_the_split_query()
+    {
+        var seeded = await SeedAsync("read-only-full");
+        var recorder = new CommandRecorder();
+        await using var ctx = CreateContext(recorder);
+        var repository = CreateRepository(ctx, latestOnly: false);
+
+        var loaded = await repository.FindByIdentifierAsReadOnlyAsync(seeded.Id.ToString(), CancellationToken.None);
+
+        loaded.ShouldNotBeNull();
+        recorder.Commands.Count.ShouldBe(3);
+        loaded!.DataList.Count.ShouldBe(2);
+        loaded.IsDataPartiallyLoaded.ShouldBeFalse();
+        loaded.ChildCorrelations.Count.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task State_load_reads_every_correlation_once_and_derives_the_open_set()
+    {
+        // The state function's load: the aggregate (open-only collection) AND the full set it lists,
+        // from ONE correlation command — previously the open-correlation include plus a separate
+        // GetByParentAsync read.
+        var seeded = await SeedAsync("state-load-latest");
+        var recorder = new CommandRecorder();
+        await using var ctx = CreateContext(recorder);
+        var repository = CreateRepository(ctx, latestOnly: true);
+
+        var (loaded, all) = await repository.FindByIdentifierAsReadOnlyWithAllCorrelationsAsync(
+            seeded.Id.ToString(), CancellationToken.None);
+
+        loaded.ShouldNotBeNull();
+        recorder.Commands.Count.ShouldBe(2);
+        recorder.Commands.Count(c => c.Contains("\"InstancesCorrelations\"")).ShouldBe(1);
+        all.Count.ShouldBe(3);
+        all.Count(c => c.IsCompleted).ShouldBe(1);
+        loaded!.ChildCorrelations.Count.ShouldBe(2);
+        loaded.ChildCorrelations.ShouldAllBe(c => !c.IsCompleted);
+        loaded.HasActiveSubFlow.ShouldBeTrue();
+        loaded.DataList.Count.ShouldBe(1);
+        loaded.IsDataPartiallyLoaded.ShouldBeTrue();
+        ctx.ChangeTracker.Entries().ShouldBeEmpty();
+
+        // Same rows and the same ORDER BY as the dedicated correlation read it replaces (the rows
+        // tie on ParentState/CompletedAt here, so the order itself is compared through the SQL).
+        var correlationSql = recorder.Commands.Single(c => c.Contains("\"InstancesCorrelations\""));
+        recorder.Commands.Clear();
+        var expected = await new EfCoreInstanceCorrelationRepository(
+                new FixedDbContextProvider(ctx), new ServiceCollection().BuildServiceProvider())
+            .GetByParentAsync(seeded.Id, CancellationToken.None);
+        all.Select(c => c.Id).ShouldBe(expected.Select(c => c.Id), ignoreOrder: true);
+        OrderByClause(correlationSql).ShouldBe(OrderByClause(recorder.Commands.Single()));
+    }
+
+    [Fact]
+    public async Task Full_history_state_load_reads_every_correlation_once()
+    {
+        var seeded = await SeedAsync("state-load-full");
+        var recorder = new CommandRecorder();
+        await using var ctx = CreateContext(recorder);
+        var repository = CreateRepository(ctx, latestOnly: false);
+
+        var (loaded, all) = await repository.FindByIdentifierAsReadOnlyWithAllCorrelationsAsync(
+            "state-load-full", CancellationToken.None);
+
+        loaded.ShouldNotBeNull();
+        recorder.Commands.Count.ShouldBe(3);
+        all.Count.ShouldBe(3);
+        loaded!.DataList.Count.ShouldBe(2);
+        loaded.ChildCorrelations.Count.ShouldBe(2);
+    }
+
+    [Fact]
     public async Task AcceptPersistedBusy_does_not_write_Status_again_on_the_next_save()
     {
         var seeded = await SeedAsync("busy-mirror", withCorrelations: false);
@@ -194,6 +323,8 @@ public sealed class InstanceHopLoadShapeTests : IAsyncLifetime
         recorder.Commands.Single(c => c.StartsWith("UPDATE", StringComparison.Ordinal))
             .ShouldContain("\"Status\"");
     }
+
+    private static string OrderByClause(string sql) => sql[sql.IndexOf("ORDER BY", StringComparison.Ordinal)..];
 
     private async Task<Instance> SeedAsync(string key, bool withCorrelations = true, string? modifiedBy = null)
     {

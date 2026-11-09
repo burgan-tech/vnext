@@ -1350,6 +1350,28 @@ public sealed class InstanceQueryAppService(
         CancellationToken cancellationToken)
     {
         var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(instanceIdentifier, cancellationToken);
+        return TagRootAndEnsureFound(instance, instanceIdentifier);
+    }
+
+    /// <summary>
+    /// The state function's load: the same read-only aggregate as
+    /// <see cref="GetInstanceByIdOrKeyAsync(string, CancellationToken)"/> plus the instance's full
+    /// correlation set (active and completed), both from ONE correlation query — the aggregate's
+    /// open-only collection is derived from it instead of being read again by an include.
+    /// </summary>
+    private async Task<Result<(Instance Instance, List<InstanceCorrelation> AllCorrelations)>>
+        GetInstanceWithAllCorrelationsAsync(
+            string instanceIdentifier,
+            CancellationToken cancellationToken)
+    {
+        var (instance, allCorrelations) = await instanceRepository
+            .FindByIdentifierAsReadOnlyWithAllCorrelationsAsync(instanceIdentifier, cancellationToken);
+        return TagRootAndEnsureFound(instance, instanceIdentifier)
+            .Map(found => (found, allCorrelations));
+    }
+
+    private static Result<Instance> TagRootAndEnsureFound(Instance? instance, string instanceIdentifier)
+    {
         var result = instance.EnsureNotNull(WorkflowErrors.InstanceNotFound(instanceIdentifier));
         if (result.IsSuccess)
         {
@@ -1822,22 +1844,21 @@ public sealed class InstanceQueryAppService(
             using var read = InstanceReadActivityHelper.StartRead(
                 InstanceReadKinds.State, input.Domain, input.Workflow);
 
-            return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
-            .BindAsync(instance =>
-                componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion ?? input.Version, cancellationToken)
-                    .MapAsync(workflow => (instance, workflow)))
+            return await GetInstanceWithAllCorrelationsAsync(input.Instance, cancellationToken)
+            .BindAsync(loaded =>
+                componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, loaded.Instance.FlowVersion ?? input.Version, cancellationToken)
+                    .MapAsync(workflow => (instance: loaded.Instance, workflow, loaded.AllCorrelations)))
             .MatchAsync(
                 onSuccess: async data =>
                 {
                     using var instanceScope = BeginInstanceScope(data.instance);
 
-                    // Full correlation set (active + completed), ordered by creation time. The aggregate's
-                    // own ChildCorrelations collection is loaded with an active-only filtered include, so
-                    // the completed rows the response exposes require this dedicated read. Ordering is
-                    // applied here rather than in the shared repository method, whose ParentState ordering
-                    // the instance-correlation and monitor consumers already depend on.
-                    var allCorrelations = (await instanceCorrelationRepository
-                            .GetByParentAsync(data.instance.Id, cancellationToken))
+                    // Full correlation set (active + completed), ordered by creation time. It comes from
+                    // the same single correlation query that filled the aggregate's open-only
+                    // ChildCorrelations, in the repository's ParentState/CompletedAt order — the order
+                    // GetByParentAsync returns, which the stable OrderBy below needs to break CreatedAt
+                    // ties exactly as before.
+                    var allCorrelations = data.AllCorrelations
                         .OrderBy(c => c.CreatedAt)
                         .ToList();
 

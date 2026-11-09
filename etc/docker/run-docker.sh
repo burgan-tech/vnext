@@ -640,7 +640,9 @@ case "$CMD" in
   up)       cmd_up "${1:-}" ;;
   plan)     cmd_plan "${1:-}" ;;
   switch)   cmd_down --all; cmd_up "${1:-}" ;;
-  restart)  d="$(resolve_domain "${1:-}")"; OFFSET_ARG="$(stored "$d" offset)"; cmd_up "$d" ;;
+  restart)  d="$(resolve_domain "${1:-}")"; OFFSET_ARG="$(stored "$d" offset)"
+            # keep the database an earlier `up --db` chose; without it restart fell back to the default name
+            [ -z "${DB_OVERRIDE:-}" ] && DB_OVERRIDE="$(stored "$d" db)"; cmd_up "$d" ;;
   down)     cmd_down "${1:-}" ;;
   status)   cmd_status ;;
   record)   d="$(resolve_domain "${1:-}")"; [ -f "$(dom_dir "$d")/offset" ] || die "unknown domain '$d'"; write_record "$d" "$(domain_running "$d" && echo running || echo stopped)"; ok "record written: $RECORDS/$d.md" ;;

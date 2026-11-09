@@ -175,7 +175,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         // configured provider afterwards and, being an explicit Add, wins over this.
         services.TryAddScoped<ICallerRoleResolver, DefaultCallerRoleResolver>();
         services.AddScoped<IAuthorizeAppService, AuthorizeAppService>();
-        services.AddScoped<IRepresentationEtagService, RepresentationEtagService>();
+        services.AddSingleton<IRepresentationEtagService, RepresentationEtagService>();
         services.AddScoped<ISchemaFieldFilterService, SchemaFieldFilterService>();
         services.AddScoped<BBT.Workflow.Instances.IInstanceDataReadService, BBT.Workflow.Instances.InstanceDataReadService>();
         services.AddScoped<BBT.Workflow.Instances.IComputedFieldReadService, BBT.Workflow.Instances.ComputedFieldReadService>();

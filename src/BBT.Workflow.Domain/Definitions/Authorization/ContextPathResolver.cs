@@ -35,10 +35,30 @@ public static class ContextPathResolver
         if (segments.Length == 0)
             return [];
 
+        return Resolve(root, segments, 0);
+    }
+
+    /// <summary>
+    /// Resolves already-split <paramref name="segments"/> (from <see cref="SplitSegments"/>), starting at
+    /// <paramref name="startIndex"/>, against <paramref name="root"/>. Exactly the walk <see cref="Resolve(JsonElement, string)"/>
+    /// performs, so a caller that routes on the leading segments itself — the role grant evaluator, which
+    /// resolves <c>Instance.Data.*</c> against the instance's own data element instead of a copy — gets the
+    /// same values. A <paramref name="startIndex"/> equal to the segment count collects <paramref name="root"/>
+    /// itself as the leaf.
+    /// </summary>
+    public static IReadOnlyList<string> Resolve(JsonElement root, string[] segments, int startIndex)
+    {
         var results = new List<string>();
-        Walk(root, segments, 0, results);
+        Walk(root, segments, startIndex, results);
         return results;
     }
+
+    /// <summary>
+    /// Splits a path into the segments <see cref="Resolve(JsonElement, string)"/> walks: dot-separated,
+    /// trimmed, empty segments dropped, <c>[*]</c> as a segment of its own. Empty for a blank path.
+    /// </summary>
+    public static string[] SplitSegments(string path)
+        => string.IsNullOrWhiteSpace(path) ? [] : SplitPath(path);
 
     /// <summary>
     /// Splits a path string into segments, normalizing <c>[*]</c> as a dedicated segment.

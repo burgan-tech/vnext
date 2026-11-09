@@ -24,6 +24,26 @@ public interface ILocalTaskInvoker
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>
+/// A local invoker that also accepts its binding as the typed object the orchestrator mapped it to.
+/// The <see cref="ILocalTaskInvoker"/> contract takes a <see cref="JsonElement"/> because that is the
+/// wire shape; on the in-process path that meant serializing the mapped binding only to deserialize it
+/// again one call later. The dispatcher uses this overload when the router picks Local and the invoker
+/// implements it for the binding's type; the result must be identical to the <see cref="JsonElement"/>
+/// overload's for the same binding.
+/// </summary>
+/// <typeparam name="TBinding">The binding type (e.g. <c>HttpTaskBinding</c>).</typeparam>
+public interface ITypedLocalTaskInvoker<in TBinding> : ILocalTaskInvoker
+    where TBinding : class
+{
+    /// <summary>Executes the typed binding. Same failure contract as <see cref="ILocalTaskInvoker.InvokeAsync"/>.</summary>
+    Task<TaskInvocationResult> InvokeAsync(
+        string? taskKey,
+        TBinding binding,
+        TaskTraceContext? traceContext,
+        CancellationToken cancellationToken = default);
+}
+
 /// <summary>Resolves the in-process invoker for a wire task type, if one is registered.</summary>
 public interface ILocalTaskInvokerRegistry
 {

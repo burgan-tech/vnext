@@ -34,18 +34,14 @@ public sealed class SetBusyStep(
         // Skip if instance is already Busy (admission reserve or chained auto transitions).
         if (context.Instance.IsBusy)
         {
-            logger.LogDebug(
-                "Instance {InstanceId} is already Busy, skipping SetBusyStep",
-                context.InstanceId);
+            logger.SetBusySkippedAlreadyBusy(context.InstanceId);
             return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Skip if instance is completed (should not happen, but defensive)
         if (context.Instance.IsCompleted)
         {
-            logger.LogDebug(
-                "Instance {InstanceId} is already completed, skipping SetBusyStep",
-                context.InstanceId);
+            logger.SetBusySkippedCompleted(context.InstanceId);
             return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
@@ -64,10 +60,7 @@ public sealed class SetBusyStep(
         if (context.OwnsStatus)
         {
             context.Instance.Busy();
-            logger.LogDebug(
-                "Instance {InstanceId} aggregate aligned to admission's Busy for transition {TransitionKey}",
-                context.InstanceId,
-                context.TransitionKey);
+            logger.SetBusyAlignedToAdmission(context.InstanceId, context.TransitionKey);
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
@@ -79,17 +72,11 @@ public sealed class SetBusyStep(
         var flipped = await instanceRepository.TryMarkBusyAsync(context.Instance, cancellationToken);
         if (flipped)
         {
-            logger.LogDebug(
-                "Instance {InstanceId} set to Busy for transition {TransitionKey}",
-                context.InstanceId,
-                context.TransitionKey);
+            logger.SetBusyFlipped(context.InstanceId, context.TransitionKey);
         }
         else
         {
-            logger.LogDebug(
-                "Instance {InstanceId} was no longer Active at SetBusy for transition {TransitionKey}; continuing without the flip",
-                context.InstanceId,
-                context.TransitionKey);
+            logger.SetBusyFlipLost(context.InstanceId, context.TransitionKey);
         }
 
         return Result<StepOutcome>.Ok(StepOutcome.Continue());
