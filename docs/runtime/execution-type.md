@@ -136,6 +136,25 @@ back to the flow-level `executionType` (or the caller's query parameter).
   round (HTTP calls included) plus a full-instance-data `ScriptContext` build per sync transition
   for a field no client read.
 
+## A sync response carries the state, free of charge
+
+- **Sync start/transition responses carry `currentState` and `effectiveState`** next to `status` /
+  `effectiveStatus` (vnext#1182). Names and values are the instance GET's `metadata.currentState` /
+  `metadata.effectiveState`: the persisted columns, **no SubFlow descent**. They are deliberately not
+  called `state` — the state function's `state` is the active SubFlow leaf's, which these are not.
+- **Also on the identity-only answer.** A runtime-internal sync call (`SuppressResponseEnrichment`: the
+  cross-domain `sub/instances/start`, the subflow forward relay) still skips the enrichment, but copies
+  both fields from the instance the pipeline already holds (`transitionOutput.PipelineInstance`) — the
+  same snapshot its `status` comes from, so the pair is consistent. That is what puts the child's
+  state into a sync SubProcess task output: `response.data.value.currentState` on a same-domain start
+  (the local executor nests the start output under `value`), `response.data.currentState` on a
+  cross-domain one (the remote body is passed through flat).
+- **No query on any path.** The enrichment path reads them off the instance it already reloaded or
+  reused; the identity-only path off the pipeline's instance. Do not add a reload or a descent to fill
+  them — a pipeline that answered from a `ClientResponse` has no instance and leaves both `null`.
+- An async `202` carries neither. Adding the fields changed the sync response's representation ETag
+  once; the state function body and `ResponseShapeVersion` are untouched.
+
 ## Implementation map
 
 - Value object: `ExecutionType` (`src/BBT.Workflow.Domain/Definitions/ExecutionType.cs`).
