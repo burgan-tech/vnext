@@ -5,36 +5,21 @@ namespace Microsoft.Extensions.Configuration;
 /// <summary>
 /// Normalises the PostgreSQL connection strings of a host before any service reads them.
 /// <para>
-/// Every host (orchestration, inbox, outbox, migrator) opens its own Npgsql pool per connection
-/// string, and Npgsql's default <c>Maximum Pool Size</c> is 100 per pool. Four hosts against one
-/// database can therefore ask for 400 connections from a server configured for 100: under a burst
-/// the server answers <c>53300: sorry, too many clients already</c>, and a pipeline step that loses
-/// that race faults its instance (measured on the contract domain at concurrency 20). The pool also
-/// stayed full after the burst, and with an empty <c>application_name</c> nobody could tell which
-/// host held the connections.
+/// It only adds <c>Application Name</c>, taken from <c>OTEL_SERVICE_NAME</c>, <c>DAPR_APP_ID</c> or the
+/// given fallback, so <c>pg_stat_activity</c> (and PgBouncer's <c>SHOW CLIENTS</c>) shows which host
+/// owns a connection; with an empty <c>application_name</c> nobody could tell. A name already present in
+/// the connection string wins, and nothing else in the string is changed.
 /// </para>
 /// <para>
-/// This step only fills in what the connection string does not already say:
-/// <list type="bullet">
-/// <item><c>Application Name</c> — always, from <c>OTEL_SERVICE_NAME</c>, <c>DAPR_APP_ID</c> or the
-/// given fallback, so <c>pg_stat_activity</c> shows the owning host.</item>
-/// <item><c>Maximum Pool Size</c> — only when <c>Database:MaxPoolSize</c> is configured. The sum of
-/// (pods × hosts × pool size) must stay below the server's <c>max_connections</c>; with a pool limit a
-/// burst waits for a free connection (<c>Timeout</c>) instead of being refused by the server.</item>
-/// <item><c>Connection Idle Lifetime</c> — only when <c>Database:ConnectionIdleLifetimeSeconds</c> is
-/// configured, so a pool shrinks back after a burst.</item>
-/// </list>
-/// An explicit value in the connection string always wins; with no <c>Database</c> section the
-/// only change is the application name.
+/// Pool sizing is deliberately left to the connection string and the deployment: in production the
+/// hosts connect through PgBouncer, which owns the server-side connection limit, so a client-side
+/// default here would only second-guess it.
 /// </para>
 /// </summary>
 public static class DatabaseConnectionDefaultsConfigurationExtensions
 {
-    /// <summary>Configuration section of the pool defaults.</summary>
-    public const string Section = "Database";
-
     /// <summary>
-    /// Applies the defaults to <c>ConnectionStrings:Default</c> and every
+    /// Applies the application name to <c>ConnectionStrings:Default</c> and every
     /// <c>ConnectionStrings:Domains:*</c> entry and layers the result over the existing sources.
     /// Call after every source that may supply a connection string (secret store included).
     /// </summary>
@@ -48,8 +33,6 @@ public static class DatabaseConnectionDefaultsConfigurationExtensions
             configuration["OTEL_SERVICE_NAME"],
             configuration["DAPR_APP_ID"],
             fallbackApplicationName);
-        var maxPoolSize = configuration.GetValue<int?>($"{Section}:MaxPoolSize");
-        var idleLifetime = configuration.GetValue<int?>($"{Section}:ConnectionIdleLifetimeSeconds");
 
         var overrides = new Dictionary<string, string?>();
         Normalise("ConnectionStrings:Default");
@@ -73,7 +56,7 @@ public static class DatabaseConnectionDefaultsConfigurationExtensions
                 return;
             }
 
-            var normalised = Apply(raw, applicationName, maxPoolSize, idleLifetime);
+            var normalised = Apply(raw, applicationName);
             if (!string.Equals(normalised, raw, StringComparison.Ordinal))
             {
                 overrides[key] = normalised;
@@ -82,9 +65,9 @@ public static class DatabaseConnectionDefaultsConfigurationExtensions
     }
 
     /// <summary>
-    /// Applies the defaults to one connection string; values already present are kept.
+    /// Adds the application name to one connection string unless it already states one.
     /// </summary>
-    public static string Apply(string connectionString, string? applicationName, int? maxPoolSize, int? idleLifetimeSeconds)
+    public static string Apply(string connectionString, string? applicationName)
     {
         NpgsqlConnectionStringBuilder builder;
         try
@@ -97,32 +80,14 @@ public static class DatabaseConnectionDefaultsConfigurationExtensions
             return connectionString;
         }
 
-        if (string.IsNullOrWhiteSpace(builder.ApplicationName) && !string.IsNullOrWhiteSpace(applicationName))
+        if (!string.IsNullOrWhiteSpace(builder.ApplicationName) || string.IsNullOrWhiteSpace(applicationName))
         {
-            builder.ApplicationName = applicationName;
+            return connectionString;
         }
 
-        if (maxPoolSize is > 0 && !HasKey(connectionString, "Maximum Pool Size", "Max Pool Size", "MaxPoolSize"))
-        {
-            builder.MaxPoolSize = maxPoolSize.Value;
-            if (builder.MinPoolSize > builder.MaxPoolSize)
-            {
-                builder.MinPoolSize = builder.MaxPoolSize;
-            }
-        }
-
-        if (idleLifetimeSeconds is > 0 && !HasKey(connectionString, "Connection Idle Lifetime", "ConnectionIdleLifetime"))
-        {
-            builder.ConnectionIdleLifetime = idleLifetimeSeconds.Value;
-        }
-
+        builder.ApplicationName = applicationName;
         return builder.ConnectionString;
     }
-
-    private static bool HasKey(string connectionString, params string[] keys) =>
-        connectionString.Split(';', StringSplitOptions.RemoveEmptyEntries)
-            .Select(part => part.Split('=', 2)[0].Trim())
-            .Any(name => keys.Any(k => string.Equals(name, k, StringComparison.OrdinalIgnoreCase)));
 
     private static string FirstNonEmpty(params string?[] values) =>
         values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v)) ?? string.Empty;

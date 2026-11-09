@@ -7,56 +7,39 @@ using Xunit;
 namespace BBT.Workflow.Application.Tests.Configuration;
 
 /// <summary>
-/// The host-level connection-string normalisation: application name always, pool limits only from
-/// configuration, and an explicit value in the connection string always wins.
+/// The host-level connection-string normalisation: the application name is added when missing, and
+/// nothing else in the connection string changes — pool sizing stays with the deployment (PgBouncer).
 /// </summary>
 public class DatabaseConnectionDefaultsConfigurationExtensionsTests
 {
     private const string Plain = "Host=localhost;Port=5432;Database=vNext_Contract;Username=postgres;Password=secret";
 
     [Fact]
-    public void Apply_AddsTheApplicationName_AndLeavesThePoolAloneWithoutConfiguration()
+    public void Apply_AddsTheApplicationName_AndChangesNothingElse()
     {
         var result = new NpgsqlConnectionStringBuilder(
-            DatabaseConnectionDefaultsConfigurationExtensions.Apply(Plain, "vnext-orchestration", null, null));
+            DatabaseConnectionDefaultsConfigurationExtensions.Apply(Plain, "vnext-orchestration"));
 
         result.ApplicationName.ShouldBe("vnext-orchestration");
-        result.MaxPoolSize.ShouldBe(new NpgsqlConnectionStringBuilder().MaxPoolSize);
-        result.Database.ShouldBe("vNext_Contract");
-        result.Password.ShouldBe("secret");
+        WithoutApplicationName(result).ShouldBe(new NpgsqlConnectionStringBuilder(Plain).ConnectionString);
     }
 
     [Fact]
-    public void Apply_SetsPoolLimits_FromConfiguration()
+    public void Apply_KeepsTheConnectionStringUntouched_WhenItAlreadyNamesTheApplication()
     {
-        var result = new NpgsqlConnectionStringBuilder(
-            DatabaseConnectionDefaultsConfigurationExtensions.Apply(Plain, "inbox", 20, 60));
+        var explicitString = Plain + ";Application Name=from-helm;Maximum Pool Size=7";
 
-        result.MaxPoolSize.ShouldBe(20);
-        result.ConnectionIdleLifetime.ShouldBe(60);
+        DatabaseConnectionDefaultsConfigurationExtensions.Apply(explicitString, "vnext-orchestration")
+            .ShouldBe(explicitString);
     }
 
     [Fact]
-    public void Apply_KeepsValuesTheConnectionStringAlreadyStates()
+    public void Apply_KeepsAStringItCannotParse()
     {
-        var explicitString = Plain + ";Application Name=from-helm;Maximum Pool Size=7;Connection Idle Lifetime=11";
+        const string unparseable = "this is not a connection string";
 
-        var result = new NpgsqlConnectionStringBuilder(
-            DatabaseConnectionDefaultsConfigurationExtensions.Apply(explicitString, "vnext-orchestration", 20, 60));
-
-        result.ApplicationName.ShouldBe("from-helm");
-        result.MaxPoolSize.ShouldBe(7);
-        result.ConnectionIdleLifetime.ShouldBe(11);
-    }
-
-    [Fact]
-    public void Apply_ClampsMinPoolSizeToTheNewMaximum()
-    {
-        var result = new NpgsqlConnectionStringBuilder(
-            DatabaseConnectionDefaultsConfigurationExtensions.Apply(Plain + ";Minimum Pool Size=30", null, 10, null));
-
-        result.MaxPoolSize.ShouldBe(10);
-        result.MinPoolSize.ShouldBe(10);
+        DatabaseConnectionDefaultsConfigurationExtensions.Apply(unparseable, "vnext-orchestration")
+            .ShouldBe(unparseable);
     }
 
     [Fact]
@@ -69,17 +52,16 @@ public class DatabaseConnectionDefaultsConfigurationExtensionsTests
             ["ConnectionStrings:Domains:sales"] = Plain.Replace("vNext_Contract", "vNext_Sales"),
             ["OTEL_SERVICE_NAME"] = "vnext-contract-app",
             ["DAPR_APP_ID"] = "ignored-because-otel-wins",
-            ["Database:MaxPoolSize"] = "25",
         });
 
         configuration.ApplyDatabaseConnectionDefaults("fallback");
 
         var main = new NpgsqlConnectionStringBuilder(configuration.GetConnectionString("Default"));
         main.ApplicationName.ShouldBe("vnext-contract-app");
-        main.MaxPoolSize.ShouldBe(25);
+        WithoutApplicationName(main).ShouldBe(new NpgsqlConnectionStringBuilder(Plain).ConnectionString);
         var sales = new NpgsqlConnectionStringBuilder(configuration["ConnectionStrings:Domains:sales"]);
         sales.Database.ShouldBe("vNext_Sales");
-        sales.MaxPoolSize.ShouldBe(25);
+        sales.ApplicationName.ShouldBe("vnext-contract-app");
     }
 
     [Fact]
@@ -91,4 +73,8 @@ public class DatabaseConnectionDefaultsConfigurationExtensionsTests
 
         configuration.GetConnectionString("Default").ShouldBeNull();
     }
+
+    /// <summary>The connection string with the added name removed, normalised for comparison.</summary>
+    private static string WithoutApplicationName(NpgsqlConnectionStringBuilder builder) =>
+        new NpgsqlConnectionStringBuilder(builder.ConnectionString) { ApplicationName = null }.ConnectionString;
 }
