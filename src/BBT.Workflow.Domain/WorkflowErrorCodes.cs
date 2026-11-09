@@ -158,6 +158,35 @@ public static class WorkflowErrorCodes
     /// </summary>
     public const string VersionRegistryUnavailable = "Instance:100053";
 
+    /// <summary>
+    /// The agent run named by <c>?runId=</c> does not belong to the instance (issue #1105). Maps to HTTP 404.
+    /// </summary>
+    public const string AgentRunNotFound = "Instance:100054";
+
+    /// <summary>
+    /// <c>?runId=</c> is not a GUID (issue #1105). Maps to HTTP 400.
+    /// </summary>
+    public const string AgentRunIdInvalid = "Instance:100055";
+
+    #endregion
+
+    #region AI Agent Errors (issue #1105)
+
+    /// <summary>The <c>sys-agents</c> component an AiAgent state references could not be resolved.</summary>
+    public const string AgentNotFound = "Agent:100001";
+
+    /// <summary>The agent's provider profile is not configured in this environment (<c>AiAgent:Providers</c>).</summary>
+    public const string AgentProviderNotConfigured = "Agent:100002";
+
+    /// <summary>The run failed and the agent's <c>policy.onProviderError</c> is <c>fault</c>.</summary>
+    public const string AgentRunFailed = "Agent:100003";
+
+    /// <summary>The caller may not dry-run agents (<c>AiAgent:DryRun:Roles</c>).</summary>
+    public const string AgentDryRunForbidden = "Agent:100004";
+
+    /// <summary>The dry-run request or the agent definition is invalid.</summary>
+    public const string AgentDryRunInvalid = "Agent:100005";
+
     #endregion
     
     #region Transition Errors (100xxx)

@@ -190,6 +190,7 @@ public class FileAdmissionBenchmarks
         public Task<Result<Extension>> GetExtensionAsync(string domain, string key, string? version, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Result<IEnumerable<Extension>>> GetAllExtensionsAsync(string domain, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Result<Mapping>> GetMappingAsync(string domain, string key, string? version, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<Result<Agent>> GetAgentAsync(string domain, string key, string? version, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<Result> SetAsync<T>(T entity, CancellationToken cancellationToken = default) where T : class, IDomainEntity, IReferenceSetter => throw new NotSupportedException();
     }
 

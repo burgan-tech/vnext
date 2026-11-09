@@ -30,7 +30,8 @@ public enum TaskType
     DaprConversation = 20,
     FanOut = 21,
     ExternalHttp = 22,
-    Python = 23
+    Python = 23,
+    Mcp = 24
 }
 
 /// <summary>

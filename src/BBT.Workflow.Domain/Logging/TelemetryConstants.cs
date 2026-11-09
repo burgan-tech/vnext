@@ -725,6 +725,15 @@ public static class TelemetryConstants
         public const string Gateway = "BBT.Workflow.Gateway";
 
         /// <summary>
+        /// AI agent model calls (issue #1105): one <c>gen_ai</c> span per provider call, emitted by the
+        /// Microsoft.Extensions.AI OpenTelemetry client in the agents module.
+        /// </summary>
+        public const string Agents = "BBT.Workflow.Agents";
+
+        /// <summary>The <c>Agent.Run/{state}</c> span of an AiAgent state entry (issue #1105).</summary>
+        public const string AgentsRun = "BBT.Workflow.Agents.Run";
+
+        /// <summary>
         /// All ActivitySource names registered by the vNext engine.
         /// </summary>
         public static readonly string[] All =
@@ -742,7 +751,9 @@ public static class TelemetryConstants
             ExecutionInvokers,
             Execution,
             WorkersInbox,
-            Gateway
+            Gateway,
+            Agents,
+            AgentsRun
         ];
 
         /// <summary>
@@ -771,7 +782,12 @@ public static class TelemetryConstants
 
                 // EventTraceScope's source; only the Inbox worker consumes events, and its own
                 // wildcard covers it there.
-                [WorkersInbox] = ["orchestration", "execution", "workers-outbox"]
+                [WorkersInbox] = ["orchestration", "execution", "workers-outbox"],
+
+                // AI agent states run only on the orchestration host (the agents module is referenced
+                // nowhere else).
+                [Agents] = ["execution", "workers-inbox", "workers-outbox"],
+                [AgentsRun] = ["execution", "workers-inbox", "workers-outbox"]
             };
     }
 

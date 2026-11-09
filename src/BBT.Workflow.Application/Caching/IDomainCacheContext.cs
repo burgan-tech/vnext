@@ -15,6 +15,7 @@ public interface IDomainCacheContext
     ICacheSet<View> Views { get; }
     ICacheSet<Extension> Extensions { get; }
     ICacheSet<Mapping> Mappings { get; }
+    ICacheSet<Agent> Agents { get; }
 
     /// <summary>
     /// Gets the cache set for the specified entity type.

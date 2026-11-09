@@ -61,6 +61,8 @@ public static class InstanceReadKinds
     /// <summary>The recorded sub-steps of one task journal row — the <c>actions</c> function.</summary>
     public const string ActionHistory = "actions";
 
+    public const string AgentRuns = "agentRuns";
+
     /// <summary>The attempts model of one transition key — the transition <c>metrics</c> endpoint.</summary>
     public const string TransitionMetrics = "transitionMetrics";
 

@@ -80,6 +80,7 @@ public sealed class RunAutomaticTransitionsStep(
         }
 
         logger.AutoTransitionSelected(winner.TransitionKey, context.Target!.Key, context.InstanceId);
+        RecordRulesDecision(context, winner.TransitionKey);
         
         // Request next transition for sync dispatch chain
         context.Directives.RequestNextTransition(
@@ -91,6 +92,44 @@ public sealed class RunAutomaticTransitionsStep(
     }
 
     /// <summary>
+    /// The automatic transitions in evaluation order. On an <see cref="Definitions.StateType.AiAgent"/> state
+    /// with an in-hop decision (issue #1105): a decision that is a reserved exit (fallback after a failed run,
+    /// onExhausted) is taken alone, without evaluating any rule against data the agent never produced;
+    /// otherwise rule-bearing transitions and candidates keep their order and the reserved exits go last.
+    /// </summary>
+    private static IEnumerable<Definitions.Transition> OrderForAgent(TransitionExecutionContext context)
+    {
+        var all = context.Target!.AutoTransitions;
+        if (context.Target.StateType != Definitions.StateType.AiAgent || context.AgentDecision is not { } decision)
+            return all;
+
+        if (decision.IsReservedExit && decision.Source != BBT.Workflow.Instances.Agents.AgentDecisionSource.Rules)
+            return all.Where(t => t.Key == decision.Selected);
+
+        return all.Where(t => !decision.ReservedKeys.Contains(t.Key))
+            .Concat(all.Where(t => decision.ReservedKeys.Contains(t.Key)));
+    }
+
+    /// <summary>
+    /// Rules mode (issue #1105): the winner is only known here, so the decision row — still pending in the
+    /// hop's unit of work — gets it now and is written with the same commit.
+    /// </summary>
+    private void RecordRulesDecision(TransitionExecutionContext context, string winner)
+    {
+        if (context.AgentDecision is not { Source: BBT.Workflow.Instances.Agents.AgentDecisionSource.Rules, DecisionRow: { } row } decision)
+            return;
+
+        row.SelectedTransition = winner;
+        if (string.Equals(winner, decision.Fallback, StringComparison.Ordinal))
+        {
+            row.Source = BBT.Workflow.Instances.Agents.AgentDecisionSource.Fallback;
+            row.IsFallback = true;
+        }
+
+        logger.AgentRulesDecisionRecorded(context.InstanceId, context.Target!.Key, winner);
+    }
+
+    /// <summary>
     /// Evaluates all automatic transitions and returns the results.
     /// </summary>
     private async Task<Result<List<AutoConditionEvaluation>>> EvaluateAllTransitionsAsync(
@@ -99,8 +138,9 @@ public sealed class RunAutomaticTransitionsStep(
     {
         var evaluations = new List<AutoConditionEvaluation>();
 
-        // State.AutoTransitions is already in evaluation order; do not re-sort here.
-        foreach (var automaticTransition in context.Target!.AutoTransitions)
+        // State.AutoTransitions is already in evaluation order; do not re-sort here — except on an
+        // AiAgent state, where OrderForAgent moves the agent's reserved exits last.
+        foreach (var automaticTransition in OrderForAgent(context))
         {
             var evalResult = await autoConditionEvaluator.EvaluateAsync(
                 automaticTransition,

@@ -77,6 +77,13 @@ public static class LifecycleOrder
     /// These tasks run when entering the new state.
     /// </summary>
     public const int OnEntry = 60;
+
+    /// <summary>
+    /// Order for running the agent of an <c>AiAgent</c> state (issue #1105).
+    /// Runs after OnEntry (so onEntry tasks can prepare data) and before SubFlow/Auto: the agent's
+    /// decision is consumed by the automatic-transition step of the same hop.
+    /// </summary>
+    public const int AgentRun = 65;
     
     /// <summary>
     /// Order for handling SubFlow operations.

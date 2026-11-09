@@ -109,6 +109,18 @@ public class WorkflowDbContext : AetherDbContext<WorkflowDbContext>, IHasEfCoreB
     /// </summary>
     public virtual DbSet<BBT.Workflow.Encryption.InstanceSecret> InstanceSecrets { get; set; }
 
+    /// <summary>Agent runs (issue #1105).</summary>
+    public virtual DbSet<BBT.Workflow.Instances.Agents.InstanceAgentRun> InstanceAgentRuns { get; set; }
+
+    /// <summary>Agent tool calls (issue #1105).</summary>
+    public virtual DbSet<BBT.Workflow.Instances.Agents.InstanceAgentToolCall> InstanceAgentToolCalls { get; set; }
+
+    /// <summary>Agent decisions (issue #1105).</summary>
+    public virtual DbSet<BBT.Workflow.Instances.Agents.InstanceAgentDecision> InstanceAgentDecisions { get; set; }
+
+    /// <summary>Agent conversations (issue #1105).</summary>
+    public virtual DbSet<BBT.Workflow.Instances.Agents.AgentSession> AgentSessions { get; set; }
+
     /// <summary>
     /// Gets or sets the background jobs.
     /// </summary>

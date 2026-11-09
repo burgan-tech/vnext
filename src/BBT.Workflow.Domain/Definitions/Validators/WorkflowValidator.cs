@@ -45,6 +45,7 @@ public class WorkflowValidator
         ValidateSubFlowOverrides(workflow, result);
         ValidateWizardStateTransitions(workflow, result);
         ValidateDefaultAutoTransitions(workflow, result);
+        ValidateAiAgentStates(workflow, result);
         ValidateAutoTransitionPriorities(workflow, result);
         ValidateLongPollInteractions(workflow, result);
         ValidateHistoryNone(workflow, result);
@@ -700,6 +701,137 @@ public class WorkflowValidator
     }
 
     /// <summary>
+    /// Validates <see cref="StateType.AiAgent"/> states (issue #1105):
+    /// - the state declares an <c>agent</c> block with an agent reference, a prompt, an output path and a decision
+    /// - <c>decision.fallback</c> is required; every reserved exit is an automatic transition of the state
+    /// - in model mode at least two candidates exist; script mode needs a decision mapping
+    /// - every <c>decision.hints</c> key is a candidate
+    /// - the sub type is Busy or None; no subFlow on the state
+    /// - a DefaultAutoTransition on the state may only be its fallback
+    /// - an <c>agent</c> block on any other state type is an error
+    /// </summary>
+    private static void ValidateAiAgentStates(Workflow workflow, WorkflowValidationResult result)
+    {
+        foreach (var state in workflow.States)
+        {
+            var statePath = $"{nameof(Workflow)}.{nameof(Workflow.States)}[{state.Key}]";
+            var agentPath = $"{statePath}.{nameof(State.Agent)}";
+
+            if (state.StateType != StateType.AiAgent)
+            {
+                if (state.Agent is not null)
+                {
+                    result.AddError(new ValidationResult(
+                        $"State '{state.Key}' declares an 'agent' block but its stateType is not AiAgent (6).",
+                        [agentPath]));
+                }
+
+                continue;
+            }
+
+            if (state.Agent is not { } binding)
+            {
+                result.AddError(new ValidationResult(
+                    $"AiAgent state '{state.Key}' must declare an 'agent' block.", [agentPath]));
+                continue;
+            }
+
+            if (binding.Agent is null || string.IsNullOrWhiteSpace(binding.Agent.Key))
+                result.AddError(new ValidationResult($"AiAgent state '{state.Key}' must reference a sys-agents component.", [$"{agentPath}.agent"]));
+
+            if (binding.Prompt is null || (string.IsNullOrWhiteSpace(binding.Prompt.Template) && string.IsNullOrWhiteSpace(binding.Prompt.Code)))
+                result.AddError(new ValidationResult($"AiAgent state '{state.Key}' must declare a prompt (template or mapping).", [$"{agentPath}.prompt"]));
+
+            if (string.IsNullOrWhiteSpace(binding.Output?.Path) || !binding.Output!.Path!.StartsWith("$.", StringComparison.Ordinal))
+                result.AddError(new ValidationResult($"AiAgent state '{state.Key}' must declare output.path as a '$.' JSON path.", [$"{agentPath}.output.path"]));
+
+            if (state.SubType is not (StateSubType.None or StateSubType.Busy))
+                result.AddError(new ValidationResult($"AiAgent state '{state.Key}' sub type must be None or Busy.", [$"{statePath}.{nameof(State.SubType)}"]));
+
+            if (state.SubFlow is not null)
+                result.AddError(new ValidationResult($"AiAgent state '{state.Key}' cannot declare a subFlow.", [$"{statePath}.{nameof(State.SubFlow)}"]));
+
+            if (binding.Decision is not { } decision)
+            {
+                result.AddError(new ValidationResult($"AiAgent state '{state.Key}' must declare a decision.", [$"{agentPath}.decision"]));
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(decision.Fallback))
+                result.AddError(new ValidationResult($"AiAgent state '{state.Key}' must declare decision.fallback.", [$"{agentPath}.decision.fallback"]));
+
+            foreach (var (member, key) in new[]
+                     {
+                         ("fallback", decision.Fallback),
+                         ("onApprovalRequest", decision.OnApprovalRequest),
+                         ("onExhausted", decision.OnExhausted)
+                     })
+            {
+                if (string.IsNullOrWhiteSpace(key))
+                    continue;
+
+                var transition = state.FindTransition(key!);
+                if (transition is null || transition.TriggerType != TriggerType.Automatic)
+                {
+                    result.AddError(new ValidationResult(
+                        $"AiAgent state '{state.Key}': decision.{member} '{key}' must be an automatic transition of the state.",
+                        [$"{agentPath}.decision.{member}"]));
+                }
+                else if (transition.Rule is not null)
+                {
+                    result.AddError(new ValidationResult(
+                        $"AiAgent state '{state.Key}': decision.{member} '{key}' cannot carry a rule; the agent decides it.",
+                        [$"{agentPath}.decision.{member}"]));
+                }
+            }
+
+            foreach (var kind10 in state.Transitions.Where(t => t.TriggerKind == TransitionKind.DefaultAutoTransition))
+            {
+                if (!string.Equals(kind10.Key, decision.Fallback, StringComparison.Ordinal))
+                {
+                    result.AddError(new ValidationResult(
+                        $"AiAgent state '{state.Key}': DefaultAutoTransition '{kind10.Key}' would fire whenever the agent has not decided; only decision.fallback may be one.",
+                        [$"{statePath}.{nameof(State.Transitions)}[{kind10.Key}]"]));
+                }
+            }
+
+            var candidates = AgentCandidateSet.Resolve(state).Select(t => t.Key).ToHashSet(StringComparer.Ordinal);
+            var mode = decision.EffectiveMode;
+
+            if (mode == AgentDecisionMode.Model && candidates.Count < 2)
+            {
+                result.AddError(new ValidationResult(
+                    $"AiAgent state '{state.Key}' in decision mode 'model' needs at least two rule-less automatic transitions besides its reserved exits (found {candidates.Count}); use mode 'rules' instead.",
+                    [$"{agentPath}.decision.mode"]));
+            }
+
+            if (mode == AgentDecisionMode.Script && decision.Mapping is null)
+            {
+                result.AddError(new ValidationResult(
+                    $"AiAgent state '{state.Key}' in decision mode 'script' must declare decision.mapping.",
+                    [$"{agentPath}.decision.mapping"]));
+            }
+
+            if (mode == AgentDecisionMode.Rules && candidates.Count > 0)
+            {
+                result.AddError(new ValidationResult(
+                    $"AiAgent state '{state.Key}' in decision mode 'rules': automatic transitions {string.Join(", ", candidates)} have no rule; give each a rule or exclude it.",
+                    [$"{statePath}.{nameof(State.Transitions)}"]));
+            }
+
+            foreach (var hint in decision.Hints?.Keys ?? Enumerable.Empty<string>())
+            {
+                if (!candidates.Contains(hint))
+                {
+                    result.AddError(new ValidationResult(
+                        $"AiAgent state '{state.Key}': decision.hints key '{hint}' is not a candidate transition.",
+                        [$"{agentPath}.decision.hints[{hint}]"]));
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// Validates automatic transition priority within each state:
     /// - A DefaultAutoTransition cannot carry a priority (it is always evaluated last)
     /// - Warns when non-default automatic transitions tie on priority in a state that uses explicit priorities
@@ -832,7 +964,8 @@ public class WorkflowValidator
         {
             foreach (var transition in state.Transitions)
             {
-                ValidateSingleTransition(transition, $"States[{state.Key}].Transitions[{transition.Key}]", result, isSharedTransition: false, isStateTransition: true);
+                ValidateSingleTransition(transition, $"States[{state.Key}].Transitions[{transition.Key}]", result, isSharedTransition: false, isStateTransition: true,
+                    agentDecided: AgentCandidateSet.IsAgentDecided(state, transition));
             }
         }
     }
@@ -845,7 +978,8 @@ public class WorkflowValidator
         string transitionPath,
         WorkflowValidationResult result,
         bool isSharedTransition,
-        bool isStateTransition = false)
+        bool isStateTransition = false,
+        bool agentDecided = false)
     {
         var basePath = $"{nameof(Workflow)}.{transitionPath}";
 
@@ -880,7 +1014,7 @@ public class WorkflowValidator
         switch (transition.TriggerType)
         {
             case TriggerType.Automatic:
-                ValidateAutoTransition(transition, basePath, result);
+                ValidateAutoTransition(transition, basePath, result, agentDecided);
                 break;
 
             case TriggerType.Scheduled:
@@ -899,10 +1033,11 @@ public class WorkflowValidator
     /// - Rule is required (except for DefaultAutoTransition which acts as fallback)
     /// - Timer, Schema, View, and Mapping are not allowed
     /// </summary>
-    private void ValidateAutoTransition(Transition transition, string basePath, WorkflowValidationResult result)
+    private void ValidateAutoTransition(Transition transition, string basePath, WorkflowValidationResult result, bool agentDecided = false)
     {
-        // Rule is required for Auto transitions, except for DefaultAutoTransition (fallback)
-        if (transition.Rule == null && transition.TriggerKind != TransitionKind.DefaultAutoTransition)
+        // Rule is required for Auto transitions, except for DefaultAutoTransition (fallback) and the
+        // rule-less transitions of an AiAgent state, whose agent decides them (issue #1105).
+        if (transition.Rule == null && transition.TriggerKind != TransitionKind.DefaultAutoTransition && !agentDecided)
         {
             result.AddError(new ValidationResult(
                 $"Auto transition '{transition.Key}' must have a rule defined.",

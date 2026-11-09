@@ -126,6 +126,7 @@ public class PipelineExecutionProfileTests : DomainTestBase<DomainEntryPoint>
             LifecycleOrder.CancelScheduledJobs,
             LifecycleOrder.OnExit,
             LifecycleOrder.OnEntry,
+            LifecycleOrder.AgentRun,
             LifecycleOrder.Schedule,
         };
         profile.ExcludedStepOrders.OrderBy(x => x).ToArray().ShouldBe(expected.OrderBy(x => x).ToArray());

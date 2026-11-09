@@ -9,6 +9,7 @@
   </Folder>
   <Folder Name="/modules/">
     <Project Path="modules/BBT.Workflow.Modules.Scripting/BBT.Workflow.Modules.Scripting.csproj" />
+    <Project Path="modules/BBT.Workflow.Modules.Agents/BBT.Workflow.Modules.Agents.csproj" />
   </Folder>
   <Folder Name="/orchestration/">
     <Project Path="orchestration/BBT.Workflow.Orchestration.HttpApi.Host/BBT.Workflow.Orchestration.HttpApi.Host.csproj" />

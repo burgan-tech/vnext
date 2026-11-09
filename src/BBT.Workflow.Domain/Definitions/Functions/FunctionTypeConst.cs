@@ -26,6 +26,8 @@ namespace BBT.Workflow.Definitions.Functions
         public const string TaskHistory = "tasks";
         /// <summary>System function: returns the recorded actions (execution sub-steps) of one task journal row.</summary>
         public const string ActionHistory = "actions";
+        /// <summary>System function: the instance's AI agent runs (metadata only); <c>?runId=</c> adds the run's tool calls (issue #1105).</summary>
+        public const string AgentRuns = "agent-runs";
         /// <summary>System function: raw bytes of an x-storage file of this instance (<c>?file=&lt;guid&gt;</c>).</summary>
         public const string File = "file";
     }

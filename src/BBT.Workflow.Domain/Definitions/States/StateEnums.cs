@@ -27,7 +27,13 @@ public enum StateType
     /// <summary>
     /// State that has wizard view
     /// </summary>
-    Wizard = 5
+    Wizard = 5,
+
+    /// <summary>
+    /// State that runs an AI agent (<c>sys-agents</c>) on entry and lets it pick one of the state's
+    /// automatic transitions (issue #1105). The instance stays Busy while the agent runs.
+    /// </summary>
+    AiAgent = 6
 }
 
 /// <summary>

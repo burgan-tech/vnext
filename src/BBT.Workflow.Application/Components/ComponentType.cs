@@ -28,7 +28,10 @@ public enum ComponentType
     Schemas,
 
     /// <summary>Mapping (reusable script-library) definitions (<c>sys-mappings</c>).</summary>
-    Mappings
+    Mappings,
+
+    /// <summary>AI agent definitions (<c>sys-agents</c>, issue #1105).</summary>
+    Agents
 }
 
 /// <summary>
@@ -67,6 +70,7 @@ public static class ComponentTypeExtensions
         ComponentType.Extensions => RuntimeSysSchemaInfo.Extensions,
         ComponentType.Schemas => RuntimeSysSchemaInfo.Schemas,
         ComponentType.Mappings => RuntimeSysSchemaInfo.Mappings,
+        ComponentType.Agents => RuntimeSysSchemaInfo.Agents,
         _ => throw new ArgumentOutOfRangeException(nameof(type), type, null)
     };
 }

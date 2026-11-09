@@ -5559,4 +5559,77 @@ public static partial class WorkflowLogs
         string message);
 
     #endregion
+    #region AI Agent (30xxx, issue #1105)
+
+    /// <summary>An agent run started on an AiAgent state entry.</summary>
+    [LoggerMessage(EventId = 30001, Level = LogLevel.Information,
+        Message = "Agent run {RunId} started: agent {AgentKey}@{AgentVersion}, state {State}, instance {InstanceId}, provider {Provider}")]
+    public static partial void AgentRunStarted(this ILogger logger, Guid runId, string agentKey, string agentVersion, string state, Guid instanceId, string provider);
+
+    /// <summary>An agent run finished with a final answer.</summary>
+    [LoggerMessage(EventId = 30002, Level = LogLevel.Information,
+        Message = "Agent run {RunId} completed for instance {InstanceId} in {DurationMs} ms: {Iterations} iteration(s), {ToolCalls} tool call(s), {TotalTokens} token(s)")]
+    public static partial void AgentRunCompleted(this ILogger logger, Guid runId, Guid instanceId, long durationMs, int iterations, int toolCalls, int totalTokens);
+
+    /// <summary>An agent run did not produce a final answer.</summary>
+    [LoggerMessage(EventId = 30003, Level = LogLevel.Warning,
+        Message = "Agent run {RunId} for instance {InstanceId} ended {Status}: {Reason}")]
+    public static partial void AgentRunFailed(this ILogger logger, Guid runId, Guid instanceId, string status, string reason);
+
+    /// <summary>The agent called a tool.</summary>
+    [LoggerMessage(EventId = 30004, Level = LogLevel.Debug,
+        Message = "Agent run {RunId} tool {ToolName} ({Kind}) finished {Status} in {DurationMs} ms")]
+    public static partial void AgentToolInvoked(this ILogger logger, Guid runId, string toolName, string kind, string status, long durationMs);
+
+    /// <summary>An agent decision was resolved.</summary>
+    [LoggerMessage(EventId = 30005, Level = LogLevel.Information,
+        Message = "Agent run {RunId} decision for instance {InstanceId} in state {State}: {Selected} (source {Source})")]
+    public static partial void AgentDecisionResolved(this ILogger logger, Guid runId, Guid instanceId, string state, string? selected, string source);
+
+    /// <summary>An agent run resumed an existing conversation.</summary>
+    [LoggerMessage(EventId = 30006, Level = LogLevel.Debug,
+        Message = "Agent session {ScopeKey} resumed with {MessageCount} message(s)")]
+    public static partial void AgentSessionResumed(this ILogger logger, string scopeKey, int messageCount);
+
+    /// <summary>An agent conversation was reset.</summary>
+    [LoggerMessage(EventId = 30007, Level = LogLevel.Information,
+        Message = "Agent session {ScopeKey} reset: {Reason}")]
+    public static partial void AgentSessionReset(this ILogger logger, string scopeKey, string reason);
+
+    /// <summary>A concurrent writer updated a cross-instance session first.</summary>
+    [LoggerMessage(EventId = 30008, Level = LogLevel.Warning,
+        Message = "Agent session {ScopeKey} was written concurrently; attempt {Attempt}")]
+    public static partial void AgentSessionConflict(this ILogger logger, string scopeKey, int attempt);
+
+    /// <summary>A session exceeded its byte budget and lost its oldest turns.</summary>
+    [LoggerMessage(EventId = 30009, Level = LogLevel.Information,
+        Message = "Agent session {ScopeKey} trimmed from {FromMessages} to {ToMessages} message(s) ({SizeBytes} bytes)")]
+    public static partial void AgentSessionTrimmed(this ILogger logger, string scopeKey, int fromMessages, int toMessages, int sizeBytes);
+
+    /// <summary>Two tools resolved to the same name; the later one is skipped.</summary>
+    [LoggerMessage(EventId = 30010, Level = LogLevel.Warning,
+        Message = "Agent {AgentKey}: tool name {ToolName} collides with an earlier tool and is skipped")]
+    public static partial void AgentToolNameCollision(this ILogger logger, string agentKey, string toolName);
+
+    /// <summary>The agent feature is disabled; the state takes its fallback.</summary>
+    [LoggerMessage(EventId = 30011, Level = LogLevel.Information,
+        Message = "AI agents are disabled (AiAgent:Enabled=false); state {State} of instance {InstanceId} takes fallback {Fallback}")]
+    public static partial void AgentRunSkippedDisabled(this ILogger logger, string state, Guid instanceId, string fallback);
+
+    /// <summary>An MCP call failed.</summary>
+    [LoggerMessage(EventId = 30012, Level = LogLevel.Warning,
+        Message = "MCP {Operation} on task {TaskKey} failed: {Reason}")]
+    public static partial void McpCallFailed(this ILogger logger, string operation, string taskKey, string reason);
+
+    /// <summary>A rule-mode decision was recorded by the automatic-transition step.</summary>
+    [LoggerMessage(EventId = 30013, Level = LogLevel.Debug,
+        Message = "Agent rules-mode decision for instance {InstanceId} in state {State}: {Selected}")]
+    public static partial void AgentRulesDecisionRecorded(this ILogger logger, Guid instanceId, string state, string? selected);
+
+    /// <summary>An agent session could not be read and starts over.</summary>
+    [LoggerMessage(EventId = 30014, Level = LogLevel.Warning,
+        Message = "Agent session {ScopeKey} could not be read ({Reason}); starting a new conversation")]
+    public static partial void AgentSessionUnreadable(this ILogger logger, string scopeKey, string reason);
+
+    #endregion
 }

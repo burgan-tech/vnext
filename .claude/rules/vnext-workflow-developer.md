@@ -35,6 +35,7 @@ key symbols. The reasons, measurements and incident history behind each rule liv
 | 40 | RunOnExitTasksStep | Run leaving-state OnExit tasks |
 | 50 | ChangeStateStep | Persist state change |
 | 60 | RunOnEntryTasksStep | Run target-state OnEntry tasks |
+| 65 | RunAgentStep | AiAgent state: run the agent, leave its decision for step 80 (not on updateData) |
 | 70 | HandleSubFlowStep | Start subflow correlation; enqueue StartSubflowJob |
 | 75 | HandleLongPollTerminationStep | Pause after state entry and arm acknowledgment fallback when configured |
 | 79 | ClearBusyOnResumeStep | Clear busy on subflow resume path |
@@ -266,6 +267,10 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 - One compiler: the predicate is ANDed at the repository merge point; GET probes with `id AND predicate` before the ETag. Parameter failures never widen.
 - Applied by the public list + single GET endpoints and the GetInstances / GetInstance tasks (same- and cross-domain), via opt-in `ApplyRowSecurity` (`[JsonIgnore]`). GetInstanceData, view resolution, transitions and state/data/view/schema/master/history/`internal/*` read unfiltered — a documented known gap, not a boundary.
 - Full guide: `docs/domain/row-security.md`.
+
+## AI Agent state (`stateType: 6`) and MCP task (24)
+
+- `RunAgentStep` (65) leaves `TransitionExecutionContext.AgentDecision`; the Auto step picks the winner. Rule-less automatic transitions of an AiAgent state never fire without an in-hop decision (updateData, resume) — do not let them default. Agent tables are never included by a hot read path. Full guide: `docs/domain/ai-agent-state.md`, `docs/runtime/mcp-task.md`.
 
 ## Flow default version
 

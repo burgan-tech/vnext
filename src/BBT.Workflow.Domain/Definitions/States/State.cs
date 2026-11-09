@@ -95,6 +95,14 @@ public sealed class State : IHasKey
 
     [JsonInclude] [JsonPropertyName("subFlow")]
     public SubFlow? SubFlow { get; private set; }
+
+    /// <summary>
+    /// The agent binding of an <see cref="StateType.AiAgent"/> state (issue #1105): which
+    /// <c>sys-agents</c> component runs on entry, its prompt, where its output lands and how its
+    /// decision picks one of the state's automatic transitions. Null on every other state type.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("agent")]
+    public AgentStateBinding? Agent { get; private set; }
     
     [JsonInclude]
     [JsonPropertyName("view")]
@@ -279,6 +287,11 @@ public sealed class State : IHasKey
     public void SetSubFlow(string type, IReference reference, ScriptCode mapping, Dictionary<string, Reference>? viewOverrides)
     {
         SubFlow = SubFlow.Create(type, reference, mapping, viewOverrides);
+    }
+
+    public void SetAgent(AgentStateBinding agent)
+    {
+        Agent = agent;
     }
 
     public void SetErrorBoundary(ErrorBoundary errorBoundary)
