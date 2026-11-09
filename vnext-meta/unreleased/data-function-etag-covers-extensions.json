@@ -1,0 +1,7 @@
+{
+  "releaseNote": {
+    "summary": "functions/data no longer answers 304 from the data fingerprint when extensions are requested; those reads are now ETagged from the built body, so a changed extension payload is always delivered.",
+    "breaking": false,
+    "docs": []
+  }
+}

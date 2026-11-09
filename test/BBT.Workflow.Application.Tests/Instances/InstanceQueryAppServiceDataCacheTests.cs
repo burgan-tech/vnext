@@ -44,6 +44,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
     private readonly ITransitionAuthorizationManager _transitionAuthorizationManager;
     private readonly ISchemaFieldFilterService _schemaFieldFilterService;
     private readonly Caching.IDataFunctionCache _dataFunctionCache;
+    private readonly IRepresentationEtagService _representationEtagService = Substitute.For<IRepresentationEtagService>();
     private readonly InstanceQueryAppService _service;
     private readonly IServiceProvider _ambientServiceProvider;
     private readonly IServiceProvider? _previousAmbientServiceProvider;
@@ -130,7 +131,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             correlationOptions: Microsoft.Extensions.Options.Options.Create(new BBT.Workflow.Instances.Correlation.InstanceCorrelationOptions()),
             currentSchema: Substitute.For<ICurrentSchema>(),
             transitionAuthorizationManager: _transitionAuthorizationManager,
-            representationEtagService: Substitute.For<IRepresentationEtagService>(),
+            representationEtagService: _representationEtagService,
             instanceDataReadService: new BBT.Workflow.Instances.InstanceDataReadService(_schemaFieldFilterService),
             callerRoleResolver: new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
             paginationLinkGenerator: Substitute.For<BBT.Aether.Application.Pagination.IPaginationLinkGenerator>(),
@@ -255,25 +256,66 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
     }
 
     /// <summary>
-    /// A matching If-None-Match answers 304 even for extension-demanding requests — the ETag
-    /// tracks the data change point, extension flux never moves it.
+    /// The fingerprint covers instance data only, so it cannot stand in as the representation
+    /// ETag of a response that also carries extension output. A state change that writes no data
+    /// leaves the fingerprint identical while the extension payload changes — answering 304 on a
+    /// fingerprint match therefore served a stale extension, and the caller acted on the previous
+    /// state's instruction. An extension-carrying request must build instead.
     /// </summary>
     [Fact]
-    public async Task GetInstanceDataAsync_WhenExtensionsRequestedWithMatchingEtag_Returns304()
+    public async Task GetInstanceDataAsync_WhenExtensionsRequestedWithMatchingFingerprintEtag_BuildsInsteadOf304()
     {
-        var instanceId = Guid.NewGuid();
+        var instance = CreateInstanceWithData(out _);
+        SetupFullPathMocks(instance);
         EnableCache();
-        SetupFingerprint(instanceId);
+        SetupFingerprint(instance.Id);
+        _representationEtagService.Generate(Arg.Any<object>()).Returns("body-hash-1");
+        _instanceExtensionService.ProcessExtensionsAsync(
+                Arg.Any<string[]?>(), Arg.Any<ScriptContext>(), Arg.Any<Definitions.Workflow>(),
+                Arg.Any<ExtensionScope>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Dictionary<string, object>>.Ok(new Dictionary<string, object> { ["ext-a"] = "fresh" }));
 
-        var input = CreateInput(instanceId.ToString());
+        var input = CreateInput(instance.Id.ToString());
         input.Extensions = ["ext-a"];
         input.IfNoneMatch = "\"etag-current\"";
 
         var result = await _service.GetInstanceDataAsync(input, CancellationToken.None);
 
+        result.IsNotModified.ShouldBeFalse();
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Extensions!["ext-a"].ShouldBe("fresh");
+        // The ETag the caller gets back must be the one that covers the extension output too
+        // (served quoted, as the HTTP header form requires).
+        result.Result.Value!.ETag.ShouldBe("\"body-hash-1\"");
+        await _instanceRepository.Received(1)
+            .FindByIdentifierAsReadOnlyAsync(instance.Id.ToString(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Conditional requests are not switched off for extension-carrying reads — only re-based.
+    /// When the built body (data AND extensions) hashes to what the caller already holds, 304 is
+    /// still the right answer, which keeps the bandwidth win for pollers whose payload is stable.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceDataAsync_WhenExtensionsRequestedAndBodyUnchanged_Returns304()
+    {
+        var instance = CreateInstanceWithData(out _);
+        SetupFullPathMocks(instance);
+        EnableCache();
+        SetupFingerprint(instance.Id);
+        _representationEtagService.Generate(Arg.Any<object>()).Returns("body-hash-1");
+        _instanceExtensionService.ProcessExtensionsAsync(
+                Arg.Any<string[]?>(), Arg.Any<ScriptContext>(), Arg.Any<Definitions.Workflow>(),
+                Arg.Any<ExtensionScope>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Dictionary<string, object>>.Ok(new Dictionary<string, object> { ["ext-a"] = "same" }));
+
+        var input = CreateInput(instance.Id.ToString());
+        input.Extensions = ["ext-a"];
+        input.IfNoneMatch = "\"body-hash-1\"";
+
+        var result = await _service.GetInstanceDataAsync(input, CancellationToken.None);
+
         result.IsNotModified.ShouldBeTrue();
-        await _instanceRepository.DidNotReceive()
-            .FindByIdentifierAsReadOnlyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     /// <summary>

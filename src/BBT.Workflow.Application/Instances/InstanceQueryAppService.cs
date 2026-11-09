@@ -1487,6 +1487,11 @@ public sealed class InstanceQueryAppService(
         // A validated cache entry does NOT short-circuit the build: it supplies the DATA portion
         // (skipping the x-roles field filtering) while extensions are ALWAYS computed fresh —
         // the cache holds pure instance data, never extension output.
+        //
+        // The fingerprint ETag is therefore only a valid representation ETag while the response
+        // carries data alone. A request that asks for extensions skips the 304 short-circuit and
+        // is answered with an ETag hashed from the built body, so a changed extension payload is
+        // always delivered even when no data was written.
         var transaction = System.Diagnostics.Activity.Current;
 
         var isLatestRequest = InstanceDataVersionComparer.IsRequestingLatest(input.Version);
@@ -1625,12 +1630,22 @@ public sealed class InstanceQueryAppService(
                         }, dataFunctionCache.ResolveTtlSeconds(flow.Config?.FunctionCache), cancellationToken);
                     }
 
-                    if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
+                    // The ETag handed to the caller has to cover everything the body carries. The
+                    // fingerprint covers instance data only, so a response that ALSO carries
+                    // extension output is hashed from the built body instead — the behaviour that
+                    // predates the fingerprint, kept for exactly the requests that still need it.
+                    // The cache entry above keeps the fingerprint ETag: it validates the DATA
+                    // portion, which extension output never enters.
+                    var responseEtag = input.Extensions is { Length: > 0 }
+                        ? representationEtagService.Generate(result)
+                        : etag;
+
+                    if (!string.IsNullOrEmpty(input.IfNoneMatch) && responseEtag.MatchesIfNoneMatch(input.IfNoneMatch))
                     {
                         return ConditionalResult<GetInstanceDataOutput>.NotModified();
                     }
 
-                    result.ETag = etag;
+                    result.ETag = responseEtag;
                     return ConditionalResult<GetInstanceDataOutput>.Success(result);
                 },
                 onFailure: ConditionalResult<GetInstanceDataOutput>.Fail);
@@ -1639,7 +1654,8 @@ public sealed class InstanceQueryAppService(
     /// <summary>
     /// Fast path for latest-data requests over the data fingerprint. Loads the lightweight
     /// projection, computes the deterministic fingerprint ETag and answers 304 when the
-    /// caller's If-None-Match matches (no cache access, no extension run, no build).
+    /// caller's If-None-Match matches (no cache access, no extension run, no build) — but only
+    /// for requests carrying no extensions, since the fingerprint cannot see extension output.
     /// Otherwise consults the body cache and returns the entry whose ETag matches the current
     /// fingerprint ETag — the build path then reuses its DATA portion (skipping field
     /// filtering) while always computing extensions fresh. Both results are null when the
@@ -1657,7 +1673,14 @@ public sealed class InstanceQueryAppService(
 
         var etag = dataFunctionCache.ComputeEtag(input, fingerprint);
 
-        if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
+        // The fingerprint sees instance data only — neither the extension output this response
+        // would carry nor the state that output is derived from. A state change that writes no
+        // data leaves the fingerprint identical while the extension payload changes, so a 304
+        // here hands the caller a stale extension: the observed failure was a client replaying
+        // the previous state's nextTransition and being rejected. Extension-carrying requests
+        // therefore skip the short-circuit and have their ETag computed from the built body.
+        if (input.Extensions is not { Length: > 0 } &&
+            !string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
         {
             logger.DataFunctionEtagNotModified(input.Instance);
             return (ConditionalResult<GetInstanceDataOutput>.NotModified(), null);
