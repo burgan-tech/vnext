@@ -17,7 +17,7 @@ namespace BBT.Workflow.Tasks.Invocation.Local;
 /// </summary>
 public sealed class LocalStateStoreTaskInvoker(
     IStateStoreClient stateStore,
-    ILogger<LocalStateStoreTaskInvoker> logger) : ILocalTaskInvoker
+    ILogger<LocalStateStoreTaskInvoker> logger) : ITypedLocalTaskInvoker<StateStoreBinding>
 {
     /// <inheritdoc />
     public string TaskType => TaskTypes.StateStore;
@@ -37,6 +37,19 @@ public sealed class LocalStateStoreTaskInvoker(
                 taskType: TaskTypes.StateStore);
         }
 
+        return await InvokeAsync(taskKey, typedBinding, traceContext, cancellationToken);
+    }
+
+    /// <summary>
+    /// The typed entry point: the orchestrator's local path hands the mapped binding object straight
+    /// here, skipping the JSON round trip the <see cref="JsonElement"/> overload exists for.
+    /// </summary>
+    public async Task<TaskInvocationResult> InvokeAsync(
+        string? taskKey,
+        StateStoreBinding typedBinding,
+        TaskTraceContext? traceContext,
+        CancellationToken cancellationToken = default)
+    {
         var result = await StateStoreInvocation.ExecuteAsync(
             stateStore, typedBinding, TaskTypes.StateStore, cancellationToken, taskKey);
 

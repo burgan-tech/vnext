@@ -51,9 +51,9 @@ public sealed class CompiledBoundaryChain
     {
         return new CompiledBoundaryChain
         {
-            TaskBoundary = CompiledBoundary.Compile(taskBoundary, ErrorBoundaryLevel.Task),
-            StateBoundary = CompiledBoundary.Compile(stateBoundary, ErrorBoundaryLevel.State),
-            GlobalBoundary = CompiledBoundary.Compile(globalBoundary, ErrorBoundaryLevel.Global)
+            TaskBoundary = CompiledBoundary.CompileCached(taskBoundary, ErrorBoundaryLevel.Task),
+            StateBoundary = CompiledBoundary.CompileCached(stateBoundary, ErrorBoundaryLevel.State),
+            GlobalBoundary = CompiledBoundary.CompileCached(globalBoundary, ErrorBoundaryLevel.Global)
         };
     }
 

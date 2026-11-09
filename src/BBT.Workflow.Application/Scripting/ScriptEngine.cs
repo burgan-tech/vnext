@@ -251,6 +251,63 @@ public sealed class ScriptEngine(
     private static readonly ConditionalWeakTable<IEvaluator, ConcurrentDictionary<string, ResolvedHelperSet>> HelperSetMemoByEvaluator = new();
 
     /// <summary>
+    /// Final evaluator cache key memoized per (evaluator, <see cref="ScriptCode"/> instance), then per
+    /// (target type, profile instance). <see cref="CSharpEvaluator.ComputeCacheKey"/> runs SHA-256 over the
+    /// source hash + the target type's assembly-qualified name + the profile (every reference path), and
+    /// the engine called it on every compile — cache hits included. The key is a pure function of those
+    /// three inputs, so it is memoized:
+    /// <list type="bullet">
+    /// <item><see cref="ScriptCode"/> instances belong to cached definitions and are replaced whole on
+    /// publish, so the weak, identity-keyed outer table never serves another definition's key.</item>
+    /// <item>The profile is compared by reference: profiles come from the memo tables above, so one
+    /// profile is one string instance; a rebuilt-but-equal profile only misses (and recomputes).</item>
+    /// <item>A REF-encoded body is resolved from the component store on every call and can change under
+    /// the same <see cref="ScriptCode"/> (hotfix publish), so the entry remembers the body it was computed
+    /// from and is only reused for an identical body — never stale.</item>
+    /// </list>
+    /// Outer-keyed by <see cref="IEvaluator"/> for the same isolation reason as
+    /// <see cref="BaseProfilesByEvaluator"/>.
+    /// </summary>
+    private static readonly ConditionalWeakTable<IEvaluator, ConditionalWeakTable<ScriptCode, ConcurrentDictionary<CacheKeySlot, MemoizedCacheKey>>> CacheKeysByEvaluator = new();
+
+    /// <summary>(target type, profile instance) — the profile compared by reference, see <see cref="CacheKeysByEvaluator"/>.</summary>
+    private readonly record struct CacheKeySlot(Type TargetType, string Profile)
+    {
+        public bool Equals(CacheKeySlot other) =>
+            TargetType == other.TargetType && ReferenceEquals(Profile, other.Profile);
+
+        public override int GetHashCode() =>
+            HashCode.Combine(TargetType, RuntimeHelpers.GetHashCode(Profile));
+    }
+
+    /// <summary>A memoized key and, for REF-encoded scripts, the resolved body it was derived from.</summary>
+    private sealed record MemoizedCacheKey(string? Body, string Key);
+
+    /// <summary>
+    /// The evaluator cache key for <paramref name="scriptCode"/> compiled to <paramref name="targetType"/>
+    /// under <paramref name="profile"/> — identical to
+    /// <c>_evaluator.ComputeCacheKey(SourceHashOf(scriptCode, body), targetType, profile)</c>, memoized
+    /// per <see cref="CacheKeysByEvaluator"/>.
+    /// </summary>
+    private string CacheKeyOf(ScriptCode scriptCode, string body, Type targetType, string profile)
+    {
+        var perScript = CacheKeysByEvaluator
+            .GetValue(_evaluator, static _ => new ConditionalWeakTable<ScriptCode, ConcurrentDictionary<CacheKeySlot, MemoizedCacheKey>>())
+            .GetValue(scriptCode, static _ => new ConcurrentDictionary<CacheKeySlot, MemoizedCacheKey>());
+
+        var slot = new CacheKeySlot(targetType, profile);
+        if (perScript.TryGetValue(slot, out var memo)
+            && (!scriptCode.IsReference || ReferenceEquals(memo.Body, body) || string.Equals(memo.Body, body, StringComparison.Ordinal)))
+        {
+            return memo.Key;
+        }
+
+        var key = _evaluator.ComputeCacheKey(SourceHashOf(scriptCode, body), targetType, profile);
+        perScript[slot] = new MemoizedCacheKey(scriptCode.IsReference ? body : null, key);
+        return key;
+    }
+
+    /// <summary>
     /// Stable string key for a per-compile sandbox grant, used to index <see cref="BaseProfilesByEvaluator"/>.
     /// Order-insensitive, case-insensitive — mirrors <see cref="CSharpEvaluator.BuildProfile"/>'s own
     /// grant ordering so two grant lists that would produce the same profile also share one cache slot.
@@ -367,8 +424,7 @@ public sealed class ScriptEngine(
                 var profile = baseProfiles.GetOrAdd(GrantKeyOf(grant), _ =>
                     _evaluator.BuildProfile(MergedRefs(null), MergedUsings(null), MergedGrantOf(grant), loadContext: null));
 
-                var sourceHash = SourceHashOf(scriptCode, body);
-                var key = _evaluator.ComputeCacheKey(sourceHash, typeof(T), profile);
+                var key = CacheKeyOf(scriptCode, body, typeof(T), profile);
 
                 return await CompileCoreAsync<T>(
                     body, null, null, null, grant, cancellationToken, precomputedCacheKey: key,
@@ -426,7 +482,7 @@ public sealed class ScriptEngine(
             // runtime-owned contract assemblies and importing the default namespaces.
             helperSet = await _helperRegistry.GetOrBuildHelpersAsync(
                 helperSources,
-                MergeDefaultGrant(grant),
+                MergedGrantOf(grant),
                 DefaultReferences.Value,
                 DefaultUsings,
                 cancellationToken);
@@ -460,8 +516,7 @@ public sealed class ScriptEngine(
             var helperProfile = helperProfiles.GetValue(helperSet.Reference, _ =>
                 _evaluator.BuildProfile(MergedRefs(refs), MergedUsings(usings), MergedGrantOf(grant), helperSet.LoadContext));
 
-            var sourceHash = SourceHashOf(scriptCode, body);
-            var key = _evaluator.ComputeCacheKey(sourceHash, typeof(T), helperProfile);
+            var key = CacheKeyOf(scriptCode, body, typeof(T), helperProfile);
 
             return await CompileCoreAsync<T>(
                 body, refs, usings, helperSet.LoadContext, grant, cancellationToken, precomputedCacheKey: key,
@@ -609,7 +664,7 @@ public sealed class ScriptEngine(
                 mergedUsings,
                 cancellationToken,
                 loadContext,
-                MergeDefaultGrant(sandboxGrant),
+                MergedGrantOf(sandboxGrant),
                 precomputedCacheKey);
 
             // Three outcomes, not two: a single-flight WAITER's wall time is someone else's compile,

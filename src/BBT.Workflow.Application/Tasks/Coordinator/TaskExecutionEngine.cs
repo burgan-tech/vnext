@@ -103,9 +103,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             GetStateBoundary(context),
             context.Workflow?.ErrorBoundary);
 
-        _logger.LogInformation(
-            "Executing task {TaskKey} with error-aware retry.",
-            onExecuteTask.Task.Key);
+        _logger.TaskExecutionStarting(onExecuteTask.Task.Key);
 
         // 2. Execute with error-aware retry (retry policy resolved per failure from matching rule)
         return await ExecuteWithErrorAwareRetryAsync(
@@ -152,8 +150,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 if (result is { IsSuccess: true, Value.IsSuccess: true })
                 {
                     Activity.Current?.SetStatus(ActivityStatusCode.Ok);
-                    _logger.LogInformation(
-                        "Task {TaskKey} completed successfully. Total duration: {Duration}ms",
+                    _logger.TaskExecutionSucceeded(
                         taskKey, (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds);
                     return result;
                 }
@@ -161,9 +158,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 // No boundary + business failure (e.g. 404) - flow continues; do not resolve fallback
                 if (result is { IsSuccess: true, Value: var value } && value is { TaskError: null, HasFailedTasks: true })
                 {
-                    _logger.LogDebug(
-                        "Task {TaskKey} failed with business error but no ErrorBoundary defined. Flow will continue with auto-transitions.",
-                        taskKey);
+                    _logger.TaskBusinessFailureWithoutBoundary(taskKey);
                     return result;
                 }
 
@@ -422,9 +417,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         var strategyResult = _persistenceStrategyFactory.GetStrategy(origin);
         if (!strategyResult.IsSuccess)
         {
-            _logger.LogDebug(
-                "No persistence strategy found for origin {TaskExecutionOrigin}, skipping persistence",
-                origin);
+            _logger.TaskPersistenceStrategyNotFound(origin.ToString());
             return null;
         }
 
@@ -498,7 +491,8 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     /// merged content. Extension/Function paths never persist instance data (unchanged
     /// behavior); a dedup no-op (identical merged content) leaves the snapshot as-is.
     /// </summary>
-    private async Task ApplyOutputToContextAsync(
+    /// <returns>The materialized Data delta that was appended, or null when nothing was applied.</returns>
+    private async Task<JsonData?> ApplyOutputToContextAsync(
         StandardTaskResponse response,
         TaskTrigger taskTrigger,
         TaskExecutionOrigin origin,
@@ -510,7 +504,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             || response.Data is null
             || context.Instance is null)
         {
-            return;
+            return null;
         }
 
         // Materialize the persisted text and the parsed element together. The append pipeline reads
@@ -532,6 +526,31 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         // ModifiedAt. That is deliberate: the stamp is already in the database, and copying it onto the
         // tracked live aggregate would mark the column dirty and send a second UPDATE for it.
         _ = persisted;
+        return delta;
+    }
+
+    /// <summary>
+    /// The task journal's <c>Response</c> text: <see cref="JsonSerializer.Serialize{TValue}(TValue, JsonSerializerOptions?)"/>
+    /// of <paramref name="response"/> under <see cref="JsonSerializerConstants.JsonOptions"/>. When the Data
+    /// delta was already materialized for the instance-data append (same object, same options), its parsed
+    /// element stands in for <c>Data</c> during the write, so the payload graph is not walked a second time —
+    /// writing a <see cref="JsonElement"/> copies its tokens, producing the identical text.
+    /// </summary>
+    internal static JsonData SerializeJournalResponse(StandardTaskResponse response, JsonData? materializedData)
+    {
+        object? originalData = response.Data;
+        if (materializedData is null || originalData is null)
+            return new JsonData(JsonSerializer.Serialize(response, JsonSerializerConstants.JsonOptions));
+
+        try
+        {
+            response.Data = materializedData.JsonElement;
+            return new JsonData(JsonSerializer.Serialize(response, JsonSerializerConstants.JsonOptions));
+        }
+        finally
+        {
+            response.Data = originalData;
+        }
     }
 
     /// <summary>
@@ -606,9 +625,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
 
         // 4. Record metrics start
 
-        _logger.LogDebug(
-            "Executing task {TaskKey} of type {TaskType} for instance {InstanceId} (retry attempt)",
-            task.Key, taskType, context.Instance?.Id);
+        _logger.TaskExecutionAttemptStarting(task.Key, taskTypeStr, context.Instance?.Id);
 
         // 5. Persist creation
         using (TaskExecutionActivityHelper.StartActivity(
@@ -639,10 +656,12 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         // to TaskExecutorBase's two response-key derivation points (see TaskEngineExecutionOptions
         // for why); Domain's TaskExecutorContext carries it as a plain string since it cannot
         // reference this Application-layer options type.
+        var capturesJournal = persistenceStrategy is not null;
         var executorContext = new TaskExecutorContext(
             task, onExecuteTask, context, instanceTransitionId, taskTrigger, origin)
         {
-            ResponseVariableKey = options.ResponseVariableKey
+            ResponseVariableKey = options.ResponseVariableKey,
+            CapturesJournalPayloads = capturesJournal
         };
 
         // 8. Execute task
@@ -651,19 +670,24 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         // B8: task TANIMI (mapping ScriptCode dahil) transition record'a kopyalanmaz — tanım zaten
         // component store'dadır; referans yeterli. Monitor tarafı Request'i JsonElement passthrough
         // gösterir (alan-parse etmez — keşifle doğrulandı), "Task" anahtarı korunur.
-        var requestPayload = new
+        // Journal payloads are built only when a journal row is persisted: without a persistence
+        // strategy (history: none, or an origin with no journal) instanceTask never leaves this method.
+        if (capturesJournal)
         {
-            Task = new { task.Key, task.Version, task.Domain, task.Flow, Type = task.GetTaskType().ToString() },
-            executorContext.InputResponse
-        };
-        var requestJson = new JsonData(JsonSerializer.Serialize(
-            requestPayload,
-            JsonSerializerConstants.JsonOptions));
-        instanceTask.SetRequest(requestJson);
+            var requestPayload = new
+            {
+                Task = new { task.Key, task.Version, task.Domain, task.Flow, Type = task.GetTaskType().ToString() },
+                executorContext.InputResponse
+            };
+            var requestJson = new JsonData(JsonSerializer.Serialize(
+                requestPayload,
+                JsonSerializerConstants.JsonOptions));
+            instanceTask.SetRequest(requestJson);
 
-        if (executorContext.RawInvocationResult is { } rawInvocationResult)
-        {
-            instanceTask.SetInvocationResult(rawInvocationResult);
+            if (executorContext.RawInvocationResult is { } rawInvocationResult)
+            {
+                instanceTask.SetInvocationResult(rawInvocationResult);
+            }
         }
 
 
@@ -684,14 +708,20 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
 
         // 10. Process response
         var response = executeResult.Value!;
-        var responseJson = new JsonData(JsonSerializer.Serialize(response, JsonSerializerConstants.JsonOptions));
 
         // Apply output to context (Flow origin: persisted immediately under the row lock).
         // Collect-only callers (FanOut items) suppress this: the batch has a single write point.
+        JsonData? appliedDelta = null;
         if (!options.SuppressDataApply)
         {
-            await ApplyOutputToContextAsync(response, taskTrigger, origin, context, cancellationToken);
+            appliedDelta = await ApplyOutputToContextAsync(response, taskTrigger, origin, context, cancellationToken);
         }
+
+        // Journal response: built only when it is persisted, and reusing the already-materialized
+        // Data delta instead of serializing response.Data a second time.
+        var responseJson = capturesJournal
+            ? SerializeJournalResponse(response, appliedDelta)
+            : JsonData.Empty;
 
         // Mark task completed with business status
         instanceTask.Completed(responseJson, isBusinessSuccess: response.IsSuccess);

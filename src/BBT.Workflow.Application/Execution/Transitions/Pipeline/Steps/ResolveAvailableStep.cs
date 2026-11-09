@@ -35,10 +35,7 @@ public sealed class ResolveAvailableStep(
 
         // Defer status update to after post-commit jobs complete
         context.Directives.SetResolvedStatus(InstanceStatus.Active);
-        logger.LogDebug(
-            "Instance {InstanceId} deferred Available status after transition to state {TargetState}",
-            context.InstanceId,
-            context.Target?.Key ?? "unknown");
+        logger.ResolveAvailableDeferred(context.InstanceId, context.Target?.Key ?? "unknown");
         return Result<StepOutcome>.Ok(StepOutcome.Continue());
     }
 
@@ -52,28 +49,22 @@ public sealed class ResolveAvailableStep(
         // otherwise steal the owner's Busy by resolving it to Active here.
         if (!context.OwnsStatus)
         {
-            logger.LogDebug(
-                "Instance {InstanceId} status not owned by this execution, skipping ResolveAvailableStep",
-                context.InstanceId);
+            logger.ResolveAvailableSkippedNotOwner(context.InstanceId);
             return false;
         }
 
         // Already completed or not busy - nothing to do
         if (context.Instance.IsCompleted || !context.Instance.IsBusy)
         {
-            logger.LogDebug(
-                "Instance {InstanceId} is not Busy or already completed, skipping ResolveAvailableStep",
-                context.InstanceId);
+            logger.ResolveAvailableSkippedNotBusy(context.InstanceId);
             return false;
         }
 
         // Auto transition chain is continuing - stay Busy
         if (context.Directives.NextTransition != null)
         {
-            logger.LogDebug(
-                "Instance {InstanceId} has NextTransition ({NextTransition}), staying Busy",
-                context.InstanceId,
-                context.Directives.NextTransition.TransitionKey);
+            logger.ResolveAvailableStayBusyNextTransition(
+                context.InstanceId, context.Directives.NextTransition.TransitionKey);
             return false;
         }
 
@@ -86,28 +77,20 @@ public sealed class ResolveAvailableStep(
         // is the correct signal while any SubFlow is running.
         if (context.Directives.TerminalReached)
         {
-            logger.LogDebug(
-                "Instance {InstanceId} reached terminal state {TargetState}, staying Busy",
-                context.InstanceId,
-                context.Target?.Key ?? "unknown");
+            logger.ResolveAvailableStayBusyTerminal(context.InstanceId, context.Target?.Key ?? "unknown");
             return false;
         }
 
         // Target is null - should not happen, but defensive
         if (context.Target == null)
         {
-            logger.LogWarning(
-                "Instance {InstanceId} has null target state, skipping ResolveAvailableStep",
-                context.InstanceId);
+            logger.ResolveAvailableNullTarget(context.InstanceId);
             return false;
         }
 
         if (context.Target.SubType == StateSubType.Busy)
         {
-            logger.LogWarning(
-                "Instance {InstanceId} has Busy subtype in state {TargetState}, skipping ResolveAvailableStep",
-                context.InstanceId,
-                context.Target.Key);
+            logger.ResolveAvailableBusySubtype(context.InstanceId, context.Target.Key);
 
             // The instance deliberately comes to rest in a Busy-subtype state; the status stays
             // Busy until an external signal (e.g. a child sub-process) advances it.
@@ -117,9 +100,7 @@ public sealed class ResolveAvailableStep(
         // Finish state - will be handled by HandleFinishStep (Completed status)
         if (context.Target.StateType == StateType.Finish)
         {
-            logger.LogDebug(
-                "Instance {InstanceId} is in Finish state, status will be Completed",
-                context.InstanceId);
+            logger.ResolveAvailableFinishState(context.InstanceId);
             return false;
         }
 
@@ -127,18 +108,12 @@ public sealed class ResolveAvailableStep(
         // (This should already be caught by NextTransition check, but defensive)
         if (!context.Target.HasOnlyManualOrEventTransitions)
         {
-            logger.LogDebug(
-                "Instance {InstanceId} target state {TargetState} has auto transitions, staying Busy",
-                context.InstanceId,
-                context.Target.Key);
+            logger.ResolveAvailableStayBusyAutoTransitions(context.InstanceId, context.Target.Key);
             return false;
         }
 
         // All conditions met - set to Available
-        logger.LogDebug(
-            "Instance {InstanceId} meets all conditions for Available status in state {TargetState}",
-            context.InstanceId,
-            context.Target.Key);
+        logger.ResolveAvailableConditionsMet(context.InstanceId, context.Target.Key);
         return true;
     }
 }

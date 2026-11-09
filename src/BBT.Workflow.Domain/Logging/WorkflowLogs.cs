@@ -1056,6 +1056,218 @@ public static partial class WorkflowLogs
     public static partial void ScheduledTransitionTookOverInteractionWait(
         this ILogger logger, Guid instanceId, string stateKey, string transitionKey);
 
+    // ---- Task execution / per-hop step hot-path logs (10240–10262, one contiguous block) ----
+
+    /// <summary>
+    /// Per-task start of the error-aware execution loop (TaskExecutionEngine). Was Information; demoted to Debug — it fires on every task.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10240,
+        Level = LogLevel.Debug,
+        Message = "Executing task {TaskKey} with error-aware retry.")]
+    public static partial void TaskExecutionStarting(
+        this ILogger logger, string taskKey);
+
+    /// <summary>
+    /// Per-task success of the error-aware execution loop. Was Information; demoted to Debug — it fires on every task.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10241,
+        Level = LogLevel.Debug,
+        Message = "Task {TaskKey} completed successfully. Total duration: {Duration}ms")]
+    public static partial void TaskExecutionSucceeded(
+        this ILogger logger, string taskKey, long duration);
+
+    /// <summary>
+    /// Business failure with no ErrorBoundary; the flow continues through auto-transitions.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10242,
+        Level = LogLevel.Debug,
+        Message = "Task {TaskKey} failed with business error but no ErrorBoundary defined. Flow will continue with auto-transitions.")]
+    public static partial void TaskBusinessFailureWithoutBoundary(
+        this ILogger logger, string taskKey);
+
+    /// <summary>
+    /// No task-journal persistence strategy exists for the execution origin.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10243,
+        Level = LogLevel.Debug,
+        Message = "No persistence strategy found for origin {TaskExecutionOrigin}, skipping persistence")]
+    public static partial void TaskPersistenceStrategyNotFound(
+        this ILogger logger, string taskExecutionOrigin);
+
+    /// <summary>
+    /// One execution attempt of a task (TaskExecutionEngine.ExecuteCoreAsync).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10244,
+        Level = LogLevel.Debug,
+        Message = "Executing task {TaskKey} of type {TaskType} for instance {InstanceId} (retry attempt)")]
+    public static partial void TaskExecutionAttemptStarting(
+        this ILogger logger, string taskKey, string taskType, Guid? instanceId);
+
+    /// <summary>
+    /// A task executor starts its template-method lifecycle (TaskExecutorBase).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10245,
+        Level = LogLevel.Debug,
+        Message = "Executing task {TaskKey} with executor {Executor}")]
+    public static partial void TaskExecutorStarting(
+        this ILogger logger, string taskKey, string executor);
+
+    /// <summary>
+    /// SetBusyStep skipped: the instance is already Busy.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10246,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} is already Busy, skipping SetBusyStep")]
+    public static partial void SetBusySkippedAlreadyBusy(
+        this ILogger logger, Guid instanceId);
+
+    /// <summary>
+    /// SetBusyStep skipped: the instance is already completed.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10247,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} is already completed, skipping SetBusyStep")]
+    public static partial void SetBusySkippedCompleted(
+        this ILogger logger, Guid instanceId);
+
+    /// <summary>
+    /// SetBusyStep aligned the in-memory aggregate to the Busy row admission already wrote.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10248,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} aggregate aligned to admission's Busy for transition {TransitionKey}")]
+    public static partial void SetBusyAlignedToAdmission(
+        this ILogger logger, Guid instanceId, string transitionKey);
+
+    /// <summary>
+    /// SetBusyStep's CAS flipped the row to Busy.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10249,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} set to Busy for transition {TransitionKey}")]
+    public static partial void SetBusyFlipped(
+        this ILogger logger, Guid instanceId, string transitionKey);
+
+    /// <summary>
+    /// SetBusyStep's CAS found the row no longer Active.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10250,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} was no longer Active at SetBusy for transition {TransitionKey}; continuing without the flip")]
+    public static partial void SetBusyFlipLost(
+        this ILogger logger, Guid instanceId, string transitionKey);
+
+    /// <summary>
+    /// ResolveAvailableStep deferred the Active status to after post-commit.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10251,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} deferred Available status after transition to state {TargetState}")]
+    public static partial void ResolveAvailableDeferred(
+        this ILogger logger, Guid instanceId, string targetState);
+
+    /// <summary>
+    /// ResolveAvailableStep skipped: this execution does not own the status.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10252,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} status not owned by this execution, skipping ResolveAvailableStep")]
+    public static partial void ResolveAvailableSkippedNotOwner(
+        this ILogger logger, Guid instanceId);
+
+    /// <summary>
+    /// ResolveAvailableStep skipped: not Busy or already completed.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10253,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} is not Busy or already completed, skipping ResolveAvailableStep")]
+    public static partial void ResolveAvailableSkippedNotBusy(
+        this ILogger logger, Guid instanceId);
+
+    /// <summary>
+    /// ResolveAvailableStep keeps Busy: an automatic transition continues the chain.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10254,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} has NextTransition ({NextTransition}), staying Busy")]
+    public static partial void ResolveAvailableStayBusyNextTransition(
+        this ILogger logger, Guid instanceId, string nextTransition);
+
+    /// <summary>
+    /// ResolveAvailableStep keeps Busy: terminal reached.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10255,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} reached terminal state {TargetState}, staying Busy")]
+    public static partial void ResolveAvailableStayBusyTerminal(
+        this ILogger logger, Guid instanceId, string targetState);
+
+    /// <summary>
+    /// ResolveAvailableStep found no target state (defensive).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10256,
+        Level = LogLevel.Warning,
+        Message = "Instance {InstanceId} has null target state, skipping ResolveAvailableStep")]
+    public static partial void ResolveAvailableNullTarget(
+        this ILogger logger, Guid instanceId);
+
+    /// <summary>
+    /// ResolveAvailableStep keeps Busy: the target state has the Busy subtype.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10257,
+        Level = LogLevel.Warning,
+        Message = "Instance {InstanceId} has Busy subtype in state {TargetState}, skipping ResolveAvailableStep")]
+    public static partial void ResolveAvailableBusySubtype(
+        this ILogger logger, Guid instanceId, string targetState);
+
+    /// <summary>
+    /// ResolveAvailableStep leaves a Finish state to HandleFinishStep.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10258,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} is in Finish state, status will be Completed")]
+    public static partial void ResolveAvailableFinishState(
+        this ILogger logger, Guid instanceId);
+
+    /// <summary>
+    /// ResolveAvailableStep keeps Busy: the target state has automatic transitions.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10259,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} target state {TargetState} has auto transitions, staying Busy")]
+    public static partial void ResolveAvailableStayBusyAutoTransitions(
+        this ILogger logger, Guid instanceId, string targetState);
+
+    /// <summary>
+    /// ResolveAvailableStep: all conditions for Available are met.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10260,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} meets all conditions for Available status in state {TargetState}")]
+    public static partial void ResolveAvailableConditionsMet(
+        this ILogger logger, Guid instanceId, string targetState);
+
     /// <summary>
     /// Logs when task instance resolution fails (for DirectTrigger, GetInstanceData).
     /// </summary>

@@ -1,5 +1,6 @@
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
@@ -78,7 +79,7 @@ public sealed class StateStoreTaskExecutor : TaskExecutorBase<StateStoreTask>
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        var envelopeResult = TaskBindingMapper.CreateEnvelope(task);
+        var envelopeResult = TaskBindingMapper.CreateBinding(task);
         if (!envelopeResult.IsSuccess)
         {
             Logger.TaskEnvelopeCreationFailed(
@@ -91,8 +92,9 @@ public sealed class StateStoreTaskExecutor : TaskExecutorBase<StateStoreTask>
 
         var traceContext = _remoteInvoker.CreateTraceContext(context.ScriptContext);
 
+        // The mapped binding object goes to the dispatcher as-is; it is serialized only for Remote.
         var result = await _dispatcher.DispatchAsync(
-            task, Execution.TaskTypes.StateStore, envelopeResult.Value!, traceContext, cancellationToken);
+            task, Execution.TaskTypes.StateStore, (StateStoreBinding)envelopeResult.Value.Binding, traceContext, cancellationToken);
 
         if (!result.IsSuccess)
         {
