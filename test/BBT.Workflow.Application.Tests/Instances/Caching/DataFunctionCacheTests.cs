@@ -125,6 +125,55 @@ public class DataFunctionCacheTests
         sut.ComputeEtag(input, afterHop).ShouldNotBe(sut.ComputeEtag(input, beforeHop));
     }
 
+    /// <summary>
+    /// The counterpart: the state moving must NOT retire the cached body. An entry holds the
+    /// field-filtered data payload only, which a data-less transition leaves untouched — folding the
+    /// state into the cache identity would discard a still-correct body on every such hop
+    /// (auto-transition chains included) and pay for the x-roles filtering pass again for nothing.
+    /// </summary>
+    [Fact]
+    public void ComputeDataEtag_IsUnchangedWhenOnlyTheStateMoved()
+    {
+        var sut = CreateSut();
+        var input = CreateInput();
+        var beforeHop = CreateFingerprint();
+        var afterHop = beforeHop with { EffectiveState = "approved" };
+
+        sut.ComputeDataEtag(input, afterHop).ShouldBe(sut.ComputeDataEtag(input, beforeHop));
+    }
+
+    /// <summary>
+    /// The cache identity still has to react to everything that DOES change the stored body, so the
+    /// split must not have dropped a component on the way.
+    /// </summary>
+    [Fact]
+    public void ComputeDataEtag_ChangesWithEveryBodyAffectingComponent()
+    {
+        var sut = CreateSut();
+        var input = CreateInput();
+        var fingerprint = CreateFingerprint();
+        var baseline = sut.ComputeDataEtag(input, fingerprint);
+
+        sut.ComputeDataEtag(input, fingerprint with { Id = Guid.NewGuid() }).ShouldNotBe(baseline);
+        sut.ComputeDataEtag(input, fingerprint with { LatestDataEtag = "01JD2G4YV0OTHERULID000000" }).ShouldNotBe(baseline);
+        sut.ComputeDataEtag(input, fingerprint with { FlowVersion = "2.0.0" }).ShouldNotBe(baseline);
+        sut.ComputeDataEtag(CreateInput(roles: ["admin"]), fingerprint).ShouldNotBe(baseline);
+    }
+
+    /// <summary>
+    /// The two identities must never coincide for the same input — a single hash serving both
+    /// purposes is exactly the conflation this split removes.
+    /// </summary>
+    [Fact]
+    public void ComputeEtagAndComputeDataEtag_AreDistinct()
+    {
+        var sut = CreateSut();
+        var input = CreateInput();
+        var fingerprint = CreateFingerprint();
+
+        sut.ComputeEtag(input, fingerprint).ShouldNotBe(sut.ComputeDataEtag(input, fingerprint));
+    }
+
     [Fact]
     public void ComputeEtag_ChangesWithCallerScope()
     {

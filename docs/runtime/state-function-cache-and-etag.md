@@ -291,8 +291,9 @@ mechanism with an instance-centric material — the data function signals **data
 change points**, not extension flux:
 
 ```
-etag = h(generation | instanceId | latestDataEtag | effectiveState | flowVersion | callerHash)
-key  = data-fn:{generation}:{domain}:{workflow}:{instance}:{callerHash}
+etag      = h(generation | instanceId | latestDataEtag | effectiveState | flowVersion | callerHash)
+dataEtag  = h(generation | instanceId | latestDataEtag |                  flowVersion | callerHash)
+key       = data-fn:{generation}:{domain}:{workflow}:{instance}:{callerHash}
 generation = v3[-nomask]                                   # SchemaMasking:Enabled=false
 callerHash = h(roles | actor identity | culture | version)   # extensions deliberately EXCLUDED
 ```
@@ -343,7 +344,17 @@ callerHash = h(roles | actor identity | culture | version)   # extensions delibe
   extension run — including always-on Global extensions); the body cache additionally removes
   the field-filtering cost from every 200.
 
-**`EffectiveState` is part of the material.** Enrichment is a function of the instance as the
+**Two identities, two questions.** `etag` is the REPRESENTATION ETag — what the caller receives
+and what `If-None-Match` is matched against. `dataEtag` is the CACHE-VALIDITY identity stamped on
+the stored entry, and it deliberately omits `effectiveState`. "May I answer 304?" depends on the
+state, because the extension output a 304 withholds is derived from it. "Is the stored body still
+the right body?" does not: an entry holds the field-filtered data payload only, which a transition
+that writes no data leaves exactly as it was. Folding the state into the cache identity would
+discard a still-correct body on every such transition — auto-transition hops included — and pay for
+the x-roles filtering pass again for nothing. So after a data-less hop the caller correctly gets a
+200 with fresh enrichment, served from the cached body.
+
+**`EffectiveState` is part of the representation material.** Enrichment is a function of the instance as the
 runtime owns it, not of the data rows alone: `ScriptContext` hands an extension the current
 state precisely so scripts can make context-aware decisions, so an extension that reads it
 changes its answer the moment the state moves. A transition that writes no data otherwise left

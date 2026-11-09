@@ -87,9 +87,27 @@ public sealed class DataFunctionCache(
             fingerprint.FlowVersion ?? string.Empty,
             BuildCallerHash(input));
 
-        return Convert.ToHexStringLower(
-            SHA256.HashData(Encoding.UTF8.GetBytes(material)))[..EtagLength];
+        return Hash(material);
     }
+
+    /// <inheritdoc />
+    public string ComputeDataEtag(GetInstanceDataInput input, InstanceDataFingerprint fingerprint)
+    {
+        // Same material MINUS the effective state: an entry holds the field-filtered data payload
+        // only, and a state change does not alter it. See IDataFunctionCache for why the cache
+        // identity and the representation ETag are deliberately different hashes.
+        var material = string.Join('|',
+            Generation,
+            fingerprint.Id,
+            fingerprint.LatestDataEtag ?? string.Empty,
+            fingerprint.FlowVersion ?? string.Empty,
+            BuildCallerHash(input));
+
+        return Hash(material);
+    }
+
+    private static string Hash(string material) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(material)))[..EtagLength];
 
     // EffectiveState joins the material because enrichment is a function of the instance as the
     // runtime owns it, not of the data rows alone: an extension reading context.Instance (the
