@@ -482,7 +482,8 @@ public sealed class TransitionAuthorizationManager(
         if (leafRole is PredefinedInstanceRoles.InstanceStarter
             or PredefinedInstanceRoles.PreviousUser
             or PredefinedInstanceRoles.InstanceBehalfOfStarter
-            or PredefinedInstanceRoles.PreviousBehalfOfUser)
+            or PredefinedInstanceRoles.PreviousBehalfOfUser
+            or PredefinedInstanceRoles.Everyone)
             return false;
 
         var dynamicGrant = DynamicRoleGrant.TryParse(leafRole);

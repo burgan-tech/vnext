@@ -32,6 +32,20 @@ public class PredefinedInstanceRolesTests
         Assert.Equal("$PreviousBehalfOfUser", PredefinedInstanceRoles.PreviousBehalfOfUser);
     }
 
+    [Fact]
+    public void Everyone_ShouldBeDollarEveryone()
+    {
+        Assert.Equal("$Everyone", PredefinedInstanceRoles.Everyone);
+    }
+
+    [Theory]
+    [InlineData("$Everyone", true)]
+    [InlineData("$everyone", false)]
+    public void IsEveryone_IsOrdinal(string role, bool expected)
+    {
+        Assert.Equal(expected, PredefinedInstanceRoles.IsEveryone(role));
+    }
+
     [Theory]
     [InlineData("$InstanceStarter", true)]
     [InlineData("$PreviousUser", true)]
@@ -44,6 +58,9 @@ public class PredefinedInstanceRolesTests
     [InlineData("role.maker", false)]
     [InlineData("", false)]
     [InlineData(null, false)]
+    [InlineData("$Everyone", true)]
+    [InlineData(" $Everyone ", true)]
+    [InlineData("$everyone", false)]
     [InlineData("  $InstanceStarter  ", true)]
     [InlineData("  $InstanceBehalfOfStarter  ", true)]
     public void IsPredefinedRole_ShouldReturnExpected(string? role, bool expected)
