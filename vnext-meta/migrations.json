@@ -416,6 +416,18 @@
       "description": "PythonTask (type 23) no longer carries code. config.script and config.executionMode are gone; config.handler names a handler registered in the domain's Python runtime image (built FROM ghcr.io/burgan-tech/vnext/python-runtime), config.input and config.timeoutSeconds stay, and the standard InputHandler/OutputHandler mapping now runs. The Execution host's Python section (Python:*) and its pythonNet, process and container modes are removed. The type was experimental and disabled by default; @burgan-tech/vnext-schema 0.0.59 defines the type 23 handler contract.",
       "action": "Move each Python script into a handler module of the domain's runtime image, replace config.script with config.handler, enable the runtime in the Helm chart (it sets Workflow:PythonRuntime:AppId), and drop Python:* settings from Execution overrides.",
       "documentation": "docs/runtime/python-task.md"
+    },
+    {
+      "id": "instance-modified-at-moves-on-every-transition",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "Instance metadata.modifiedAt, modifiedAt filter and sort, LastTouchedAt",
+      "since": "0.0.104",
+      "severity": "info",
+      "title": "modifiedAt moves with every transition and every updateData data row",
+      "description": "Before: only the set-based status writes (Busy flip and release, un-fault, effective-status projection and its revert, long-poll arm) moved Instances.ModifiedAt, so a completed, cancelled or faulted instance kept a time from before its final transition started, and an updateData did not move it. Now every transition stamps it, a same-state one included (a completion with the same instant as completedAt), and every data row an updateData writes (request body or task output) stamps its enteredAt, as does a stage, tags or key change; an updateData that changes none of these moves nothing. Filters and sorts on modifiedAt, and reports reading it as 'last change', see the new values; rows written before the upgrade keep their old values.",
+      "action": "No change is required. Re-check consumers that read modifiedAt as the time of the last status change: it is now the time of the last transition or data change.",
+      "documentation": "docs/runtime/instance-filtering-and-queries.md"
     }
   ]
 }
