@@ -87,7 +87,9 @@ public static class GatewayServiceCollectionExtensions
         // scripting services: ScriptServices takes it as an optional dependency, so a host without the gateway
         // stack simply gets scripts whose GetFileAsync reports the reader as unavailable.
         services.TryAddScoped<IScriptFileReader, ScriptFileReader>();
-        services.TryAddScoped<IScriptFileWriter, ScriptFileWriter>();
+        // IScriptFileWriter is NOT registered here: ScriptFileWriter needs IComponentCacheStore and
+        // IFileOffloadService, which only the Application module provides. It lives in
+        // AddInfrastructureRuntimeServices so minimal hosts (DbMigrator) never see an unresolvable registration.
 
         return services;
     }
