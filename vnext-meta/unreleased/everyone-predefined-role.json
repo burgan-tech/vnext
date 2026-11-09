@@ -1,0 +1,18 @@
+{
+  "releaseNote": {
+    "summary": "Adds the $Everyone predefined role, which matches every caller, so deny $Everyone hides a field or transition from all and allow $Everyone opens it to all.",
+    "breaking": false,
+    "docs": []
+  },
+  "features": {
+    "engine": {
+      "everyonePredefinedRole": {
+        "since": "next",
+        "status": "stable",
+        "description": "$Everyone is a predefined role that is Yes for every caller: with or without roles, with or without an instance loaded (also on the static no-instance path). deny $Everyone refuses everybody, allow $Everyone admits everybody; a caller holding a role named $Everyone changes nothing (decided on the grant side). Accepted on every role-grant surface (transition roles, queryRoles, availableIn roles, function roles, subflow overrides, schema x-roles) and as an allOf/anyOf child. Rejected at publish in x-masking.roles / x-encryption.roles (it would exempt every caller; also dropped at read time, fail closed) and in rowSecurity.rules[].roles (RS-E05). Matching is Ordinal: a miscased spelling ($everyone, $EVERYONE) is a publish error on every role-grant surface; only $Everyone gets this check, extending it to the existing predefined roles could reject published definitions. Collision note: a static role literally named $Everyone, held by a caller or sent in the role header, changes meaning because the predefined match runs before the static comparison; the collision is negligible. PURELY ADDITIVE otherwise.",
+        "schemaPath": "roles[] | queryRoles[] | transitions[].roles[] | availableIn[].roles[] | schema.attributes.schema.properties[].x-roles[]",
+        "documentation": "docs/domain/role-grant-authorization.md"
+      }
+    }
+  }
+}
