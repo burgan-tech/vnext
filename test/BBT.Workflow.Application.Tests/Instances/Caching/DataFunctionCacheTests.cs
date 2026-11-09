@@ -101,6 +101,28 @@ public class DataFunctionCacheTests
         sut.ComputeEtag(input, fingerprint with { Id = Guid.NewGuid() }).ShouldNotBe(baseline);
         sut.ComputeEtag(input, fingerprint with { LatestDataEtag = "01JD2G4YV0OTHERULID000000" }).ShouldNotBe(baseline);
         sut.ComputeEtag(input, fingerprint with { FlowVersion = "2.0.0" }).ShouldNotBe(baseline);
+        sut.ComputeEtag(input, fingerprint with { EffectiveState = "approved" }).ShouldNotBe(baseline);
+    }
+
+    /// <summary>
+    /// The case the state component exists for: a transition that writes no instance data. The data
+    /// row is untouched, so <c>LatestDataEtag</c> is identical and every other component is equal —
+    /// only the state moved. Without it in the material the two reads share an ETag and the second
+    /// is answered 304, handing the caller the previous state's enrichment (observed in the field as
+    /// a client replaying the previous state's nextTransition and being rejected).
+    /// </summary>
+    [Fact]
+    public void ComputeEtag_ChangesWhenOnlyTheStateMoved()
+    {
+        var sut = CreateSut();
+        var input = CreateInput();
+        var beforeHop = CreateFingerprint();
+        var afterHop = beforeHop with { EffectiveState = "approved" };
+
+        // Same instance, same data row, same flow version, same caller — only the state differs.
+        afterHop.LatestDataEtag.ShouldBe(beforeHop.LatestDataEtag);
+
+        sut.ComputeEtag(input, afterHop).ShouldNotBe(sut.ComputeEtag(input, beforeHop));
     }
 
     [Fact]

@@ -1487,11 +1487,6 @@ public sealed class InstanceQueryAppService(
         // A validated cache entry does NOT short-circuit the build: it supplies the DATA portion
         // (skipping the x-roles field filtering) while extensions are ALWAYS computed fresh —
         // the cache holds pure instance data, never extension output.
-        //
-        // The fingerprint ETag is therefore only a valid representation ETag while the response
-        // carries data alone. A request that asks for extensions skips the 304 short-circuit and
-        // is answered with an ETag hashed from the built body, so a changed extension payload is
-        // always delivered even when no data was written.
         var transaction = System.Diagnostics.Activity.Current;
 
         var isLatestRequest = InstanceDataVersionComparer.IsRequestingLatest(input.Version);
@@ -1630,26 +1625,12 @@ public sealed class InstanceQueryAppService(
                         }, dataFunctionCache.ResolveTtlSeconds(flow.Config?.FunctionCache), cancellationToken);
                     }
 
-                    // The ETag handed to the caller has to cover everything the body carries. The
-                    // fingerprint covers instance data only, so a response that ALSO carries
-                    // extension output is hashed from the built body instead — the behaviour that
-                    // predates the fingerprint, kept for exactly the requests that still need it.
-                    // The cache entry above keeps the fingerprint ETag: it validates the DATA
-                    // portion, which extension output never enters.
-                    // Keyed on what the body ACTUALLY carries, not on what the caller asked for: a
-                    // DefinedFlows extension runs precisely when nothing was requested
-                    // (Extension.ShouldExecute), and a Global one runs regardless, so "no extensions
-                    // requested" does not mean "no extension output".
-                    var responseEtag = result.Extensions is { Count: > 0 }
-                        ? representationEtagService.Generate(result)
-                        : etag;
-
-                    if (!string.IsNullOrEmpty(input.IfNoneMatch) && responseEtag.MatchesIfNoneMatch(input.IfNoneMatch))
+                    if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
                     {
                         return ConditionalResult<GetInstanceDataOutput>.NotModified();
                     }
 
-                    result.ETag = responseEtag;
+                    result.ETag = etag;
                     return ConditionalResult<GetInstanceDataOutput>.Success(result);
                 },
                 onFailure: ConditionalResult<GetInstanceDataOutput>.Fail);
@@ -1658,8 +1639,7 @@ public sealed class InstanceQueryAppService(
     /// <summary>
     /// Fast path for latest-data requests over the data fingerprint. Loads the lightweight
     /// projection, computes the deterministic fingerprint ETag and answers 304 when the
-    /// caller's If-None-Match matches (no cache access, no extension run, no build) — but only
-    /// for requests carrying no extensions, since the fingerprint cannot see extension output.
+    /// caller's If-None-Match matches (no cache access, no extension run, no build).
     /// Otherwise consults the body cache and returns the entry whose ETag matches the current
     /// fingerprint ETag — the build path then reuses its DATA portion (skipping field
     /// filtering) while always computing extensions fresh. Both results are null when the
@@ -1677,14 +1657,7 @@ public sealed class InstanceQueryAppService(
 
         var etag = dataFunctionCache.ComputeEtag(input, fingerprint);
 
-        // The fingerprint sees instance data only — neither the extension output this response
-        // would carry nor the state that output is derived from. A state change that writes no
-        // data leaves the fingerprint identical while the extension payload changes, so a 304
-        // here hands the caller a stale extension: the observed failure was a client replaying
-        // the previous state's nextTransition and being rejected. A response that can carry
-        // extension output therefore skips the short-circuit and is ETagged from the built body.
-        if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch) &&
-            !await MayCarryExtensionOutputAsync(input, fingerprint, cancellationToken))
+        if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
         {
             logger.DataFunctionEtagNotModified(input.Instance);
             return (ConditionalResult<GetInstanceDataOutput>.NotModified(), null);
@@ -1705,41 +1678,6 @@ public sealed class InstanceQueryAppService(
 
         logger.DataFunctionCacheHit(input.Instance);
         return (null, entry);
-    }
-
-    /// <summary>
-    /// Whether a data response for this request could carry extension output, decided WITHOUT
-    /// loading the aggregate. The fingerprint ETag only describes instance data, so it may answer
-    /// 304 solely for responses that carry nothing else.
-    /// <para>
-    /// Requested extensions are the obvious case, but not the only one:
-    /// <see cref="ExtensionExecutionExtensions.ShouldExecute"/> runs a <c>DefinedFlows</c> extension
-    /// exactly when NOTHING was requested, so an empty request list is the branch where a
-    /// flow-declared extension does run. The flow comes from the component cache, not the
-    /// repository, and is consulted only once a 304 is actually on the table.
-    /// </para>
-    /// <para>
-    /// NOT covered: <c>Global</c> extensions, which execute regardless of flow and request.
-    /// <c>IComponentCacheStore.GetAllExtensionsAsync</c> cannot presently enumerate them (it probes
-    /// a single component by empty key and wraps one result), so a Global extension never reaches
-    /// the response today and there is nothing here to protect against. If that enumeration is
-    /// fixed, this guard has to account for it too.
-    /// </para>
-    /// </summary>
-    private async Task<bool> MayCarryExtensionOutputAsync(
-        GetInstanceDataInput input,
-        InstanceDataFingerprint fingerprint,
-        CancellationToken cancellationToken)
-    {
-        if (input.Extensions is { Length: > 0 })
-            return true;
-
-        var flowResult = await componentCacheStore.GetFlowAsync(
-            input.Domain, input.Workflow, fingerprint.FlowVersion, cancellationToken);
-
-        // An unresolvable flow is not a licence to answer 304: the full path resolves it properly
-        // (and reports the real error), so treat the unknown as "might carry extensions".
-        return !flowResult.IsSuccess || flowResult.Value!.Extensions.Count > 0;
     }
 
     /// Gets the view definition for rule-based view selection.

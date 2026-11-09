@@ -287,11 +287,11 @@ Two consequences worth knowing:
 ## Data function
 
 The data function (`GET .../instances/{instance}/data` and `functions/data`) uses the same
-mechanism with a data-centric material — the design principle is that the data function
-signals **data change points**, not state or extension flux:
+mechanism with an instance-centric material — the data function signals **data and state
+change points**, not extension flux:
 
 ```
-etag = h(generation | instanceId | latestDataEtag | flowVersion | callerHash)
+etag = h(generation | instanceId | latestDataEtag | effectiveState | flowVersion | callerHash)
 key  = data-fn:{generation}:{domain}:{workflow}:{instance}:{callerHash}
 generation = v3[-nomask]                                   # SchemaMasking:Enabled=false
 callerHash = h(roles | actor identity | culture | version)   # extensions deliberately EXCLUDED
@@ -343,12 +343,21 @@ callerHash = h(roles | actor identity | culture | version)   # extensions delibe
   extension run — including always-on Global extensions); the body cache additionally removes
   the field-filtering cost from every 200.
 
-Accepted staleness (by design — "the critical thing is the data change point"): the ETag does
-not track extension output, so an ETag-holding client receives 304 until the next data write
-or flow migration even if extension output changed in the meantime; clients that need fresh
-extension output call without `If-None-Match` and always get a freshly computed response.
-Similarly, state-dependent `queryRoles` outcomes are only re-evaluated when data or flow
-version changes (transitions usually write data, which re-triggers everything).
+**`EffectiveState` is part of the material.** Enrichment is a function of the instance as the
+runtime owns it, not of the data rows alone: `ScriptContext` hands an extension the current
+state precisely so scripts can make context-aware decisions, so an extension that reads it
+changes its answer the moment the state moves. A transition that writes no data otherwise left
+this ETag identical and the 304 served the previous state's enrichment — observed in the field
+as a client replaying the previous state's `nextTransition` and being rejected with 403. The
+schema function's ETag has always carried `effectiveState` for the same reason (its transition
+resolution is state-dependent); the data function's omission was the asymmetry, not a
+distinct policy. State-dependent `queryRoles` outcomes are re-evaluated on the same signal.
+
+Accepted staleness (by design): the ETag tracks data and state, not extension output itself.
+An extension whose answer varies on anything beyond those two — the wall clock, an external
+call — can still be served 304 until the next data write, state change or flow migration;
+clients that need such output fresh call without `If-None-Match` and always get a freshly
+computed response.
 
 ## Master and schema functions
 
