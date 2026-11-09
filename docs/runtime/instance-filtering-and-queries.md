@@ -32,6 +32,64 @@ Two kinds of fields, distinguished by the name you pass:
 > (see `docs/runtime/state-function-cache-and-etag.md`). So `effectiveStatus eq Completed` can match
 > a parent whose served `effectiveStatus` reads `Busy` — for "is this flow done?", filter on `status`.
 
+> **`modifiedAt` is the last time the instance changed.** Every transition stamps it, a same-state one
+> included, whether it leaves the instance Active, Busy, Completed (a cancel too) or Faulted. An
+> `updateData` stamps it with the `EnteredAt` of each data row it writes — its request body or its
+> tasks' output, the last row winning; one that changes no data, stage, tags or key writes nothing and
+> moves nothing. "Transition" means a hop a request, timer, event or chain fires: an internal SubFlow or
+> long-poll resume that rests Busy moves it only through the status projection writes listed below.
+> Earlier runtimes moved it only on the set-based status writes, so a finished instance showed a time
+> from before its final transition started. `LastTouchedAt` (`COALESCE(ModifiedAt, CreatedAt)`) follows it.
+>
+> The stamp rides on a write the hop makes anyway wherever the hop has one. `Instance.ChangeState`
+> stamps at order 50 when the state moves; a same-state hop has nothing to write there, so
+> `ChangeStateStep` leaves its stamp pending (`PipelineDirectives.DeferModifiedAtStamp`) and the end of
+> the hop applies it, where its outcome is known (`TransitionSettlement`, or the handoff in
+> `TransitionPipeline`) — unless the write that closes the hop already stamped it:
+>
+> | Transition | Stamped by | Extra cost |
+> | --- | --- | --- |
+> | Changes the state | `Instance.ChangeState` (order 50), in the UPDATE that writes the new state | none |
+> | Completes, cancels or faults | `Complete` / `Cancel` / `Fault` (same instant as `completedAt`), in the status UPDATE | none |
+> | Same state, ends with the Busy release (the start transition into the pre-positioned initial state, a `$self` shared transition resting Active) or pauses at the long-poll arm | the release or arm CAS that closes the hop | none |
+> | Same state, ends without a release (parked in Busy, waiting on a SubFlow, or the status is not held) | `Instance.MarkModified` at the end of the hop (settlement, or the post-commit handoff), sent by its commit | one UPDATE of its own, after the hop's last save; the admission's Busy flip, when there was one, stamped the hop's start and this moves it to the hop's end |
+> | Changes the stage, tags or key (any transition, `updateData` included) | `SetStage` / `AddTags` / `SetKey`, only when the value changes | none — the changed column is written anyway |
+> | `updateData` that writes data | each data row it writes — body (`CreateTransitionRecordStep`) or task output (`TaskExecutionEngine`), via `AppendAsync(touchInstance: true)` | one extra statement per row, in the batch that inserts it: same round trip, the row already locked |
+>
+> Status ownership is not consulted: a job re-entry is classified as the owner without having flipped
+> anything (a parent waiting on its SubFlow), so only the outcome says which write closes the hop. A
+> same-state hop that continues in-process (an inline automatic transition) is closed by the next hop,
+> whose own outcome stamps the instance.
+>
+> Every other set-based status write stamps it too (`EfCoreInstanceRepository`: Busy flip and release,
+> un-fault, effective-status projection and its revert, long-poll arm). Data appended inside any other
+> transition (request body, task output) is not stamped separately. A same-state hop that hands off
+> post-commit work which is then settled with a Busy release (version-registry invalidation) is
+> stamped at the handoff and again by that release — admin-rate traffic.
+>
+> **Cost** (one-off measurements, 2026-11-05/06, harness not committed). An instance-row UPDATE that
+> changes only `ModifiedAt` is one non-HOT row version — the indexed `LastTouchedAt` changes, so the
+> `Instances` indexes get a new entry (up to ten today; five are partial, seven apply to an Active instance
+> without a long-poll token or incident) — and about 650 bytes of WAL (Testcontainers Postgres 16,
+> 500 operations, `pg_stat_user_tables` and `pg_current_wal_lsn()` deltas). It is paid inside the
+> instance's row lock, so it shows on a busy instance. `pgbench` on a local Docker Postgres 18 replaying
+> the `updateData` append (row lock, two data rows per hop, `Instances` DDL and indexes copied from a lab
+> schema, 20-second runs alternated), stamping per row as the runtime does — average throughput, with the
+> single alternated runs in brackets: over 20,000 instances (8 clients) about −4% (+1% to −13%); over 50
+> instances (16 clients) −5% (−3% to −7%); one instance under five concurrent `updateData` calls about
+> −20% (−5% to −35%).
+> One stamp per hop measured −2% and −6% on the last two, but no write can tell reliably which row is
+> its hop's first: keying it on the database transaction was tried and reverted, because Npgsql reuses
+> the transaction object on a pooled connection and later hops stopped stamping
+> (`UpdateData_hops_in_consecutive_transactions_each_stamp`).
+> A single stamp sent as its own round trip cost about as much as two batched ones; a same-state hop
+> that ends without a release pays that (about 0.25 ms locally). In the vnext-example E2E (local Docker,
+> OpenObserve; eight branch runs, two of them on the final tree, against two master runs, 27–31
+> `updateData` row inserts per run) the per-run median of a stamped row insert was 0.64–0.81 ms against
+> 0.36–0.48 ms on master — about +0.3–0.4 ms per row, so roughly +0.7 ms for an `updateData` whose body
+> and task both write. Inserts that do not stamp read 0.38–0.45 ms against 0.36–0.39 ms; with two master
+> runs that is not separated from run-to-run drift.
+
 > **`instanceType` records how the instance was STARTED, not a live relationship.** `Root` / `R`,
 > `SubFlow` / `S`, `SubProcess` / `P`, stamped once at creation and never updated — so it stays
 > answerable after the instance finishes, but it says a child *was created by* a parent, not that
