@@ -986,6 +986,11 @@ public sealed class EfCoreInstanceRepository(
     public async Task<Instance?> FindByIdentifierAsReadOnlyAsync(string identifier,
         CancellationToken cancellationToken = default)
     {
+        if (LatestOnlyLoading)
+        {
+            return await FindByIdentifierAsReadOnlyLatestOnlyAsync(identifier, cancellationToken);
+        }
+
         var query = (await PrepareDetailedQueryAsync())
             .AsNoTracking()
             .AsSplitQuery();
@@ -1009,6 +1014,104 @@ public sealed class EfCoreInstanceRepository(
             .Where(p => p.Key == identifier)
             .OrderByDescending(p => p.CreatedAt)
             .FirstOrDefaultAsync(cancellationToken));
+    }
+
+    /// <summary>
+    /// The no-tracking twin of <see cref="FindByIdentifierLatestOnlyAsync"/> — the load behind every
+    /// read endpoint (GET instance, data/view/schema/master functions). Same aggregate shape as the
+    /// split path (latest data row + open child correlations) in two commands instead of three: the
+    /// latest data row is at most one row per instance, so it joins the instance row with nothing to
+    /// multiply, and the open correlations follow as one query keyed on the instance id. The
+    /// correlations are not joined too, for the reason the tracked twin gives. The tracked
+    /// collection loader does not apply to a detached aggregate, so the rows are attached through
+    /// <see cref="Instance.AcceptLoadedChildCorrelations"/>.
+    /// </summary>
+    private async Task<Instance?> FindByIdentifierAsReadOnlyLatestOnlyAsync(
+        string identifier,
+        CancellationToken cancellationToken)
+    {
+        var instance = await FindReadOnlyRootAsync(identifier, cancellationToken);
+        if (instance is null)
+        {
+            return null;
+        }
+
+        using (PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan))
+        {
+            var instanceId = instance.Id;
+            var openCorrelations = await (await GetDbContextAsync()).Set<InstanceCorrelation>()
+                .AsNoTracking()
+                .Where(c => c.ParentInstanceId == instanceId && !c.IsCompleted)
+                .ToListAsync(cancellationToken);
+            instance.AcceptLoadedChildCorrelations(openCorrelations);
+        }
+
+        return MarkIfPartiallyLoaded(instance);
+    }
+
+    /// <inheritdoc />
+    public async Task<(Instance? Instance, List<InstanceCorrelation> AllCorrelations)>
+        FindByIdentifierAsReadOnlyWithAllCorrelationsAsync(
+            string identifier,
+            CancellationToken cancellationToken = default)
+    {
+        var instance = await FindReadOnlyRootAsync(identifier, cancellationToken);
+        if (instance is null)
+        {
+            return (null, []);
+        }
+
+        List<InstanceCorrelation> allCorrelations;
+        using (PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan))
+        {
+            // One read for both consumers: the response's full correlation set (same filter and
+            // order as IInstanceCorrelationRepository.GetByParentAsync) and the aggregate's open
+            // subset, which the detail load would otherwise fetch with a filtered include.
+            var instanceId = instance.Id;
+            allCorrelations = await (await GetDbContextAsync()).Set<InstanceCorrelation>()
+                .AsNoTracking()
+                .Where(c => c.ParentInstanceId == instanceId)
+                .OrderBy(c => c.ParentState)
+                .ThenBy(c => c.CompletedAt)
+                .ToListAsync(cancellationToken);
+        }
+
+        instance.AcceptLoadedChildCorrelations(allCorrelations);
+        return (MarkIfPartiallyLoaded(instance), allCorrelations);
+    }
+
+    /// <summary>
+    /// The no-tracking instance row with its data rows and WITHOUT the correlation include, under
+    /// the usual identifier resolution (id first, then the most recent row for the key). Latest-only
+    /// loading: one single query (the latest row joins without multiplying). Full history: the
+    /// DataList stays a split query.
+    /// </summary>
+    private async Task<Instance?> FindReadOnlyRootAsync(
+        string identifier,
+        CancellationToken cancellationToken)
+    {
+        IQueryable<Instance> query;
+        using (PipelineStepActivityHelper.StartOperationActivity(QueryPrepareSpan))
+        {
+            var root = (await base.WithDetailsAsync()).AsNoTracking();
+            query = LatestOnlyLoading
+                ? root.Include(i => i.DataList.Where(d => d.IsLatest)).AsSingleQuery()
+                : root.Include(i => i.DataList).AsSplitQuery();
+        }
+
+        using (PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan))
+        {
+            var instance = Guid.TryParse(identifier, out var instanceId)
+                ? await query.FirstOrDefaultAsync(p => p.Id == instanceId, cancellationToken)
+                : null;
+
+            // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
+            // keeps the fallback deterministic by returning the most recent instance for the key.
+            return instance ?? await query
+                .Where(p => p.Key == identifier)
+                .OrderByDescending(p => p.CreatedAt)
+                .FirstOrDefaultAsync(cancellationToken);
+        }
     }
 
     /// <inheritdoc />

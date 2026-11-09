@@ -25,6 +25,19 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The read-only (no-tracking) load of <see cref="FindByIdentifierAsReadOnlyAsync"/> — same
+    /// identifier resolution, same data rows, same open-only <see cref="Instance.ChildCorrelations"/>
+    /// — that also hands back the instance's FULL correlation set (open and completed) from the same
+    /// single correlation query, ordered by <c>ParentState</c> then <c>CompletedAt</c> exactly like
+    /// <see cref="IInstanceCorrelationRepository.GetByParentAsync"/>. For readers that need both (the
+    /// state function), this replaces the open-correlation include plus a second, all-rows read.
+    /// <c>AllCorrelations</c> is empty when the instance is not found.
+    /// </summary>
+    Task<(Instance? Instance, List<InstanceCorrelation> AllCorrelations)> FindByIdentifierAsReadOnlyWithAllCorrelationsAsync(
+        string identifier,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Loads several instances by id for read-only projection, including only their data rows.
     /// Unlike <see cref="FindByIdentifierAsReadOnlyAsync"/> this omits the ChildCorrelations include,
     /// because callers of this method never read correlations. Ids with no matching row are omitted.
