@@ -79,7 +79,7 @@ public sealed class RoutedInstanceCommandGatewayMarkBusyTests
 
         var busyService = Substitute.For<IInstanceBusyManager>();
         busyService.MarkBusyWithPropagationAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+            .Returns(Task.FromResult<InstanceStatus?>(InstanceStatus.Busy));
 
         var services = new ServiceCollection();
         services.AddSingleton(_ => schema);
@@ -99,6 +99,7 @@ public sealed class RoutedInstanceCommandGatewayMarkBusyTests
         var result = await sut.MarkBusyAsync(input, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
+        result.Value!.EffectiveStatusCode.ShouldBe(InstanceStatus.Busy.Code);
         runtimeInfo.Received(1).IsDomainMatch(input.Domain);
         await busyService.Received(1).MarkBusyWithPropagationAsync(
             Arg.Is<Guid>(x => x == input.InstanceId),

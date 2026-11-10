@@ -255,11 +255,12 @@ public sealed class InstanceFilterQueryTests : IAsyncLifetime
 
         // Tags via ARRAY[]::text[] and ExtraProperties as a parameter — avoid literal '{}' which EF's
         // raw-SQL builder would misread as a "{n}" placeholder. LastTouchedAt is a generated column
-        // (GENERATED ALWAYS) so it is omitted and computed by PostgreSQL.
+        // (GENERATED ALWAYS) so it is omitted and computed by PostgreSQL. SubStateNotificationSeq is
+        // NOT NULL; its DEFAULT 0 comes only from the migration, which EnsureCreated does not run.
         await ctx.Database.ExecuteSqlRawAsync(
             "INSERT INTO \"public\".\"Instances\" " +
-            "(\"Id\",\"Key\",\"Flow\",\"FlowVersion\",\"CurrentState\",\"Status\",\"Tags\",\"ExtraProperties\",\"CreatedAt\") " +
-            "VALUES ({0},{1},{2},'1.0.0',{3},{4},ARRAY[]::text[],{5},{6})",
+            "(\"Id\",\"Key\",\"Flow\",\"FlowVersion\",\"CurrentState\",\"Status\",\"Tags\",\"ExtraProperties\",\"CreatedAt\",\"SubStateNotificationSeq\") " +
+            "VALUES ({0},{1},{2},'1.0.0',{3},{4},ARRAY[]::text[],{5},{6},0)",
             instanceId, key, Flow, currentState, status, "{}", createdAt);
 
         await ctx.Database.ExecuteSqlRawAsync(

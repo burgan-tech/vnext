@@ -40,7 +40,7 @@ public abstract class InstanceCorrelationRepositoryTests<TEntry> : DomainTestBas
         );
 
         // Act
-        var result = await Repository.InsertAsync(correlation);
+        var result = await Repository.InsertAsync(correlation, true);
 
         // Assert
         result.ShouldNotBeNull();
@@ -83,8 +83,8 @@ public abstract class InstanceCorrelationRepositoryTests<TEntry> : DomainTestBas
             "1.0"
         );
 
-        await Repository.InsertAsync(correlation1);
-        await Repository.InsertAsync(correlation2);
+        await Repository.InsertAsync(correlation1, true);
+        await Repository.InsertAsync(correlation2, true);
 
         // Act
         var results = await Repository.GetActiveByParentAsync(parentInstance.Id);
@@ -117,7 +117,7 @@ public abstract class InstanceCorrelationRepositoryTests<TEntry> : DomainTestBas
             "1.0"
         );
 
-        await Repository.InsertAsync(correlation);
+        await Repository.InsertAsync(correlation, true);
 
         // Act
         var result = await Repository.AnyActiveSubFlowByParentAsync(parentInstance.Id);
@@ -163,7 +163,7 @@ public abstract class InstanceCorrelationRepositoryTests<TEntry> : DomainTestBas
             "1.0"
         );
 
-        await Repository.InsertAsync(correlation);
+        await Repository.InsertAsync(correlation, true);
 
         // Act
         var result = await Repository.FindActiveSubFlowByParentAsync(parentInstance.Id);
@@ -196,7 +196,7 @@ public abstract class InstanceCorrelationRepositoryTests<TEntry> : DomainTestBas
             "1.0"
         );
 
-        await Repository.InsertAsync(correlation);
+        await Repository.InsertAsync(correlation, true);
 
         // Act
         var result = await Repository.FindBySubInstanceIdAsync(subInstance.Id);
@@ -228,7 +228,7 @@ public abstract class InstanceCorrelationRepositoryTests<TEntry> : DomainTestBas
             "1.0"
         );
 
-        await Repository.InsertAsync(correlation);
+        await Repository.InsertAsync(correlation, true);
 
         // Act
         correlation.Completed();
@@ -245,7 +245,7 @@ public abstract class InstanceCorrelationRepositoryTests<TEntry> : DomainTestBas
     private async Task<Instance> CreateTestInstanceAsync(string key)
     {
         var instance = Instance.Create(Guid.NewGuid(), "test-workflow", "1.0.0",key);
-        await InstanceRepository.InsertAsync(instance);
+        await InstanceRepository.InsertAsync(instance, true);
         return instance;
     }
 }
