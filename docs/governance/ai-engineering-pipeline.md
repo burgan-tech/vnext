@@ -190,7 +190,7 @@ sequenceDiagram
 | `issue-triage.yml` *(exists)* | `issues: opened, edited, reopened`, manual | author not a bot | per issue |
 | `ai-director.yml` | `issues: labeled`, hourly sweep, manual | label is `ai:ready` / `ai:replan`; issue open | per issue |
 | `ai-council.yml` | `issues: labeled`, manual | label is `ai:council-required` | per issue |
-| `ai-developer.yml` | `issues: labeled`, manual | label is `ai:planned` / `ai:changes-required`; not `ai:blocked`, `ai:done`, `ai:human-approval`; risk low / medium, or high with `ai:council-approved` | per issue, never cancelled mid-push |
+| `ai-developer.yml` | `issues: labeled`, manual | label is `ai:planned` / `ai:changes-required`; not `ai:blocked`, `ai:done`, `ai:human-approval`, `ai:semver-major`; with `ai:council-required` also `ai:council-approved` | per issue, never cancelled mid-push |
 | `ai-quality-gate.yml` | `workflow_run: completed` (test / Sonar / contract / e2e workflows), `pull_request: ready_for_review`, hourly sweep, manual | PR open; target `master` / `release-v*` | per PR, latest wins |
 | `ai-done.yml` | `pull_request: closed` | merged; linked issue carries an `ai:*` state | per issue |
 
@@ -200,9 +200,16 @@ GitHub does not start a workflow for events caused by `GITHUB_TOKEN` (a loop gua
 Director added `ai:planned` with `GITHUB_TOKEN`, the Developer would never run. Every write that
 must trigger the next role uses the GitHub App installation token (`APP_ID` / `APP_PRIVATE_KEY`,
 already configured for triage), generated **after** the agent has finished, so the agent never
-holds it. The app needs Issues, Pull requests and Contents read/write; it must **not** have the
-Workflows permission — GitHub then refuses any push that edits `.github/workflows/`, which is a
-second guard on top of the diff policy.
+holds it.
+
+The same App also serves the release workflows, so its installation may hold more permissions than
+the pipeline needs. Every `ai-*.yml` workflow therefore **down-scopes** the token it mints with
+`permission-*` inputs on `actions/create-github-app-token` — only `contents`, `issues`,
+`pull-requests` (and read-only `checks`, `statuses`, `actions`, `metadata`), never `workflows`,
+`administration` or `secrets`. A token without `workflows` makes GitHub refuse any push that edits
+`.github/workflows/`, a second guard on top of the diff policy.
+[`ai-workflows.test.mjs`](../../scripts/governance/test/ai-workflows.test.mjs) fails the PR
+Contract workflow when an `ai-*.yml` mints a token without `permission-*` inputs or with a forbidden one.
 
 ### 7.2 Why the Quality Gate runs on `workflow_run`
 
@@ -212,11 +219,21 @@ is not used: it is the common way to leak secrets to PR code.
 
 ### 7.3 Re-checking the declared classification
 
-The agent's "patch / low impact" is a claim. The Quality Gate's trusted script compares the PR's
-changed paths with a path rule list (migrations, `Authorization/`, `Security/`, `Encryption/`,
-contract DTOs, `Events.Contracts`, `LifecycleOrder.cs`, `PipelineExecutionProfile.cs`, Dapr
-components, Helm values). A match on a low-impact PR is not a PASS: the gate sets
-`ai:impact-high` + `ai:council-required` and explains why.
+The agent's "patch / low impact" is a claim. The path rules in
+[`.github/ai/impact-paths.json`](../../.github/ai/impact-paths.json) list what makes a change high
+impact: migrations, `Authorization/`, `Security/` / `Encryption/` / `Masking/`, the script sandbox,
+controllers and application contracts / DTOs, `Events.Contracts`, task abstractions,
+`LifecycleOrder.cs` / `PipelineExecutionProfile.cs` / `PipelineProfileResolver.cs`,
+`StateFunctionCache.cs`, Dapr components and anything under `.github/`. Two checks read it:
+
+- the PR contract (`PR-AI-IMPACT`) flags an `ai:impact-low` PR whose diff matches a rule — on every
+  push, so the Developer sees it before review;
+- the Quality Gate's trusted script does not PASS such a PR: it sets `ai:impact-high` +
+  `ai:council-required` and explains which rule matched.
+
+Helm values live in vnext-helm-charts, outside this diff; a change that needs them is high impact
+through the companion-contract criterion (§3). A test fails when a rule stops matching any tracked
+file, so a moved directory cannot silently disable it.
 
 ## 8. Quality Gate
 
@@ -243,8 +260,10 @@ still `CHANGES_REQUIRED`; the Developer fixes it in the same repair loop.
 ## 9. The AI PR body — what the human gets
 
 The Developer writes the body from [the PR template](../../.github/PULL_REQUEST_TEMPLATE.md) and
-adds one section. [`pr-contract.mjs`](../../scripts/governance/pr-contract.mjs) enforces it for any
-PR whose linked issue carries an `ai:*` state.
+adds one section. [`pr-contract.mjs`](../../scripts/governance/pr-contract.mjs) enforces it on every
+PR that carries an `ai:` label (the trusted writer labels the PR as it labels the issue), on light
+and full tiers alike — rule ids `PR-AI-*` in the
+[evidence reviewer §4](../code-review/reviewers/evidence.md#4-pr-body-evidence-evidencepr-).
 
 ```markdown
 ## AI decision record
@@ -351,7 +370,7 @@ change of a contract product raises impact (§3).
 |---|---|---|
 | 0 | **Unit tests in CI, green.** `pr-tests.yml` runs on every PR and push to master and fails on any failing test; every pre-existing red is fixed (no known-red baseline), then the `Unit Tests` check becomes required ([policy](../testing/unit-tests.md)) | master has zero failing unit tests and the check is required |
 | 1 | **Taxonomy.** Labels of §4 in `labels.json` (one group per row, pinned by `labels.test.mjs`), `sync-labels --apply`, deprecated labels documented | every label exists with a description |
-| 2 | **Guards.** PR contract's `AI decision record` rule, the classification path rules (§7.3), App token permissions without Workflows | unit tests for the scripts pass |
+| 2 | **Guards.** `PR-AI-*` rules in the PR contract (§9), the path rules in `.github/ai/impact-paths.json` (§7.3), down-scoped App tokens checked by `ai-workflows.test.mjs` (§7.1) | governance script tests pass |
 | 3 | **Read-only roles** in `dry-run`: Director, Council, Quality Gate post comments only | a week of runs with no wrong state |
 | 4 | **Developer** in `dry-run` (pushes to a branch, opens a draft PR, no label transitions), then `apply` | first low-impact issue reaches `ai:human-approval` |
 | 5 | **E2E in CI** (§10) | e2e evidence appears on AI PRs |
