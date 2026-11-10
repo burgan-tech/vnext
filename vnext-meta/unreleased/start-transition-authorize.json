@@ -1,0 +1,18 @@
+{
+  "releaseNote": {
+    "summary": "Adds workflow-scoped authorize?start=true so a gateway can gate instance start by startTransition.roles before any instance exists.",
+    "breaking": false,
+    "docs": []
+  },
+  "features": {
+    "engine": {
+      "startTransitionAuthorize": {
+        "since": "next",
+        "status": "stable",
+        "description": "GET {domain}/workflows/{workflow}/functions/authorize?start=true[&version=x][&role=r] answers whether the caller may start an instance of the workflow, from the workflow's own startTransition.roles, before any instance exists. Lets a gateway gate POST {domain}/workflows/{workflow}/instances/start the way it gates transitions with the instance-scoped authorize. start=true is the only accepted target; without it the call is a 400 (AuthorizeRequiresExactlyOneTarget). The caller's roles are resolved exactly as on the instance-scoped authorize (configured provider, role parameter composed per provider). Evaluation is the no-instance path of the single role grant evaluator: static roles and $Everyone are compared; instance-bound leaves ($InstanceStarter, $PreviousUser, $InstanceBehalfOfStarter, $PreviousBehalfOfUser, $user., $userBehalfOf., $role. context references) have nothing to resolve against and never match, so they neither admit nor refuse - a start transition guarded only by such a grant is closed to everyone. No grants allow. availableIn and the state gate do not apply. 200 when allowed, 403 with { allowed: false } when not, 404 for an unknown workflow or version. The runtime itself still does not check startTransition.roles at POST .../instances/start, consistent with every other transition. PURELY ADDITIVE.",
+        "schemaPath": "startTransition.roles[]",
+        "documentation": "docs/domain/authorize-function.md"
+      }
+    }
+  }
+}
