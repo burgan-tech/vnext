@@ -269,6 +269,8 @@ public sealed class PostCommitParentMutationEventDurabilityTests
                 entity.Ignore(instance => instance.ActiveCorrelations);
                 entity.Ignore(instance => instance.Subflow);
                 entity.Ignore(instance => instance.Status);
+                entity.Ignore(instance => instance.EffectiveStatus);
+                entity.Ignore(instance => instance.Type);
             });
 
             base.OnModelCreating(modelBuilder);

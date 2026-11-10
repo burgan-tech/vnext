@@ -47,14 +47,11 @@ public class ExtensionComponentValidatorTests
         // Arrange
         var extensionJson = """
         {
-            "type": "O",
-            "scope": "O",
+            "type": "global",
+            "scope": "everywhere",
             "task": {
-                "type": "6",
-                "config": {
-                    "url": "https://example.com",
-                    "method": "GET"
-                }
+                "order": 1,
+                "task": {"key": "t", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"}
             }
         }
         """;
@@ -122,8 +119,8 @@ public class ExtensionComponentValidatorTests
         // Arrange
         var extensionJson = """
         {
-            "type": "O",
-            "scope": "O"
+            "type": "global",
+            "scope": "everywhere"
         }
         """;
         var attributes = JsonDocument.Parse(extensionJson).RootElement;

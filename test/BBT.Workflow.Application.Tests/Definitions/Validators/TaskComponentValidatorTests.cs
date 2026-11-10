@@ -105,8 +105,11 @@ public class TaskComponentValidatorTests
         var result = _validator.Validate(attributes);
 
         // Assert
+        // WorkflowTask is [JsonPolymorphic] on "type", so an unknown discriminator is rejected while
+        // deserializing (JsonException) and reported against the component, naming the bad value.
         result.IsValid.ShouldBeFalse();
-        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("WorkflowTask.Type"));
+        result.ValidationErrors.ShouldContain(e =>
+            e.MemberNames.Contains("WorkflowTask") && e.ErrorMessage!.Contains("InvalidType"));
     }
 
     [Theory]
