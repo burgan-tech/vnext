@@ -201,7 +201,6 @@ batches of 1000 every `AiAgent:SessionSweepIntervalMinutes` (0 disables it), and
 
 ```jsonc
 "AiAgent": {
-  "Enabled": true,                                  // false: every agent state records a Disabled run and takes its fallback
   "Providers": {
     "bank-llm": { "Kind": "openai-compatible", "Endpoint": "https://llm.internal/v1", "Model": "qwen3-32b",
                   "ApiKeySecretRef": "vault/workflow-secret/LLM_KEY", "StructuredOutput": "jsonSchema" },

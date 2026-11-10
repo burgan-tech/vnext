@@ -12,12 +12,6 @@ public sealed class AiAgentOptions
     /// <summary>Configuration section.</summary>
     public const string Section = "AiAgent";
 
-    /// <summary>
-    /// Kill switch. When false, an AiAgent state never calls a provider: it records a disabled run and
-    /// takes its <c>decision.fallback</c>.
-    /// </summary>
-    public bool Enabled { get; set; } = true;
-
     /// <summary>Provider profiles by name (the component's <c>provider</c>).</summary>
     public Dictionary<string, AgentProviderProfile> Providers { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
