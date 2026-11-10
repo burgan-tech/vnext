@@ -49,7 +49,8 @@ Evidence always; Security, Data, Performance, Reliability and Devil's Advocate b
 proposals before cross-exposure, at most two evidence-based objection rounds, a recorded decision with
 dissent, rollback and verification plan, and one of `APPROVED` / `EXPERIMENT_REQUIRED` /
 `CLARIFICATION_REQUIRED` / `BLOCKED` / `REJECTED` — is the `agent-council` skill. High/Critical and
-Chair-gated decisions stay blocked until the configured Chair approves.
+Chair-gated decisions stay blocked until the configured Chair approves. One scoped exception: in the
+CI AI pipeline an `APPROVED` council verdict authorizes development (not merge) — [pipeline §3](../../docs/governance/ai-engineering-pipeline.md).
 
 ## Hard gates
 

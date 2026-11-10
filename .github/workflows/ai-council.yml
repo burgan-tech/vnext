@@ -1,0 +1,186 @@
+name: AI Council
+
+# Architecture Council of the AI pipeline (docs/governance/ai-engineering-pipeline.md §3, §7).
+# Judges a planned, high-impact issue when `ai:council-required` is added (by the Director, the
+# Quality Gate or a maintainer): one sticky council comment (<!-- ai-council:v1 -->) with the
+# verdict, the positions, dissent, conditions and the decision-log row. In apply mode APPROVED sets
+# `ai:council-approved` + `ai:planned` (the Developer starts); every other verdict sets `ai:blocked`.
+# The Cursor agent reads the issue snapshot and the code and prints a JSON result; it has no shell,
+# write, network or GitHub access. scripts/ai/council/apply.mjs validates it, can only make the
+# verdict stricter (never approves a breaking change, a low-confidence answer or a human condition)
+# and is the only step that writes to GitHub. An unchanged proposal is never judged twice.
+# Mode: AI_MODE = dry-run (default: comment only) | apply. Model: AI_COUNCIL_MODEL.
+# Auth: secret CURSOR_API_KEY; without it the job is a no-op.
+
+on:
+  issues:
+    types: [labeled]
+  schedule:
+    # The Director cannot re-trigger the council when the label is already there; the sweep can.
+    - cron: '37 * * * *'
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: 'Issue number (empty = sweep issues with ai:council-required)'
+        required: false
+      force:
+        description: 'Judge again even if the input is unchanged or already approved'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ai-council-${{ github.event.issue.number || inputs.issue || 'sweep' }}
+  cancel-in-progress: false
+
+jobs:
+  council:
+    if: >-
+      github.event_name != 'issues' ||
+      github.event.label.name == 'ai:council-required' && !github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AI_MODE: ${{ vars.AI_MODE || 'dry-run' }}
+      AI_COUNCIL_MODEL: ${{ vars.AI_COUNCIL_MODEL || 'claude-sonnet-5-5-medium' }}
+      HAS_AUTH: ${{ secrets.CURSOR_API_KEY != '' }}
+    steps:
+      - name: Check credentials
+        if: env.HAS_AUTH != 'true'
+        run: echo "::notice::CURSOR_API_KEY not set; AI Council skipped."
+
+      - uses: actions/checkout@v4
+        if: env.HAS_AUTH == 'true'
+        with:
+          # The agent can read the working tree; keep the token out of .git/config.
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        if: env.HAS_AUTH == 'true'
+        with:
+          node-version: '24'
+
+      - name: Run AI script tests
+        if: env.HAS_AUTH == 'true'
+        run: node --test "scripts/ai/test/*.test.mjs"
+
+      - name: Stage trusted tooling
+        # apply.mjs and its libraries run from this copy, taken before the agent can touch the tree.
+        if: env.HAS_AUTH == 'true'
+        run: |
+          # The runner context is not available in job-level env: the paths are exported here.
+          TOOLS="$RUNNER_TEMP/ai-tools" AI_IN="$RUNNER_TEMP/ai-in"
+          printf 'TOOLS=%s\nAI_IN=%s\n' "$TOOLS" "$AI_IN" >> "$GITHUB_ENV"
+          mkdir -p "$TOOLS/scripts/triage" "$TOOLS/scripts/governance" "$TOOLS/config" "$AI_IN"
+          cp -R scripts/ai "$TOOLS/scripts/"
+          cp -R scripts/triage/lib "$TOOLS/scripts/triage/"
+          cp -R scripts/governance/lib "$TOOLS/scripts/governance/"
+          cp .github/ai/council.md "$TOOLS/config/"
+
+      - name: Collect issues
+        id: collect
+        if: env.HAS_AUTH == 'true'
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+          FORCE: ${{ inputs.force && '--force' || '' }}
+        run: |
+          if [ -n "$ISSUE" ]; then
+            node "$TOOLS/scripts/ai/council/collect.mjs" --issue "$ISSUE" --out "$AI_IN" $FORCE
+          else
+            node "$TOOLS/scripts/ai/council/collect.mjs" --sweep --limit 2 --out "$AI_IN" $FORCE
+          fi
+
+      - name: Install Cursor CLI
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.agent != ''
+        # Same pinned, verified package as issue-triage.yml; upgrade all together.
+        env:
+          CURSOR_CLI_VERSION: 2026.10.22-27dcf5f
+          CURSOR_CLI_SHA256: 85296944e4600a83c4b764f578d1502bf9c416db200d33a593e8f3ecabfdc294
+        run: |
+          pkg="$RUNNER_TEMP/cursor-cli.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSL -o "$pkg" "https://downloads.cursor.com/lab/$CURSOR_CLI_VERSION/linux/x64/agent-cli-package.tar.gz"
+          echo "$CURSOR_CLI_SHA256  $pkg" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/cursor-cli"
+          tar --strip-components=1 -xzf "$pkg" -C "$RUNNER_TEMP/cursor-cli"
+          echo "$RUNNER_TEMP/cursor-cli" >> "$GITHUB_PATH"
+
+      - name: Run the council with Cursor (read-only)
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.agent != ''
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          ISSUES: ${{ steps.collect.outputs.agent }}
+        run: |
+          mkdir -p .ai/out
+          export CURSOR_CONFIG_DIR="$RUNNER_TEMP/cursor-config"
+          mkdir -p "$CURSOR_CONFIG_DIR"
+          cat > "$CURSOR_CONFIG_DIR/cli-config.json" <<'JSON'
+          {
+            "version": 1,
+            "editor": { "vimMode": false },
+            "permissions": {
+              "allow": ["Read(**)"],
+              "deny": [
+                "Shell(*)", "Write(**)", "Write(/**)", "WebFetch(*)", "Mcp(*:*)",
+                "Read(.git/**)", "Read(.ai/out/**)",
+                "Read(/proc/**)", "Read(/sys/**)", "Read(/etc/**)", "Read(/root/**)",
+                "Read(/tmp/**)", "Read(/opt/**)", "Read(/usr/**)", "Read(/var/**)",
+                "Read(/home/runner/.cursor/**)", "Read(/home/runner/.config/**)", "Read(/home/runner/.ssh/**)",
+                "Read(/home/runner/.docker/**)", "Read(/home/runner/.npm/**)", "Read(/home/runner/.npmrc)",
+                "Read(/home/runner/.gitconfig)",
+                "Read(/home/runner/work/_temp/**)", "Read(/home/runner/work/_actions/**)"
+              ]
+            }
+          }
+          JSON
+          # The prompt comes from the staged copy, so nothing the agent reads can rewrite it.
+          prompt="$(cat "$TOOLS/config/council.md")"
+          for n in $ISSUES; do
+            echo "::group::Issue #$n"
+            mkdir -p .ai/in && cp "$AI_IN/$n.json" .ai/in/
+            timeout 2400 cursor-agent -p --trust --mode ask --output-format json --model "$AI_COUNCIL_MODEL" \
+              "$prompt
+
+          ---
+          Run the council for the single input file .ai/in/$n.json now. Answer with the result JSON object only." \
+              > ".ai/out/$n.json" \
+              || echo "::warning::Cursor agent exited non-zero on #$n"
+            echo "::endgroup::"
+          done
+
+      - name: Check the agent left the tree untouched
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.agent != ''
+        run: |
+          dirty="$(git status --porcelain --untracked-files=all -- . ':!.ai')"
+          if [ -n "$dirty" ]; then
+            echo "::error::The council agent changed files outside .ai/; nothing is written to GitHub."
+            echo "$dirty"
+            exit 1
+          fi
+
+      - name: Generate GitHub App token
+        # Label writes must start the Developer; GITHUB_TOKEN events do not trigger workflows.
+        # Taken after the agent ran, and down-scoped: issues only, never workflows (§7.1).
+        id: app
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.issues != '' && env.AI_MODE == 'apply'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+
+      - name: Apply results
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.issues != ''
+        env:
+          AI_APP_TOKEN: ${{ steps.app.outputs.token }}
+          AI_REDACT: |
+            ${{ secrets.CURSOR_API_KEY }}
+            ${{ github.token }}
+            ${{ steps.app.outputs.token }}
+        # Reads the trusted copy of the input; the agent's answers are in .ai/out.
+        run: node "$TOOLS/scripts/ai/council/apply.mjs" --mode "$AI_MODE" --in "$AI_IN" --results .ai/out
