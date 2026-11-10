@@ -64,6 +64,13 @@ jobs:
       - name: Build
         run: dotnet build ./BBT.Workflow.slnx --configuration Release --no-restore
 
+      - name: Raise inotify limits
+        # Tests that build a host register a config file watcher each; the runner's default of
+        # 128 inotify instances per user fails ~500 Domain tests with "inotify instances ... reached".
+        run: |
+          sudo sysctl -w fs.inotify.max_user_instances=8192
+          sudo sysctl -w fs.inotify.max_user_watches=524288
+
       - name: Test
         id: test
         # Every project runs even when an earlier one fails; the report step decides the outcome.
