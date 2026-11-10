@@ -4,6 +4,7 @@ using BBT.Aether.DistributedCache;
 using BBT.Aether.Results;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -59,6 +60,12 @@ public class CacheSet<T>(
     /// registry is such a component, so applying it there would recurse.
     /// </summary>
     private const string SystemKeyPrefix = "sys-";
+
+    /// <summary>
+    /// How many versions a resolution log line or span tag lists. A component accumulates one version per
+    /// publish, so the list is bounded; the highest versions are kept because they decide the answer.
+    /// </summary>
+    private const int MaxLoggedVersions = 20;
 
     private readonly IVersionPolicySource _versionPolicy = versionPolicy ?? NoVersionPolicySource.Instance;
 
@@ -264,11 +271,30 @@ public class CacheSet<T>(
         Activity? activity,
         CancellationToken cancellationToken)
     {
-        var allResult = await backend.LoadAllByKeyAsync(domain, key, cancellationToken);
-        if (!allResult.IsSuccess || allResult.Value!.Count == 0)
+        var candidatesResult = await LoadCandidatesAsync(domain, key, cancellationToken);
+        if (!candidatesResult.IsSuccess)
             return await CacheNegativeAsync(domain, key, requested, spelling, redisKey, cancellationToken);
 
-        var allVersions = allResult.Value!;
+        var candidates = candidatesResult.Value!;
+        var allVersions = candidates.Entities;
+        var candidateVersions = DescribeCandidates(allVersions);
+        CacheActivityHelper.SetResolutionCandidates(
+            activity, allVersions.Count, candidateVersions, candidates.DroppedVersions.Count, resolvedVersion: null);
+
+        // A stored version the backend could not load is still published, so the winner below may be an
+        // older build than the one that should win. Answer anyway — failing the read would turn one bad
+        // row into an outage — but never pin that answer for the full resolution TTL (issue #1192).
+        if (candidates.HasDropped)
+        {
+            logger.ComponentCacheCandidatesDropped(
+                ComponentKeyName, domain, key, spelling,
+                candidates.DroppedVersions.Count,
+                string.Join(", ", candidates.DroppedVersions.Take(MaxLoggedVersions)),
+                options.Value.NegativeTtlSeconds);
+        }
+
+        if (allVersions.Count == 0)
+            return await CacheNegativeAsync(domain, key, requested, spelling, redisKey, cancellationToken);
 
         // The normalized spelling is what the answer gets filed under, so it has to be what the answer
         // was computed from — otherwise a padded or differently-cased request could cache one component
@@ -307,8 +333,13 @@ public class CacheSet<T>(
 
         // Only the spelling that was asked for. Writing the other spellings here would be guessing at
         // resolutions nobody requested, and one of those guesses being wrong is how a resolution cache
-        // goes stale in the first place.
-        await TryWriteAsync(redisKey, envelope, ResolutionEntryOptions(), cancellationToken);
+        // goes stale in the first place. A resolution from a partial candidate list is kept only as long
+        // as a negative entry, so it is re-checked promptly instead of served for the full TTL.
+        await TryWriteAsync(
+            redisKey,
+            envelope,
+            candidates.HasDropped ? NegativeEntryOptions() : ResolutionEntryOptions(),
+            cancellationToken);
 
         // The body is immutable and was loaded anyway, so a pinned read of this exact version can reuse
         // it instead of going back to the database.
@@ -318,9 +349,48 @@ public class CacheSet<T>(
             FullEntryOptions(),
             cancellationToken);
 
-        logger.ComponentCacheResolvedFromBackend(ComponentKeyName, domain, key, spelling, matched.Version);
+        CacheActivityHelper.SetResolutionCandidates(
+            activity, allVersions.Count, candidateVersions, candidates.DroppedVersions.Count, matched.Version);
+        logger.ComponentCacheResolvedFromBackend(
+            ComponentKeyName, domain, key, spelling, matched.Version,
+            allVersions.Count, candidateVersions, candidates.DroppedVersions.Count);
 
         return Result<T>.Ok(matched);
+    }
+
+    /// <summary>
+    /// Loads the versions of a component key, with the stored versions the backend had to leave out when
+    /// it can report them (<see cref="ICacheCandidateSource{T}"/>); any other backend reports none.
+    /// </summary>
+    private async Task<Result<ComponentCandidateSet<T>>> LoadCandidatesAsync(
+        string domain,
+        string key,
+        CancellationToken cancellationToken)
+    {
+        if (backend is ICacheCandidateSource<T> candidateSource)
+            return await candidateSource.LoadCandidatesByKeyAsync(domain, key, cancellationToken);
+
+        var allResult = await backend.LoadAllByKeyAsync(domain, key, cancellationToken);
+        return allResult.IsSuccess
+            ? Result<ComponentCandidateSet<T>>.Ok(new ComponentCandidateSet<T>(allResult.Value!, []))
+            : Result<ComponentCandidateSet<T>>.Fail(allResult.Error);
+    }
+
+    /// <summary>
+    /// The candidate versions, highest first and bounded to <see cref="MaxLoggedVersions"/>, for logs and
+    /// span tags. The highest versions are the ones that decide a resolution, so they are the ones kept.
+    /// </summary>
+    private static string DescribeCandidates(IEnumerable<T> candidates)
+    {
+        var versions = candidates
+            .Select(e => e.Version)
+            .OrderByDescending(v => v, InstanceDataVersionComparer.StringVersionComparer.Instance)
+            .ToList();
+
+        var shown = string.Join(", ", versions.Take(MaxLoggedVersions));
+        return versions.Count > MaxLoggedVersions
+            ? $"{shown}, ... (+{versions.Count - MaxLoggedVersions})"
+            : shown;
     }
 
     /// <summary>

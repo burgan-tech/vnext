@@ -8,6 +8,7 @@ using BBT.Aether.Guids;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -129,11 +130,17 @@ public sealed class CacheSetTestHarness
     /// <see cref="ICacheBackend{T}"/> double reporting a settable version list and counting loads, so
     /// "this served zero database queries" can be asserted rather than assumed.
     /// </summary>
-    public sealed class FakeCacheBackend : ICacheBackend<View>
+    public sealed class FakeCacheBackend : ICacheBackend<View>, ICacheCandidateSource<View>
     {
         private int _loadAllCallCount;
 
         public List<View> Versions { get; set; } = [];
+
+        /// <summary>
+        /// Stored versions the backend reports it could not load (a body that fails to deserialize),
+        /// so a resolution over a partial candidate list can be constructed.
+        /// </summary>
+        public List<string> DroppedVersions { get; set; } = [];
 
         public int LoadAllCallCount => Volatile.Read(ref _loadAllCallCount);
 
@@ -150,6 +157,15 @@ public sealed class CacheSetTestHarness
             string key,
             CancellationToken cancellationToken = default)
         {
+            var candidates = await LoadCandidatesByKeyAsync(domain, key, cancellationToken);
+            return Result<List<View>>.Ok(candidates.Value!.Entities);
+        }
+
+        public async Task<Result<ComponentCandidateSet<View>>> LoadCandidatesByKeyAsync(
+            string domain,
+            string key,
+            CancellationToken cancellationToken = default)
+        {
             Interlocked.Increment(ref _loadAllCallCount);
 
             if (FailLoadAll)
@@ -158,10 +174,13 @@ public sealed class CacheSetTestHarness
             if (Gate is not null)
                 await Gate.Task;
 
-            return Result<List<View>>.Ok(Versions
+            var entities = Versions
                 .Where(v => string.Equals(v.Domain, domain, StringComparison.OrdinalIgnoreCase) &&
                             string.Equals(v.Key, key, StringComparison.OrdinalIgnoreCase))
-                .ToList());
+                .ToList();
+
+            return Result<ComponentCandidateSet<View>>.Ok(
+                new ComponentCandidateSet<View>(entities, [.. DroppedVersions]));
         }
 
         public Task<Result<View>> LoadAsync(

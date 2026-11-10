@@ -49,6 +49,22 @@ public interface IRuntimeService
         where T : class, IDomainEntity, IReferenceSetter;
 
     /// <summary>
+    /// Retrieves all active versions of an entity by key, together with the stored versions that could
+    /// not be loaded (for example a body that fails to deserialize).
+    /// </summary>
+    /// <remarks>
+    /// Same rows as <see cref="GetAsync{T}(string, CancellationToken)"/>; the only difference is that the
+    /// versions it silently leaves out are reported, so version resolution can tell a partial candidate
+    /// list from a complete one.
+    /// </remarks>
+    /// <typeparam name="T">The type of entity to retrieve</typeparam>
+    /// <param name="key">The entity key to filter by</param>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests</param>
+    /// <returns>The loaded entities and the versions that were dropped.</returns>
+    Task<ComponentCandidateSet<T>> GetCandidatesAsync<T>(string key, CancellationToken cancellationToken = default)
+        where T : class, IDomainEntity, IReferenceSetter;
+
+    /// <summary>
     /// Returns the distributed cache keys for all active entities of the specified type without
     /// loading the entity data. Used by broadcast-receiving pods to warm their in-memory cache
     /// from the distributed cache without a full DB scan.
