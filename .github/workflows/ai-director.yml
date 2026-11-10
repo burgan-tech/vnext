@@ -1,0 +1,176 @@
+name: AI Director
+
+# Engineering Director of the AI pipeline (docs/governance/ai-engineering-pipeline.md §2–§7).
+# Plans an issue when a maintainer adds `ai:ready` or `ai:replan`: a sticky plan comment
+# (<!-- ai-director-plan:v1 -->), the classification labels and the next state.
+# The Cursor agent reads the issue snapshot and the code and prints a JSON result; it has no shell,
+# write, network or GitHub access. scripts/ai/director/apply.mjs validates the result, re-checks the
+# impact against .github/ai/impact-paths.json (it can only raise it) and is the only step that
+# writes to GitHub. An open linked PR or a still-valid plan is decided before the agent runs.
+# Mode: repository variable AI_MODE = dry-run (default: plan comment only) | apply (labels too,
+# written with the GitHub App so the label event starts the next role).
+# Auth: secret CURSOR_API_KEY; without it the job is a no-op. Model: AI_DIRECTOR_MODEL.
+
+on:
+  issues:
+    types: [labeled]
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: 'Issue number (empty = sweep ai:replan / ai:ready issues)'
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ai-director-${{ github.event.issue.number || inputs.issue || 'sweep' }}
+  cancel-in-progress: false
+
+jobs:
+  director:
+    if: >-
+      github.event_name != 'issues' ||
+      (github.event.label.name == 'ai:ready' || github.event.label.name == 'ai:replan') && !github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AI_MODE: ${{ vars.AI_MODE || 'dry-run' }}
+      AI_DIRECTOR_MODEL: ${{ vars.AI_DIRECTOR_MODEL || 'claude-sonnet-5-5-medium' }}
+      HAS_AUTH: ${{ secrets.CURSOR_API_KEY != '' }}
+    steps:
+      - name: Check credentials
+        if: env.HAS_AUTH != 'true'
+        run: echo "::notice::CURSOR_API_KEY not set; AI Director skipped."
+
+      - uses: actions/checkout@v4
+        if: env.HAS_AUTH == 'true'
+        with:
+          # The agent can read the working tree; keep the token out of .git/config.
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        if: env.HAS_AUTH == 'true'
+        with:
+          node-version: '24'
+
+      - name: Run AI script tests
+        if: env.HAS_AUTH == 'true'
+        run: node --test "scripts/ai/test/*.test.mjs"
+
+      - name: Collect issues
+        id: collect
+        if: env.HAS_AUTH == 'true'
+        env:
+          ISSUE: ${{ github.event.issue.number || inputs.issue }}
+        run: |
+          if [ -n "$ISSUE" ]; then
+            node scripts/ai/director/collect.mjs --issue "$ISSUE"
+          else
+            node scripts/ai/director/collect.mjs --sweep --limit 3
+          fi
+
+      - name: Stage trusted tooling
+        # apply.mjs, its libraries and the path rules run from this copy, taken before the agent can touch the tree.
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.issues != ''
+        run: |
+          tools="$RUNNER_TEMP/ai-tools"
+          mkdir -p "$tools/scripts/triage" "$tools/scripts/governance" "$tools/rules"
+          cp -R scripts/ai "$tools/scripts/"
+          cp -R scripts/triage/lib "$tools/scripts/triage/"
+          cp -R scripts/governance/lib "$tools/scripts/governance/"
+          cp .github/ai/impact-paths.json "$tools/rules/impact-paths.json"
+
+      - name: Install Cursor CLI
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.agent != ''
+        # Same pinned, verified package as issue-triage.yml; upgrade both together.
+        env:
+          CURSOR_CLI_VERSION: 2026.10.22-27dcf5f
+          CURSOR_CLI_SHA256: 85296944e4600a83c4b764f578d1502bf9c416db200d33a593e8f3ecabfdc294
+        run: |
+          pkg="$RUNNER_TEMP/cursor-cli.tar.gz"
+          curl -fsSL -o "$pkg" "https://downloads.cursor.com/lab/$CURSOR_CLI_VERSION/linux/x64/agent-cli-package.tar.gz"
+          echo "$CURSOR_CLI_SHA256  $pkg" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/cursor-cli"
+          tar --strip-components=1 -xzf "$pkg" -C "$RUNNER_TEMP/cursor-cli"
+          echo "$RUNNER_TEMP/cursor-cli" >> "$GITHUB_PATH"
+
+      - name: Plan with Cursor (read-only)
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.agent != ''
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          ISSUES: ${{ steps.collect.outputs.agent }}
+        run: |
+          mkdir -p .ai/out
+          # Global CLI config outside the checkout: no --force, every tool that needs approval is
+          # refused in print mode, and the deny list refuses shell, writes, network and reads outside
+          # the code again. The agent prints its result; this step saves it.
+          export CURSOR_CONFIG_DIR="$RUNNER_TEMP/cursor-config"
+          mkdir -p "$CURSOR_CONFIG_DIR"
+          cat > "$CURSOR_CONFIG_DIR/cli-config.json" <<'JSON'
+          {
+            "version": 1,
+            "editor": { "vimMode": false },
+            "permissions": {
+              "allow": ["Read(**)"],
+              "deny": [
+                "Shell(*)", "Write(**)", "Write(/**)", "WebFetch(*)", "Mcp(*:*)",
+                "Read(.git/**)", "Read(.ai/out/**)",
+                "Read(/proc/**)", "Read(/sys/**)", "Read(/etc/**)", "Read(/root/**)",
+                "Read(/tmp/**)", "Read(/opt/**)", "Read(/usr/**)", "Read(/var/**)",
+                "Read(/home/runner/.cursor/**)", "Read(/home/runner/.config/**)", "Read(/home/runner/.ssh/**)",
+                "Read(/home/runner/.docker/**)", "Read(/home/runner/.npm/**)", "Read(/home/runner/.npmrc)",
+                "Read(/home/runner/.gitconfig)",
+                "Read(/home/runner/work/_temp/**)", "Read(/home/runner/work/_actions/**)"
+              ]
+            }
+          }
+          JSON
+          for n in $ISSUES; do
+            echo "::group::Issue #$n"
+            timeout 1500 cursor-agent -p --trust --mode ask --output-format json --model "$AI_DIRECTOR_MODEL" \
+              "Follow .github/ai/director.md for the single input file .ai/in/$n.json. Answer with the result JSON object only." \
+              > ".ai/out/$n.json" \
+              || echo "::warning::Cursor agent exited non-zero on #$n"
+            echo "::endgroup::"
+          done
+
+      - name: Check the agent left the tree untouched
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.agent != ''
+        run: |
+          dirty="$(git status --porcelain --untracked-files=all -- . ':!.ai')"
+          if [ -n "$dirty" ]; then
+            echo "::error::The Director agent changed files outside .ai/; nothing is written to GitHub."
+            echo "$dirty"
+            exit 1
+          fi
+
+      - name: Generate GitHub App token
+        # Label writes must start the next role; GITHUB_TOKEN events do not trigger workflows.
+        # Taken after the agent ran, and down-scoped: issues only, never workflows (§7.1).
+        id: app
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.issues != '' && env.AI_MODE == 'apply'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+
+      - name: Apply results
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.issues != ''
+        env:
+          AI_APP_TOKEN: ${{ steps.app.outputs.token }}
+          AI_REDACT: |
+            ${{ secrets.CURSOR_API_KEY }}
+            ${{ github.token }}
+            ${{ steps.app.outputs.token }}
+        run: |
+          node "$RUNNER_TEMP/ai-tools/scripts/ai/director/apply.mjs" \
+            --mode "$AI_MODE" \
+            --impact-rules "$RUNNER_TEMP/ai-tools/rules/impact-paths.json"

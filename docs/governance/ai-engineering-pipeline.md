@@ -32,6 +32,19 @@ The prompts are the four routine files (Director, Council, Developer, Quality Ga
 the agent no longer calls GitHub itself, it returns a JSON object whose schema is in the prompt,
 and the matching `scripts/ai/<role>/apply.mjs` performs every write.
 
+**Director in CI** ([`ai-director.yml`](../../.github/workflows/ai-director.yml),
+[`scripts/ai/director/`](../../scripts/ai/director/), core in
+[`scripts/ai/lib/director.mjs`](../../scripts/ai/lib/director.mjs)). Before the agent runs, the
+collector decides three of the routine's states without it: an open linked PR → `active-pr` (nothing
+is planned); an earlier plan comment whose classification still parses and no `ai:replan` →
+`reuse` (apply mode restores its labels, no comment, no agent run); otherwise → `plan`. Only
+`plan` starts the agent, so the hourly sweep does not re-plan the same issue. After the agent, the
+writer re-checks the planned component paths against `.github/ai/impact-paths.json` — each rule
+carries the §3 criterion it proves, and a match can only **raise** the impact — then picks the next
+state: `ai:blocked` (major, a `.github/` change, already resolved, needs info, or a human
+`ai:blocked` without `ai:replan`), `ai:council-required` (a council criterion or a maintainer's
+request), else `ai:planned`. In `dry-run` the plan comment shows the labels it *would* set.
+
 **No branch-prefix filter.** The Quality Gate reviews **every open PR** that targets `master` or a
 `release-v*` line, not only `claude/*` branches. What changes with the PR's origin is what the
 gate may *write* (§8).
@@ -188,7 +201,7 @@ sequenceDiagram
 | Workflow | Event | Filter | Concurrency |
 |---|---|---|---|
 | `issue-triage.yml` *(exists)* | `issues: opened, edited, reopened`, manual | author not a bot | per issue |
-| `ai-director.yml` | `issues: labeled`, hourly sweep, manual | label is `ai:ready` / `ai:replan`; issue open | per issue |
+| `ai-director.yml` *(dry-run)* | `issues: labeled`, hourly sweep (at most 3 issues, `ai:replan` first), manual | label is `ai:ready` / `ai:replan`; issue open | per issue |
 | `ai-council.yml` | `issues: labeled`, manual | label is `ai:council-required` | per issue |
 | `ai-developer.yml` | `issues: labeled`, manual | label is `ai:planned` / `ai:changes-required`; not `ai:blocked`, `ai:done`, `ai:human-approval`, `ai:semver-major`; with `ai:council-required` also `ai:council-approved` | per issue, never cancelled mid-push |
 | `ai-quality-gate.yml` | `workflow_run: completed` (test / Sonar / contract / e2e workflows), `pull_request: ready_for_review`, hourly sweep, manual | PR open; target `master` / `release-v*` | per PR, latest wins |
@@ -371,7 +384,7 @@ change of a contract product raises impact (§3).
 | 0 | **Unit tests in CI, green.** `pr-tests.yml` runs on every PR and push to master and fails on any failing test; every pre-existing red is fixed (no known-red baseline), then the `Unit Tests` check becomes required ([policy](../testing/unit-tests.md)) | master has zero failing unit tests and the check is required |
 | 1 | **Taxonomy.** Labels of §4 in `labels.json` (one group per row, pinned by `labels.test.mjs`), `sync-labels --apply`, deprecated labels documented | every label exists with a description |
 | 2 | **Guards.** `PR-AI-*` rules in the PR contract (§9), the path rules in `.github/ai/impact-paths.json` (§7.3), down-scoped App tokens checked by `ai-workflows.test.mjs` (§7.1) | governance script tests pass |
-| 3 | **Read-only roles** in `dry-run`: Director, Council, Quality Gate post comments only | a week of runs with no wrong state |
+| 3 | **Read-only roles** in `dry-run`, one PR per role: Director (`ai-director.yml`), then Quality Gate, then Council — comments only | a week of runs with no wrong state |
 | 4 | **Developer** in `dry-run` (pushes to a branch, opens a draft PR, no label transitions), then `apply` | first low-impact issue reaches `ai:human-approval` |
 | 5 | **E2E in CI** (§10) | e2e evidence appears on AI PRs |
 | 6 | `apply` for every role | — |

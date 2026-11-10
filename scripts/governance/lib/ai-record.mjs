@@ -12,7 +12,7 @@ export const isAiPr = (labels) => (labels ?? []).some((l) => l.startsWith('ai:')
 
 /** Compiles the rule list of `.github/ai/impact-paths.json`. */
 export function compileImpactRules(json) {
-  return (json?.rules ?? []).map((r) => ({ id: r.id, reason: r.reason, re: new RegExp(r.pattern) }));
+  return (json?.rules ?? []).map((r) => ({ id: r.id, reason: r.reason, criterion: r.criterion ?? null, re: new RegExp(r.pattern) }));
 }
 
 /** Each high-impact rule that a changed path matches, with the first matching paths. */

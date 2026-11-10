@@ -51,8 +51,8 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Run CI and triage script tests
-        run: node --test "scripts/ci/test/*.test.mjs" "scripts/triage/test/*.test.mjs"
+      - name: Run CI, triage and AI script tests
+        run: node --test "scripts/ci/test/*.test.mjs" "scripts/triage/test/*.test.mjs" "scripts/ai/test/*.test.mjs"
 
       - name: Setup NETStandard.Library.Ref for PostSharp
         run: ./scripts/setup-netstandard-ref.sh

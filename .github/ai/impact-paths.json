@@ -1,17 +1,17 @@
 {
-  "$comment": "Changed paths that make a change high impact (docs/governance/ai-engineering-pipeline.md §3, §7.3). A PR labelled ai:impact-low that touches one of them fails the PR contract (PR-AI-IMPACT) and the Quality Gate raises it to ai:impact-high + ai:council-required. Patterns are JavaScript regular expressions matched against the repo-relative path.",
+  "$comment": "Changed paths that make a change high impact (docs/governance/ai-engineering-pipeline.md §3, §7.3). A PR labelled ai:impact-low that touches one of them fails the PR contract (PR-AI-IMPACT) and the Quality Gate raises it to ai:impact-high + ai:council-required. Patterns are JavaScript regular expressions matched against the repo-relative path. `criterion` is the high-impact criterion of §3 the rule proves; the Director uses it to decide the council (auth-security, migration, contract, distributed-consistency trigger it; core-process does not; ci-governance blocks AI work).",
   "rules": [
-    { "id": "migration", "reason": "database migration or persisted shape", "pattern": "^src/BBT\\.Workflow\\.Infrastructure/Migrations/" },
-    { "id": "authorization", "reason": "authorization, roles or role grants", "pattern": "^src/[^/]+/(.+/)?Authorization/" },
-    { "id": "security", "reason": "secrets, encryption or field masking", "pattern": "^src/[^/]+/(.+/)?(Security|Encryption|Masking)/" },
-    { "id": "script-sandbox", "reason": "script sandbox (banned APIs, script host module)", "pattern": "(^modules/BBT\\.Workflow\\.Modules\\.Scripting/|BannedSymbols[^/]*\\.txt$)" },
-    { "id": "public-api", "reason": "public HTTP API controller", "pattern": "^(orchestration|execution)/[^/]+/Controllers/" },
-    { "id": "api-contract", "reason": "application contract or DTO", "pattern": "^src/BBT\\.Workflow\\.Application/(.+/)?(Contracts|Dtos)/" },
-    { "id": "event-contract", "reason": "distributed event contract", "pattern": "^src/BBT\\.Workflow\\.Events\\.Contracts/" },
-    { "id": "task-contract", "reason": "task / execution abstraction shared across services", "pattern": "^src/BBT\\.Workflow\\.(Tasks|Execution)\\.Abstractions/" },
-    { "id": "pipeline", "reason": "transition pipeline order or execution profiles", "pattern": "/Execution/Transitions/Pipeline/(LifecycleOrder|PipelineExecutionProfile|PipelineProfileResolver)\\.cs$" },
-    { "id": "state-function-shape", "reason": "state function body version (ResponseShapeVersion)", "pattern": "/StateFunctionCache\\.cs$" },
-    { "id": "dapr-components", "reason": "Dapr component configuration", "pattern": "^etc/.+/dapr/components/" },
-    { "id": "ci-governance", "reason": "CI workflows, AI prompts or governance rules", "pattern": "^\\.github/" }
+    { "id": "migration", "criterion": "migration", "reason": "database migration or persisted shape", "pattern": "^src/BBT\\.Workflow\\.Infrastructure/Migrations/" },
+    { "id": "authorization", "criterion": "auth-security", "reason": "authorization, roles or role grants", "pattern": "^src/[^/]+/(.+/)?Authorization/" },
+    { "id": "security", "criterion": "auth-security", "reason": "secrets, encryption or field masking", "pattern": "^src/[^/]+/(.+/)?(Security|Encryption|Masking)/" },
+    { "id": "script-sandbox", "criterion": "auth-security", "reason": "script sandbox (banned APIs, script host module)", "pattern": "(^modules/BBT\\.Workflow\\.Modules\\.Scripting/|BannedSymbols[^/]*\\.txt$)" },
+    { "id": "public-api", "criterion": "contract", "reason": "public HTTP API controller", "pattern": "^(orchestration|execution)/[^/]+/Controllers/" },
+    { "id": "api-contract", "criterion": "contract", "reason": "application contract or DTO", "pattern": "^src/BBT\\.Workflow\\.Application/(.+/)?(Contracts|Dtos)/" },
+    { "id": "event-contract", "criterion": "contract", "reason": "distributed event contract", "pattern": "^src/BBT\\.Workflow\\.Events\\.Contracts/" },
+    { "id": "task-contract", "criterion": "contract", "reason": "task / execution abstraction shared across services", "pattern": "^src/BBT\\.Workflow\\.(Tasks|Execution)\\.Abstractions/" },
+    { "id": "pipeline", "criterion": "core-process", "reason": "transition pipeline order or execution profiles", "pattern": "/Execution/Transitions/Pipeline/(LifecycleOrder|PipelineExecutionProfile|PipelineProfileResolver)\\.cs$" },
+    { "id": "state-function-shape", "criterion": "contract", "reason": "state function body version (ResponseShapeVersion)", "pattern": "/StateFunctionCache\\.cs$" },
+    { "id": "dapr-components", "criterion": "distributed-consistency", "reason": "Dapr component configuration", "pattern": "^etc/.+/dapr/components/" },
+    { "id": "ci-governance", "criterion": "ci-governance", "reason": "CI workflows, AI prompts or governance rules", "pattern": "^\\.github/" }
   ]
 }
