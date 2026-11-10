@@ -1,0 +1,103 @@
+name: Unit Tests
+
+# Builds the solution and runs the unit-test projects under test/ (Domain, Application,
+# Infrastructure). Integration tests live in vnext-example and are not part of this job.
+# Whether a failure blocks is set by the repository variable UNIT_TESTS_MODE:
+#   report   (default) never fails; the job summary lists failures grouped by error signature
+#   baseline fails only on a failure missing from .github/ci/unit-test-baseline.json (known reds)
+#   enforce  fails on any failure — the target once master is green
+# Every run uploads the TRX files and `failing.json`, the input for refreshing the baseline.
+# Rollout: docs/governance/ai-engineering-pipeline.md §11 step 0.
+
+on:
+  pull_request:
+    branches: [master, 'release-*', 'sprint-*']
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [master, 'release-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unit-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      UNIT_TESTS_MODE: ${{ vars.UNIT_TESTS_MODE || 'report' }}
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          # Same set as the release pack job: PostSharp rolls its host forward to the runner's
+          # runtime and needs the matching AspNetCore.App.
+          dotnet-version: |
+            9.0.x
+            10.0.2xx
+            10.0.x
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Run report script tests
+        run: node --test "scripts/ci/test/*.test.mjs"
+
+      - name: Setup NETStandard.Library.Ref for PostSharp
+        run: ./scripts/setup-netstandard-ref.sh
+
+      - name: Restore
+        run: dotnet restore ./BBT.Workflow.slnx
+
+      - name: Build
+        run: dotnet build ./BBT.Workflow.slnx --configuration Release --no-restore
+
+      - name: Test
+        id: test
+        # Every project runs even when an earlier one fails; the report step decides the outcome.
+        run: |
+          mkdir -p "$RUNNER_TEMP/trx"
+          for p in Domain Application Infrastructure; do
+            echo "::group::BBT.Workflow.$p.Tests"
+            dotnet test "test/BBT.Workflow.$p.Tests" --configuration Release --no-build \
+              --logger "trx;LogFileName=$p.trx" --results-directory "$RUNNER_TEMP/trx" \
+              --blame-hang --blame-hang-timeout 10m \
+              || echo "::warning::BBT.Workflow.$p.Tests reported failures"
+            echo "::endgroup::"
+          done
+
+      - name: Report
+        run: |
+          baseline=.github/ci/unit-test-baseline.json
+          args=()
+          [ -f "$baseline" ] && args+=(--baseline "$baseline")
+          node scripts/ci/unit-tests-report.mjs \
+            $(for f in "$RUNNER_TEMP"/trx/*.trx; do printf -- '--trx %s ' "$f"; done) \
+            "${args[@]}" \
+            --mode "$UNIT_TESTS_MODE" \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --failures-out "$RUNNER_TEMP/trx/failing.json"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: |
+            ${{ runner.temp }}/trx/*.trx
+            ${{ runner.temp }}/trx/failing.json
+            ${{ runner.temp }}/trx/**/Sequence_*.xml
+          if-no-files-found: warn
+          retention-days: 14
