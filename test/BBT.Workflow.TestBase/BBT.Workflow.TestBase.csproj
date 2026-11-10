@@ -19,6 +19,6 @@
     <PackageReference Include="xunit" Version="$(xunitPackageVersion)" />
     <PackageReference Include="xunit.extensibility.execution" Version="$(xunitPackageVersion)" />
     <PackageReference Include="xunit.runner.visualstudio" Version="$(xunitRunnerPackageVersion)" />
-    <PackageReference Include="Microsoft.AspNetCore.Diagnostics.Middleware" Version="$(MicrosoftPackageVersion)" />
+    <PackageReference Include="Microsoft.AspNetCore.Diagnostics.Middleware" Version="$(MicrosoftExtensionsLibrariesPackageVersion)" />
   </ItemGroup>
 </Project>

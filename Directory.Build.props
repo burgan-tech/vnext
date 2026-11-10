@@ -7,8 +7,14 @@
         <PostSharpPackageVersion>2026.0.12</PostSharpPackageVersion>
         <!-- Elastic Apm packages -->
         <ElasticApmPackageVersion>1.31.0</ElasticApmPackageVersion>
-        <!-- Microsoft packages -->
-        <MicrosoftPackageVersion>10.0.*</MicrosoftPackageVersion>
+        <!-- Microsoft packages. Pinned, not 10.0.*: a floating version resolves a servicing release while
+             nuget.org still holds only part of it (2026-11-10: 10.0.15 packages whose 10.0.15 dependencies were
+             not published yet), so the same commit restored one hour and failed the next. Bump deliberately. -->
+        <MicrosoftPackageVersion>10.0.14</MicrosoftPackageVersion>
+        <!-- Npgsql and its EF Core provider version on their own line (10.0.x is not the Microsoft servicing number) -->
+        <NpgsqlPackageVersion>10.0.3</NpgsqlPackageVersion>
+        <!-- Microsoft.AspNetCore.Diagnostics.Middleware ships from dotnet/extensions on its own numbering -->
+        <MicrosoftExtensionsLibrariesPackageVersion>10.0.0</MicrosoftExtensionsLibrariesPackageVersion>
         <!-- EF Core pinned to avoid CS1705 (assembly version mismatch) across projects -->
         <EfCorePackageVersion>10.0.4.0</EfCorePackageVersion>
         <!-- HealthChecks packages - currently only support .NET 9.0 -->

@@ -10,7 +10,7 @@
 
     <ItemGroup>
         <PackageReference Include="Microsoft.NET.Test.Sdk" Version="$(TestSdkPackageVersion)" />
-        <PackageReference Include="Npgsql" Version="$(MicrosoftPackageVersion)" />
+        <PackageReference Include="Npgsql" Version="$(NpgsqlPackageVersion)" />
     </ItemGroup>
 
     <ItemGroup>

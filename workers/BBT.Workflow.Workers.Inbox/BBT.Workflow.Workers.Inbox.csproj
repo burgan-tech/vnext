@@ -13,7 +13,7 @@
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="$(MicrosoftPackageVersion)" />
     <PackageReference Include="Dapr.Client" Version="$(DaprPackageVersion)" />
     <PackageReference Include="Dapr.AspNetCore" Version="$(DaprPackageVersion)" />
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="$(MicrosoftPackageVersion)" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="$(NpgsqlPackageVersion)" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\BBT.Workflow.HttpApi.Shared\BBT.Workflow.HttpApi.Shared.csproj" />
