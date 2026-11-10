@@ -92,9 +92,12 @@ public sealed class ResourceLockStep(
         {
             // The policy decides what losing the race MEANS, and the two outcomes differ in kind, not
             // degree: Abort treats it as a failure (the pipeline faults the instance), Reject treats it
-            // as a normal "not your turn" (the pipeline leaves the instance untouched and the admission
-            // layer compensates the Busy flip). Separate error codes keep that difference visible to the
-            // caller instead of hiding it behind one 409.
+            // as a normal "not your turn" — the pipeline returns the failure without faulting and hands
+            // the Busy reservation back itself (TransitionPipeline, guarded by context.OwnsStatus).
+            // Nothing downstream compensates that flip: this path runs no settle, so without that
+            // explicit handback the caller would get its 409 and the instance would stay wedged in Busy.
+            // Separate error codes keep the Abort/Reject difference visible to the caller instead of
+            // hiding it behind one 409.
             return Result<StepOutcome>.Fail(lockDef.OnConflict == ResourceLockConflictPolicy.Reject
                 ? ExecutionErrors.ResourceLockRejected(resourceKey)
                 : ExecutionErrors.ResourceLockConflict(resourceKey));
