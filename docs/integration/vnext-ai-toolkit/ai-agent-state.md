@@ -39,6 +39,10 @@ status: pending
 - `reviewer`: model mode needs ≥ 2 candidates, fallback required and automatic, tool names unique;
   `security-reviewer`: no plain-text MCP headers, empty allow-list, egress.
 
+- Phase 2 (stacked PR): `component-agent` covers `requiresApproval`, `memory.compaction`; `workflow-scaffold`
+  covers team states (`mode` + `agents[]`) and an approval round trip (`onApprovalRequest` → any state →
+  transition back with `{ "approval": { "approved": true } }`).
+
 ## Contract and examples
 
 Examples: vnext-example `core/Workflows/ai-agent-lab/`.

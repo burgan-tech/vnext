@@ -43,6 +43,12 @@ status: pending
 - `core-header`: allow `flow: sys-agents`.
 - `test/validate-*` examples for each.
 
+- Phase 2 (stacked PR): state `agent` block gains `mode` (`single|sequential|concurrent|handoff`), `agents[]`
+  (`name` `^[a-zA-Z0-9_-]{1,64}$`, `agent` reference, `description`), `prompt.messages[]` (`role`
+  `system|user|assistant`, `content`) and `prompt.context` (`{ name: "data.…|body.…|instance.…" }`);
+  agent component `memory.compaction` (`trim|summarize`); tool `requiresApproval` is now valid;
+  `decision.onApprovalRequest` may target any state.
+
 ## Contract and examples
 
 ```jsonc
