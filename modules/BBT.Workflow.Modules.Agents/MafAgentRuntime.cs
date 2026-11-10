@@ -109,7 +109,7 @@ internal sealed class MafAgentRuntime(IChatClientProvider provider, ILoggerFacto
                 SessionMessagesTrimmed = trimmed,
                 ProviderConversationId = conversationId,
                 Transcript = request.CaptureTranscript
-                    ? JsonSerializer.Serialize(response.Messages, AIJsonUtilities.DefaultOptions)
+                    ? JsonSerializer.Serialize(request.FullTranscript ? input.Concat(response.Messages).ToList() : response.Messages.ToList(), AIJsonUtilities.DefaultOptions)
                     : null
             };
 

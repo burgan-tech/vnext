@@ -39,6 +39,7 @@ public sealed class AgentRunsFunctionHandler(IAgentRunQueryAppService queryAppSe
             Workflow = request.Workflow,
             Instance = request.Instance,
             RunId = runId,
+            IncludeTranscript = string.Equals(request.QueryParameters.GetValueOrDefault("include"), "transcript", StringComparison.OrdinalIgnoreCase),
             State = request.QueryParameters.GetValueOrDefault("state"),
             Skip = int.TryParse(request.QueryParameters.GetValueOrDefault("skip"), out var skip) ? skip : 0,
             Take = int.TryParse(request.QueryParameters.GetValueOrDefault("take"), out var take) ? take : 20

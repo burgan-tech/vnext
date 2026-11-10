@@ -123,6 +123,7 @@ public sealed record AgentSeedMessage(string Role, string Content);
 /// <param name="CaptureTranscript">Whether to return the transcript.</param>
 /// <param name="Compaction">How a local session is kept within <paramref name="MaxMessages"/>.</param>
 /// <param name="SeedMessages">Messages sent before <paramref name="UserPrompt"/> on this run.</param>
+/// <param name="FullTranscript">With <paramref name="CaptureTranscript"/>: the transcript also holds this run's input messages (<c>audit.transcript: full</c>).</param>
 /// <param name="ApprovalAnswers">When set, the run resumes a conversation that stopped for approval: only these answers are sent, no new prompt.</param>
 public sealed record AgentRunRequest(
     Guid RunId,
@@ -142,7 +143,8 @@ public sealed record AgentRunRequest(
     bool CaptureTranscript,
     AgentMemoryCompaction Compaction = AgentMemoryCompaction.Trim,
     IReadOnlyList<AgentSeedMessage>? SeedMessages = null,
-    IReadOnlyList<AgentApprovalAnswer>? ApprovalAnswers = null);
+    IReadOnlyList<AgentApprovalAnswer>? ApprovalAnswers = null,
+    bool FullTranscript = false);
 
 /// <summary>Outcome of one agent run.</summary>
 public sealed record AgentRunResult

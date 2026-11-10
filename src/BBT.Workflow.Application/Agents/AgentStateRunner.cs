@@ -280,7 +280,8 @@ public sealed class AgentStateRunner(
                     CaptureTranscript: (audit?.Transcript ?? AgentTranscriptMode.None) != AgentTranscriptMode.None,
                     Compaction: memory.Compaction ?? AgentMemoryCompaction.Trim,
                     SeedMessages: seedMessages,
-                    ApprovalAnswers: approvalAnswers), cancellationToken);
+                    ApprovalAnswers: approvalAnswers,
+                    FullTranscript: audit?.Transcript == AgentTranscriptMode.Full), cancellationToken);
         }
 
         foreach (var denied in approvalAnswers?.Where(a => !a.Approved && a.Pending.RequiresConfirmation) ?? [])

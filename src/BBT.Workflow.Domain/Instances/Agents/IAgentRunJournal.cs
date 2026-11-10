@@ -123,4 +123,7 @@ public interface IAgentRunReadRepository
 
     /// <summary>The tool calls of a run in order.</summary>
     Task<IReadOnlyList<AgentToolCallItem>> ListToolCallsAsync(Guid runId, CancellationToken cancellationToken = default);
+
+    /// <summary>The run's stored transcript (gzip-compressed JSON message list), or null.</summary>
+    Task<byte[]?> FindTranscriptAsync(Guid instanceId, Guid runId, CancellationToken cancellationToken = default);
 }

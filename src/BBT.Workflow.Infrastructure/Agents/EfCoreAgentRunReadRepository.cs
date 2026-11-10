@@ -33,6 +33,17 @@ public sealed class EfCoreAgentRunReadRepository(IAetherDbContextProvider<Workfl
     }
 
     /// <inheritdoc />
+    public async Task<byte[]?> FindTranscriptAsync(Guid instanceId, Guid runId, CancellationToken cancellationToken = default)
+    {
+        var context = await dbContextProvider.GetDbContextAsync(cancellationToken);
+        return await context.InstanceAgentRuns
+            .AsNoTracking()
+            .Where(r => r.Id == runId && r.InstanceId == instanceId)
+            .Select(r => r.Transcript)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<IReadOnlyList<AgentToolCallItem>> ListToolCallsAsync(Guid runId, CancellationToken cancellationToken = default)
     {
         var context = await dbContextProvider.GetDbContextAsync(cancellationToken);
