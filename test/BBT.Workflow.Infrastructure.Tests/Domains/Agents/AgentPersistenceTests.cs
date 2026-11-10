@@ -122,10 +122,17 @@ public sealed class AgentPersistenceTests : IAsyncLifetime
             Encoding.UTF8.GetString(stored.SessionData!).ShouldNotContain("secret customer text");
         }
 
-        // A writer that did not read the row, and a writer holding a stale version, both lose.
-        (await store.SaveAsync(Write(scope, instance.Id, plain, null), instance.Id)).ShouldBeFalse();
-        (await store.SaveAsync(Write(scope, instance.Id, plain, first.Snapshot.RowVersion), instance.Id)).ShouldBeTrue();
-        (await store.SaveAsync(Write(scope, instance.Id, plain, first.Snapshot.RowVersion), instance.Id)).ShouldBeFalse();
+        // An instance row has one writer (the Busy mutex): it is written without a version guard.
+        (await store.SaveAsync(Write(scope, instance.Id, plain, null), instance.Id)).ShouldBeTrue();
+
+        // A shared k:* row is guarded: a writer that did not read the row, and a writer holding a stale
+        // version, both lose.
+        var shared = $"k:core:triage:{instance.Id:N}";
+        (await store.SaveAsync(Write(shared, instance.Id, plain, null), instance.Id)).ShouldBeTrue();
+        var read = await store.FindAsync(shared, instance.Id);
+        (await store.SaveAsync(Write(shared, instance.Id, plain, null), instance.Id)).ShouldBeFalse();
+        (await store.SaveAsync(Write(shared, instance.Id, plain, read.Snapshot!.RowVersion), instance.Id)).ShouldBeTrue();
+        (await store.SaveAsync(Write(shared, instance.Id, plain, read.Snapshot.RowVersion), instance.Id)).ShouldBeFalse();
     }
 
     [Fact]

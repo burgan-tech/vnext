@@ -16,6 +16,7 @@ public sealed class AgentRunRecorder(Guid runId, Guid instanceId, EffectiveAgent
 {
     private readonly object _gate = new();
     private readonly List<InstanceAgentToolCall> _calls = [];
+    private readonly Dictionary<string, (AgentToolKind Kind, string? BindingRef)> _tools = new(StringComparer.Ordinal);
     private int _sequence;
 
     /// <summary>Run id.</summary>
@@ -51,8 +52,11 @@ public sealed class AgentRunRecorder(Guid runId, Guid instanceId, EffectiveAgent
         JsonElement parameters,
         int? timeoutSeconds,
         int? resultMaxChars,
-        Func<AgentToolInvocation, CancellationToken, Task<AgentToolResult>> body) =>
-        async (invocation, cancellationToken) =>
+        Func<AgentToolInvocation, CancellationToken, Task<AgentToolResult>> body)
+    {
+        lock (_gate)
+            _tools[name] = (kind, bindingRef);
+        return async (invocation, cancellationToken) =>
         {
             int sequence;
             bool overBudget;
@@ -124,6 +128,39 @@ public sealed class AgentRunRecorder(Guid runId, Guid instanceId, EffectiveAgent
             logger.AgentToolInvoked(runId, name, kind.ToString(), result.Status.ToString(), elapsed);
             return result with { Content = content };
         };
+    }
+
+    /// <summary>
+    /// Records a call that did not run in this run: waiting for approval
+    /// (<see cref="AgentToolCallStatus.ApprovalPending"/>) or answered with a denial
+    /// (<see cref="AgentToolCallStatus.Denied"/>).
+    /// </summary>
+    public void RecordApproval(AgentPendingApproval pending, AgentToolCallStatus status, string? reason)
+    {
+        lock (_gate)
+        {
+            var (kind, bindingRef) = _tools.TryGetValue(pending.ToolName, out var known) ? known : (AgentToolKind.Task, null);
+            var now = DateTime.UtcNow;
+            _calls.Add(new InstanceAgentToolCall(Guid.NewGuid())
+            {
+                RunId = runId,
+                InstanceId = instanceId,
+                Sequence = ++_sequence,
+                Iteration = 0,
+                CallId = Truncate(pending.CallId, 64),
+                Name = Truncate(pending.ToolName, 64),
+                Kind = kind,
+                BindingRef = bindingRef is null ? null : Truncate(bindingRef, 300),
+                IdempotencyKey = InstanceAgentToolCall.CreateIdempotencyKey(runId, pending.CallId),
+                Arguments = pending.Arguments.GetRawText(),
+                Status = status,
+                Error = reason is null ? null : Truncate(reason, 400),
+                StartedAt = now,
+                FinishedAt = now,
+                DurationMs = 0
+            });
+        }
+    }
 
     private static string? MissingRequired(JsonElement schema, JsonElement args)
     {

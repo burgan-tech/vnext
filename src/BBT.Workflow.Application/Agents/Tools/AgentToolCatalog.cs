@@ -100,7 +100,8 @@ public sealed class AgentToolCatalog(
                 tool.Name,
                 tool.Description ?? tool.Name,
                 parameters,
-                ctx.Recorder.Wrap(tool.Name, tool.Kind, BindingRef(tool), parameters, tool.TimeoutSeconds, tool.ResultMaxChars, body)));
+                ctx.Recorder.Wrap(tool.Name, tool.Kind, BindingRef(tool), parameters, tool.TimeoutSeconds, tool.ResultMaxChars, body),
+                tool.RequiresApproval));
         }
 
         return tools;
@@ -253,7 +254,8 @@ public sealed class AgentToolCatalog(
                 serverTool.Description ?? exposed,
                 parameters,
                 ctx.Recorder.Wrap(exposed, AgentToolKind.Mcp, $"sys-tasks/{reference.Domain}/{reference.Key}@{reference.Version}",
-                    parameters, tool.TimeoutSeconds, tool.ResultMaxChars, body)));
+                    parameters, tool.TimeoutSeconds, tool.ResultMaxChars, body),
+                tool.RequiresApproval));
         }
 
         return definitions;

@@ -12,9 +12,9 @@ namespace BBT.Workflow.Agents;
 /// Agent conversation store (table <c>AgentSessions</c>, issue #1105).
 /// <list type="bullet">
 /// <item>Read: one primary-key lookup, projected (no tracking).</item>
-/// <item>Write: one <c>INSERT … ON CONFLICT DO UPDATE … WHERE xmin = expected</c> statement; zero affected
-/// rows means another writer got there first (only possible for cross-instance <c>k:*</c> rows; an
-/// <c>i:*</c> row has one writer under the instance's Busy mutex).</item>
+/// <item>Write: one <c>INSERT … ON CONFLICT DO UPDATE</c> statement. A cross-instance <c>k:*</c> row is
+/// guarded by <c>xmin = expected</c> (zero affected rows: another writer got there first); an <c>i:*</c>
+/// row has one writer under the instance's Busy mutex and is written unguarded.</item>
 /// <item>Content: the serialized message list, gzip-compressed. Not encrypted and not masked (a product
 /// decision for this phase: no guard until real use asks for one).</item>
 /// </list>
@@ -66,8 +66,9 @@ public sealed class EfCoreAgentSessionStore(IAetherDbContextProvider<WorkflowDbC
 
         var table = $"\"{(context.CurrentSchemaName ?? "public").Replace("\"", "", StringComparison.Ordinal)}\".\"AgentSessions\"";
 
-        // The guard always references @expected: an empty expected version (no row was read) never
-        // matches, so a row created in the meantime is reported as a conflict instead of overwritten.
+        // Instance rows (i:*) have one writer, under the instance's Busy mutex: last write wins. Shared rows
+        // (k:*) are guarded: an empty expected version (no row was read) never matches, so a row created in
+        // the meantime is reported as a conflict instead of overwritten.
         var sql =
             $"INSERT INTO {table} (\"ScopeKey\", \"Mode\", \"Storage\", \"AgentKey\", \"AgentVersion\", \"InstructionsHash\", " +
             "\"SessionData\", \"ProviderConversationId\", \"MessageCount\", \"SizeBytes\", \"OwnerInstanceId\", " +
@@ -81,7 +82,7 @@ public sealed class EfCoreAgentSessionStore(IAetherDbContextProvider<WorkflowDbC
             "\"MessageCount\" = EXCLUDED.\"MessageCount\", " +
             "\"SizeBytes\" = EXCLUDED.\"SizeBytes\", \"LastInstanceId\" = EXCLUDED.\"LastInstanceId\", " +
             "\"LastRunId\" = EXCLUDED.\"LastRunId\", \"UpdatedAt\" = EXCLUDED.\"UpdatedAt\", \"ExpiresAt\" = EXCLUDED.\"ExpiresAt\" " +
-            $"WHERE @expected <> '' AND {table}.xmin::text = @expected";
+            $"WHERE @shared = false OR (@expected <> '' AND {table}.xmin::text = @expected)";
 
         var affected = await context.Database.ExecuteSqlRawAsync(sql,
         [
@@ -100,7 +101,8 @@ public sealed class EfCoreAgentSessionStore(IAetherDbContextProvider<WorkflowDbC
             Param("lastRun", NpgsqlDbType.Uuid, session.LastRunId),
             Param("updatedAt", NpgsqlDbType.TimestampTz, DateTime.SpecifyKind(session.UpdatedAt, DateTimeKind.Utc)),
             Param("expiresAt", NpgsqlDbType.TimestampTz, session.ExpiresAt is { } e ? DateTime.SpecifyKind(e, DateTimeKind.Utc) : null),
-            Param("expected", NpgsqlDbType.Text, write.ExpectedRowVersion?.ToString() ?? string.Empty)
+            Param("expected", NpgsqlDbType.Text, write.ExpectedRowVersion?.ToString() ?? string.Empty),
+            Param("shared", NpgsqlDbType.Boolean, !write.ScopeKey.StartsWith("i:", StringComparison.Ordinal))
         ], cancellationToken);
 
         return affected == 1;

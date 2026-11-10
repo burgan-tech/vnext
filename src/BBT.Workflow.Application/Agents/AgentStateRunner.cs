@@ -108,8 +108,15 @@ public sealed class AgentStateRunner(
         var policy = EffectiveAgentPolicy.Resolve(agent.Policy, binding.Policy, settings);
         run.Model = profile.Model;
 
-        // 2. Re-entry ceiling: no provider call, the state leaves through onExhausted.
-        if (policy.MaxEntries is { } maxEntries && entryNo > maxEntries && !string.IsNullOrEmpty(decisionSpec.OnExhausted))
+        // 2. A conversation that stopped for approval resumes with the answers carried by the entering
+        //    transition; a resume is not a new entry for the re-entry ceiling.
+        var pendingApprovals = AgentApprovalSupport.ReadPending(instance.LatestData?.Data.JsonElement, binding.Output!.Path!, state.Key);
+        var approvalAnswers = pendingApprovals.Count > 0
+            ? AgentApprovalSupport.MatchAnswers(pendingApprovals, context.DataElement)
+            : null;
+
+        // 3. Re-entry ceiling: no provider call, the state leaves through onExhausted.
+        if (approvalAnswers is null && policy.MaxEntries is { } maxEntries && entryNo > maxEntries && !string.IsNullOrEmpty(decisionSpec.OnExhausted))
         {
             return await FinishAsync(context, run, [], AgentRunStatus.BudgetExceeded, $"entry {entryNo} exceeds policy.maxEntries ({maxEntries})",
                 decisionSpec, [], decisionSpec.OnExhausted!, AgentDecisionSource.Exhausted, null, clock, null, cancellationToken);
@@ -153,26 +160,29 @@ public sealed class AgentStateRunner(
         var memoryMode = memory.Mode ?? AgentMemoryMode.State;
         var useProviderSession = memory.Storage == AgentMemoryStorage.Provider && profile.SupportsServiceSessions;
         var scopeKey = ScopeKey(memoryMode, memory, context, agent, templateScope);
+        // Held tool calls are resumed from a session, so a state without memory still keeps one for the approval round trip.
+        var approvalScopeKey = scopeKey ?? (useProviderSession ? null : $"i:{context.InstanceId:N}:{context.WorkflowKey}:{state.Key}");
+        var readScopeKey = approvalAnswers is not null ? approvalScopeKey : scopeKey;
         AgentSessionSnapshot? snapshot = null;
-        if (scopeKey is not null)
+        if (readScopeKey is not null)
         {
-            var read = await sessionStore.FindAsync(scopeKey, instance.Id, cancellationToken);
+            var read = await sessionStore.FindAsync(readScopeKey, instance.Id, cancellationToken);
             if (read.Unreadable is { } why)
-                logger.AgentSessionUnreadable(scopeKey, why);
+                logger.AgentSessionUnreadable(readScopeKey, why);
             snapshot = read.Snapshot;
 
-            if (snapshot is not null && ResetReason(snapshot, agent, instructionsHash, memory) is { } reason)
+            if (approvalAnswers is null && snapshot is not null && ResetReason(snapshot, agent, instructionsHash, memory) is { } reason)
             {
-                logger.AgentSessionReset(scopeKey, reason);
+                logger.AgentSessionReset(readScopeKey, reason);
                 snapshot = snapshot with { Messages = null, ProviderConversationId = null, MessageCount = 0 };
             }
             else if (snapshot is not null)
             {
-                logger.AgentSessionResumed(scopeKey, snapshot.MessageCount);
+                logger.AgentSessionResumed(readScopeKey, snapshot.MessageCount);
                 run.SessionResumed = true;
             }
 
-            run.SessionScopeKey = scopeKey;
+            run.SessionScopeKey = readScopeKey;
         }
 
         // 6. Tools.
@@ -214,8 +224,12 @@ public sealed class AgentStateRunner(
                     memory.MaxMessages ?? 40,
                     CaptureTranscript: (audit?.Transcript ?? AgentTranscriptMode.None) != AgentTranscriptMode.None,
                     Compaction: memory.Compaction ?? AgentMemoryCompaction.Trim,
-                    SeedMessages: seedMessages), cancellationToken);
+                    SeedMessages: seedMessages,
+                    ApprovalAnswers: approvalAnswers), cancellationToken);
         }
+
+        foreach (var denied in approvalAnswers?.Where(a => !a.Approved && a.Pending.RequiresConfirmation) ?? [])
+            recorder.RecordApproval(denied.Pending, AgentToolCallStatus.Denied, denied.Reason);
 
         ApplyResult(run, result, recorder, audit, settings, schema, candidates, userPrompt, instructionsHash, tools);
 
@@ -223,7 +237,15 @@ public sealed class AgentStateRunner(
         string? selected;
         AgentDecisionSource source;
         string? reasonText;
-        if (result.Status == AgentRunStatus.Completed)
+        if (result.Status == AgentRunStatus.ApprovalRequested)
+        {
+            foreach (var held in result.PendingApprovals.Where(a => a.RequiresConfirmation))
+                recorder.RecordApproval(held, AgentToolCallStatus.ApprovalPending, null);
+            (selected, source, reasonText) = string.IsNullOrEmpty(decisionSpec.OnApprovalRequest)
+                ? (fallback, AgentDecisionSource.Fallback, $"{result.FailureReason}, but the state declares no decision.onApprovalRequest")
+                : (decisionSpec.OnApprovalRequest, AgentDecisionSource.ApprovalRequest, result.FailureReason);
+        }
+        else if (result.Status == AgentRunStatus.Completed)
         {
             reasonText = AgentDecisionSupport.ReadString(result.Output, AgentDecisionSupport.ReasonProperty);
             switch (mode)
@@ -273,9 +295,13 @@ public sealed class AgentStateRunner(
         await WriteOutputAsync(context, binding.Output!.Path!, result.Status == AgentRunStatus.Completed ? result.Output : null,
             Summary(run, selected, source, reasonText, recorder, result), cancellationToken);
 
-        // 10. Session (one upsert statement), only after a completed run.
+        // 10. Session (one upsert statement): after a completed run, and after a run held for approval
+        //     (the resume needs it, whatever the memory mode).
         if (scopeKey is not null && result.Status == AgentRunStatus.Completed)
             await SaveSessionAsync(scopeKey, memoryMode, memory, useProviderSession, agent, instructionsHash, instance.Id, runId, snapshot, result, context, cancellationToken);
+        else if (approvalScopeKey is not null && result.Status == AgentRunStatus.ApprovalRequested)
+            await SaveSessionAsync(approvalScopeKey, scopeKey is null ? AgentMemoryMode.None : memoryMode, memory, useProviderSession, agent, instructionsHash, instance.Id, runId,
+                snapshot, result, context, cancellationToken);
 
         return await FinishAsync(context, run, recorder.Calls, run.Status, run.FailureReason, decisionSpec, candidates, selected,
             source, reasonText, clock, recorder, cancellationToken, written: true);
@@ -409,6 +435,7 @@ public sealed class AgentStateRunner(
         AgentRunRecorder? recorder, AgentRunResult? result) => new
     {
         runId = run.Id,
+        state = run.State,
         status = run.Status.ToString(),
         decision = selected ?? string.Empty,
         decisionSource = source.ToString(),
@@ -422,7 +449,10 @@ public sealed class AgentStateRunner(
         usage = new { promptTokens = run.PromptTokens, completionTokens = run.CompletionTokens, totalTokens = run.TotalTokens },
         session = run.SessionScopeKey is null
             ? new { scope = "none", resumed = false }
-            : new { scope = ScopeKind(run.SessionScopeKey), resumed = run.SessionResumed }
+            : new { scope = ScopeKind(run.SessionScopeKey), resumed = run.SessionResumed },
+        pendingApprovals = (result?.PendingApprovals ?? [])
+            .Select(a => new { requestId = a.RequestId, callId = a.CallId, tool = a.ToolName, arguments = a.Arguments, requiresConfirmation = a.RequiresConfirmation })
+            .ToArray()
     };
 
     private static string ScopeKind(string scopeKey) => scopeKey.StartsWith("k:", StringComparison.Ordinal) ? "key" : "instance";

@@ -61,7 +61,9 @@ internal sealed class MafAgentRuntime(IChatClientProvider provider, ILoggerFacto
                 ResponseFormat = jsonMode
                     ? ChatResponseFormat.Json
                     : ChatResponseFormat.ForJsonSchema(request.OutputSchema, "agent_output", "Structured output of the agent"),
-                Tools = request.Tools.Select(t => (AITool)new AgentToolFunction(t)).ToList()
+                Tools = request.Tools
+                    .Select(t => t.RequiresApproval ? new ApprovalRequiredAIFunction(new AgentToolFunction(t)) : (AITool)new AgentToolFunction(t))
+                    .ToList()
             };
             if (request.Tools.Count == 0)
                 chatOptions.Tools = null;
@@ -74,10 +76,15 @@ internal sealed class MafAgentRuntime(IChatClientProvider provider, ILoggerFacto
             }, loggerFactory);
 
             var session = await LoadSessionAsync(agent, request, deadline.Token);
-            var input = (request.SeedMessages ?? [])
-                .Select(m => new ChatMessage(new ChatRole(m.Role), m.Content))
-                .Append(new ChatMessage(ChatRole.User, request.UserPrompt))
-                .ToList();
+            var input = request.ApprovalAnswers is { Count: > 0 } answers
+                ? [new ChatMessage(ChatRole.User, answers.Select(a => (AIContent)new ToolApprovalRequestContent(
+                        a.Pending.RequestId,
+                        new FunctionCallContent(a.Pending.CallId, a.Pending.ToolName, ToArguments(a.Pending.Arguments)))
+                    .CreateResponse(a.Approved, a.Reason)).ToList())]
+                : (request.SeedMessages ?? [])
+                    .Select(m => new ChatMessage(new ChatRole(m.Role), m.Content))
+                    .Append(new ChatMessage(ChatRole.User, request.UserPrompt))
+                    .ToList();
             var response = await agent.RunAsync(input, session, null, deadline.Token);
 
             var promptTokens = (int)(response.Usage?.InputTokenCount ?? 0);
@@ -105,6 +112,27 @@ internal sealed class MafAgentRuntime(IChatClientProvider provider, ILoggerFacto
                     ? JsonSerializer.Serialize(response.Messages, AIJsonUtilities.DefaultOptions)
                     : null
             };
+
+            var pending = response.Messages
+                .SelectMany(m => m.Contents)
+                .OfType<ToolApprovalRequestContent>()
+                .Select(r => new AgentPendingApproval(
+                    r.RequestId,
+                    r.ToolCall.CallId,
+                    (r.ToolCall as FunctionCallContent)?.Name ?? string.Empty,
+                    JsonSerializer.SerializeToElement((r.ToolCall as FunctionCallContent)?.Arguments ?? new Dictionary<string, object?>(), AIJsonUtilities.DefaultOptions),
+                    r.RequiresConfirmation))
+                .ToList();
+            if (pending.Count > 0)
+            {
+                // The conversation stops before any held call runs; the session (saved above) resumes it.
+                return result with
+                {
+                    Status = AgentRunStatus.ApprovalRequested,
+                    FailureReason = $"{pending.Count(p => p.RequiresConfirmation)} tool call(s) wait for approval",
+                    PendingApprovals = pending
+                };
+            }
 
             if (policy.MaxTokens > 0 && promptTokens + completionTokens > policy.MaxTokens)
             {
@@ -199,6 +227,11 @@ internal sealed class MafAgentRuntime(IChatClientProvider provider, ILoggerFacto
         var element = await agent.SerializeSessionAsync(session, null, cancellationToken);
         return (Encoding.UTF8.GetBytes(element.GetRawText()), count, trimmed, null);
     }
+
+    private static IDictionary<string, object?> ToArguments(JsonElement arguments) =>
+        arguments.ValueKind == JsonValueKind.Object
+            ? arguments.EnumerateObject().ToDictionary(p => p.Name, p => (object?)p.Value.Clone())
+            : new Dictionary<string, object?>();
 
     private static bool TryParseObject(string? text, out JsonElement output)
     {

@@ -82,9 +82,6 @@ public sealed partial class AgentComponentValidator(IOptions<AiAgentOptions>? op
             return;
         }
 
-        if (tool.RequiresApproval)
-            errors.Add(new ValidationResult("Tool approval (requiresApproval) is not available yet; remove it or set it to false.", [$"{path}.requiresApproval"]));
-
         if (tool.Kind == AgentToolKind.Mcp)
         {
             if (tool.Binding.Task is null)
