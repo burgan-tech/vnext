@@ -52,6 +52,14 @@ public static class AgentApprovalSupport
         return pending;
     }
 
+    /// <summary>Reads one string member of the <c>$agent</c> summary under <paramref name="outputPath"/>.</summary>
+    public static string? ReadSummaryString(JsonElement? data, string outputPath, string member)
+    {
+        var path = outputPath.TrimStart('$').Trim('.');
+        var value = AgentTemplateRenderer.Navigate(data, string.IsNullOrEmpty(path) ? $"$agent.{member}" : $"{path}.$agent.{member}");
+        return value is { ValueKind: JsonValueKind.String } s ? s.GetString() : null;
+    }
+
     /// <summary>Pairs every held call with its answer from the entering transition's body.</summary>
     public static IReadOnlyList<AgentApprovalAnswer> MatchAnswers(IReadOnlyList<AgentPendingApproval> pending, JsonElement? body)
     {

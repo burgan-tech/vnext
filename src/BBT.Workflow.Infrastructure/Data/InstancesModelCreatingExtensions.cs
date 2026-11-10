@@ -662,6 +662,7 @@ public static class InstancesModelCreatingExtensions
             b.ToTable("InstanceAgentRuns", schema);
             b.ConfigureByConvention();
             b.Property(p => p.State).IsRequired().HasMaxLength(StateConstants.MaxKeyLength);
+            b.Property(p => p.Participant).HasMaxLength(64);
             b.Property(p => p.ExecutionKey).IsRequired().HasMaxLength(64).IsFixedLength();
             b.Property(p => p.AgentKey).IsRequired().HasMaxLength(WorkflowConstants.MaxKeyLength);
             b.Property(p => p.AgentDomain).IsRequired().HasMaxLength(WorkflowConstants.MaxDomainLength);

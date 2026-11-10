@@ -54,6 +54,12 @@ public sealed class InstanceAgentRun : Entity<Guid>
     /// <summary>Which entry to this state this run served.</summary>
     public int EntryNo { get; set; }
 
+    /// <summary>
+    /// Participant name of a multi-agent state's auxiliary run (a sequential/concurrent participant or the
+    /// handoff router); null for the run that produced the state's output and decision.
+    /// </summary>
+    public string? Participant { get; set; }
+
     /// <summary>Resolved agent key.</summary>
     public string AgentKey { get; set; } = default!;
 
@@ -130,9 +136,9 @@ public sealed class InstanceAgentRun : Entity<Guid>
     public DateTime CreatedAt { get; set; }
 
     /// <summary>Builds the execution key of a state entry.</summary>
-    public static string CreateExecutionKey(Guid? transitionId, string state, int entryNo)
+    public static string CreateExecutionKey(Guid? transitionId, string state, int entryNo, string? participant = null)
     {
-        var raw = $"{transitionId?.ToString("N") ?? "none"}:{state}:{entryNo}";
+        var raw = $"{transitionId?.ToString("N") ?? "none"}:{state}:{entryNo}" + (participant is null ? string.Empty : $":{participant}");
         return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(raw)));
     }
 }

@@ -13,7 +13,7 @@ public interface IAgentRunJournal
     Task AddAsync(
         InstanceAgentRun run,
         IReadOnlyList<InstanceAgentToolCall> toolCalls,
-        InstanceAgentDecision decision,
+        InstanceAgentDecision? decision,
         CancellationToken cancellationToken = default);
 }
 
@@ -94,7 +94,8 @@ public sealed record AgentRunListItem(
     bool SessionResumed,
     string? SelectedTransition,
     AgentDecisionSource? DecisionSource,
-    string? DecisionReason);
+    string? DecisionReason,
+    string? Participant = null);
 
 /// <summary>A tool call row as the read surface returns it.</summary>
 public sealed record AgentToolCallItem(

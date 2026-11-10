@@ -769,6 +769,23 @@ public partial class WorkflowValidator
             if (string.IsNullOrWhiteSpace(binding.Output?.Path) || !binding.Output!.Path!.StartsWith("$.", StringComparison.Ordinal))
                 result.AddError(new ValidationResult($"AiAgent state '{state.Key}' must declare output.path as a '$.' JSON path.", [$"{agentPath}.output.path"]));
 
+            var participants = binding.Agents ?? [];
+            if (binding.EffectiveMode == AgentTeamMode.Single && participants.Count > 0)
+                result.AddError(new ValidationResult($"AiAgent state '{state.Key}' declares agents[] but mode is single; set mode to sequential, concurrent or handoff.", [$"{agentPath}.agents"]));
+            if (binding.EffectiveMode != AgentTeamMode.Single && participants.Count == 0)
+                result.AddError(new ValidationResult($"AiAgent state '{state.Key}' in mode {binding.EffectiveMode} needs at least one participant in agents[].", [$"{agentPath}.agents"]));
+            var participantNames = new HashSet<string>(StringComparer.Ordinal);
+            for (var i = 0; i < participants.Count; i++)
+            {
+                var participant = participants[i];
+                if (participant.Name is not { } name || !AgentContextName().IsMatch(name))
+                    result.AddError(new ValidationResult($"AiAgent state '{state.Key}': agents[{i}].name must match ^[a-zA-Z0-9_-]{{1,64}}$.", [$"{agentPath}.agents[{i}].name"]));
+                else if (!participantNames.Add(name))
+                    result.AddError(new ValidationResult($"AiAgent state '{state.Key}': agents[{i}].name '{name}' is used more than once.", [$"{agentPath}.agents[{i}].name"]));
+                if (participant.Agent is null)
+                    result.AddError(new ValidationResult($"AiAgent state '{state.Key}': agents[{i}] must reference a sys-agents component.", [$"{agentPath}.agents[{i}].agent"]));
+            }
+
             if (state.SubType is not (StateSubType.None or StateSubType.Busy))
                 result.AddError(new ValidationResult($"AiAgent state '{state.Key}' sub type must be None or Busy.", [$"{statePath}.{nameof(State.SubType)}"]));
 

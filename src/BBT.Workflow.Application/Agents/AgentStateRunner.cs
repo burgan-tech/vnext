@@ -139,12 +139,69 @@ public sealed class AgentStateRunner(
         var mode = decisionSpec.EffectiveMode;
 
         // 4. Prompt and output schema.
-        var userPrompt = binding.Prompt!.IsScript
+        var basePrompt = binding.Prompt!.IsScript
             ? await (await scriptEngine.CompileToInstanceAsync<IAgentPromptMapping>(
                     binding.Prompt.ToScriptCode(), flowScripts: context.Workflow.Scripts, cancellationToken: cancellationToken))
                 .Handler(scriptContext)
             : AgentTemplateRenderer.Render(binding.Prompt.Template ?? string.Empty, templateScope);
-        userPrompt += AgentTemplateRenderer.RenderContext(binding.Prompt.Context, templateScope);
+        basePrompt += AgentTemplateRenderer.RenderContext(binding.Prompt.Context, templateScope);
+
+        var rolesResult = await callerRoleResolver.ResolveRolesAsync(context.Headers, cancellationToken);
+        var callerRoles = rolesResult.IsSuccess ? rolesResult.Value ?? [] : [];
+        var exclude = (binding.Tools?.Exclude ?? []).ToHashSet(StringComparer.Ordinal);
+
+        // 4b. Multi-agent: participants run before the final agent (sequential / concurrent), or the lead
+        //     routes to the participant that becomes the final agent (handoff). A resumed approval continues
+        //     the final agent's conversation and runs no participant again.
+        var team = TeamSummary.None;
+        var userPrompt = basePrompt;
+        if (binding.EffectiveMode != AgentTeamMode.Single)
+        {
+            var participants = binding.Agents ?? [];
+            if (approvalAnswers is not null)
+            {
+                var resumedHandoff = AgentApprovalSupport.ReadSummaryString(instance.LatestData?.Data.JsonElement, binding.Output!.Path!, "handoffTo");
+                if (binding.EffectiveMode == AgentTeamMode.Handoff &&
+                    participants.FirstOrDefault(p => p.Name == resumedHandoff) is { Agent: { } resumedRef } &&
+                    await ResolveAgentAsync(resumedRef, cancellationToken) is { IsSuccess: true } resumed)
+                {
+                    agent = resumed.Value!;
+                    team = team with { HandoffTo = resumedHandoff };
+                }
+            }
+            else
+            {
+                var teamRun = await RunTeamAsync(context, scriptContext, transitionId, binding, agent, basePrompt, entryNo, exclude, callerRoles, cancellationToken);
+                team = teamRun.Summary;
+                if (teamRun.FailureReason is { } teamFailure)
+                {
+                    return await FinishAsync(context, run, [], AgentRunStatus.Failed, teamFailure,
+                        decisionSpec, [], fallback, AgentDecisionSource.Fallback, teamFailure, clock, null, cancellationToken, team: team);
+                }
+
+                userPrompt += teamRun.Context;
+                agent = teamRun.FinalAgent ?? agent;
+            }
+
+            if (!ReferenceEquals(agent, agentResult.Value))
+            {
+                run.AgentKey = agent.Key;
+                run.AgentDomain = agent.Domain;
+                run.AgentVersion = agent.Version;
+                run.RuntimeKey = agent.Runtime;
+                run.ProviderKey = agent.Provider;
+                if (!settings.Providers.TryGetValue(agent.Provider, out profile))
+                {
+                    var why = $"participant agent '{agent.Key}' uses provider profile '{agent.Provider}', which is not configured";
+                    return await FinishAsync(context, run, [], AgentRunStatus.Failed, why,
+                        decisionSpec, [], fallback, AgentDecisionSource.Fallback, why, clock, null, cancellationToken, team: team);
+                }
+
+                policy = EffectiveAgentPolicy.Resolve(agent.Policy, binding.Policy, settings);
+                run.Model = profile.Model;
+            }
+        }
+
         if (mode == AgentDecisionMode.Model)
             userPrompt += AgentDecisionSupport.DescribeCandidates(candidates);
         var seedMessages = (binding.Prompt.Messages ?? [])
@@ -186,13 +243,11 @@ public sealed class AgentStateRunner(
         }
 
         // 6. Tools.
-        var rolesResult = await callerRoleResolver.ResolveRolesAsync(context.Headers, cancellationToken);
-        var callerRoles = rolesResult.IsSuccess ? rolesResult.Value ?? [] : [];
         var audit = agent.Audit;
         var recorder = new AgentRunRecorder(runId, instance.Id, policy, audit?.PersistToolResults ?? true, startedAt, logger);
         var tools = await toolCatalog.BuildAsync(new AgentToolBuildContext(
             agent,
-            (binding.Tools?.Exclude ?? []).ToHashSet(StringComparer.Ordinal),
+            exclude,
             callerRoles,
             scriptContext,
             transitionId,
@@ -293,7 +348,7 @@ public sealed class AgentStateRunner(
 
         // 9. One data write: the structured output (completed runs) and the $agent summary.
         await WriteOutputAsync(context, binding.Output!.Path!, result.Status == AgentRunStatus.Completed ? result.Output : null,
-            Summary(run, selected, source, reasonText, recorder, result), cancellationToken);
+            Summary(run, selected, source, reasonText, recorder, result, team), cancellationToken);
 
         // 10. Session (one upsert statement): after a completed run, and after a run held for approval
         //     (the resume needs it, whatever the memory mode).
@@ -304,7 +359,7 @@ public sealed class AgentStateRunner(
                 snapshot, result, context, cancellationToken);
 
         return await FinishAsync(context, run, recorder.Calls, run.Status, run.FailureReason, decisionSpec, candidates, selected,
-            source, reasonText, clock, recorder, cancellationToken, written: true);
+            source, reasonText, clock, recorder, cancellationToken, written: true, team: team);
     }
 
     private async Task<Result<AgentHopDecision>> FinishAsync(
@@ -321,7 +376,8 @@ public sealed class AgentStateRunner(
         Stopwatch clock,
         AgentRunRecorder? recorder,
         CancellationToken cancellationToken,
-        bool written = false)
+        bool written = false,
+        TeamSummary? team = null)
     {
         run.Status = status;
         run.FailureReason = failure is null ? null : Truncate(failure, 400);
@@ -331,7 +387,7 @@ public sealed class AgentStateRunner(
         if (!written)
         {
             await WriteOutputAsync(context, context.Target!.Agent!.Output!.Path!, null,
-                Summary(run, selected, source, reason, recorder, null), cancellationToken);
+                Summary(run, selected, source, reason, recorder, null, team ?? TeamSummary.None), cancellationToken);
         }
 
         var isFallback = source is AgentDecisionSource.Fallback or AgentDecisionSource.Disabled or AgentDecisionSource.Exhausted;
@@ -432,7 +488,7 @@ public sealed class AgentStateRunner(
     /// </summary>
     private static object Summary(
         InstanceAgentRun run, string? selected, AgentDecisionSource source, string? reason,
-        AgentRunRecorder? recorder, AgentRunResult? result) => new
+        AgentRunRecorder? recorder, AgentRunResult? result, TeamSummary team) => new
     {
         runId = run.Id,
         state = run.State,
@@ -450,6 +506,10 @@ public sealed class AgentStateRunner(
         session = run.SessionScopeKey is null
             ? new { scope = "none", resumed = false }
             : new { scope = ScopeKind(run.SessionScopeKey), resumed = run.SessionResumed },
+        participants = team.Participants
+            .Select(p => new { name = p.Participant, agentKey = p.AgentKey, runId = p.Id, status = p.Status.ToString() })
+            .ToArray(),
+        handoffTo = team.HandoffTo ?? string.Empty,
         pendingApprovals = (result?.PendingApprovals ?? [])
             .Select(a => new { requestId = a.RequestId, callId = a.CallId, tool = a.ToolName, arguments = a.Arguments, requiresConfirmation = a.RequiresConfirmation })
             .ToArray()
@@ -540,6 +600,172 @@ public sealed class AgentStateRunner(
                 : Result<Agent>.Fail(Error.NotFound(WorkflowErrorCodes.AgentNotFound,
                     $"Agent component {reference.Domain}/{reference.Key}@{reference.Version} could not be resolved: {result.Error.Message}"));
         }
+    }
+
+    /// <summary>Participants of one state entry, for the <c>$agent</c> summary.</summary>
+    private sealed record TeamSummary(IReadOnlyList<InstanceAgentRun> Participants, string? HandoffTo)
+    {
+        public static readonly TeamSummary None = new([], null);
+    }
+
+    /// <summary>What the team phase hands to the final run.</summary>
+    private sealed record TeamOutcome(TeamSummary Summary, string Context, Agent? FinalAgent, string? FailureReason);
+
+    /// <summary>
+    /// Runs the participants of a multi-agent state. Sequential: in order, each prompt carrying the outputs
+    /// before it; concurrent: in parallel on the same prompt. Both return the outputs as
+    /// <c>&lt;data name="participant:…"&gt;</c> blocks for the lead, which stays the final agent. Handoff: the lead
+    /// runs as a router whose output names a participant; that participant becomes the final agent. A
+    /// participant that fails is passed on as <c>{"error": …}</c>; a router that fails or names no
+    /// participant fails the team (the state takes its fallback). Participant rows join the hop's unit of
+    /// work after every run finished, one at a time (the context is not thread-safe).
+    /// </summary>
+    private async Task<TeamOutcome> RunTeamAsync(
+        TransitionExecutionContext context, ScriptContext scriptContext, Guid? transitionId, AgentStateBinding binding,
+        Agent lead, string basePrompt, int entryNo, IReadOnlySet<string> exclude, IReadOnlyCollection<string> callerRoles,
+        CancellationToken cancellationToken)
+    {
+        var participants = binding.Agents ?? [];
+        var finished = new List<(InstanceAgentRun Run, IReadOnlyList<InstanceAgentToolCall> Calls, JsonElement? Output)>();
+
+        async Task<TeamOutcome> CompleteAsync(string contextText, Agent? finalAgent, string? failure, string? handoffTo)
+        {
+            foreach (var (row, calls, _) in finished)
+                await journal.AddAsync(row, calls, null, cancellationToken);
+            return new TeamOutcome(new TeamSummary(finished.Select(f => f.Run).ToList(), handoffTo), contextText, finalAgent, failure);
+        }
+
+        switch (binding.EffectiveMode)
+        {
+            case AgentTeamMode.Sequential:
+            {
+                var carried = string.Empty;
+                foreach (var participant in participants)
+                {
+                    var one = await RunAuxiliaryAsync(context, scriptContext, transitionId, binding, participant.Name!, participant.Agent!,
+                        basePrompt + carried, null, entryNo, exclude, callerRoles, cancellationToken);
+                    finished.Add(one);
+                    carried += ParticipantBlock(one.Run, one.Output);
+                }
+
+                return await CompleteAsync(carried, null, null, null);
+            }
+            case AgentTeamMode.Concurrent:
+            {
+                var runs = await Task.WhenAll(participants.Select(participant =>
+                    RunAuxiliaryAsync(context, scriptContext, transitionId, binding, participant.Name!, participant.Agent!,
+                        basePrompt, null, entryNo, exclude, callerRoles, cancellationToken)));
+                finished.AddRange(runs);
+                return await CompleteAsync(string.Concat(runs.Select(r => ParticipantBlock(r.Run, r.Output))), null, null, null);
+            }
+            case AgentTeamMode.Handoff:
+            {
+                var router = await RunAuxiliaryAsync(context, scriptContext, transitionId, binding, "$router", binding.Agent!,
+                    basePrompt + AgentDecisionSupport.DescribeParticipants(participants),
+                    s => AgentDecisionSupport.AugmentHandoff(s, participants), entryNo, exclude, callerRoles, cancellationToken);
+                finished.Add(router);
+
+                var chosen = AgentDecisionSupport.ReadString(router.Output, AgentDecisionSupport.HandoffProperty);
+                var target = participants.FirstOrDefault(p => p.Name == chosen);
+                if (router.Run.Status != AgentRunStatus.Completed || target?.Agent is null)
+                {
+                    return await CompleteAsync(string.Empty, null,
+                        $"handoff router did not name a participant ({router.Run.FailureReason ?? $"returned '{chosen ?? "nothing"}'"})", chosen);
+                }
+
+                var resolved = await ResolveAgentAsync(target.Agent, cancellationToken);
+                if (!resolved.IsSuccess)
+                    return await CompleteAsync(string.Empty, null, resolved.Error.Message, chosen);
+
+                return await CompleteAsync(ParticipantBlock(router.Run, router.Output), resolved.Value, null, chosen);
+            }
+            default:
+                return await CompleteAsync(string.Empty, lead, null, null);
+        }
+    }
+
+    /// <summary>
+    /// One participant (or handoff router) run: its own component, tools and policy narrowed by the state;
+    /// no session, no transcript, no approval (a held call fails the participant). Not added to the journal.
+    /// </summary>
+    private async Task<(InstanceAgentRun Run, IReadOnlyList<InstanceAgentToolCall> Calls, JsonElement? Output)> RunAuxiliaryAsync(
+        TransitionExecutionContext context, ScriptContext scriptContext, Guid? transitionId, AgentStateBinding binding,
+        string name, Reference reference, string prompt, Func<JsonElement, JsonElement>? augment, int entryNo,
+        IReadOnlySet<string> exclude, IReadOnlyCollection<string> callerRoles, CancellationToken cancellationToken)
+    {
+        var settings = options.Value;
+        var startedAt = DateTime.UtcNow;
+        var clock = Stopwatch.StartNew();
+        var state = context.Target!.Key;
+        var row = new InstanceAgentRun(Guid.NewGuid())
+        {
+            InstanceId = context.Instance.Id,
+            TransitionId = transitionId,
+            State = state,
+            EntryNo = entryNo,
+            Participant = Truncate(name, 64),
+            ExecutionKey = InstanceAgentRun.CreateExecutionKey(transitionId, state, entryNo, name),
+            AgentKey = reference.Key,
+            AgentDomain = reference.Domain,
+            AgentVersion = reference.Version,
+            RuntimeKey = AgentRuntimeKeys.Maf,
+            ProviderKey = string.Empty,
+            StartedAt = startedAt,
+            CreatedAt = startedAt
+        };
+
+        IReadOnlyList<InstanceAgentToolCall> Finish(AgentRunStatus status, string? failure, IReadOnlyList<InstanceAgentToolCall> calls)
+        {
+            row.Status = status;
+            row.FailureReason = failure is null ? null : Truncate(failure, 400);
+            row.FinishedAt = DateTime.UtcNow;
+            row.DurationMs = clock.ElapsedMilliseconds;
+            return calls;
+        }
+
+        var resolved = await ResolveAgentAsync(reference, cancellationToken);
+        if (!resolved.IsSuccess)
+            return (row, Finish(AgentRunStatus.Failed, resolved.Error.Message, []), null);
+        var agent = resolved.Value!;
+        row.AgentKey = agent.Key;
+        row.AgentDomain = agent.Domain;
+        row.AgentVersion = agent.Version;
+        row.ProviderKey = agent.Provider;
+        if (!settings.Providers.TryGetValue(agent.Provider, out var profile))
+            return (row, Finish(AgentRunStatus.Failed, $"provider profile '{agent.Provider}' is not configured", []), null);
+        row.Model = profile.Model;
+
+        var policy = EffectiveAgentPolicy.Resolve(agent.Policy, binding.Policy, settings);
+        var recorder = new AgentRunRecorder(row.Id, context.Instance.Id, policy, agent.Audit?.PersistToolResults ?? true, startedAt, logger);
+        var tools = await toolCatalog.BuildAsync(new AgentToolBuildContext(
+            agent, exclude, callerRoles, scriptContext, transitionId, recorder, Stub: false), cancellationToken);
+        var schema = augment is null ? agent.Output!.Schema!.Value : augment(agent.Output!.Schema!.Value);
+        var instructions = agent.Instructions!.Resolved;
+
+        AgentRunResult result;
+        using (var slot = limiter.TryAcquire())
+        {
+            result = slot is null
+                ? AgentRunResult.Failed(AgentRunStatus.Failed, $"capacity: AiAgent:MaxConcurrentRuns ({settings.MaxConcurrentRuns}) reached")
+                : await runtime.RunAsync(new AgentRunRequest(
+                    row.Id, agent.Key, agent.Provider, profile, instructions, prompt, schema, agent.Model, tools, policy,
+                    null, null, false, 0, CaptureTranscript: false), cancellationToken);
+        }
+
+        ApplyResult(row, result, recorder, agent.Audit, settings, schema, [], prompt, AgentTemplateRenderer.Sha256(instructions), tools);
+        if (result.Status == AgentRunStatus.ApprovalRequested)
+            return (row, Finish(AgentRunStatus.Failed, "tool approval is only supported on the final agent of a state", recorder.Calls), null);
+
+        logger.AgentRunCompleted(row.Id, row.InstanceId, clock.ElapsedMilliseconds, row.Iterations, row.ToolCallCount, row.TotalTokens);
+        return (row, Finish(result.Status, result.FailureReason, recorder.Calls), result.Status == AgentRunStatus.Completed ? result.Output : null);
+    }
+
+    private static string ParticipantBlock(InstanceAgentRun run, JsonElement? output)
+    {
+        var body = output is { } o
+            ? o.GetRawText()
+            : JsonSerializer.Serialize(new { error = run.FailureReason ?? run.Status.ToString() });
+        return $"\n\n<data name=\"participant:{run.Participant}\">\n{body.Replace("</data", "<\\/data", StringComparison.OrdinalIgnoreCase)}\n</data>";
     }
 
     private static byte[] Gzip(byte[] data)

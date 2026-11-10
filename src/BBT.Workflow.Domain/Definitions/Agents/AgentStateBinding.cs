@@ -27,6 +27,51 @@ public sealed record AgentStateBinding
 
     /// <summary>Narrows the component's policy.</summary>
     public AgentPolicy? Policy { get; init; }
+
+    /// <summary>
+    /// How several agents work in this state. <c>single</c> (default): only <see cref="Agent"/> runs.
+    /// <c>sequential</c> / <c>concurrent</c>: the <see cref="Agents"/> run first (in order, each seeing the
+    /// outputs before it / in parallel on the same prompt), then <see cref="Agent"/> — the lead — runs with
+    /// their outputs and produces the state's output and decision. <c>handoff</c>: the lead runs as a router
+    /// and names one participant, which then produces the state's output and decision.
+    /// </summary>
+    public AgentTeamMode? Mode { get; init; }
+
+    /// <summary>Participants of a multi-agent state (<see cref="Mode"/> other than <c>single</c>).</summary>
+    public List<AgentParticipant>? Agents { get; init; }
+
+    /// <summary>The effective team mode.</summary>
+    [JsonIgnore]
+    public AgentTeamMode EffectiveMode => Mode ?? AgentTeamMode.Single;
+}
+
+/// <summary>How the agents of a state work together.</summary>
+public enum AgentTeamMode
+{
+    /// <summary>One agent.</summary>
+    Single = 0,
+
+    /// <summary>Participants in order, then the lead.</summary>
+    Sequential = 1,
+
+    /// <summary>Participants in parallel, then the lead.</summary>
+    Concurrent = 2,
+
+    /// <summary>The lead routes to one participant, which answers.</summary>
+    Handoff = 3
+}
+
+/// <summary>A participant agent of a multi-agent state.</summary>
+public sealed record AgentParticipant
+{
+    /// <summary>Name, unique in the state (<c>^[a-zA-Z0-9_-]{1,64}$</c>); the lead sees outputs and routes by it.</summary>
+    public string? Name { get; init; }
+
+    /// <summary>The <c>sys-agents</c> component.</summary>
+    public Reference? Agent { get; init; }
+
+    /// <summary>What the lead is told this participant is for (handoff).</summary>
+    public string? Description { get; init; }
 }
 
 /// <summary>

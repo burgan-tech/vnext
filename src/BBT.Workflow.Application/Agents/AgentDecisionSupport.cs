@@ -76,6 +76,44 @@ public static class AgentDecisionSupport
         return JsonSerializer.SerializeToElement(node);
     }
 
+    /// <summary>Output member a handoff router names its participant in.</summary>
+    public const string HandoffProperty = "handoff";
+
+    /// <summary>
+    /// Adds the required <c>handoff</c> enum (participant names) and <c>handoffReason</c> to a handoff
+    /// router's output schema.
+    /// </summary>
+    public static JsonElement AugmentHandoff(JsonElement schema, IReadOnlyList<AgentParticipant> participants)
+    {
+        var node = JsonNode.Parse(schema.GetRawText())!.AsObject();
+        var properties = node["properties"] as JsonObject ?? new JsonObject();
+        node["properties"] = properties;
+        properties[HandoffProperty] = new JsonObject
+        {
+            ["type"] = "string",
+            ["enum"] = new JsonArray(participants.Select(p => (JsonNode)JsonValue.Create(p.Name!)!).ToArray()),
+            ["description"] = "The participant that handles this request."
+        };
+        properties["handoffReason"] = new JsonObject { ["type"] = "string", ["description"] = "One sentence explaining the choice." };
+
+        var required = node["required"] as JsonArray ?? new JsonArray();
+        foreach (var name in new[] { HandoffProperty, "handoffReason" })
+        {
+            if (!required.Any(r => r?.GetValue<string>() == name))
+                required.Add(name);
+        }
+
+        node["required"] = required;
+        return JsonSerializer.SerializeToElement(node);
+    }
+
+    /// <summary>The participants a handoff router chooses from, appended to its prompt.</summary>
+    public static string DescribeParticipants(IReadOnlyList<AgentParticipant> participants)
+    {
+        var lines = participants.Select(p => $"- \"{p.Name}\": {p.Description ?? p.Name}");
+        return "\n\nChoose exactly one participant for the \"handoff\" field:\n" + string.Join("\n", lines);
+    }
+
     /// <summary>The decision options appended to the user prompt in model mode.</summary>
     public static string DescribeCandidates(IReadOnlyList<AgentCandidate> candidates)
     {

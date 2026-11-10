@@ -56,5 +56,6 @@ public sealed class EfCoreAgentRunReadRepository(IAetherDbContextProvider<Workfl
             r.TotalTokens, r.SessionScopeKey, r.SessionResumed,
             d == null ? null : d.SelectedTransition,
             d == null ? null : (AgentDecisionSource?)d.Source,
-            d == null ? null : d.Reason);
+            d == null ? null : d.Reason,
+            r.Participant);
 }
