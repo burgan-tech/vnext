@@ -22,10 +22,7 @@ public enum AgentDecisionSource : short
     Exhausted = 5,
 
     /// <summary>A tool asked for approval.</summary>
-    ApprovalRequest = 6,
-
-    /// <summary>The agent feature is disabled in this environment.</summary>
-    Disabled = 7
+    ApprovalRequest = 6
 }
 
 /// <summary>The decision of an agent run (table <c>InstanceAgentDecisions</c>, one per run).</summary>

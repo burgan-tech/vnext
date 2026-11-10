@@ -80,13 +80,6 @@ public sealed class AgentStateRunner(
             Attempts = 0
         };
 
-        if (!settings.Enabled)
-        {
-            logger.AgentRunSkippedDisabled(state.Key, instance.Id, fallback);
-            return await FinishAsync(context, run, [], AgentRunStatus.Failed, "AI agents are disabled in this environment",
-                decisionSpec, [], fallback, AgentDecisionSource.Disabled, null, clock, null, cancellationToken);
-        }
-
         // 1. Resolve the agent component (cache store, generation-token keyed; no database read on a warm cache).
         var agentResult = await ResolveAgentAsync(binding.Agent!, cancellationToken);
         if (!agentResult.IsSuccess)
@@ -391,7 +384,7 @@ public sealed class AgentStateRunner(
                 Summary(run, selected, source, reason, recorder, null, team ?? TeamSummary.None), cancellationToken);
         }
 
-        var isFallback = source is AgentDecisionSource.Fallback or AgentDecisionSource.Disabled or AgentDecisionSource.Exhausted;
+        var isFallback = source is AgentDecisionSource.Fallback or AgentDecisionSource.Exhausted;
         var mode = decisionSpec.EffectiveMode;
         var row = DecisionRow(run, mode, source, selected, reason, candidates, isFallback);
         await journal.AddAsync(run, calls, row, cancellationToken);

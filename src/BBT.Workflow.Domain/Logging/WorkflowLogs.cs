@@ -5611,11 +5611,6 @@ public static partial class WorkflowLogs
         Message = "Agent {AgentKey}: tool name {ToolName} collides with an earlier tool and is skipped")]
     public static partial void AgentToolNameCollision(this ILogger logger, string agentKey, string toolName);
 
-    /// <summary>The agent feature is disabled; the state takes its fallback.</summary>
-    [LoggerMessage(EventId = 30011, Level = LogLevel.Information,
-        Message = "AI agents are disabled (AiAgent:Enabled=false); state {State} of instance {InstanceId} takes fallback {Fallback}")]
-    public static partial void AgentRunSkippedDisabled(this ILogger logger, string state, Guid instanceId, string fallback);
-
     /// <summary>An MCP call failed.</summary>
     [LoggerMessage(EventId = 30012, Level = LogLevel.Warning,
         Message = "MCP {Operation} on task {TaskKey} failed: {Reason}")]

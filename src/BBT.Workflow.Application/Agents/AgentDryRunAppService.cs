@@ -87,8 +87,6 @@ public sealed class AgentDryRunAppService(
         var callerRoles = roles.IsSuccess ? roles.Value ?? [] : [];
         if (settings.DryRun.Roles.Count == 0 || !callerRoles.Any(r => settings.DryRun.Roles.Contains(r, StringComparer.OrdinalIgnoreCase)))
             return Result<AgentDryRunOutput>.Fail(Error.Forbidden(WorkflowErrorCodes.AgentDryRunForbidden, "Agent dry-run is not allowed for this caller."));
-        if (!settings.Enabled)
-            return Result<AgentDryRunOutput>.Fail(Error.Forbidden(WorkflowErrorCodes.AgentDryRunForbidden, "AI agents are disabled in this environment."));
 
         Result<Agent> agentResult;
         using (currentSchema.Change(RuntimeSysSchemaInfo.Agents))
