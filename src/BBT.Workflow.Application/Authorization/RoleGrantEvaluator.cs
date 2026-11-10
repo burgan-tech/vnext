@@ -127,9 +127,11 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
         // that is a proven No still rules the whole deny out (Unknown AND No = No).
         var noRoles = HasNoRoles(roles);
         return RoleGrantMatcher.Decide(grants, leafRole =>
-            noRoles && TransitionAuthorizationManager.IsRoleBound(leafRole)
-                ? GrantMatch.Unknown
-                : MatchesAnyRole(leafRole, roles, transition) ? GrantMatch.Yes : GrantMatch.No);
+        {
+            if (noRoles && TransitionAuthorizationManager.IsRoleBound(leafRole))
+                return GrantMatch.Unknown;
+            return MatchesAnyRole(leafRole, roles, transition) ? GrantMatch.Yes : GrantMatch.No;
+        });
     }
 
     /// <summary>
@@ -279,6 +281,10 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
     {
         if (string.IsNullOrWhiteSpace(grantRole))
             return null;
+
+        // $Everyone is every caller; nothing about the instance or the caller can make it No.
+        if (PredefinedInstanceRoles.IsEveryone(grantRole))
+            return true;
 
         if (string.Equals(grantRole, PredefinedInstanceRoles.InstanceStarter, StringComparison.Ordinal))
             return !string.IsNullOrEmpty(actorUserName) &&

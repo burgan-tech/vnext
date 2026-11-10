@@ -172,7 +172,8 @@ public static class SchemaRolesParser
     /// Exemption grants are allow-only: a caller matching one sees the raw value, everyone else the transformed one.
     /// A <c>deny</c> entry is dropped rather than honoured (the publish validator rejects it), so a stray deny can never
     /// widen what anyone sees. A combinator is dropped too (the validator rejects it): no exemption means
-    /// the value stays masked — fail closed.
+    /// the value stays masked — fail closed. So is a <c>$Everyone</c> grant (the validator rejects it): it would
+    /// exempt every caller and reveal the value to all.
     /// </summary>
     private static IReadOnlyList<RoleGrant> ParseExemptGrants(JsonElement rolesArray)
     {
@@ -183,7 +184,7 @@ public static class SchemaRolesParser
         var allow = new List<RoleGrant>(all.Count);
         foreach (var grant in all)
         {
-            if (!grant.IsDeny && !grant.IsCombinator)
+            if (!grant.IsDeny && !grant.IsCombinator && !PredefinedInstanceRoles.IsEveryone(grant.Role))
                 allow.Add(grant);
         }
 

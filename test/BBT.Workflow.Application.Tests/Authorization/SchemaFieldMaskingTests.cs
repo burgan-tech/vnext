@@ -49,6 +49,8 @@ public sealed class SchemaFieldMaskingTests
         "email":     { "type": "string", "x-encryption": { "type": "encrypt",
                        "roles": [ { "role": "morph-idm.auditor", "grant": "allow" } ] } },
         "legacy":    { "type": "string", "x-encryption": { "type": "encrypt" } },
+        "everyoneExempt": { "type": "string", "x-masking": { "operator": "mask", "params": { "keepLast": 2 },
+                       "roles": [ { "role": "$Everyone", "grant": "allow" } ] } },
         "public":    { "type": "string" }
         """;
 
@@ -111,6 +113,16 @@ public sealed class SchemaFieldMaskingTests
     [Fact]
     public async Task MisspelledRole_IsMasked_AnAllowListFailsClosed()
         => (await ApplyAsync(Roles("morph-idm.audtor"))).GetProperty("tckn").GetString().ShouldBe("********901");
+
+    [Fact]
+    public async Task ExemptionListingEveryone_StillMasksForEveryCaller()
+    {
+        // A schema that skipped publish (the validator refuses $Everyone in an exemption list) must still mask.
+        const string only = """{ "everyoneExempt": "abcdef" }""";
+
+        (await ApplyAsync(Roles(Reader), data: only)).GetProperty("everyoneExempt").GetString().ShouldBe("****ef");
+        (await ApplyAsync(Roles(), data: only)).GetProperty("everyoneExempt").GetString().ShouldBe("****ef");
+    }
 
     [Fact]
     public async Task EmptyRoleSet_IsMasked()

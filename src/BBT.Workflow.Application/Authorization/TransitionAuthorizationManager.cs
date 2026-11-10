@@ -370,9 +370,13 @@ public sealed class TransitionAuthorizationManager(
             ? null
             : SubFlowStateOverrideReader.TryReadQueryRoles(instance, currentStateKey);
 
-        var queryRoles = overridden is { Count: > 0 }
-            ? overridden
-            : state is { QueryRoles.Count: > 0 } ? state.QueryRoles : workflow.QueryRoles;
+        IReadOnlyCollection<RoleGrant> queryRoles;
+        if (overridden is { Count: > 0 })
+            queryRoles = overridden;
+        else if (state is { QueryRoles.Count: > 0 })
+            queryRoles = state.QueryRoles;
+        else
+            queryRoles = workflow.QueryRoles;
 
         return await IsAnyRoleAllowedForGrantsAsync(callerRoles, queryRoles, instance, requestContext, cancellationToken);
     }
@@ -420,7 +424,8 @@ public sealed class TransitionAuthorizationManager(
     /// Static comparison only: with no instance there is nothing for a predefined or identity-bound
     /// dynamic leaf to resolve against, so those leaves are <see cref="GrantMatch.No"/> here. A
     /// role-bound leaf is <see cref="GrantMatch.Unknown"/> for a caller with no roles, exactly as on
-    /// the instance-bound path.
+    /// the instance-bound path. <c>$Everyone</c> is the one identity leaf that needs nothing to
+    /// resolve against: it is <see cref="GrantMatch.Yes"/> here for every caller.
     /// </para>
     /// </remarks>
     public static bool EvaluateRolesStatic(
@@ -438,11 +443,24 @@ public sealed class TransitionAuthorizationManager(
                 normalized.Add(role.Trim());
         }
 
-        return RoleGrantMatcher.Decide(roleGrants, leafRole =>
-            !IsRoleBound(leafRole) ? GrantMatch.No
-            : normalized.Count == 0 ? GrantMatch.Unknown
-            : MatchesAnyStatic(leafRole, normalized) ? GrantMatch.Yes
-            : GrantMatch.No, defaultAllowWhenNoAllowGrant);
+        return RoleGrantMatcher.Decide(
+            roleGrants, leafRole => MatchStaticLeaf(leafRole, normalized), defaultAllowWhenNoAllowGrant);
+    }
+
+    /// <summary>
+    /// How one leaf matches on the no-instance path: <c>$Everyone</c> is Yes, a leaf that is not
+    /// role-bound has nothing to resolve against (No), a role-bound leaf is Unknown for a role-less
+    /// caller, else Yes only when one of the caller's roles names it.
+    /// </summary>
+    private static GrantMatch MatchStaticLeaf(string leafRole, List<string> normalized)
+    {
+        if (PredefinedInstanceRoles.IsEveryone(leafRole))
+            return GrantMatch.Yes;
+        if (!IsRoleBound(leafRole))
+            return GrantMatch.No;
+        if (normalized.Count == 0)
+            return GrantMatch.Unknown;
+        return MatchesAnyStatic(leafRole, normalized) ? GrantMatch.Yes : GrantMatch.No;
     }
 
     /// <summary>
@@ -486,6 +504,10 @@ public sealed class TransitionAuthorizationManager(
             or PredefinedInstanceRoles.PreviousUser
             or PredefinedInstanceRoles.InstanceBehalfOfStarter
             or PredefinedInstanceRoles.PreviousBehalfOfUser)
+            return false;
+
+        // $Everyone is trim-tolerant (IsEveryone), so a padded spelling must classify the same way here.
+        if (PredefinedInstanceRoles.IsEveryone(leafRole))
             return false;
 
         var dynamicGrant = DynamicRoleGrant.TryParse(leafRole);
