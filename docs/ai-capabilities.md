@@ -192,7 +192,12 @@ council, implementation and PR review, driven by `ai:*` labels:
 [AI engineering pipeline](governance/ai-engineering-pipeline.md). Built so far: the **Director**
 (`.github/workflows/ai-director.yml`, prompt `.github/ai/director.md`, scripts `scripts/ai/director/`)
 plans an issue when a maintainer adds `ai:ready` / `ai:replan`; `AI_MODE` = `dry-run` (default, plan
-comment only) / `apply` (labels via the GitHub App); model `AI_DIRECTOR_MODEL`. Locally:
+comment only) / `apply` (labels via the GitHub App); model `AI_DIRECTOR_MODEL`. The **Quality Gate**
+(`.github/workflows/ai-quality-gate.yml`, prompt `.github/ai/quality-gate.md`, evidence list
+`.github/ai/gate.json`, scripts `scripts/ai/gate/`) reviews every open PR into `master` /
+`release-v*` once its CI reported, one comment per PR; model `AI_GATE_MODEL`, repair limit
+`AI_MAX_REPAIRS`. Locally: `SONAR_TOKEN=… node scripts/ai/gate/collect.mjs --pr <n> --force --out <dir>`
+then `apply.mjs --in <dir> --print`. Locally:
 `node scripts/ai/director/collect.mjs --issue <n>` then `apply.mjs --print`. Tests:
 `node --test "scripts/ai/test/*.test.mjs"` (also in the `Unit Tests` workflow).
 
