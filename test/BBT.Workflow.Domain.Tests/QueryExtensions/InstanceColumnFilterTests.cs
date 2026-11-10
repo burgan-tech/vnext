@@ -277,7 +277,7 @@ public class InstanceColumnFilterTests
             "Key", "like", "test", ref parameterIndex);
 
         // Assert
-        condition.ShouldBe("s.\"Key\" ILIKE {0}");
+        condition.ShouldBe("s.\"Key\" COLLATE \"tr-TR-x-icu\" ILIKE {0}");
         parameters.Count.ShouldBe(1);
         parameters[0].Value.ShouldBe("%test%");
         parameterIndex.ShouldBe(1);
@@ -294,7 +294,7 @@ public class InstanceColumnFilterTests
             "Flow", "startswith", "workflow", ref parameterIndex);
 
         // Assert
-        condition.ShouldBe("s.\"Flow\" ILIKE {0}");
+        condition.ShouldBe("s.\"Flow\" COLLATE \"tr-TR-x-icu\" ILIKE {0}");
         parameters.Count.ShouldBe(1);
         parameters[0].Value.ShouldBe("workflow%");
         parameterIndex.ShouldBe(1);
@@ -311,7 +311,7 @@ public class InstanceColumnFilterTests
             "Flow", "endswith", "flow", ref parameterIndex);
 
         // Assert
-        condition.ShouldBe("s.\"Flow\" ILIKE {0}");
+        condition.ShouldBe("s.\"Flow\" COLLATE \"tr-TR-x-icu\" ILIKE {0}");
         parameters.Count.ShouldBe(1);
         parameters[0].Value.ShouldBe("%flow");
         parameterIndex.ShouldBe(1);

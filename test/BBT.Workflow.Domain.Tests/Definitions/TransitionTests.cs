@@ -426,7 +426,7 @@ public class TransitionTests : DomainTestBase<DomainEntryPoint>
             "from": "state1",
             "target": "state2",
             "triggerType": "Automatic",
-            "kind": "DefaultAutoTransition",
+            "triggerKind": "DefaultAutoTransition",
             "versionStrategy": "Patch",
             "labels": [],
             "onExecutionTasks": [],

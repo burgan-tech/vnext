@@ -453,19 +453,21 @@ public class WorkflowTests : DomainTestBase<DomainEntryPoint>
         var state = State.Create("test-state", StateType.Intermediate, StateSubType.Success, "Patch");
         workflow.AddState(state);
 
-        var sharedTransition = Transition.Create("cancel", null, "cancelled", TriggerType.Manual, "Patch");
+        // "cancel" is a reserved well-known key resolved through the workflow's cancel
+        // configuration, so a plain shared transition uses an ordinary key.
+        var sharedTransition = Transition.Create("reject", null, "rejected", TriggerType.Manual, "Patch");
         workflow.AddSharedTransition(sharedTransition);
 
         // Act
-        var result = workflow.ResolveTransition("cancel", state);
+        var result = workflow.ResolveTransition("reject", state);
 
         // Assert
         Assert.NotNull(result);
-        Assert.Equal("cancelled", result.Target);
+        Assert.Equal("rejected", result.Target);
     }
 
     [Fact]
-    public void CacheKey_ShouldGenerateCorrectFormat()
+    public void ComponentKey_ShouldBeFlowsComponentType()
     {
         // Arrange
         var workflow = Workflow.Create();
@@ -473,10 +475,11 @@ public class WorkflowTests : DomainTestBase<DomainEntryPoint>
         workflow.SetReference(reference);
 
         // Act
-        var cacheKey = workflow.ComponentKey;
+        var componentKey = workflow.ComponentKey;
 
-        // Assert
-        Assert.Equal("Workflow:test-domain:sys-flows:test-flow:1.0.0", cacheKey);
+        // Assert: ComponentKey is the component type key; the per-instance cache key was removed in c81ba6a43.
+        Assert.Equal(Workflow.ComponentTypeKey, componentKey);
+        Assert.Equal("sys-flows", componentKey);
     }
     
     [Fact]

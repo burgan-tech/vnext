@@ -42,8 +42,9 @@ public sealed class NotificationTaskTests
     }
 
     [Fact]
-    public void Create_DefaultsIncludeStateChannelToFalse()
+    public void Create_DefaultsIncludeStateChannelToTrue()
     {
+        // The documented and schema default (vnext-schema task-definition "default": true).
         var config = """
         {
             "key": "notify",
@@ -53,7 +54,7 @@ public sealed class NotificationTaskTests
         """;
         var task = NotificationTask.Create(JsonSerializer.Deserialize<JsonElement>(config));
 
-        task.IncludeStateChannel.ShouldBeFalse();
+        task.IncludeStateChannel.ShouldBeTrue();
     }
 
     [Fact]
