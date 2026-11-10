@@ -557,8 +557,15 @@ public sealed class AgentStateRunner(
         };
 
         var write = new AgentSessionWrite(scopeKey, session, useProviderSession ? null : messages, snapshot?.RowVersion);
-        if (!await sessionStore.SaveAsync(write, instanceId, cancellationToken))
-            logger.AgentSessionConflict(scopeKey, 1);
+        if (await sessionStore.SaveAsync(write, instanceId, cancellationToken))
+            return;
+
+        // Only a shared k:* row is guarded, so only another instance can have written it in between: take
+        // its current version and write once more (this run's conversation wins the second time).
+        logger.AgentSessionConflict(scopeKey, 1);
+        var current = await sessionStore.FindAsync(scopeKey, instanceId, cancellationToken);
+        if (!await sessionStore.SaveAsync(write with { ExpectedRowVersion = current.Snapshot?.RowVersion }, instanceId, cancellationToken))
+            logger.AgentSessionConflict(scopeKey, 2);
     }
 
     private static string? ResetReason(AgentSessionSnapshot snapshot, Agent agent, string instructionsHash, AgentMemory memory)

@@ -143,6 +143,11 @@ public sealed class AgentToolCatalog(
         var branch = ctx.ScriptContext.CreateParallelBranch();
         branch.SetBody(JsonSerializer.Deserialize<ExpandoObject>(invocation.Arguments.GetRawText(), JsonSerializerConstants.JsonOptions));
 
+        // An HTTP tool call carries a key the target can deduplicate on: the same run and call id always
+        // produce the same key. A mapping that replaces the whole header set drops it.
+        if (prepared is HttpTask http)
+            http.AddHeader("Idempotency-Key", InstanceAgentToolCall.CreateIdempotencyKey(ctx.Recorder.RunId, invocation.CallId));
+
         await using var scope = scopeFactory.CreateAsyncScope();
         var engine = scope.ServiceProvider.GetRequiredService<ITaskExecutionEngine>();
 
