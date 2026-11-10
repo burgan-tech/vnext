@@ -741,7 +741,6 @@ public static class InstancesModelCreatingExtensions
             b.Property(p => p.InstructionsHash).HasMaxLength(64);
             b.Property(p => p.SessionData).HasColumnType("bytea");
             b.Property(p => p.ProviderConversationId).HasMaxLength(128);
-            b.Property(p => p.EncryptionKey).HasColumnType("bytea");
             b.Property(p => p.RowVersion).IsRowVersion();
 
             // The sweeper's range; a partial index keeps it to the rows that can expire.

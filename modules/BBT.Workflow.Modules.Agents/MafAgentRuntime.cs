@@ -81,7 +81,7 @@ internal sealed class MafAgentRuntime(IChatClientProvider provider, ILoggerFacto
             var iterations = Math.Max(1, response.Messages.Count(m => m.Role == ChatRole.Assistant));
 
             var (sessionBytes, messageCount, trimmed, conversationId) =
-                await SaveSessionAsync(agent, session, request, deadline.Token);
+                await SaveSessionAsync(agent, session, request, retrying, deadline.Token);
 
             var result = new AgentRunResult
             {
@@ -154,7 +154,7 @@ internal sealed class MafAgentRuntime(IChatClientProvider provider, ILoggerFacto
     }
 
     private static async Task<(byte[]? Bytes, int Count, int Trimmed, string? ConversationId)> SaveSessionAsync(
-        ChatClientAgent agent, AgentSession session, AgentRunRequest request, CancellationToken cancellationToken)
+        ChatClientAgent agent, AgentSession session, AgentRunRequest request, IChatClient summarizer, CancellationToken cancellationToken)
     {
         if (request.UseProviderSession)
             return (null, 0, 0, (session as ChatClientAgentSession)?.ConversationId);
@@ -163,7 +163,18 @@ internal sealed class MafAgentRuntime(IChatClientProvider provider, ILoggerFacto
         var count = 0;
         if (session.TryGetInMemoryChatHistory(out var history) && history is not null)
         {
-            if (request.MaxMessages > 0 && history.Count > request.MaxMessages)
+            if (request.Compaction == AgentMemoryCompaction.Summarize && request.MaxMessages > 0 && history.Count > request.MaxMessages)
+            {
+                // One provider call replaces the oldest messages with a summary message; the reducer keeps
+                // tool exchanges intact at the boundary.
+                var before = history.Count;
+                var reduced = (await new SummarizingChatReducer(summarizer, request.MaxMessages, 0)
+                    .ReduceAsync(history, cancellationToken)).ToList();
+                trimmed = Math.Max(0, before - reduced.Count);
+                history = reduced;
+                session.SetInMemoryChatHistory(history);
+            }
+            else if (request.MaxMessages > 0 && history.Count > request.MaxMessages)
             {
                 var keep = history.Skip(history.Count - request.MaxMessages).ToList();
                 // Never start the kept window with a tool result or a dangling tool call.

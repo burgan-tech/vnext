@@ -151,6 +151,16 @@ public enum AgentMemoryStorage
     Provider = 1
 }
 
+/// <summary>How a local session is kept within <see cref="AgentMemory.MaxMessages"/>.</summary>
+public enum AgentMemoryCompaction
+{
+    /// <summary>Drop the oldest messages (never starting the kept window on a tool exchange).</summary>
+    Trim = 0,
+
+    /// <summary>Replace the oldest messages with one model-written summary (one extra provider call when it triggers).</summary>
+    Summarize = 1
+}
+
 /// <summary>Conversation memory settings.</summary>
 public sealed record AgentMemory
 {
@@ -163,8 +173,11 @@ public sealed record AgentMemory
     /// <summary>Message store.</summary>
     public AgentMemoryStorage? Storage { get; init; }
 
-    /// <summary>Messages kept (oldest trimmed first).</summary>
+    /// <summary>Messages kept (oldest trimmed or summarized first).</summary>
     public int? MaxMessages { get; init; }
+
+    /// <summary>How the session is kept within <see cref="MaxMessages"/> (local storage only).</summary>
+    public AgentMemoryCompaction? Compaction { get; init; }
 
     /// <summary>Retention after the owner settles.</summary>
     public int? RetentionDays { get; init; }
@@ -179,6 +192,7 @@ public sealed record AgentMemory
         Key = over.Key ?? Key,
         Storage = over.Storage ?? Storage,
         MaxMessages = over.MaxMessages ?? MaxMessages,
+        Compaction = over.Compaction ?? Compaction,
         RetentionDays = over.RetentionDays ?? RetentionDays,
         ResetOn = over.ResetOn ?? ResetOn
     };
@@ -189,6 +203,7 @@ public sealed record AgentMemory
         Mode = AgentMemoryMode.State,
         Storage = AgentMemoryStorage.Local,
         MaxMessages = 40,
+        Compaction = AgentMemoryCompaction.Trim,
         RetentionDays = 30,
         ResetOn = ["agentVersionChange"]
     };

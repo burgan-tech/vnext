@@ -1,6 +1,4 @@
 using System.IO.Compression;
-using System.Security.Cryptography;
-using System.Text;
 using BBT.Aether.Domain.EntityFrameworkCore;
 using BBT.Workflow.Data;
 using BBT.Workflow.Instances.Agents;
@@ -17,17 +15,12 @@ namespace BBT.Workflow.Agents;
 /// <item>Write: one <c>INSERT … ON CONFLICT DO UPDATE … WHERE xmin = expected</c> statement; zero affected
 /// rows means another writer got there first (only possible for cross-instance <c>k:*</c> rows; an
 /// <c>i:*</c> row has one writer under the instance's Busy mutex).</item>
-/// <item>Content: gzip, then AES-256-GCM with a fresh random key stored on the row; the scope key is the
-/// associated data, so a ciphertext copied to another row does not decrypt. Deleting the row — or its
-/// owning instance, which cascades — destroys the key with the content.</item>
+/// <item>Content: the serialized message list, gzip-compressed. Not encrypted and not masked (a product
+/// decision for this phase: no guard until real use asks for one).</item>
 /// </list>
 /// </summary>
 public sealed class EfCoreAgentSessionStore(IAetherDbContextProvider<WorkflowDbContext> dbContextProvider) : IAgentSessionStore
 {
-    private const byte FormatVersion = 0x01;
-    private const int NonceSize = 12;
-    private const int TagSize = 16;
-
     /// <inheritdoc />
     public async Task<AgentSessionReadResult> FindAsync(string scopeKey, Guid instanceId, CancellationToken cancellationToken = default)
     {
@@ -37,7 +30,7 @@ public sealed class EfCoreAgentSessionStore(IAetherDbContextProvider<WorkflowDbC
             .Where(s => s.ScopeKey == scopeKey)
             .Select(s => new
             {
-                s.ScopeKey, s.AgentKey, s.AgentVersion, s.InstructionsHash, s.SessionData, s.EncryptionKey,
+                s.ScopeKey, s.AgentKey, s.AgentVersion, s.InstructionsHash, s.SessionData,
                 s.ProviderConversationId, s.MessageCount, s.RowVersion, s.ExpiresAt
             })
             .FirstOrDefaultAsync(cancellationToken);
@@ -46,15 +39,13 @@ public sealed class EfCoreAgentSessionStore(IAetherDbContextProvider<WorkflowDbC
             return new AgentSessionReadResult(null, null);
 
         byte[]? messages = null;
-        if (row.SessionData is { Length: > 0 } sealedData)
+        if (row.SessionData is { Length: > 0 } stored)
         {
-            if (row.EncryptionKey is not { Length: 32 } key)
-                return new AgentSessionReadResult(null, "missing key");
             try
             {
-                messages = Decompress(Open(sealedData, key, scopeKey));
+                messages = Decompress(stored);
             }
-            catch (Exception ex) when (ex is CryptographicException or InvalidDataException or ArgumentException)
+            catch (Exception ex) when (ex is InvalidDataException or ArgumentException)
             {
                 return new AgentSessionReadResult(null, ex.GetType().Name);
             }
@@ -71,13 +62,7 @@ public sealed class EfCoreAgentSessionStore(IAetherDbContextProvider<WorkflowDbC
         var context = await dbContextProvider.GetDbContextAsync(cancellationToken);
         var session = write.Session;
 
-        byte[]? data = null;
-        byte[]? key = null;
-        if (write.Messages is { Length: > 0 } messages)
-        {
-            key = RandomNumberGenerator.GetBytes(32);
-            data = Seal(Compress(messages), key, write.ScopeKey);
-        }
+        var data = write.Messages is { Length: > 0 } messages ? Compress(messages) : null;
 
         var table = $"\"{(context.CurrentSchemaName ?? "public").Replace("\"", "", StringComparison.Ordinal)}\".\"AgentSessions\"";
 
@@ -85,15 +70,15 @@ public sealed class EfCoreAgentSessionStore(IAetherDbContextProvider<WorkflowDbC
         // matches, so a row created in the meantime is reported as a conflict instead of overwritten.
         var sql =
             $"INSERT INTO {table} (\"ScopeKey\", \"Mode\", \"Storage\", \"AgentKey\", \"AgentVersion\", \"InstructionsHash\", " +
-            "\"SessionData\", \"ProviderConversationId\", \"EncryptionKey\", \"MessageCount\", \"SizeBytes\", \"OwnerInstanceId\", " +
+            "\"SessionData\", \"ProviderConversationId\", \"MessageCount\", \"SizeBytes\", \"OwnerInstanceId\", " +
             "\"LastInstanceId\", \"LastRunId\", \"UpdatedAt\", \"ExpiresAt\") " +
-            "VALUES (@scope, @mode, @storage, @agentKey, @agentVersion, @instructionsHash, @data, @conversationId, @key, " +
+            "VALUES (@scope, @mode, @storage, @agentKey, @agentVersion, @instructionsHash, @data, @conversationId, " +
             "@messageCount, @sizeBytes, @owner, @lastInstance, @lastRun, @updatedAt, @expiresAt) " +
             "ON CONFLICT (\"ScopeKey\") DO UPDATE SET " +
             "\"Mode\" = EXCLUDED.\"Mode\", \"Storage\" = EXCLUDED.\"Storage\", \"AgentKey\" = EXCLUDED.\"AgentKey\", " +
             "\"AgentVersion\" = EXCLUDED.\"AgentVersion\", \"InstructionsHash\" = EXCLUDED.\"InstructionsHash\", " +
             "\"SessionData\" = EXCLUDED.\"SessionData\", \"ProviderConversationId\" = EXCLUDED.\"ProviderConversationId\", " +
-            "\"EncryptionKey\" = EXCLUDED.\"EncryptionKey\", \"MessageCount\" = EXCLUDED.\"MessageCount\", " +
+            "\"MessageCount\" = EXCLUDED.\"MessageCount\", " +
             "\"SizeBytes\" = EXCLUDED.\"SizeBytes\", \"LastInstanceId\" = EXCLUDED.\"LastInstanceId\", " +
             "\"LastRunId\" = EXCLUDED.\"LastRunId\", \"UpdatedAt\" = EXCLUDED.\"UpdatedAt\", \"ExpiresAt\" = EXCLUDED.\"ExpiresAt\" " +
             $"WHERE @expected <> '' AND {table}.xmin::text = @expected";
@@ -108,7 +93,6 @@ public sealed class EfCoreAgentSessionStore(IAetherDbContextProvider<WorkflowDbC
             Param("instructionsHash", NpgsqlDbType.Varchar, session.InstructionsHash),
             Param("data", NpgsqlDbType.Bytea, data),
             Param("conversationId", NpgsqlDbType.Varchar, session.ProviderConversationId),
-            Param("key", NpgsqlDbType.Bytea, key),
             Param("messageCount", NpgsqlDbType.Integer, session.MessageCount),
             Param("sizeBytes", NpgsqlDbType.Integer, data?.Length ?? 0),
             Param("owner", NpgsqlDbType.Uuid, session.OwnerInstanceId),
@@ -133,30 +117,6 @@ public sealed class EfCoreAgentSessionStore(IAetherDbContextProvider<WorkflowDbC
         return await context.Database.ExecuteSqlRawAsync(
             $"DELETE FROM {table} WHERE ctid IN (SELECT ctid FROM {table} WHERE \"ExpiresAt\" < now() LIMIT {{0}})",
             [Math.Max(1, batchSize)], cancellationToken);
-    }
-
-    internal static byte[] Seal(byte[] plain, byte[] key, string scopeKey)
-    {
-        var payload = new byte[1 + NonceSize + plain.Length + TagSize];
-        payload[0] = FormatVersion;
-        var nonce = payload.AsSpan(1, NonceSize);
-        RandomNumberGenerator.Fill(nonce);
-        using var aes = new AesGcm(key, TagSize);
-        aes.Encrypt(nonce, plain, payload.AsSpan(1 + NonceSize, plain.Length), payload.AsSpan(1 + NonceSize + plain.Length, TagSize),
-            Encoding.UTF8.GetBytes(scopeKey));
-        return payload;
-    }
-
-    internal static byte[] Open(byte[] payload, byte[] key, string scopeKey)
-    {
-        if (payload.Length < 1 + NonceSize + TagSize || payload[0] != FormatVersion)
-            throw new CryptographicException("unknown session format");
-        var length = payload.Length - 1 - NonceSize - TagSize;
-        var plain = new byte[length];
-        using var aes = new AesGcm(key, TagSize);
-        aes.Decrypt(payload.AsSpan(1, NonceSize), payload.AsSpan(1 + NonceSize, length),
-            payload.AsSpan(1 + NonceSize + length, TagSize), plain, Encoding.UTF8.GetBytes(scopeKey));
-        return plain;
     }
 
     private static byte[] Compress(byte[] data)

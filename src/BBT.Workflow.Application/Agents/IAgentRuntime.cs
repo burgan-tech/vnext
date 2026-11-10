@@ -100,6 +100,7 @@ public sealed record AgentToolDefinition(
 /// <param name="UseProviderSession">Whether the provider keeps the conversation.</param>
 /// <param name="MaxMessages">Messages kept in a local session.</param>
 /// <param name="CaptureTranscript">Whether to return the transcript.</param>
+/// <param name="Compaction">How a local session is kept within <paramref name="MaxMessages"/>.</param>
 public sealed record AgentRunRequest(
     Guid RunId,
     string AgentKey,
@@ -115,7 +116,8 @@ public sealed record AgentRunRequest(
     string? ProviderConversationId,
     bool UseProviderSession,
     int MaxMessages,
-    bool CaptureTranscript);
+    bool CaptureTranscript,
+    AgentMemoryCompaction Compaction = AgentMemoryCompaction.Trim);
 
 /// <summary>Outcome of one agent run.</summary>
 public sealed record AgentRunResult

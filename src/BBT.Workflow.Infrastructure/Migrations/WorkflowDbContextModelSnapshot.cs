@@ -195,9 +195,6 @@ namespace BBT.Workflow.Migrations
                         .HasMaxLength(180)
                         .HasColumnType("character varying(180)");
 
-                    b.Property<byte[]>("EncryptionKey")
-                        .HasColumnType("bytea");
-
                     b.Property<DateTime?>("ExpiresAt")
                         .HasColumnType("timestamp with time zone");
 

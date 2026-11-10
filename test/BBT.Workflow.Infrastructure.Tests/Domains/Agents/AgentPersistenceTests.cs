@@ -98,7 +98,7 @@ public sealed class AgentPersistenceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Session_round_trips_encrypted_and_detects_concurrent_writers()
+    public async Task Session_round_trips_compressed_and_detects_concurrent_writers()
     {
         var instance = await SeedInstanceAsync();
         var scope = $"i:{instance.Id:N}:flow:classifying";
@@ -126,26 +126,6 @@ public sealed class AgentPersistenceTests : IAsyncLifetime
         (await store.SaveAsync(Write(scope, instance.Id, plain, null), instance.Id)).ShouldBeFalse();
         (await store.SaveAsync(Write(scope, instance.Id, plain, first.Snapshot.RowVersion), instance.Id)).ShouldBeTrue();
         (await store.SaveAsync(Write(scope, instance.Id, plain, first.Snapshot.RowVersion), instance.Id)).ShouldBeFalse();
-    }
-
-    [Fact]
-    public async Task Ciphertext_moved_to_another_scope_does_not_decrypt()
-    {
-        var instance = await SeedInstanceAsync();
-        var a = $"i:{instance.Id:N}:flow:a";
-        var b = $"i:{instance.Id:N}:flow:b";
-        await using var ctx = CreateContext(null);
-        var store = new EfCoreAgentSessionStore(new FixedProvider(ctx));
-        await store.SaveAsync(Write(a, instance.Id, Encoding.UTF8.GetBytes("A"), null), instance.Id);
-        await store.SaveAsync(Write(b, instance.Id, Encoding.UTF8.GetBytes("B"), null), instance.Id);
-
-        await ctx.Database.ExecuteSqlRawAsync(
-            "UPDATE public.\"AgentSessions\" SET \"SessionData\" = (SELECT \"SessionData\" FROM public.\"AgentSessions\" WHERE \"ScopeKey\" = {0}), " +
-            "\"EncryptionKey\" = (SELECT \"EncryptionKey\" FROM public.\"AgentSessions\" WHERE \"ScopeKey\" = {0}) WHERE \"ScopeKey\" = {1}", a, b);
-
-        var read = await store.FindAsync(b, instance.Id);
-        read.Snapshot.ShouldBeNull();
-        read.Unreadable.ShouldNotBeNull();
     }
 
     [Fact]

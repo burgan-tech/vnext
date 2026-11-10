@@ -208,7 +208,8 @@ public sealed class AgentStateRunner(
                     snapshot?.ProviderConversationId,
                     useProviderSession,
                     memory.MaxMessages ?? 40,
-                    CaptureTranscript: (audit?.Transcript ?? AgentTranscriptMode.None) != AgentTranscriptMode.None), cancellationToken);
+                    CaptureTranscript: (audit?.Transcript ?? AgentTranscriptMode.None) != AgentTranscriptMode.None,
+                    Compaction: memory.Compaction ?? AgentMemoryCompaction.Trim), cancellationToken);
         }
 
         ApplyResult(run, result, recorder, audit, settings, schema, candidates, userPrompt, instructionsHash, tools);
