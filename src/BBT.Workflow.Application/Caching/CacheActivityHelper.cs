@@ -61,6 +61,11 @@ public static class CacheActivityHelper
     private const string TagCacheStore = "cache.store";
     private const string TagCacheItemCount = "cache.item_count";
     private const string TagComponentType = "cache.component_type";
+    private const string TagCandidateCount = "cache.candidate_count";
+    private const string TagCandidates = "cache.candidates";
+    private const string TagDroppedCount = "cache.dropped_count";
+    private const string TagDroppedVersions = "cache.dropped_versions";
+    private const string TagResolved = "cache.resolved_version";
 
     /// <summary>
     /// Starts a new activity as a child of the current activity for a cache operation.
@@ -190,6 +195,29 @@ public static class CacheActivityHelper
         if (!string.IsNullOrEmpty(pointer))
             activity.SetTag(TelemetryConstants.TagNames.FlowVersionPointer, pointer);
         activity.SetTag(TelemetryConstants.TagNames.FlowVersionSource, ToTagValue(source));
+    }
+
+    /// <summary>
+    /// Records the candidate versions a backend resolution was computed from, the stored versions that
+    /// were dropped from them, and the winner, so a resolution to an older build can be explained from
+    /// the trace. Version lists are pre-bounded by the caller.
+    /// </summary>
+    public static void SetResolutionCandidates(
+        Activity? activity,
+        int candidateCount,
+        string candidates,
+        int droppedCount,
+        string droppedVersions,
+        string? resolved)
+    {
+        if (activity is null) return;
+        activity.SetTag(TagCandidateCount, candidateCount);
+        activity.SetTag(TagCandidates, candidates);
+        activity.SetTag(TagDroppedCount, droppedCount);
+        if (droppedCount > 0)
+            activity.SetTag(TagDroppedVersions, droppedVersions);
+        if (!string.IsNullOrEmpty(resolved))
+            activity.SetTag(TagResolved, resolved);
     }
 
     /// <summary>The lower-case tag value of a <see cref="VersionResolutionSource"/>.</summary>

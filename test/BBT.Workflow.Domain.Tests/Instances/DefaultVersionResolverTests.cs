@@ -148,4 +148,45 @@ public class DefaultVersionResolverTests
     {
         DefaultVersionResolver.IsValidPointer(pointer).ShouldBeFalse();
     }
+
+    // #1192: package builds of one artifact version. The resolver must pick the highest build for both
+    // the artifact request and latest, and an explicit artifact request must not be capped by a pointer
+    // left on an older build.
+    private static readonly string[] PackageBuilds =
+    [
+        "1.0.0-pkg.1.0.345+contract",
+        "1.0.0-pkg.1.0.349+contract",
+        "1.0.0-pkg.1.0.350+contract"
+    ];
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("latest")]
+    [InlineData("1.0.0")]
+    [InlineData("1")]
+    public void Resolve_PackageBuilds_WithoutPointer_ShouldPickHighestBuild(string? requested)
+    {
+        var result = DefaultVersionResolver.Resolve(PackageBuilds, null, requested);
+
+        result.Outcome.ShouldBe(VersionResolutionOutcome.Resolved);
+        result.Version.ShouldBe("1.0.0-pkg.1.0.350+contract");
+    }
+
+    [Fact]
+    public void Resolve_PackageBuilds_PointerOnOlderBuild_LatestFollowsPointer()
+    {
+        var result = DefaultVersionResolver.Resolve(PackageBuilds, "1.0.0-pkg.1.0.349+contract", null);
+
+        result.Version.ShouldBe("1.0.0-pkg.1.0.349+contract");
+        result.Source.ShouldBe(VersionResolutionSource.Default);
+    }
+
+    [Fact]
+    public void Resolve_PackageBuilds_PointerOnOlderBuild_ArtifactRequestIsNotCapped()
+    {
+        var result = DefaultVersionResolver.Resolve(PackageBuilds, "1.0.0-pkg.1.0.349+contract", "1.0.0");
+
+        result.Version.ShouldBe("1.0.0-pkg.1.0.350+contract");
+        result.Source.ShouldBe(VersionResolutionSource.Explicit);
+    }
 }

@@ -118,6 +118,32 @@ chart's generic env passthrough suffices if an environment ever needs a differen
   a memoized token after a bump attempt, landed or not.
 - The `GenerationTtlSeconds` (default 3600) backstop for a lost bump is unaffected.
 
+## Diagnosing a resolution to an older build (#1192)
+
+A floating request (`latest`, `"1.0.0"`, `"1"`) is answered from the warmed entry right after a
+publish, and from the backend (`RuntimeCacheBackend` → `GetActiveDataListByKeyAsync`) once the
+generation token or the resolution entry expires. The comparison is not the variable: `"1.0.0"` and
+`latest` pick the highest package build of the candidates they are given. A miss that resolves to an
+older build therefore means the newer row was **not among the candidates** — or, for `latest` only,
+that a default-version pointer holds it there (publish never moves the pointer;
+[flow-default-version](flow-default-version.md)).
+
+| Signal | Where | Meaning |
+|---|---|---|
+| `70010 ComponentCacheResolvedFromBackend` (Debug) | log | spelling, winner, candidate count and the (bounded, 20) candidate list of a cold resolution |
+| `cache.candidate_count`, `cache.candidates`, `cache.dropped_count`, `cache.dropped_versions`, `cache.resolved_version` | `Cache.Get` span | the same, on the trace |
+| `70013 ComponentCacheCandidatesDropped` (Warning) | log | stored rows were found but could not be read (`20xxx InstanceDeserializationFailed` names each); the answer is cached only for `NegativeTtlSeconds` |
+| `70014 ComponentCacheWarmCandidateMissing` (Information) | log | a publish warmed a version that a fresh backend load did not return; benign before the publish commits, otherwise the warm and cold answers can disagree once the warm entries expire |
+| `vnext.flow.version.pointer` / `vnext.flow.version.source` | `Cache.Get` span | the pointer and the rule (`default`, `ceiling`, `explicit`) behind a policy resolution |
+
+A resolution computed while a row was dropped is marked degraded on its envelope and lives only for
+`NegativeTtlSeconds` (default 30s) in L2 and in every pod's L1, never for `ResolutionTtlSeconds`.
+
+**Forcing re-resolution.** `POST /api/v1/utilities/invalidate` (`{domain, flow, key, version}`) bumps
+the generation and then re-casts the named version, which warms the common spellings again with that
+version added to the candidates. It is a workaround, not a diagnostic: if the backend cannot see the
+row, the warmed answers hide it for another resolution TTL. Read the signals above first.
+
 ## Verification
 
 - Unit: memo hit skips the distributed read; expiry re-reads; `BumpAsync` drops and rewrites

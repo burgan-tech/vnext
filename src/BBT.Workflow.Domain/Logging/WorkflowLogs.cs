@@ -5666,18 +5666,22 @@ public static partial class WorkflowLogs
 
     /// <summary>
     /// Logs when a version request was resolved from the backend because no cached resolution existed.
+    /// Carries the candidate versions the answer was computed from (bounded), so a resolution to an
+    /// older build can be explained from the log alone.
     /// </summary>
     [LoggerMessage(
         EventId = 70010,
         Level = LogLevel.Debug,
-        Message = "Component cache resolved {ComponentType} {Domain}/{Key}@{Requested} to {Resolved}")]
+        Message = "Component cache resolved {ComponentType} {Domain}/{Key}@{Requested} to {Resolved} from {CandidateCount} candidate(s) [{Candidates}]")]
     public static partial void ComponentCacheResolvedFromBackend(
         this ILogger logger,
         string componentType,
         string domain,
         string key,
         string requested,
-        string resolved);
+        string resolved,
+        int candidateCount,
+        string candidates);
 
     /// <summary>
     /// Logs when a version request matched no published version and a short-lived negative entry
@@ -5711,6 +5715,46 @@ public static partial class WorkflowLogs
         int count,
         string canonicalVersion,
         string resolved);
+
+    /// <summary>
+    /// Logs when stored versions of a component were found but could not be loaded as resolution
+    /// candidates, so the resolved version may be an older build than the newest stored one. The
+    /// answer is cached only for the negative TTL instead of the resolution TTL.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 70013,
+        Level = LogLevel.Warning,
+        Message = "Component cache resolution for {ComponentType} {Domain}/{Key}@{Requested} ignored {DroppedCount} unreadable stored version(s) [{DroppedVersions}]; resolved to {Resolved} and cached it briefly")]
+    public static partial void ComponentCacheCandidatesDropped(
+        this ILogger logger,
+        string componentType,
+        string domain,
+        string key,
+        string requested,
+        int droppedCount,
+        string droppedVersions,
+        string resolved);
+
+    /// <summary>
+    /// Logs when a publish warmed resolutions for a version that a fresh backend load did not return.
+    /// </summary>
+    /// <remarks>
+    /// Benign when the publish has not committed yet. Otherwise the warmed answers include a version a
+    /// later cache miss cannot see, which is how a miss after expiry can resolve to an older build than
+    /// the warmed entry did. Information, so the line is visible where the stale answer is diagnosed.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 70014,
+        Level = LogLevel.Information,
+        Message = "Component cache warm-up for {ComponentType} {Domain}/{Key}: published version {Version} is not among the {CandidateCount} version(s) the backend returned [{Candidates}]")]
+    public static partial void ComponentCacheWarmCandidateMissing(
+        this ILogger logger,
+        string componentType,
+        string domain,
+        string key,
+        string version,
+        int candidateCount,
+        string candidates);
 
     /// <summary>
     /// Logs when a component cache read or write failed. Reads degrade to a backend load and writes

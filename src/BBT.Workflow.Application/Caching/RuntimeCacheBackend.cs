@@ -23,7 +23,7 @@ namespace BBT.Workflow.Caching;
 public sealed class RuntimeCacheBackend<T>(
     IServiceScopeFactory scopeFactory,
     ILogger<RuntimeCacheBackend<T>> logger)
-    : ICacheBackend<T>
+    : IComponentCandidateBackend<T>
     where T : class, IDomainEntity, IReferenceSetter
 {
     /// <summary>
@@ -54,7 +54,19 @@ public sealed class RuntimeCacheBackend<T>(
     /// <param name="key">The entity key/name</param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests</param>
     /// <returns>A Result containing all active versions, which may be empty</returns>
-    public Task<Result<List<T>>> LoadAllByKeyAsync(
+    public async Task<Result<List<T>>> LoadAllByKeyAsync(
+        string domain,
+        string key,
+        CancellationToken cancellationToken = default)
+    {
+        var candidates = await LoadCandidatesAsync(domain, key, cancellationToken);
+        return candidates.IsSuccess
+            ? Result<List<T>>.Ok(candidates.Value!.Entities)
+            : Result<List<T>>.Fail(candidates.Error);
+    }
+
+    /// <inheritdoc />
+    public Task<Result<ComponentCandidates<T>>> LoadCandidatesAsync(
         string domain,
         string key,
         CancellationToken cancellationToken = default) => RunDetachedAsync(async services =>
@@ -67,14 +79,12 @@ public sealed class RuntimeCacheBackend<T>(
         // which differs from the caller's when a co-hosted domain's component is resolved.
         using var domainScope = runtimeInfoProvider.UseDomain(domain);
 
-        var all = await runtimeService.GetAsync<T>(key, cancellationToken);
-        var filtered = all
-            .Where(e => e is not null &&
-                        string.Equals(e!.Domain, domain, StringComparison.OrdinalIgnoreCase))
-            .Select(e => e!)
+        var load = await runtimeService.GetCandidatesAsync<T>(key, cancellationToken);
+        var filtered = load.Entities
+            .Where(e => string.Equals(e.Domain, domain, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        return Result<List<T>>.Ok(filtered);
+        return Result<ComponentCandidates<T>>.Ok(new ComponentCandidates<T>(filtered, load.DroppedVersions));
     }, cancellationToken);
 
     public Task<Result<T>> LoadAsync(

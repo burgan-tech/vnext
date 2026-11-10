@@ -208,7 +208,7 @@ public class CacheSet<T>(
                 // Hydrate before storing: the entity's reference properties have private setters, so
                 // the L2 round-trip leaves them null until HydrateReference fills them back in.
                 HydrateReference(envelope);
-                PopulateL1(redisKey, envelope, ResolutionEntryOptions());
+                PopulateL1(redisKey, envelope, envelope.IsDegraded ? NegativeEntryOptions() : ResolutionEntryOptions());
                 return Result<T>.Ok(envelope.Entity);
             }
         }
@@ -264,11 +264,22 @@ public class CacheSet<T>(
         Activity? activity,
         CancellationToken cancellationToken)
     {
-        var allResult = await backend.LoadAllByKeyAsync(domain, key, cancellationToken);
-        if (!allResult.IsSuccess || allResult.Value!.Count == 0)
-            return await CacheNegativeAsync(domain, key, requested, spelling, redisKey, cancellationToken);
+        var candidatesResult = await LoadCandidatesAsync(domain, key, cancellationToken);
+        if (!candidatesResult.IsSuccess || candidatesResult.Value!.Entities.Count == 0)
+        {
+            if (candidatesResult.IsSuccess && candidatesResult.Value!.HasDropped)
+            {
+                // Rows exist but none could be read: say so, the negative entry alone hides it.
+                logger.ComponentCacheCandidatesDropped(
+                    ComponentKeyName, domain, key, spelling, candidatesResult.Value!.DroppedVersions.Count,
+                    FormatVersions(candidatesResult.Value.DroppedVersions), string.Empty);
+            }
 
-        var allVersions = allResult.Value!;
+            return await CacheNegativeAsync(domain, key, requested, spelling, redisKey, cancellationToken);
+        }
+
+        var candidates = candidatesResult.Value!;
+        var allVersions = candidates.Entities;
 
         // The normalized spelling is what the answer gets filed under, so it has to be what the answer
         // was computed from — otherwise a padded or differently-cased request could cache one component
@@ -303,22 +314,44 @@ public class CacheSet<T>(
         if (matched is null)
             return await CacheNegativeAsync(domain, key, requested, spelling, redisKey, cancellationToken);
 
+        var candidateList = FormatVersions(allVersions.Select(e => e.Version));
+        CacheActivityHelper.SetResolutionCandidates(
+            activity, allVersions.Count, candidateList,
+            candidates.DroppedVersions.Count, FormatVersions(candidates.DroppedVersions), matched.Version);
+
         var envelope = CreateEnvelope(matched);
+
+        // A stored version that could not be read is missing from the candidates, so the winner may be
+        // an older build than the newest one stored (#1192). Such an answer is still returned — failing
+        // the read would turn a degraded resolution into an outage — but it is kept only as long as a
+        // negative entry, never for the resolution TTL, and it is logged with the versions it lost.
+        if (candidates.HasDropped)
+        {
+            envelope.IsDegraded = true;
+            logger.ComponentCacheCandidatesDropped(
+                ComponentKeyName, domain, key, spelling, candidates.DroppedVersions.Count,
+                FormatVersions(candidates.DroppedVersions), matched.Version);
+        }
 
         // Only the spelling that was asked for. Writing the other spellings here would be guessing at
         // resolutions nobody requested, and one of those guesses being wrong is how a resolution cache
         // goes stale in the first place.
-        await TryWriteAsync(redisKey, envelope, ResolutionEntryOptions(), cancellationToken);
+        await TryWriteAsync(
+            redisKey,
+            envelope,
+            envelope.IsDegraded ? NegativeEntryOptions() : ResolutionEntryOptions(),
+            cancellationToken);
 
         // The body is immutable and was loaded anyway, so a pinned read of this exact version can reuse
         // it instead of going back to the database.
         await TryWriteAsync(
             CreateFullKey(domain, key, matched.Version),
-            envelope,
+            CreateEnvelope(matched),
             FullEntryOptions(),
             cancellationToken);
 
-        logger.ComponentCacheResolvedFromBackend(ComponentKeyName, domain, key, spelling, matched.Version);
+        logger.ComponentCacheResolvedFromBackend(
+            ComponentKeyName, domain, key, spelling, matched.Version, allVersions.Count, candidateList);
 
         return Result<T>.Ok(matched);
     }
@@ -468,8 +501,8 @@ public class CacheSet<T>(
         string? pointer = null;
         try
         {
-            var allResult = await backend.LoadAllByKeyAsync(domain, key, cancellationToken);
-            candidates = allResult.IsSuccess ? allResult.Value! : [];
+            var candidatesResult = await LoadCandidatesAsync(domain, key, cancellationToken);
+            candidates = candidatesResult.IsSuccess ? candidatesResult.Value!.Entities : [];
 
             if (applyPolicy)
             {
@@ -498,7 +531,14 @@ public class CacheSet<T>(
         // because the winner is re-resolved rather than assumed, it stays correct when the published
         // version is older than something already stored.
         if (!candidates.Any(e => string.Equals(e.Version, entity.Version, StringComparison.OrdinalIgnoreCase)))
+        {
+            // Recorded because this is the one place warm and cold resolution can disagree: once the
+            // warmed entries expire, a miss resolves from the backend alone (#1192).
+            logger.ComponentCacheWarmCandidateMissing(
+                ComponentKeyName, domain, key, entity.Version, candidates.Count,
+                FormatVersions(candidates.Select(e => e.Version)));
             candidates = [.. candidates, entity];
+        }
 
         var versions = candidates.Select(e => e.Version).ToList();
 
@@ -575,6 +615,40 @@ public class CacheSet<T>(
     // ────────────────────────────────────────────────────────────────────
     // Private: helpers
     // ────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Loads the candidate versions of a component, with the stored versions the backend had to drop
+    /// when it can report them; any other backend is treated as never dropping anything.
+    /// </summary>
+    private async Task<Result<ComponentCandidates<T>>> LoadCandidatesAsync(
+        string domain,
+        string key,
+        CancellationToken cancellationToken)
+    {
+        if (backend is IComponentCandidateBackend<T> candidateBackend)
+            return await candidateBackend.LoadCandidatesAsync(domain, key, cancellationToken);
+
+        var allResult = await backend.LoadAllByKeyAsync(domain, key, cancellationToken);
+        return allResult.IsSuccess
+            ? Result<ComponentCandidates<T>>.Ok(new ComponentCandidates<T>(allResult.Value!, []))
+            : Result<ComponentCandidates<T>>.Fail(allResult.Error);
+    }
+
+    /// <summary>Maximum number of versions written into one log line or span tag.</summary>
+    internal const int MaxLoggedVersions = 20;
+
+    /// <summary>
+    /// Formats a version list for a log line or tag: ordinal order, at most
+    /// <see cref="MaxLoggedVersions"/> entries, with the remainder counted.
+    /// </summary>
+    internal static string FormatVersions(IEnumerable<string> versions)
+    {
+        var ordered = versions.OrderBy(v => v, StringComparer.Ordinal).ToList();
+        if (ordered.Count <= MaxLoggedVersions)
+            return string.Join(", ", ordered);
+
+        return string.Join(", ", ordered.Take(MaxLoggedVersions)) + $", … (+{ordered.Count - MaxLoggedVersions})";
+    }
 
     private async Task<CacheEnvelope<T>?> TryGetEnvelopeAsync(
         string redisKey,

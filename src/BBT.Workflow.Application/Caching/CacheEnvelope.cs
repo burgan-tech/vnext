@@ -24,4 +24,13 @@ public sealed class CacheEnvelope<T> where T : class
     /// does not exist would reach the database again.
     /// </remarks>
     public bool IsNegative { get; set; }
+
+    /// <summary>
+    /// Marks a resolution computed while stored versions could not be loaded as candidates.
+    /// </summary>
+    /// <remarks>
+    /// Such an answer may be an older build than the newest stored one, so it is kept only for the
+    /// negative TTL, in L2 and in every pod's L1, and the next read after that resolves again.
+    /// </remarks>
+    public bool IsDegraded { get; set; }
 }
