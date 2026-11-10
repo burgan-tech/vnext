@@ -103,9 +103,11 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
         // that is a proven No still rules the whole deny out (Unknown AND No = No).
         var noRoles = HasNoRoles(roles);
         return RoleGrantMatcher.Decide(grants, leafRole =>
-            noRoles && TransitionAuthorizationManager.IsRoleBound(leafRole)
-                ? GrantMatch.Unknown
-                : MatchesAnyRole(leafRole, roles, transition) ? GrantMatch.Yes : GrantMatch.No);
+        {
+            if (noRoles && TransitionAuthorizationManager.IsRoleBound(leafRole))
+                return GrantMatch.Unknown;
+            return MatchesAnyRole(leafRole, roles, transition) ? GrantMatch.Yes : GrantMatch.No;
+        });
     }
 
     /// <summary>

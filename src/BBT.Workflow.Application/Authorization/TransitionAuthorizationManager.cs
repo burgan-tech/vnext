@@ -367,9 +367,13 @@ public sealed class TransitionAuthorizationManager(
             ? null
             : SubFlowStateOverrideReader.TryReadQueryRoles(instance, currentStateKey);
 
-        var queryRoles = overridden is { Count: > 0 }
-            ? overridden
-            : state is { QueryRoles.Count: > 0 } ? state.QueryRoles : workflow.QueryRoles;
+        IReadOnlyCollection<RoleGrant> queryRoles;
+        if (overridden is { Count: > 0 })
+            queryRoles = overridden;
+        else if (state is { QueryRoles.Count: > 0 })
+            queryRoles = state.QueryRoles;
+        else
+            queryRoles = workflow.QueryRoles;
 
         return await IsAnyRoleAllowedForGrantsAsync(callerRoles, queryRoles, instance, requestContext, cancellationToken);
     }
@@ -436,12 +440,24 @@ public sealed class TransitionAuthorizationManager(
                 normalized.Add(role.Trim());
         }
 
-        return RoleGrantMatcher.Decide(roleGrants, leafRole =>
-            PredefinedInstanceRoles.IsEveryone(leafRole) ? GrantMatch.Yes
-            : !IsRoleBound(leafRole) ? GrantMatch.No
-            : normalized.Count == 0 ? GrantMatch.Unknown
-            : MatchesAnyStatic(leafRole, normalized) ? GrantMatch.Yes
-            : GrantMatch.No, defaultAllowWhenNoAllowGrant);
+        return RoleGrantMatcher.Decide(
+            roleGrants, leafRole => MatchStaticLeaf(leafRole, normalized), defaultAllowWhenNoAllowGrant);
+    }
+
+    /// <summary>
+    /// How one leaf matches on the no-instance path: <c>$Everyone</c> is Yes, a leaf that is not
+    /// role-bound has nothing to resolve against (No), a role-bound leaf is Unknown for a role-less
+    /// caller, else Yes only when one of the caller's roles names it.
+    /// </summary>
+    private static GrantMatch MatchStaticLeaf(string leafRole, List<string> normalized)
+    {
+        if (PredefinedInstanceRoles.IsEveryone(leafRole))
+            return GrantMatch.Yes;
+        if (!IsRoleBound(leafRole))
+            return GrantMatch.No;
+        if (normalized.Count == 0)
+            return GrantMatch.Unknown;
+        return MatchesAnyStatic(leafRole, normalized) ? GrantMatch.Yes : GrantMatch.No;
     }
 
     /// <summary>
