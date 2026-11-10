@@ -83,7 +83,7 @@ Risk labels used by the original routines map onto this matrix so the prompts ke
 `ai:risk-low` = patch / low · `ai:risk-medium` = minor / low · `ai:risk-high` = any / high ·
 `ai:risk-critical` = major. The Director writes exactly one.
 
-## 4. Label taxonomy (target)
+## 4. Label taxonomy
 
 All labels live in [`.github/triage/labels.json`](../../.github/triage/labels.json) and are created
 with `node scripts/triage/sync-labels.mjs --apply` (it never deletes a label).
@@ -97,9 +97,10 @@ with `node scripts/triage/sync-labels.mjs --apply` (it never deletes a label).
 | Council | `ai:council-required` · `ai:council-approved` | Director, human; council writer |
 | Deprecated | `ai:in-progress` → `ai:developing` · `ai:pr-opened` → `ai:pr-ready` · `ai:needs-human` → `ai:blocked` | nobody; kept for old issues |
 
-Today `ai:planned`, `ai:developing`, `ai:pr-ready`, `ai:blocked`, `ai:risk-medium` and
-`ai:risk-high` exist in the repository without a description and are missing from `labels.json`;
-the rest of the new labels do not exist yet.
+In `labels.json` each row of this table is its own group: `status`, `changeLevel`, `impact`, `risk`,
+`council`, `deprecated` (beside the triage groups `kinds`, `areas`, `priorities`). A deprecated entry
+carries `replacedBy`; the pipeline never sets it, and the issue keeps it until a human removes it.
+`scripts/triage/test/labels.test.mjs` pins the groups to this table — change both together.
 
 **Rules a human can rely on**
 
@@ -349,7 +350,7 @@ change of a contract product raises impact (§3).
 | Step | What | Done when |
 |---|---|---|
 | 0 | **Unit tests in CI, green.** `pr-tests.yml` runs on every PR and push to master and fails on any failing test; every pre-existing red is fixed (no known-red baseline), then the `Unit Tests` check becomes required ([policy](../testing/unit-tests.md)) | master has zero failing unit tests and the check is required |
-| 1 | **Taxonomy.** Labels of §4 in `labels.json`, `sync-labels --apply`, deprecated labels documented | every label exists with a description |
+| 1 | **Taxonomy.** Labels of §4 in `labels.json` (one group per row, pinned by `labels.test.mjs`), `sync-labels --apply`, deprecated labels documented | every label exists with a description |
 | 2 | **Guards.** PR contract's `AI decision record` rule, the classification path rules (§7.3), App token permissions without Workflows | unit tests for the scripts pass |
 | 3 | **Read-only roles** in `dry-run`: Director, Council, Quality Gate post comments only | a week of runs with no wrong state |
 | 4 | **Developer** in `dry-run` (pushes to a branch, opens a draft PR, no label transitions), then `apply` | first low-impact issue reaches `ai:human-approval` |
