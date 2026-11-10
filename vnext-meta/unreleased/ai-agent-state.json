@@ -1,6 +1,6 @@
 {
   "releaseNote": {
-    "summary": "AI agent states (stateType 6) run a reusable sys-agents component with inline tools and pick the next automatic transition; new MCP task type 24; agent-runs system function.",
+    "summary": "AI agent states (stateType 6): sys-agents components alone or as a team, inline tools with approval, session memory; MCP task type 24; agent-runs function.",
     "breaking": false,
     "docs": []
   },
@@ -9,7 +9,7 @@
       "aiAgentState": {
         "since": "next",
         "status": "experimental",
-        "description": "stateType 6 (AiAgent) with an 'agent' block: agent (sys-agents ref), prompt (template with {{ data.* }} or IAgentPromptMapping), output.path, memory override, tools.exclude, decision {mode model|rules|script, fallback (required), exclude, hints, hintsMapping, mapping, onExhausted}, policy (narrows only). Runs at pipeline order 65 (not on updateData); the decision is consumed by the automatic-transition step of the same hop. Rule-less automatic transitions of the state are the candidates; without an in-hop decision they never fire. The structured output and a $agent summary are merged under output.path in one data write. sys-agents component: provider (AiAgent:Providers profile name), instructions, inline tools (kind 1 task, 2 script dynamicExpresso|C#, 3 mcp), memory {mode none|state|flow|key, storage local|provider, maxMessages, retentionDays, resetOn}, output.schema, policy, audit. Journal tables InstanceAgentRuns, InstanceAgentToolCalls, InstanceAgentDecisions, AgentSessions (encrypted). Kill switch AiAgent:Enabled."
+        "description": "stateType 6 (AiAgent) with an 'agent' block: agent (sys-agents ref), prompt (template with {{ data.* }} or IAgentPromptMapping, messages[] seed messages, context {name: path} data blocks), output.path, memory override, tools.exclude, decision {mode model|rules|script, fallback (required), exclude, hints, hintsMapping, mapping, onExhausted}, policy (narrows only). Runs at pipeline order 65 (not on updateData); the decision is consumed by the automatic-transition step of the same hop. Rule-less automatic transitions of the state are the candidates; without an in-hop decision they never fire. The structured output and a $agent summary are merged under output.path in one data write. sys-agents component: provider (AiAgent:Providers profile name), instructions, inline tools (kind 1 task, 2 script dynamicExpresso|C#, 3 mcp), memory {mode none|state|flow|key, storage local|provider, maxMessages, compaction trim|summarize, retentionDays, resetOn}, output.schema, policy, audit. Journal tables InstanceAgentRuns, InstanceAgentToolCalls, InstanceAgentDecisions, AgentSessions (gzip, not encrypted). Kill switch AiAgent:Enabled."
       },
       "mcpTask": {
         "since": "next",
@@ -19,7 +19,17 @@
       "agentRunsFunction": {
         "since": "next",
         "status": "experimental",
-        "description": "Instance system function 'agent-runs': agent runs newest first with the decision (metadata only; prompts, outputs, tool payloads, transcripts and sessions are never served). ?runId= returns one run with its tool calls; ?state=, ?skip=, ?take= page the list. POST {domain}/definitions/agents/{key}/dry-run runs an agent once with stub tools for the roles in AiAgent:DryRun:Roles."
+        "description": "Instance system function 'agent-runs': agent runs newest first with the decision and participant. ?runId= returns one run with its tool calls, &include=transcript adds the transcript audit.transcript kept (summary: response; full: input and response); ?state=, ?skip=, ?take= page the list. POST {domain}/definitions/agents/{key}/dry-run runs an agent once with stub tools for the roles in AiAgent:DryRun:Roles."
+      },
+      "aiAgentToolApproval": {
+        "since": "next",
+        "status": "experimental",
+        "description": "Tool requiresApproval: a run that stops on such a call journals it ApprovalPending, writes $agent.pendingApprovals and takes decision.onApprovalRequest (an automatic transition to any state). Re-entering the agent state with body {approval: {approved, callId?, reason?} | [...]} resumes the conversation from its session; an unanswered call is denied."
+      },
+      "aiAgentTeams": {
+        "since": "next",
+        "status": "experimental",
+        "description": "agent.mode single|sequential|concurrent|handoff with agents[] {name, agent, description}. Sequential/concurrent participants run before the lead, which receives their outputs as <data name=\"participant:…\"> blocks and decides; handoff runs the lead as a router whose output names the participant that answers and decides. Participant runs are journaled with InstanceAgentRuns.Participant."
       }
     }
   }
