@@ -235,9 +235,9 @@ same review comment, but the gate changes **no labels** and never triggers the D
 in it (HEAD SHA, check names and conclusions, test status, Sonar and security findings, verdict,
 repair attempt count) decides whether anything changed; unchanged → no write.
 
-**Unit test phase** — see §11 step 0. Until master is green, the gate compares failures with the
-recorded master baseline: a **new** failure blocks, a pre-existing one is a non-blocking warning.
-Once master is green this exception is removed and every failure blocks.
+**Unit tests** — every failing unit test blocks, with no pre-existing-failure exception: the suite
+is kept green ([Unit Tests: Always Green](../testing/unit-tests.md)). A red the PR did not cause is
+still `CHANGES_REQUIRED`; the Developer fixes it in the same repair loop.
 
 ## 9. The AI PR body — what the human gets
 
@@ -348,7 +348,7 @@ change of a contract product raises impact (§3).
 
 | Step | What | Done when |
 |---|---|---|
-| 0 | **Unit tests in CI, then green.** `pr-tests.yml` (non-blocking) measures the real master baseline; failures are grouped by signature into low-impact patch issues and fixed (good first jobs for the pipeline in `dry-run`); then the `Unit Tests` check becomes required | master has zero failing unit tests and the check is required |
+| 0 | **Unit tests in CI, green.** `pr-tests.yml` runs on every PR and push to master and fails on any failing test; every pre-existing red is fixed (no known-red baseline), then the `Unit Tests` check becomes required ([policy](../testing/unit-tests.md)) | master has zero failing unit tests and the check is required |
 | 1 | **Taxonomy.** Labels of §4 in `labels.json`, `sync-labels --apply`, deprecated labels documented | every label exists with a description |
 | 2 | **Guards.** PR contract's `AI decision record` rule, the classification path rules (§7.3), App token permissions without Workflows | unit tests for the scripts pass |
 | 3 | **Read-only roles** in `dry-run`: Director, Council, Quality Gate post comments only | a week of runs with no wrong state |
@@ -366,7 +366,7 @@ change of a contract product raises impact (§3).
 | `AI_MODE` | variable | `dry-run` (comments only, default) / `apply` |
 | `AI_DIRECTOR_MODEL`, `AI_COUNCIL_MODEL`, `AI_DEVELOPER_MODEL`, `AI_GATE_MODEL` | variable | per-role model override (`agent --list-models`) |
 | `AI_MAX_REPAIRS` | variable | default `3` |
-| `UNIT_TESTS_MODE` | variable | [`pr-tests.yml`](../../.github/workflows/pr-tests.yml): `report` (default, never blocks) → `baseline` (blocks only failures missing from `.github/ci/unit-test-baseline.json`) → `enforce` (any failure blocks) |
+| `UNIT_TESTS_MODE` | variable | [`pr-tests.yml`](../../.github/workflows/pr-tests.yml): unset = `enforce` (any failure blocks); `report` is an emergency switch for a runner outage only |
 
 ## 13. Security model
 

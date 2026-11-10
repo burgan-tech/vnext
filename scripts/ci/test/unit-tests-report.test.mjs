@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { parseTrx, signature, groupBySignature, compareWithBaseline, decide } from '../unit-tests-report.mjs';
+import { parseTrx, signature, groupBySignature, decide } from '../unit-tests-report.mjs';
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), '..', 'unit-tests-report.mjs');
 
@@ -42,20 +42,10 @@ test('signature blanks numbers and quoted values so same-cause failures group', 
   assert.deepEqual(groups[0].tests, ['A.Tests.Three', 'A.Tests.Two']);
 });
 
-test('baseline comparison separates regressions, known reds and fixed tests', () => {
-  const cmp = compareWithBaseline(parseTrx(TRX).failures, ['A.Tests.Two', 'A.Tests.Gone']);
-  assert.deepEqual(cmp.regressions.map((f) => f.name), ['A.Tests.Three', 'A.Tests.Five<T>']);
-  assert.deepEqual(cmp.knownReds.map((f) => f.name), ['A.Tests.Two']);
-  assert.deepEqual(cmp.fixed, ['A.Tests.Gone']);
-});
-
-test('decide: report never fails, baseline fails on regressions, enforce on any failure', () => {
-  const totals = { failed: 1 };
-  assert.equal(decide('report', totals, { regressions: [1] }), 'pass');
-  assert.equal(decide('baseline', totals, { regressions: [] }), 'pass');
-  assert.equal(decide('baseline', totals, { regressions: [1] }), 'fail');
-  assert.equal(decide('enforce', totals, { regressions: [] }), 'fail');
-  assert.equal(decide('enforce', { failed: 0 }, { regressions: [] }), 'pass');
+test('decide: enforce fails on any failure, report never fails', () => {
+  assert.equal(decide('enforce', { failed: 1 }), 'fail');
+  assert.equal(decide('enforce', { failed: 0 }), 'pass');
+  assert.equal(decide('report', { failed: 3 }), 'pass');
 });
 
 test('CLI: report mode exits 0 and writes the failures file', () => {
@@ -63,25 +53,27 @@ test('CLI: report mode exits 0 and writes the failures file', () => {
   const trx = join(dir, 'Domain.trx');
   writeFileSync(trx, TRX);
   const out = join(dir, 'failing.json');
-  const r = cli('--trx', trx, '--failures-out', out);
+  const r = cli('--trx', trx, '--mode', 'report', '--failures-out', out);
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /\| Domain \| 1 \| 3 \| 1 \| 5 \|/);
   assert.equal(JSON.parse(readFileSync(out, 'utf8')).failing.length, 3);
 });
 
-test('CLI: baseline mode exits 1 on a regression and 0 when all reds are known', () => {
+test('CLI: enforce is the default and exits 1 on a failure', () => {
   const dir = tmp();
   const trx = join(dir, 'a.trx');
   writeFileSync(trx, TRX);
-  const partial = join(dir, 'partial.json');
-  writeFileSync(partial, JSON.stringify({ failing: ['A.Tests.Two'] }));
-  assert.equal(cli('--trx', trx, '--mode', 'baseline', '--baseline', partial).status, 1);
-  const full = join(dir, 'full.json');
-  writeFileSync(full, JSON.stringify({ failing: ['A.Tests.Two', 'A.Tests.Three', 'A.Tests.Five<T>'] }));
-  assert.equal(cli('--trx', trx, '--mode', 'baseline', '--baseline', full).status, 0);
+  assert.equal(cli('--trx', trx).status, 1);
 });
 
-test('CLI: baseline mode without a baseline file is a usage error', () => {
+test('CLI: enforce exits 0 when every test passed', () => {
+  const dir = tmp();
+  const trx = join(dir, 'a.trx');
+  writeFileSync(trx, '<TestRun><Results><UnitTestResult testName="A.Ok" outcome="Passed" /></Results></TestRun>');
+  assert.equal(cli('--trx', trx).status, 0);
+});
+
+test('CLI: an unknown mode is a usage error', () => {
   const dir = tmp();
   const trx = join(dir, 'a.trx');
   writeFileSync(trx, TRX);

@@ -1,16 +1,15 @@
 #!/usr/bin/env node
 // Summarises unit-test TRX files for CI and decides whether the run blocks.
-//   node scripts/ci/unit-tests-report.mjs --trx <file>... [--baseline <json>] [--mode report|baseline|enforce]
+//   node scripts/ci/unit-tests-report.mjs --trx <file>... [--mode enforce|report]
 //                                        [--summary <md out>] [--failures-out <json out>]
 // Modes:
-//   report   (default) never fails; prints totals, failures grouped by error signature
-//   baseline fails only on a failure that is not listed in the baseline file (a regression)
-//   enforce  fails on any failure
-// Baseline file: { "failing": ["Fully.Qualified.TestName", ...] } — the known reds on master.
-import { readFileSync, writeFileSync, existsSync, realpathSync } from 'node:fs';
+//   enforce  (default) fails on any failing test — the suite is kept green, there is no known-red list
+//   report   never fails; an emergency switch only (repository variable UNIT_TESTS_MODE=report)
+// Both print totals and the failures grouped by error signature.
+import { readFileSync, writeFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const MODES = new Set(['report', 'baseline', 'enforce']);
+const MODES = new Set(['enforce', 'report']);
 
 function attr(tagAttrs, name) {
   const m = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(tagAttrs);
@@ -61,26 +60,13 @@ export function groupBySignature(failures) {
     .sort((a, b) => b.count - a.count || a.signature.localeCompare(b.signature));
 }
 
-/** Splits failures into regressions (not in baseline) and known reds; lists baseline entries that now pass. */
-export function compareWithBaseline(failures, baselineNames) {
-  const known = new Set(baselineNames);
-  const failing = new Set(failures.map((f) => f.name));
-  return {
-    regressions: failures.filter((f) => !known.has(f.name)),
-    knownReds: failures.filter((f) => known.has(f.name)),
-    fixed: [...known].filter((n) => !failing.has(n)).sort(),
-  };
-}
-
-export function decide(mode, totals, cmp) {
-  if (mode === 'enforce') return totals.failed > 0 ? 'fail' : 'pass';
-  if (mode === 'baseline') return cmp.regressions.length > 0 ? 'fail' : 'pass';
-  return 'pass';
+export function decide(mode, totals) {
+  return mode === 'enforce' && totals.failed > 0 ? 'fail' : 'pass';
 }
 
 const esc = (s) => s.replace(/\|/g, '\\|').replace(/`/g, "'");
 
-export function renderSummary({ mode, perFile, totals, groups, cmp, verdict, hasBaseline }) {
+export function renderSummary({ mode, perFile, totals, groups, verdict }) {
   const lines = [];
   lines.push('## Unit tests');
   lines.push('');
@@ -90,15 +76,6 @@ export function renderSummary({ mode, perFile, totals, groups, cmp, verdict, has
   lines.push('|---|---:|---:|---:|---:|');
   for (const f of perFile) lines.push(`| ${esc(f.name)} | ${f.totals.passed} | ${f.totals.failed} | ${f.totals.skipped} | ${f.totals.total} |`);
   lines.push(`| **All** | **${totals.passed}** | **${totals.failed}** | **${totals.skipped}** | **${totals.total}** |`);
-  if (hasBaseline) {
-    lines.push('');
-    lines.push(`Against the master baseline: **${cmp.regressions.length} new failure(s)**, ${cmp.knownReds.length} known red(s), ${cmp.fixed.length} baseline test(s) now passing.`);
-    if (cmp.regressions.length) {
-      lines.push('');
-      lines.push('### New failures');
-      for (const r of cmp.regressions.slice(0, 50)) lines.push(`- \`${esc(r.name)}\` — ${esc(signature(r.message))}`);
-    }
-  }
   if (groups.length) {
     lines.push('');
     lines.push('### Failures by error signature');
@@ -113,13 +90,13 @@ export function renderSummary({ mode, perFile, totals, groups, cmp, verdict, has
 }
 
 function parseArgs(argv) {
-  const out = { trx: [], mode: 'report' };
+  const out = { trx: [], mode: 'enforce' };
   for (let i = 0; i < argv.length; i += 2) {
     const key = argv[i]?.replace(/^--/, '');
     const value = argv[i + 1];
     if (!argv[i]?.startsWith('--') || value === undefined) throw new Error(`Bad argument near ${argv[i]}`);
     if (key === 'trx') out.trx.push(value);
-    else if (['baseline', 'mode', 'summary', 'failures-out'].includes(key)) out[key] = value;
+    else if (['mode', 'summary', 'failures-out'].includes(key)) out[key] = value;
     else throw new Error(`Unknown option: --${key}`);
   }
   if (!MODES.has(out.mode)) throw new Error(`--mode must be one of ${[...MODES].join(', ')}`);
@@ -136,13 +113,9 @@ function main() {
   const failures = perFile.flatMap((f) => f.failures);
   if (totals.total === 0) throw new Error('No test results found in the TRX input.');
 
-  const hasBaseline = Boolean(args.baseline && existsSync(args.baseline));
-  if (args.mode === 'baseline' && !hasBaseline) throw new Error('--mode baseline needs an existing --baseline file');
-  const baselineNames = hasBaseline ? JSON.parse(readFileSync(args.baseline, 'utf8')).failing ?? [] : [];
-  const cmp = compareWithBaseline(failures, baselineNames);
-  const verdict = decide(args.mode, totals, cmp);
+  const verdict = decide(args.mode, totals);
 
-  const md = renderSummary({ mode: args.mode, perFile, totals, groups: groupBySignature(failures), cmp, verdict, hasBaseline });
+  const md = renderSummary({ mode: args.mode, perFile, totals, groups: groupBySignature(failures), verdict });
   if (args.summary) writeFileSync(args.summary, md, { flag: 'a' });
   else process.stdout.write(md);
   if (args['failures-out']) {

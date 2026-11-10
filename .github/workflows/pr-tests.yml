@@ -2,12 +2,11 @@ name: Unit Tests
 
 # Builds the solution and runs the unit-test projects under test/ (Domain, Application,
 # Infrastructure). Integration tests live in vnext-example and are not part of this job.
-# Whether a failure blocks is set by the repository variable UNIT_TESTS_MODE:
-#   report   (default) never fails; the job summary lists failures grouped by error signature
-#   baseline fails only on a failure missing from .github/ci/unit-test-baseline.json (known reds)
-#   enforce  fails on any failure — the target once master is green
-# Every run uploads the TRX files and `failing.json`, the input for refreshing the baseline.
-# Rollout: docs/governance/ai-engineering-pipeline.md §11 step 0.
+# Policy: the suite is kept green — any failing unit test fails the check, there is no known-red
+# list. The repository variable UNIT_TESTS_MODE=report turns blocking off as an emergency switch
+# only (for example a broken runner image); unset, the job enforces.
+# Every run uploads the TRX files and `failing.json`; the job summary groups failures by signature.
+# Policy text: docs/testing/unit-tests.md.
 
 on:
   pull_request:
@@ -30,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      UNIT_TESTS_MODE: ${{ vars.UNIT_TESTS_MODE || 'report' }}
+      UNIT_TESTS_MODE: ${{ vars.UNIT_TESTS_MODE || 'enforce' }}
       DOTNET_NOLOGO: 'true'
       DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
     steps:
@@ -74,6 +73,8 @@ jobs:
       - name: Test
         id: test
         # Every project runs even when an earlier one fails; the report step decides the outcome.
+        # A crashed or hung project leaves no TRX; the Report step fails the check for it, since a
+        # missing project would otherwise read as fewer tests, not as a failure.
         run: |
           mkdir -p "$RUNNER_TEMP/trx"
           for p in Domain Application Infrastructure; do
@@ -83,19 +84,25 @@ jobs:
               --blame-hang --blame-hang-timeout 10m \
               || echo "::warning::BBT.Workflow.$p.Tests reported failures"
             echo "::endgroup::"
+            [ -f "$RUNNER_TEMP/trx/$p.trx" ] || missing="$missing $p"
           done
+          echo "missing=${missing# }" >> "$GITHUB_OUTPUT"
 
       - name: Report
+        env:
+          MISSING_TRX: ${{ steps.test.outputs.missing }}
         run: |
-          baseline=.github/ci/unit-test-baseline.json
-          args=()
-          [ -f "$baseline" ] && args+=(--baseline "$baseline")
+          if [ -n "$MISSING_TRX" ]; then
+            echo "::error::No test results for: $MISSING_TRX (crashed or hung test host)"
+            echo "**No test results for: $MISSING_TRX** — the test host crashed or hung; see the job log and the blame artifacts." >> "$GITHUB_STEP_SUMMARY"
+            [ "$UNIT_TESTS_MODE" = report ] || fail=1
+          fi
           node scripts/ci/unit-tests-report.mjs \
             $(for f in "$RUNNER_TEMP"/trx/*.trx; do printf -- '--trx %s ' "$f"; done) \
-            "${args[@]}" \
             --mode "$UNIT_TESTS_MODE" \
             --summary "$GITHUB_STEP_SUMMARY" \
             --failures-out "$RUNNER_TEMP/trx/failing.json"
+          exit "${fail:-0}"
 
       - name: Upload results
         if: always()

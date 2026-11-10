@@ -21,6 +21,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 | [Domain](domain/instance-data-merge-concept.md) | Instance lifecycle, data versioning, cache context, function-handler behavior. |
 | [Runtime](runtime/task-executors-and-invokers.md) | Task execution, invokers, scripting, remote runtime integration. |
 | [Contracts](contracts/api-and-service-contracts.md) | API shapes, validation, compatibility, error behavior. |
+| [Unit tests: always green](testing/unit-tests.md) | The zero-failure rule for `test/` on every PR, the required `Unit Tests` check, how to reproduce it locally, the outage-only switch. |
 | [Testing](testing/integration-testing.md) | How a runtime change is verified end to end: policy, sibling repos, local runtime, `VNEXT_BASE_URL`, scenario/index obligations, Aether local feed, Helm parity. |
 | [Observability verification](testing/observability-verification.md) | How a locally exercised change is confirmed through the MCP servers: traps, fallbacks when a server is down, OpenObserve query mechanics, the `postgres` connect timeout. |
 | Integration — [FanOutTask (Forge)](integration/forge-fanout-task-implementation.md), [Field protection (vnext-docs + Forge)](integration/field-protection-consumer-revision.md) | Implementation specs for consumer products (Forge Studio, CLI, SDKs) that build against runtime features; the handoff-document [convention](integration/README.md). |

@@ -27,6 +27,7 @@ These are mechanical, fast, and each one is CRITICAL because CI or a later reade
 - [ ] `evidence/unit-pins-invariant` — where the change restores or protects a documented invariant, the test pins the invariant itself, not the incidental symptom. The repo's existing pinning tests are the model: `SubStateChangeCoalescingTests`, `InstanceIncidentPersistenceTests`, `TaskStepIncidentPersistenceTests`, `RoleGrantEvaluatorTests`, `DynamicRoleGrantTests`.
 - [ ] `evidence/unit-no-overmock` — the test asserts behaviour, not the call sequence of its own mocks.
 - [ ] `evidence/unit-naming` — the test name states the claim; xUnit + NSubstitute/Shouldly per the repo's convention.
+- [ ] `evidence/unit-green` — the `Unit Tests` check is green for the HEAD commit. A red is CRITICAL whether or not this PR caused it; there is no pre-existing-failure exception ([policy](../../testing/unit-tests.md)). A test whose expected value was changed must say why the old expectation was wrong.
 
 ## 3. Integration-test policy (`evidence/it-*`)
 
