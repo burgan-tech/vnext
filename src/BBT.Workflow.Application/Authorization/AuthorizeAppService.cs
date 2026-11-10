@@ -252,7 +252,8 @@ public sealed class AuthorizeAppService(
                           wf, start, instance: null, callerRoles.Value, requestContext, cancellationToken);
         AuthorizationActivityHelper.SetDecision(decision, allowed, callerRoles.Value?.Count ?? 0);
 
-        logger.AuthorizeRequest(domain, workflow, string.Empty, $"start:{wf.StartTransition?.Key}", Describe(callerRoles.Value), allowed);
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.AuthorizeRequest(domain, workflow, string.Empty, $"start:{wf.StartTransition?.Key}", Describe(callerRoles.Value), allowed);
 
         return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = allowed });
     }
