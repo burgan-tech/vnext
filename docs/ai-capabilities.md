@@ -197,7 +197,11 @@ comment only) / `apply` (labels via the GitHub App); model `AI_DIRECTOR_MODEL`. 
 `.github/ai/gate.json`, scripts `scripts/ai/gate/`) reviews every open PR into `master` /
 `release-v*` once its CI reported, one comment per PR; model `AI_GATE_MODEL`, repair limit
 `AI_MAX_REPAIRS`. Locally: `SONAR_TOKEN=… node scripts/ai/gate/collect.mjs --pr <n> --force --out <dir>`
-then `apply.mjs --in <dir> --print`. Locally:
+then `apply.mjs --in <dir> --print`. The **Council** (`.github/workflows/ai-council.yml`, prompt
+`.github/ai/council.md`, scripts `scripts/ai/council/`) judges an issue labelled `ai:council-required`
+that has a Director plan; one comment per issue with the verdict and the decision-log row; model
+`AI_COUNCIL_MODEL`. Locally: `node scripts/ai/council/collect.mjs --issue <n> --force --out <dir>` then
+`apply.mjs --in <dir> --print`. Locally:
 `node scripts/ai/director/collect.mjs --issue <n>` then `apply.mjs --print`. Tests:
 `node --test "scripts/ai/test/*.test.mjs"` (also in the `Unit Tests` workflow).
 
