@@ -38,8 +38,7 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         var startTimestamp = Stopwatch.GetTimestamp();
         var taskKey = context.Task.Key;
 
-        Logger.LogDebug("Executing task {TaskKey} with executor {Executor}",
-            taskKey, GetType().Name);
+        Logger.TaskExecutorStarting(taskKey, GetType().Name);
 
         // 1. Validate & Cast
         var validationResult = ValidateContext(context);
@@ -98,9 +97,14 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         // the full object graph until the journal write extends its lifetime without reducing the
         // number of serializations; JsonData keeps only the persisted text and parses lazily if a
         // later consumer actually requests JsonElement.
-        context.RawInvocationResult = invokeResult.Value is null
-            ? new JsonData("null")
-            : new JsonData(invokeResult.Value);
+        // Skipped when no journal row is persisted (no persistence strategy, e.g. history: none):
+        // the payload would be serialized only to be dropped.
+        if (context.CapturesJournalPayloads)
+        {
+            context.RawInvocationResult = invokeResult.Value is null
+                ? new JsonData("null")
+                : new JsonData(invokeResult.Value);
+        }
 
         // Note: Business errors (HTTP 4xx/5xx) are NOT intercepted here.
         // The invocation result (including IsSuccess=false, StatusCode, Metadata/ExceptionType)
@@ -384,12 +388,23 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         if (envelope.Binding.ValueKind != JsonValueKind.Object)
             return envelope;
 
-        var binding = System.Text.Json.Nodes.JsonNode.Parse(envelope.Binding.GetRawText())!.AsObject();
-        var current = binding["Headers"]?.GetValue<string?>();
+        // Read Headers in place; the binding is only parsed into a mutable node (and re-serialized) when a
+        // credential actually has to be added — the common "mapping already set it / no caller credential"
+        // case returns the envelope untouched without touching the rest of the binding.
+        var current = envelope.Binding.TryGetProperty("Headers", out var headersElement)
+            ? headersElement.ValueKind switch
+            {
+                JsonValueKind.String => headersElement.GetString(),
+                JsonValueKind.Null => null,
+                _ => throw new InvalidOperationException(
+                    $"Task binding 'Headers' must be a JSON string, was {headersElement.ValueKind}.")
+            }
+            : null;
         var merged = Execution.HttpTaskInvocation.WithCallerCredential(current, CallerHeadersOf(scriptContext));
         if (merged == current)
             return envelope;
 
+        var binding = System.Text.Json.Nodes.JsonNode.Parse(envelope.Binding.GetRawText())!.AsObject();
         binding["Headers"] = merged;
         return new TaskEnvelope
         {

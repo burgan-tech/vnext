@@ -55,16 +55,73 @@ public static class ServiceScopeFactoryExtensions
     {
         return scopeFactory.ExecuteInScopeRawAsync(async (sp, ct) =>
         {
-            var unitOfWorkManager = sp.GetRequiredService<BBT.Aether.Uow.IUnitOfWorkManager>();
-
-            await using var unitOfWork = unitOfWorkManager.Begin(new BBT.Aether.Uow.UnitOfWorkOptions
-            {
-                Scope = BBT.Aether.Uow.UnitOfWorkScopeOption.RequiresNew,
-                IsTransactional = false
-            });
+            await using var unitOfWork = BeginIsolatedReadUnitOfWork(sp);
 
             return await action(sp, ct);
         }, cancellationToken);
+    }
+
+    #endregion
+
+    #region ExecuteReadWithWorkflowAsync
+
+    /// <summary>
+    /// <see cref="ExecuteWithWorkflowAsync{T}(IServiceScopeFactory, string, string, string?, Func{IServiceProvider, CancellationToken, Task{Result{T}}}, CancellationToken, WorkflowExecutionContext?, Definitions.Workflow?)"/>
+    /// for a READ served on behalf of a caller that may be running in parallel: a fresh DI scope, a fresh
+    /// non-transactional unit of work, then the workflow's schema scope.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The plain <c>ExecuteWithWorkflowAsync</c> isolates the services, not the <c>DbContext</c>: the context
+    /// is bound to the ambient (<c>AsyncLocal</c>) unit of work and keyed by schema (see
+    /// <see cref="ExecuteInIsolatedUnitOfWorkAsync{T}"/>). Same-order tasks run as parallel branches of one
+    /// pipeline, so two same-domain reads of one flow — two <c>GetInstances</c> tasks, a <c>GetInstance</c>
+    /// beside a <c>GetInstanceData</c>, a <c>DirectTrigger</c> resolving its key — got the same context and
+    /// the second query failed with "A second operation was started on this context instance".
+    /// </para>
+    /// <para>
+    /// The pipeline's own unit of work is non-transactional, so a read on a fresh context sees exactly the
+    /// rows it saw on the shared one. The unit of work is committed when the action returns, so anything
+    /// the read path writes as a side effect is saved as it would have been by the caller's commit; for a
+    /// pure read the commit is a no-op.
+    /// </para>
+    /// </remarks>
+    public static Task<Result<T>> ExecuteReadWithWorkflowAsync<T>(
+        this IServiceScopeFactory scopeFactory,
+        string domain,
+        string workflowKey,
+        string? workflowVersion,
+        Func<IServiceProvider, CancellationToken, Task<Result<T>>> action,
+        CancellationToken cancellationToken = default)
+    {
+        return scopeFactory.ExecuteInScopeAsync(
+            (sp, ct) => WithIsolatedReadUnitOfWorkAsync(sp, ct,
+                () => WithWorkflowScopeAsync(
+                    sp, domain, workflowKey, workflowVersion, ct,
+                    () => action(sp, ct),
+                    Result<T>.Fail)),
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// <see cref="ExecuteReadWithWorkflowAsync{T}(IServiceScopeFactory, string, string, string?, Func{IServiceProvider, CancellationToken, Task{Result{T}}}, CancellationToken)"/>
+    /// for a read answering a <see cref="ConditionalResult{T}"/> (304-capable).
+    /// </summary>
+    public static Task<ConditionalResult<T>> ExecuteReadWithWorkflowAsync<T>(
+        this IServiceScopeFactory scopeFactory,
+        string domain,
+        string workflowKey,
+        string? workflowVersion,
+        Func<IServiceProvider, CancellationToken, Task<ConditionalResult<T>>> action,
+        CancellationToken cancellationToken = default)
+    {
+        return scopeFactory.ExecuteInScopeRawAsync(
+            (sp, ct) => WithIsolatedReadUnitOfWorkAsync(sp, ct,
+                () => WithWorkflowScopeAsync(
+                    sp, domain, workflowKey, workflowVersion, ct,
+                    () => action(sp, ct),
+                    error => ConditionalResult<T>.Fail(error))),
+            cancellationToken);
     }
 
     #endregion
@@ -302,6 +359,33 @@ public static class ServiceScopeFactoryExtensions
     #endregion
 
     #region Private Helpers
+
+    /// <summary>
+    /// Begins the unit of work an isolated read runs in: <c>RequiresNew</c>, so it does not join the
+    /// ambient one, and non-transactional, so it holds no connection between operations.
+    /// </summary>
+    private static BBT.Aether.Uow.IUnitOfWork BeginIsolatedReadUnitOfWork(IServiceProvider sp) =>
+        sp.GetRequiredService<BBT.Aether.Uow.IUnitOfWorkManager>().Begin(new BBT.Aether.Uow.UnitOfWorkOptions
+        {
+            Scope = BBT.Aether.Uow.UnitOfWorkScopeOption.RequiresNew,
+            IsTransactional = false
+        });
+
+    /// <summary>
+    /// Runs <paramref name="action"/> inside <see cref="BeginIsolatedReadUnitOfWork"/> and commits it when the
+    /// action returns. Must be entered in the caller's own async frame — the ambient assignment made by
+    /// <c>Begin</c> flows only into the continuations of the frame that called it.
+    /// </summary>
+    private static async Task<TResult> WithIsolatedReadUnitOfWorkAsync<TResult>(
+        IServiceProvider sp,
+        CancellationToken ct,
+        Func<Task<TResult>> action)
+    {
+        await using var unitOfWork = BeginIsolatedReadUnitOfWork(sp);
+        var result = await action();
+        await unitOfWork.CommitAsync(ct);
+        return result;
+    }
 
     /// <summary>
     /// Core workflow setup: activates the schema scope, loads the workflow from cache, then

@@ -26,7 +26,7 @@ public sealed class JsonSchemaValidator : IJsonSchemaValidator
     public Result Validate(JsonElement jsonSchema, JsonElement? data, SchemaValidationOptions options)
     {
         var schemaWithoutVocabulary = JsonSchemaVocabularySanitizer.RemoveVocabularyKeywords(jsonSchema);
-        var schema = JsonSchema.FromText(schemaWithoutVocabulary.GetRawText());
+        var schema = JsonSchema.FromText(schemaWithoutVocabulary.GetRawText(), JsonSchemaBuild.Options());
         var json = JsonDocument.Parse(data?.GetRawText() ?? "{}");
 
         var validationResult = schema.Evaluate(json.RootElement, new EvaluationOptions()

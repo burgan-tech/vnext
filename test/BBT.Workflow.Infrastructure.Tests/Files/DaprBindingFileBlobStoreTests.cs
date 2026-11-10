@@ -35,7 +35,8 @@ public sealed class DaprBindingFileBlobStoreTests
         sent.Data.ToArray().ShouldBe(new byte[] { 1, 2 });
         sent.Metadata["key"].ShouldBe("vnext-runtime/f1");
         sent.Metadata["fileName"].ShouldBe("vnext-runtime/f1");
-        sent.Metadata["contentType"].ShouldBe("application/pdf");
+        sent.Metadata["Content-Type"].ShouldBe("application/pdf");
+        sent.Metadata.ShouldNotContainKey("contentType");
     }
 
     [Fact]

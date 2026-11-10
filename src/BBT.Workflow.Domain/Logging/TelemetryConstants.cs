@@ -16,6 +16,12 @@ public static class TelemetryConstants
         public const string Domain = "vnext.domain";
         public const string Flow = "vnext.flow.key";
         public const string FlowVersion = "vnext.flow.version";
+        /// <summary>The flow version as requested (<c>latest</c>, MAJOR, MAJOR.MINOR, artifact or full).</summary>
+        public const string FlowVersionRequested = "vnext.flow.version.requested";
+        /// <summary>The flow's default-version pointer that took part in the resolution, when one is set.</summary>
+        public const string FlowVersionPointer = "vnext.flow.version.pointer";
+        /// <summary>The rule that resolved the flow version: <c>automatic</c>, <c>explicit</c>, <c>default</c> or <c>ceiling</c>.</summary>
+        public const string FlowVersionSource = "vnext.flow.version.source";
         public const string InstanceId = "vnext.instance.id";
         /// <summary>
         /// Vendor-neutral workflow instance identifier used to correlate telemetry
@@ -87,6 +93,13 @@ public static class TelemetryConstants
         /// boundary.
         /// </summary>
         public const string AuthDecision = "vnext.auth.decision";
+
+        /// <summary>
+        /// Set on a decision that was NOT taken at the instance the request descended to. Today only
+        /// <c>leaf-missing</c>: the active SubFlow's child could not be loaded yet, so the deepest existing
+        /// instance decided (vnext#1181). Absent on every ordinary decision.
+        /// </summary>
+        public const string AuthFallback = "vnext.auth.fallback";
 
         /// <summary>How many transition keys a filtering pass was asked about.</summary>
         public const string AuthKeysEvaluated = "vnext.auth.keys.evaluated";
@@ -178,6 +191,27 @@ public static class TelemetryConstants
         /// </para>
         /// </summary>
         public const string ReadFastPath = "vnext.read.fastpath";
+
+        /// <summary>
+        /// Row security (vnext#1107) was evaluated for this read. Written only for a flow that declares
+        /// <c>rowSecurity</c>: a flow without it carries no row-security tag at all.
+        /// </summary>
+        public const string RowSecurityApplied = "vnext.rowsecurity.applied";
+
+        /// <summary>
+        /// Row-security outcome: <c>unrestricted</c>, <c>filtered</c>, <c>excluded</c>, <c>denied-no-match</c>,
+        /// <c>denied-no-contribution</c>, <c>denied-resolution-failed</c> or <c>denied-flow-load</c>.
+        /// </summary>
+        public const string RowSecurityOutcome = "vnext.rowsecurity.outcome";
+
+        /// <summary>Indexes of the matched row-security rules, comma separated (<c>0,2</c>). Never values.</summary>
+        public const string RowSecurityRules = "vnext.rowsecurity.rules";
+
+        /// <summary>Names (never values) of the row-security parameters that did not resolve.</summary>
+        public const string RowSecurityMissingParams = "vnext.rowsecurity.missing_params";
+
+        /// <summary>The flow version whose row-security rules applied (the default-version pointer's choice, K2).</summary>
+        public const string RowSecurityFlowVersion = "vnext.rowsecurity.flow_version";
         /// <summary>
         /// How the wait on the per-key build gate ended: <c>build</c> (this request owns the build)
         /// or <c>coalesced</c> (while it waited, the request that held the gate populated the short
@@ -214,6 +248,11 @@ public static class TelemetryConstants
         /// Subflow instance ID for subflow/subprocess correlation in traces and logs.
         /// </summary>
         public const string SubflowInstanceId = "vnext.subflow.instance.id";
+        /// <summary>
+        /// Number of request headers carried from the settled SubFlow child that the parent resume
+        /// context received (count only, never names or values).
+        /// </summary>
+        public const string SubflowCarriedHeaderCount = "vnext.subflow.carried_header_count";
         /// <summary>
         /// Root (ancestor) instance ID — the top-level flow in a nested subflow chain (A→B→C→D always carries A's ID).
         /// </summary>
@@ -441,6 +480,13 @@ public static class TelemetryConstants
 
         /// <summary>Whether the single-attempt status-lock acquire succeeded.</summary>
         public const string LockAcquired = "vnext.lock.acquired";
+
+        /// <summary>
+        /// A bounded wait gave up early because the caller's <c>LockAcquireWait.KeepWaiting</c> check
+        /// said the work was no longer needed (the holder — the other delivery — had committed).
+        /// Only ever <c>true</c>; absent on every other acquisition.
+        /// </summary>
+        public const string LockWaitAbandoned = "vnext.lock.wait_abandoned";
 
         /// <summary>Lease seconds requested for the status lock.</summary>
         public const string LockLeaseSeconds = "vnext.lock.lease_seconds";
@@ -676,7 +722,6 @@ public static class TelemetryConstants
         public const string Extensions = "BBT.Workflow.Extensions";
         public const string ExecutionInvokers = "BBT.Workflow.Execution.Invokers";
         public const string Execution = "BBT.Workflow.Execution";
-        public const string ExecutionPython = "BBT.Workflow.Execution.Python";
         public const string WorkersInbox = "BBT.Workflow.Workers.Inbox";
 
         /// <summary>
@@ -703,7 +748,6 @@ public static class TelemetryConstants
             Extensions,
             ExecutionInvokers,
             Execution,
-            ExecutionPython,
             WorkersInbox,
             Gateway
         ];
@@ -731,9 +775,6 @@ public static class TelemetryConstants
                 // The Execution service's own handler span. Only the Execution host runs it; its
                 // wildcard entry covers it there.
                 [Execution] = ["orchestration", "workers-inbox", "workers-outbox"],
-
-                // The Python task runner lives on the Execution host alone.
-                [ExecutionPython] = ["orchestration", "workers-inbox", "workers-outbox"],
 
                 // EventTraceScope's source; only the Inbox worker consumes events, and its own
                 // wildcard covers it there.

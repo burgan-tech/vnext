@@ -82,7 +82,7 @@ public sealed class PostCommitRelayDispatcherTests : IDisposable
     private static PostCommitRelayDispatcher Dispatcher(IServiceProvider provider, IRuntimeInfoProvider runtime) =>
         new(provider, runtime, NullLogger<PostCommitRelayDispatcher>.Instance);
 
-    private static InstanceSubCompletedEvent CompletedEvent(bool sync = false) => new()
+    private static InstanceSubCompletedEvent CompletedEvent(bool sync = false, Dictionary<string, string?>? carriedHeaders = null) => new()
     {
         InstanceId = Guid.NewGuid(),
         Domain = "orders",
@@ -91,7 +91,8 @@ public sealed class PostCommitRelayDispatcherTests : IDisposable
         SubInstanceId = Guid.NewGuid(),
         CompletedState = "done",
         CompletedAt = DateTime.UtcNow,
-        Sync = sync
+        Sync = sync,
+        CarriedHeaders = carriedHeaders
     };
 
     private static InstanceSubStateChangedEvent StateChangedEvent() => new()
@@ -169,6 +170,52 @@ public sealed class PostCommitRelayDispatcherTests : IDisposable
             Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task Relays_Carry_CarriedHeaders_Verbatim()
+    {
+        var gateway = Substitute.For<IInstanceCommandGateway>();
+        gateway.CompleteAsync(Arg.Any<FlowCompletedInput>(), Arg.Any<CancellationToken>()).Returns(Result.Ok());
+        gateway.FaultAsync(Arg.Any<SubFlowFaultedInput>(), Arg.Any<CancellationToken>()).Returns(Result.Ok());
+        gateway.CancelAsync(Arg.Any<SubItemCanceledInput>(), Arg.Any<CancellationToken>()).Returns(Result.Ok());
+        var sut = Dispatcher(Registrations(gateway), MatchingRuntime());
+
+        var headers = new Dictionary<string, string?> { ["x-a"] = "1", ["x-b"] = null };
+        var completed = CompletedEvent(carriedHeaders: headers);
+        var faulted = new InstanceSubFaultedEvent
+        {
+            InstanceId = Guid.NewGuid(), Domain = "orders", Flow = "order-flow", Version = "1.0.0",
+            SubInstanceId = Guid.NewGuid(), FaultedState = "error", FaultedAt = DateTime.UtcNow,
+            CarriedHeaders = headers
+        };
+        var canceled = new InstanceSubCanceledEvent
+        {
+            InstanceId = Guid.NewGuid(), Domain = "orders", Flow = "order-flow", Version = "1.0.0",
+            SubInstanceId = Guid.NewGuid(), CanceledState = "canceled", CanceledAt = DateTime.UtcNow,
+            SubItemType = SubItemType.SubFlow, TerminationOrigin = TerminationOrigin.Direct,
+            InitiatorInstanceId = Guid.NewGuid(), CascadeId = Guid.NewGuid(),
+            CarriedHeaders = headers
+        };
+        var completedNull = CompletedEvent();
+
+        await sut.RelayAsync([Envelope(completed), Envelope(faulted), Envelope(canceled), Envelope(completedNull)],
+            CancellationToken.None);
+
+        await gateway.Received(1).CompleteAsync(
+            Arg.Is<FlowCompletedInput>(i => i.SubInstanceId == completed.SubInstanceId
+                && i.CarriedHeaders != null && i.CarriedHeaders.Count == 2
+                && i.CarriedHeaders["x-a"] == "1" && i.CarriedHeaders["x-b"] == null),
+            Arg.Any<CancellationToken>());
+        await gateway.Received(1).FaultAsync(
+            Arg.Is<SubFlowFaultedInput>(i => i.CarriedHeaders != null && i.CarriedHeaders["x-a"] == "1"),
+            Arg.Any<CancellationToken>());
+        await gateway.Received(1).CancelAsync(
+            Arg.Is<SubItemCanceledInput>(i => i.CarriedHeaders != null && i.CarriedHeaders["x-a"] == "1"),
+            Arg.Any<CancellationToken>());
+        await gateway.Received(1).CompleteAsync(
+            Arg.Is<FlowCompletedInput>(i => i.SubInstanceId == completedNull.SubInstanceId && i.CarriedHeaders == null),
+            Arg.Any<CancellationToken>());
+    }
+
     /// <summary>
     /// The inverse of what the terminal-only relay pinned before this change: the sub-state event is
     /// now a registered, relayed event rather than one the dispatcher steps over.
@@ -191,6 +238,37 @@ public sealed class PostCommitRelayDispatcherTests : IDisposable
                 && i.NewState == evt.NewState
                 && i.ChangedAt == evt.ChangedAt),
             Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A child's terminal Completed status is not relayed: the terminal event raised in the same
+    /// commit is relayed just before it and owns that transition. The span still reports the skip.
+    /// </summary>
+    [Fact]
+    public async Task Does_Not_Relay_A_SubStateChanged_Reporting_Terminal_Completed()
+    {
+        var gateway = Substitute.For<IInstanceCommandGateway>();
+        var sut = Dispatcher(Registrations(gateway), MatchingRuntime());
+
+        var evt = new InstanceSubStateChangedEvent
+        {
+            ParentInstanceId = Guid.NewGuid(),
+            SubInstanceId = Guid.NewGuid(),
+            Domain = "orders",
+            Flow = "order-flow",
+            Version = "1.0.0",
+            NewState = "done",
+            PreviousState = "running",
+            NewStateType = 3,
+            NewStateSubType = 1,
+            ChangedAt = DateTime.UtcNow,
+            NewStatus = "C"
+        };
+        await sut.RelayAsync([Envelope(evt)], CancellationToken.None);
+
+        gateway.ReceivedCalls().ShouldBeEmpty();
+        var span = _collected.Single(a => a.DisplayName == "PostCommit.EventRelay");
+        span.GetTagItem(TelemetryConstants.TagNames.RelayOutcome).ShouldBe(PostCommitRelayOutcomes.Skipped);
     }
 
     [Fact]

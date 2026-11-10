@@ -79,7 +79,7 @@ public class CSharpEvaluatorUsingMergeTests
     {
         var evaluator = new CSharpEvaluator();
         const string code =
-            "public class C { public int Calc() { var s = new System.IO.MemoryStream(); return (int)s.Length; } }";
+            "public class C { public int Calc() { var s = System.IO.File.Exists(\"x\"); return s ? 1 : 0; } }";
 
         await Should.ThrowAsync<ScriptSandboxViolationException>(
             () => evaluator.CompileToInstanceAsync<object>(code));

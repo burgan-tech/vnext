@@ -29,6 +29,23 @@ public abstract class InstanceOutputBase
     public InstanceStatus? EffectiveStatus { get; set; }
 
     /// <summary>
+    /// The state this instance itself rests in after the sync run — same value and same name as
+    /// <c>currentState</c> on the instance GET. Deliberately NOT called <c>state</c>: the state
+    /// function's <c>state</c> is the active SubFlow leaf's (it descends), this one never descends.
+    /// Populated only when sync=true, including the identity-only answer a runtime-internal child
+    /// start or relay gets (vnext#1182) — read from the instance already in hand, never a DB read.
+    /// </summary>
+    public string? CurrentState { get; set; }
+
+    /// <summary>
+    /// The state a client observes for this instance: the active SubFlow's state when one is
+    /// running, otherwise <see cref="CurrentState"/>. Same value as <c>effectiveState</c> on the
+    /// instance GET (the persisted column, no descent). Populated only when sync=true, like
+    /// <see cref="CurrentState"/>.
+    /// </summary>
+    public string? EffectiveState { get; set; }
+
+    /// <summary>
     /// Instance attributes filtered by master-schema role grants. Populated only when sync=true.
     /// </summary>
     public JsonElement? Attributes { get; set; }

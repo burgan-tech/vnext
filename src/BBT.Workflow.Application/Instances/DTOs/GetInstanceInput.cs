@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 
 using BBT.Workflow.Definitions;
 
@@ -45,6 +46,26 @@ public sealed class GetInstanceInput : IHasDomain
     /// Query parameters from the request for script context binding
     /// </summary>
     public Dictionary<string, string?>? QueryParameters { get; set; }
+
+    /// <summary>
+    /// Raw multi-valued request headers for row security. Filled only by the controller; never serialized.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyDictionary<string, string[]>? RawHeaders { get; set; }
+
+    /// <summary>
+    /// Raw multi-valued query parameters for row security. Filled only by the controller; never serialized.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyDictionary<string, string[]>? RawQueryParameters { get; set; }
+
+    /// <summary>
+    /// Applies the flow's row security (vnext#1107). Set by the public list / GET endpoint and the GetInstances /
+    /// GetInstance tasks; other in-process callers (view resolution, triggers, GetInstanceData) leave it false.
+    /// Never serialized.
+    /// </summary>
+    [JsonIgnore]
+    public bool ApplyRowSecurity { get; set; }
 
 }
 
@@ -105,6 +126,26 @@ public sealed class GetInstanceListInput : IHasDomain
     /// Query parameters from the request for script context binding
     /// </summary>
     public Dictionary<string, string?>? QueryParameters { get; set; }
+
+    /// <summary>
+    /// Raw multi-valued request headers for row security. Filled only by the controller; never serialized.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyDictionary<string, string[]>? RawHeaders { get; set; }
+
+    /// <summary>
+    /// Raw multi-valued query parameters for row security. Filled only by the controller; never serialized.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyDictionary<string, string[]>? RawQueryParameters { get; set; }
+
+    /// <summary>
+    /// Applies the flow's row security (vnext#1107). Set by the public list / GET endpoint and the GetInstances /
+    /// GetInstance tasks; other in-process callers (view resolution, triggers, GetInstanceData) leave it false.
+    /// Never serialized.
+    /// </summary>
+    [JsonIgnore]
+    public bool ApplyRowSecurity { get; set; }
 
     /// <summary>
     /// Gets the groupBy parameter from QueryParameters

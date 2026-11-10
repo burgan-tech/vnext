@@ -429,6 +429,47 @@
       "title": "A payload whose x-storage node repeats a member name (for example two 'content' or 'file' members) is handled inconsistently: the read-only element probe and the mutable node used by the swap do not necessarily see the same occurrence, so the outcome (swap, keep or reject) is not defined.",
       "workaround": "Send well-formed JSON without duplicate member names; standard JSON serializers never produce them.",
       "fixedIn": null
+    },
+    {
+      "id": "dapr-s3-binding-frames-tls-uploads",
+      "affectedVersions": ">=0.0.102",
+      "fixedIn": null,
+      "description": "Dapr 1.17+ bindings.aws.s3 builds its transfer manager without options, so every https upload carries a CRC32 trailer as Content-Encoding: aws-chunked; a store that does not decode it keeps the frame as the object (vnext-client-sdk-core#145; any runtime version on a daprd 1.17+ sidecar). AWS_REQUEST_CHECKSUM_CALCULATION on the sidecar does not change it and no component metadata does. The runtime recovers such objects on read; a consumer reading the bucket directly sees the frame. Use a store that decodes aws-chunked, an http endpoint in a trusted network, or pin the sidecar to daprd 1.16.x until components-contrib exposes the option."
+    },
+    {
+      "id": "file-staged-upload-orphans",
+      "affectedVersions": ">=0.0.102",
+      "fixedIn": null,
+      "description": "A streamed upload that no start or transition claims before its ticket expires leaves its object in the store (the staging entry expires, the object does not). Use the store's lifecycle rules, as for other x-storage orphans."
+    },
+    {
+      "id": "script-sandbox-reflection-gaps",
+      "affectedVersions": ">=0.0.102",
+      "fixedIn": null,
+      "description": "Environment.GetEnvironmentVariable, Type.GetProperty, Type.Assembly, AppDomain and AssemblyLoadContext remain allowed because shipped packages use them (vnext-sys-flow, morph-idm); combined with dynamic they still reach reflection. The analyzer guards against accidental and low-effort misuse; isolation is the host's (read-only file system, no secrets on disk, egress policy, curated plugin directory)."
+    },
+    {
+      "id": "file-download-response-buffered-by-body-logging",
+      "affectedVersions": ">=0.0.102",
+      "fixedIn": null,
+      "description": "Aether's HttpBodyLoggingMiddleware copies every response not in Telemetry:Logging:ExcludedPaths into memory before sending it, even with body logging off, so a functions/file or internal/file download is held in memory once once more after the binding get. Excluding the two routes removes the copy but also their HTTP server spans, because Aether's tracing filter uses Logging.ExcludedPaths as well. Shipped configuration keeps the spans; the fix belongs in Aether."
+    },
+    {
+      "id": "row-security-instance-surfaces-unfiltered",
+      "affectedVersions": ">=0.0.102",
+      "severity": "warning",
+      "component": "row-security",
+      "path": "workflow.attributes.rowSecurity",
+      "title": "rowSecurity filters the instance list, single GET and GetInstances/GetInstance tasks only; functions, transitions and GetInstanceData serve excluded instances by id, and GET 404 next to data 200 is an existence oracle.",
+      "workaround": "Do not treat rowSecurity as an access boundary for an instance whose id the caller knows; enforce access to those functions at the gateway (authorize) until instance-addressed coverage ships.",
+      "description": "rowSecurity filters the list and single GET endpoints and the GetInstances/GetInstance tasks only; state/data/view/schema/master/history/internal functions, transitions, view resolution and the GetInstanceData task read excluded instances unfiltered.",
+      "fixedIn": null
+    },
+    {
+      "id": "subflow-carried-headers-denylist",
+      "affectedVersions": ">=0.0.102",
+      "fixedIn": null,
+      "description": "Carried headers use a denylist: a credential in a header whose name contains none of authorization, cookie, token, secret or session (for example x-api-key, password) is carried to the outbox, the broker and the parent unless listed in Workflow:SubFlow:CarriedHeaders:AdditionalDenied, which matches exact names only."
     }
   ]
 }

@@ -119,7 +119,9 @@ public sealed class InstanceCancellationService(
             await using var uow = uowManager.Begin(
                 new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
-            var instance = await instanceRepository.FindAsync(instanceId, true, cancellationToken);
+            // Existence probe only — nothing below reads the aggregate beyond its id. The detailed
+            // load (latest data jsonb + open correlations, three split queries) bought nothing here.
+            var instance = await instanceRepository.FindLeanByIdAsync(instanceId, cancellationToken);
             if (instance == null)
             {
                 logger.InstanceNotFound(instanceId, string.Empty);

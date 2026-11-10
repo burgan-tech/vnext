@@ -104,6 +104,21 @@ child's, so the parent's own move into the SubFlow state is superseded by the ch
 travelling up) and **Faulted** (`InstanceSubFaultedEvent` already carries the faulted state upward;
 this channel reports progression, not failure).
 
+A notification reporting the child's terminal **`Completed`** status (finish state, cancel or exit) is
+still published — the outbox keeps it as a fact for `instance.sub.*` subscribers — but it is **not
+applied**: the relay declines it (`skipped`, reason `terminal_superseded`) and `SubflowStateService`
+drops it on either delivery path before any read or lock. The terminal event raised in the same
+commit owns that transition. `HandleFinishStep` (100) defers it before `TransitionSettlement` adds
+the state change, the dispatcher relays in order, and its settlement records the child's final state
+on the correlation, closes it and re-derives the parent's projection — moving every parent
+fingerprint member the long-poll ETag reads. So the state change only ever arrived after that, to an
+already-closed correlation (`Correlation not found`, no write), or — when the terminal relay failed
+or the backup won the race — projected a finished child onto a parent about to resume, and on a
+nested chain carried it to the grandparent, which the terminal settlement never corrects upward.
+SubProcess children are unaffected: `PublishPendingSubStateChange` never publishes for them
+(`IsSubFlow`). A notification without `NewStatus` (a publisher that predates the field) keeps the
+old handling.
+
 Instance **creation** flushes explicitly: it pre-positions the instance into its initial state and
 commits in a unit of work that has no settlement. That is load-bearing when a child's start
 transition targets its own initial state — nothing moves afterwards, so this is the parent's only
@@ -152,14 +167,24 @@ Implementation notes for the coalescing:
 - **The Inbox BACKUP checks before it locks** (`SubFlowStateChangedInput.IsBackupDelivery`, set only
   by `InstanceSubStateChangedEventHandler`). One no-tracking `ProbeSubflowStateAsync` row: stale by
   the same predicate, or the same notification (seq, else µs stamp) whose values the parent and the
-  open correlation already carry ⇒ dropped with no lock, no transaction, no write; anything else takes
-  the locked path. It is a plain READ COMMITTED select — no row lock, no write — so it does not
+  open correlation already carry, or a child whose correlation a terminal settlement has already
+  closed (`HasClosedCorrelation`, reason `correlation_closed` — the locked path would answer
+  not-found and write nothing) ⇒ dropped with no lock, no transaction, no write; anything else
+  (including a child with no correlation at all) takes the locked path. It is a plain READ COMMITTED select — no row lock, no write — so it does not
   reintroduce the forbidden correlation-first CAS, and recovery is intact (an uncommitted first apply
   leaves an older watermark). A backup that loses the lock re-probes before throwing. Relay
   deliveries never probe.
 - **The state channel has its OWN lock backoff** (`WorkflowExecutionOptions.SubItemStateLockRetry`,
-  10 × 10 ms), not the terminal paths' 120 ms: the wait is `base*attempt + jitter(0..base)`, so at
-  120 ms the first retry alone slept 120–240 ms for a lock held a few ms (measured max 241 ms).
+  10 × 10 ms), not the terminal paths' (`SubItemTerminalLockRetry`, 10 × 20 ms): the wait is
+  `base*attempt + jitter(0..base)`, so the base decides the first retry. The terminal base used to be
+  120 ms, and the first retry alone slept 120–240 ms for a lock held a few ms (measured max 241 ms on
+  the state channel; 154–169 ms backup waits on digital-investment).
+- **The terminal paths re-probe between lock attempts** (`LockAcquireWait.KeepWaiting`, wired by
+  `SubItemTerminalGuardExtensions.WhileCorrelationOpen`): after each backoff sleep the same lock-free
+  correlation probe runs, and once it answers settled the wait is abandoned
+  (`vnext.lock.wait_abandoned=true`, result `correlation_already_settled_during_wait`) instead of
+  acquiring the lock only to load the parent and find the correlation closed. A not-acquired answer is
+  re-probed once more before it becomes a `SubflowTerminalLockNotAcquiredException`.
 - The UoW is `RequiresNew, IsTransactional = true` — not for the lock, for atomicity: without a
   transaction Aether stages the outbox rows *after* `UpdateAsync(autoSave)` already committed the
   Instance row, so the upward event and the state write could diverge.
@@ -386,7 +411,73 @@ keep it from polluting a transition's trace:
   `SubflowTerminalRearmExhausted` (40128, Error), `SubFlowStateChangeParentNotFound` (40129, Warning),
   `SubFlowStateChangeCorrelationNotFound` (40130, Warning), `SubFlowStateChangeOutOfOrder` (40131,
   Warning), `SubFlowStateChangeLockNotAcquired` (40132, Warning), `PostCommitEventRelayTimedOut`
-  (40133, Warning), `PostCommitEventRelayDepthExceeded` (40134, Warning).
+  (40133, Warning), `PostCommitEventRelayDepthExceeded` (40134, Warning),
+  `SubFlowStateChangeBackupAlreadyApplied` (40137, Debug), `PostCommitEventRelaySkipped` (40138,
+  Debug), `SubFlowStateChangeTerminalSuperseded` (40139, Debug),
+  `SubFlowCarriedHeadersFiltered` (40140, Debug).
+- **Aether's per-attempt lock log**: `DaprDistributedLockService.TryAcquireLockAsync` logs
+  `Failed to acquire lock for resource …` at Warning on every unsuccessful attempt — contention, not
+  failure, and the bounded retry in `TransitionLockScopeFactory` already logs each retry at Debug
+  (`TransitionLockRetryScheduled`) and exhaustion once at Warning (`InstanceLockFailed`). The
+  orchestration host sets that category to `Error` in `appsettings.json` (errors still surface). Only
+  orchestration needs it: it is the only host that takes the sub-item lock — the Inbox worker forwards
+  backup deliveries to orchestration over HTTP. A per-category environment variable leaves the entry in
+  force; a chart that replaces the whole `Logging` section must carry it (follow-up for
+  `vnext-helm-charts`: `docs/integration/vnext-helm-charts/aether-lock-log-level.md`). Side effect: the
+  Dapr handle's `ExtendAsync is not supported` Warning, logged under the same category, is hidden too.
+
+## Carried headers on sub-item terminal events
+
+The three terminal events `instance.sub.completed`, `instance.sub.faulted` and `instance.sub.canceled`
+carry an optional `CarriedHeaders` map: the request headers of the call that settled the child, so the
+parent's output mapping and its resume can read what the child's caller sent. The field is
+additive and optional; a consumer that ignores it sees the event as before.
+
+- **Carried set.** Every request header except the deny floor and the framework exclusions. Both are
+  enforced in code (`CarriedHeaderPolicy`, `src/BBT.Workflow.Application/SubFlow/Headers/`), compared
+  case-insensitively, and keys are stored lower-cased.
+  - Deny floor: any name containing `authorization`, `cookie`, `token`, `secret` or `session`, plus every
+    name in `AdditionalDenied` (exact match). Configuration can add to the floor, never remove from it.
+  - Framework exclusions (correctness, not secrecy): `x-subflow-depth`, `x-parent-instance-id`,
+    `x-root-instance-id`, `x-workflow-instance-id`, `x-correlation-id`, `traceparent`, `tracestate`,
+    `baggage`, `host`, `transfer-encoding`, `connection`, `keep-alive`, and the prefixes `content-`,
+    `dapr-`, `grpc-`.
+  - Caps: at most `MaxEntries` (64) entries and `MaxValueLength` (4096) characters per value. An
+    over-long value is dropped and counted as "denied"; entries past the entry cap are dropped and counted as "overflow". Both counts appear in log 40140; header values are never logged.
+- **`role` is always carried and applied** (requester amendment RA-1). There is no `Role` option.
+- **Denylist, not allowlist** (RA-2). A header that is neither on the floor nor excluded travels, so a
+  secret in an unusually named header (say `x-api-key`) is carried unless it is listed in
+  `AdditionalDenied`. Accepted risk: the gateway or the operator owns that list. Values reach the
+  outbox row, the Inbox body and the parent's output mapping.
+- **Four copy sites.** The set is captured once at the producer (`HandleFinishStep`, and the request-hop
+  fault paths), only for sub-item instances (a root instance has no parent to carry them to), then copied
+  verbatim at the post-commit relay, the Inbox body and the re-arm rebuild. Every receiver filters it
+  again before use, because the event is untrusted input.
+- **Upward parent fault.** When the parent itself faults because of the child's settlement (parent
+  workflow could not be loaded, output mapping failed, abort boundary), the received set is re-captured
+  through the local policy before it goes to the grandparent: `Emit=false` yields `null`, and the deny
+  floor and caps apply again, so a forged `/complete` body cannot smuggle `authorization` upward.
+- **Switches** (section `Workflow:SubFlow:CarriedHeaders`):
+
+  | Key | Default | Effect |
+  |---|---|---|
+  | `Emit` | `true` | `false`: producers write no headers on terminal events. |
+  | `ExposeToOutputMapping` | `true` | The completion and fault output mapping reads them as `context.Headers`. |
+  | `ApplyToResume` | `true` | Applies them to the parent's resume request for completion, fault and cancel (`false` for a domain that wants the stricter behaviour). `Actor = System` is unchanged; `ScriptResponse.Headers` gets no resume semantics. |
+  | `AdditionalDenied` | `[]` | Extra names denied (exact, case-insensitive). |
+  | `MaxEntries` / `MaxValueLength` | `64` / `4096` | Caps above. |
+
+- **`null` and empty.** If the filtered set is empty the producer writes `null`; a consumer treats `null`
+  and `{}` the same (empty dictionary). Timer, timeout and job-timeout-recovery settlements, and the *downward*
+  cancel/fault cascades, have no caller request, so they carry `null`; an *upward* parent fault instead
+  forwards the re-filtered child set (above). The internal `/complete`, `/fault`, `/cancel` request's own
+  HTTP headers are never read; only the body field counts.
+- **Never logged.** Header values are never logged or put on a span. The span tag
+  `vnext.subflow.carried_header_count` carries the count; `SubFlowCarriedHeadersFiltered` (40140, Debug)
+  reports kept / denied / overflow counts only.
+
+How the output mapping and resume see these headers:
+[Subflow Execution](../architecture/subflow-execution.md#carried-headers-from-the-child).
 
 ## Accepted risks
 

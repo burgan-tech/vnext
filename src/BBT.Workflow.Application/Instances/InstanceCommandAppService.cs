@@ -188,7 +188,8 @@ public sealed class InstanceCommandAppService(
         {
             Id = existingInstance.Id,
             Key = existingInstance.Key,
-            Status = existingInstance.Status
+            Status = existingInstance.Status,
+            FlowVersion = existingInstance.FlowVersion
         });
     }
 
@@ -301,6 +302,8 @@ public sealed class InstanceCommandAppService(
         using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Create");
         activity?.SetTag(TelemetryConstants.TagNames.Flow, workflow.Key);
         activity?.SetTag(TelemetryConstants.TagNames.FlowVersion, workflow.Version);
+        // What the caller asked for (floating, "latest" or explicit); FlowVersion above is what it resolved to.
+        activity?.SetTag(TelemetryConstants.TagNames.FlowVersionRequested, input.Version);
         activity?.SetTag(TelemetryConstants.TagNames.InstanceDataAppended, input.Instance.Attributes != null);
 
         await using var uow = UnitOfWorkManager.Begin(
@@ -518,16 +521,29 @@ public sealed class InstanceCommandAppService(
         // Execute transition - lock is managed by TransitionPipeline
         return workflowExecutionService
             .ExecuteTransitionAsync(context, cancellationToken)
-            .MapAsync(transitionOutput => new StartInstanceOutput
+            .MapAsync(transitionOutput =>
             {
-                Id = data.Instance.Id,
-                Key = data.Instance.Key,
-                Status = transitionOutput.Status,
-                // Stamp the effective sync/async outcome from context.Mode (the mode we resolved and
-                // dispatched on) so the controller shapes 200 vs 202 by what actually ran, not the caller's
-                // sync query parameter (#1003). Authoritative here — the output may have been built by the
-                // post-commit settle path (subflow start), which does not carry it.
-                ExecutedAsync = context.Mode == ExecMode.Async
+                var startOutput = new StartInstanceOutput
+                {
+                    Id = data.Instance.Id,
+                    Key = data.Instance.Key,
+                    Status = transitionOutput.Status,
+                    FlowVersion = data.Instance.FlowVersion,
+                    // Stamp the effective sync/async outcome from context.Mode (the mode we resolved and
+                    // dispatched on) so the controller shapes 200 vs 202 by what actually ran, not the caller's
+                    // sync query parameter (#1003). Authoritative here — the output may have been built by the
+                    // post-commit settle path (subflow start), which does not carry it.
+                    ExecutedAsync = context.Mode == ExecMode.Async
+                };
+
+                // A runtime-internal sync start (cross-domain sub start) skips the enrichment below but
+                // still answers with the child's state (vnext#1182). Read off the instance the pipeline
+                // already holds — the same snapshot Status came from, so the pair is consistent — and
+                // never off the database: this surface stays identity-only in cost.
+                if (context.Mode == ExecMode.Sync && input.SuppressResponseEnrichment)
+                    ApplySyncState(startOutput, transitionOutput.PipelineInstance);
+
+                return startOutput;
             })
             // Enrich by the EFFECTIVE mode, not the caller's query parameter (#1003): a definition-forced
             // sync run returns the full instance, a forced-async accept returns identity only — so the body
@@ -832,6 +848,10 @@ public sealed class InstanceCommandAppService(
                 if (context.Mode == ExecMode.Sync && !input.SuppressResponseEnrichment)
                     return EnrichSyncOutputAsync(output, output.Id, workflowDefinition, new AuthorizationRequestContext(input.Headers), cancellationToken);
                 output.Key = snapshot.Key;
+                // Identity-only relay that still ran sync: carry the state from the pipeline's own
+                // instance, no read (vnext#1182). Null when the pipeline answered from a ClientResponse.
+                if (context.Mode == ExecMode.Sync)
+                    ApplySyncState(output, output.PipelineInstance);
                 return Task.FromResult(Result<TransitionOutput>.Ok(output));
             });
     }
@@ -992,6 +1012,7 @@ public sealed class InstanceCommandAppService(
             // {id, status} from the admission decision with no instance in hand, and its caller polls
             // the state function anyway.
             outputBase.EffectiveStatus = instance.GetEffectiveStatus;
+            ApplySyncState(outputBase, instance);
         }
 
         var latestData = instance.LatestData;
@@ -1052,6 +1073,20 @@ public sealed class InstanceCommandAppService(
         }
 
         return Result<TOutput>.Ok(output);
+    }
+
+    /// <summary>
+    /// Copies the instance's own and effective state onto a sync response (vnext#1182). Columns only —
+    /// the same values the instance GET serves as <c>currentState</c> / <c>effectiveState</c>, with no
+    /// SubFlow descent, so it never costs a query. A null instance leaves both fields null.
+    /// </summary>
+    private static void ApplySyncState(InstanceOutputBase output, Instance? instance)
+    {
+        if (instance is null)
+            return;
+
+        output.CurrentState = instance.CurrentState;
+        output.EffectiveState = instance.EffectiveState;
     }
 
     /// <summary>

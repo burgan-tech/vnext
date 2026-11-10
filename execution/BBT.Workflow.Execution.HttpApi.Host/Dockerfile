@@ -1,43 +1,19 @@
-# Ubuntu/glibc is required so NumPy, pandas, SciPy, and scikit-learn can use
-# their published manylinux wheels on both amd64 and arm64.
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble AS base
 
 ENV DEBIAN_FRONTEND=noninteractive \
     DOTNET_NUGET_SIGNATURE_VERIFICATION=false \
-    ASPNETCORE_URLS=http://+:5000 \
-    PYTHONNET_PYDLL=libpython3.12.so.1.0 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_INDEX=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    OMP_NUM_THREADS=1 \
-    OPENBLAS_NUM_THREADS=1 \
-    MKL_NUM_THREADS=1
+    ASPNETCORE_URLS=http://+:5000
 
 # libgssapi-krb5-2: Npgsql probes GSSAPI on every connection; without it the .NET native shim
 # prints "Cannot load library libgssapi_krb5.so.2" to stderr (harmless, but reads as a failure).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libgssapi-krb5-2 \
-        libpython3.12 \
-        python3.12 \
-        python3.12-venv \
-        util-linux \
         wget \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /opt/vnext-python
-COPY execution/python/requirements.lock ./requirements.lock
-RUN python3.12 -m venv /opt/vnext-python/venv \
-    && env -u PIP_NO_INDEX /opt/vnext-python/venv/bin/python -m pip install \
-        --no-cache-dir --only-binary=:all: --require-hashes -r requirements.lock \
-    && /opt/vnext-python/venv/bin/python -c "import numpy, pandas, sklearn" \
-    && /opt/vnext-python/venv/bin/python -m pip uninstall -y pip setuptools wheel
-
-COPY execution/python/runner.py execution/python/vnext_runner.py ./
-
 RUN groupadd --system --gid 10001 workflowuser \
-    && useradd --system --uid 10001 --gid 10001 --home-dir /nonexistent workflowuser \
-    && chmod -R a=rX /opt/vnext-python
+    && useradd --system --uid 10001 --gid 10001 --home-dir /nonexistent workflowuser
 
 WORKDIR /app
 RUN chown workflowuser:workflowuser /app

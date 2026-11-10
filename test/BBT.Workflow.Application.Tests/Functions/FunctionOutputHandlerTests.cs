@@ -240,6 +240,37 @@ public class FunctionOutputHandlerTests
 
     // ─── CreateRawResponse: output headers/status (multi-task) ─────────────────
 
+    // vnext-client-sdk-core#99/#142-E: a binary raw body is flagged and kept as bytes; a ScriptFile answers its own type.
+    [Fact]
+    public void CreateRawResponse_ByteArray_IsFlaggedBinary()
+    {
+        var response = FunctionAppService.CreateRawResponse(
+            CreateMultiTaskFunction(rawResponse: true), CreateScriptContext(), data: new byte[] { 0x25, 0x50, 0xFF });
+        response.IsBinary.ShouldBe(true);
+        response.Data.ShouldBe(new byte[] { 0x25, 0x50, 0xFF });
+    }
+
+    [Fact]
+    public void CreateRawResponse_ScriptFile_IsItsBytes_WithItsMediaType_UnlessTheScriptSetsOne()
+    {
+        var file = new BBT.Workflow.Scripting.Functions.ScriptFile(new byte[] { 1, 2 }, "c.pdf", "application/pdf", 2, "e");
+
+        var own = FunctionAppService.CreateRawResponse(CreateMultiTaskFunction(rawResponse: true), CreateScriptContext(), data: file);
+        own.Data.ShouldBe(new byte[] { 1, 2 });
+        own.Headers!["Content-Type"].ShouldBe("application/pdf");
+
+        var authored = FunctionAppService.CreateRawResponse(CreateMultiTaskFunction(rawResponse: true), CreateScriptContext(), data: file,
+            outputHeaders: new Dictionary<string, string> { ["content-type"] = "application/x-custom" });
+        authored.Headers!["content-type"].ShouldBe("application/x-custom");
+        authored.Headers.ContainsKey("Content-Type").ShouldBeFalse();
+    }
+
+    [Fact]
+    public void CreateRawResponse_TextAndObjects_AreNotBinary()
+        => FunctionAppService.CreateRawResponse(CreateMultiTaskFunction(rawResponse: true), CreateScriptContext(), data: "text")
+            .IsBinary.ShouldBeNull();
+
+
     [Fact]
     public void CreateRawResponse_UsesOutputHeadersAndStatus_WhenProvided()
     {

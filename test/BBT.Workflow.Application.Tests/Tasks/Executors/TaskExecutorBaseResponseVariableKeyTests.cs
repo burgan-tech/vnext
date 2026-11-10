@@ -119,12 +119,19 @@ public sealed class TaskExecutorBaseResponseVariableKeyTests
             // today's behavior (remote-only) is preserved byte-for-byte.
             var dispatcher = Substitute.For<ITaskInvocationDispatcher>();
             dispatcher.DispatchAsync(
-                    Arg.Any<WorkflowTask>(), Arg.Any<string>(), Arg.Any<TaskEnvelope>(),
+                    Arg.Any<WorkflowTask>(), Arg.Any<string>(), Arg.Any<BBT.Workflow.Execution.Bindings.HttpTaskBinding>(),
                     Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>())
                 .Returns(call => RemoteInvoker.InvokeAsync(
                     call.ArgAt<string>(1),
                     call.ArgAt<WorkflowTask>(0).Key,
-                    call.ArgAt<TaskEnvelope>(2),
+                    // The typed overload's Remote route: the envelope CreateEnvelope would have built.
+                    new TaskEnvelope
+                    {
+                        TaskType = call.ArgAt<string>(1),
+                        TaskKey = call.ArgAt<WorkflowTask>(0).Key,
+                        Binding = System.Text.Json.JsonSerializer.SerializeToElement(
+                            call.ArgAt<BBT.Workflow.Execution.Bindings.HttpTaskBinding>(2))
+                    },
                     call.ArgAt<TaskTraceContext>(3),
                     call.ArgAt<CancellationToken>(4)));
 

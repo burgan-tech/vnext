@@ -7,6 +7,7 @@ using BBT.Aether;
 using BBT.Aether.Domain.EntityFrameworkCore;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
+using BBT.Aether.Users;
 using BBT.Workflow.Data;
 using BBT.Workflow.DataSink;
 using BBT.Workflow.Definitions;
@@ -20,6 +21,7 @@ using BBT.Workflow.BackgroundJobs.Options;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using BBT.Workflow.Definitions.Schemas;
@@ -39,6 +41,8 @@ public sealed class EfCoreInstanceRepository(
         IInstanceRepository
 {
     private const string DefaultSchemaName = "public";
+    private const string QueryPrepareSpan = "Instance.Query.Prepare";
+    private const string QueryExecuteSpan = "Instance.Query.Execute";
 
     public override async Task<IQueryable<Instance>> WithDetailsAsync()
     {
@@ -278,7 +282,8 @@ public sealed class EfCoreInstanceRepository(
         CancellationToken cancellationToken = default)
     {
         // One no-tracking row: the parent's projection columns plus the open correlation's watermark
-        // as a correlated sub-select. No includes, no row lock (plain READ COMMITTED), no write.
+        // and a closed-correlation flag as correlated sub-selects. No includes, no row lock (plain
+        // READ COMMITTED), no write.
         var dbSet = await GetDbSetAsync();
         var row = await dbSet
             .AsNoTracking()
@@ -292,7 +297,9 @@ public sealed class EfCoreInstanceRepository(
                 Correlation = i.ChildCorrelations
                     .Where(c => c.SubFlowInstanceId == subInstanceId && !c.IsCompleted)
                     .Select(c => new { c.SubFlowCurrentState, c.SubFlowNotificationSeq, c.SubFlowStateChangedAt })
-                    .FirstOrDefault()
+                    .FirstOrDefault(),
+                HasClosedCorrelation = i.ChildCorrelations
+                    .Any(c => c.SubFlowInstanceId == subInstanceId && c.IsCompleted)
             })
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -307,7 +314,8 @@ public sealed class EfCoreInstanceRepository(
             row.Correlation is not null,
             row.Correlation?.SubFlowCurrentState,
             row.Correlation?.SubFlowNotificationSeq ?? 0,
-            row.Correlation?.SubFlowStateChangedAt);
+            row.Correlation?.SubFlowStateChangedAt,
+            row.HasClosedCorrelation);
     }
 
     /// <inheritdoc />
@@ -457,6 +465,47 @@ public sealed class EfCoreInstanceRepository(
             instanceId, InstanceStatus.Busy, InstanceStatus.Active, cancellationToken, effectiveStatus);
 
     /// <inheritdoc />
+    public async Task<bool> TryClaimContinuationAsync(
+        Guid instanceId,
+        string expectedState,
+        DateTime utcNow,
+        TimeSpan ttl,
+        CancellationToken cancellationToken = default)
+    {
+        // One statement: the row lock Postgres takes for the UPDATE is what makes two racing
+        // updateData continuations see each other — the second one re-evaluates the WHERE after the
+        // first commits and finds the claim taken (or the state already moved on).
+        // Deliberately does NOT stamp ModifiedAt (nor does the release below): the claim is internal
+        // bookkeeping, not a change to the instance. The continuation it admits stamps ModifiedAt
+        // through its own writes (docs/runtime/instance-filtering-and-queries.md § modifiedAt), and a
+        // stamp here would move the instance's "last changed" time — and its LastTouchedAt index
+        // entries — for a continuation that may then change nothing.
+        var staleBefore = utcNow - ttl;
+        var affected = await (await GetDbSetAsync())
+            .Where(i => i.Id == instanceId
+                        && i.Status == InstanceStatus.Busy
+                        && i.CurrentState == expectedState
+                        && (EF.Property<DateTime?>(i, InstanceContinuationClaim.ColumnName) == null
+                            || EF.Property<DateTime?>(i, InstanceContinuationClaim.ColumnName) < staleBefore))
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(i => EF.Property<DateTime?>(i, InstanceContinuationClaim.ColumnName), utcNow),
+                cancellationToken);
+
+        return affected == 1;
+    }
+
+    /// <inheritdoc />
+    public async Task ReleaseContinuationClaimAsync(Guid instanceId, CancellationToken cancellationToken = default)
+    {
+        await (await GetDbSetAsync())
+            .Where(i => i.Id == instanceId
+                        && EF.Property<DateTime?>(i, InstanceContinuationClaim.ColumnName) != null)
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(i => EF.Property<DateTime?>(i, InstanceContinuationClaim.ColumnName), (DateTime?)null),
+                cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task SetEffectiveStatusAsync(
         Guid instanceId,
         InstanceStatus effectiveStatus,
@@ -536,6 +585,66 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
+    public async Task AcceptPersistedBusyAsync(Instance instance, CancellationToken cancellationToken = default)
+    {
+        instance.Busy();
+
+        var context = await GetDbContextAsync();
+        var entry = context.Entry(instance);
+        if (entry.State == EntityState.Detached)
+        {
+            return;
+        }
+
+        // The redundant status write was ALSO what made the audit interceptor stamp an empty
+        // ModifiedBy / ModifiedByBehalfOf with the caller (it runs only for a Modified entry). On
+        // an instance whose first request changes nothing else — a start that rests in its initial
+        // state — dropping it would leave metadata.modifiedBy empty where it used to name the
+        // caller. So the write is dropped only when that stamp would change nothing; otherwise the
+        // status stays modified and the next flush writes exactly what it always did.
+        if (WouldStampModificationAudit(entry))
+        {
+            return;
+        }
+
+        // Status only: the reserve's CAS may also have written EffectiveStatus, but this method
+        // does not mirror it in memory, so its tracked value and baseline are left as they are.
+        var status = entry.Property(nameof(Instance.Status));
+        status.OriginalValue = instance.Status;
+        status.IsModified = false;
+    }
+
+    /// <summary>
+    /// Whether Aether's <c>AuditInterceptor</c> would change the modification audit columns of
+    /// <paramref name="entry"/> on its next save: it fills <c>ModifiedBy</c> / <c>ModifiedByBehalfOf</c>
+    /// only while they are empty — with the caller, or null (nullable) / a placeholder otherwise.
+    /// </summary>
+    private bool WouldStampModificationAudit(EntityEntry<Instance> entry)
+    {
+        var currentUser = ServiceProvider.GetService<ICurrentUser>();
+        return WouldChange(entry.Property(nameof(Instance.ModifiedBy)), currentUser?.ActorUserName)
+               || WouldChange(entry.Property(nameof(Instance.ModifiedByBehalfOf)), currentUser?.UserName);
+
+        static bool WouldChange(PropertyEntry property, string? value)
+        {
+            var current = property.CurrentValue as string;
+            if (!string.IsNullOrEmpty(current))
+            {
+                return false;
+            }
+
+            if (!string.IsNullOrEmpty(value))
+            {
+                return true;
+            }
+
+            // Empty caller: a nullable column becomes null (a change only from ""), a required one
+            // gets the interceptor's placeholder.
+            return !property.Metadata.IsNullable || current is not null;
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<bool> TryReleaseBusyAsync(Instance instance, CancellationToken cancellationToken = default)
     {
         var effectiveStatus = instance.HasActiveSubFlow ? null : InstanceStatus.Active;
@@ -582,9 +691,10 @@ public sealed class EfCoreInstanceRepository(
 
     /// <summary>
     /// The shared CAS: guard in the WHERE, single UPDATE, no aggregate load. ModifiedAt is set
-    /// explicitly because ExecuteUpdate bypasses the audit interceptor — without it the computed
-    /// LastTouchedAt column would stop advancing. ModifiedBy is deliberately NOT re-stamped: a
-    /// Busy flip is a system operation (same rule as InstanceJobs.MarkAsProcessedAsync).
+    /// explicitly: a set-based write never reaches the aggregate's own stamps (Instance.ChangeState,
+    /// Complete, Cancel, Fault), and Aether's audit interceptor fills only a null value — without it
+    /// the computed LastTouchedAt column would stop advancing. ModifiedBy is deliberately NOT
+    /// re-stamped: a Busy flip is a system operation (same rule as InstanceJobs.MarkAsProcessedAsync).
     /// </summary>
     private async Task<bool> TryTransitionStatusAsync(
         Guid instanceId,
@@ -740,6 +850,11 @@ public sealed class EfCoreInstanceRepository(
         string? identifier,
         CancellationToken cancellationToken = default)
     {
+        if (LatestOnlyLoading)
+        {
+            return await FindByIdentifierLatestOnlyAsync(identifier, cancellationToken);
+        }
+
         var query = (await PrepareDetailedQueryAsync())
             .AsSplitQuery();
         using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
@@ -762,6 +877,65 @@ public sealed class EfCoreInstanceRepository(
             .Where(p => p.Key == identifier)
             .OrderByDescending(p => p.CreatedAt)
             .FirstOrDefaultAsync(cancellationToken));
+    }
+
+    /// <summary>
+    /// The tracked detailed load when latest-only loading is on — the pipeline's hop-1 load
+    /// (<c>GetActiveAsync</c>). Same aggregate shape as the split path (latest data row + open
+    /// child correlations), in two commands instead of three: the latest data row is at most one
+    /// row per instance, so it joins the instance row in a single query with nothing to multiply,
+    /// and the open correlations follow as one explicit collection load keyed on the instance id.
+    /// The correlations are deliberately NOT joined too: an instance with several open
+    /// correlations would repeat the latest data's jsonb once per correlation row.
+    /// </summary>
+    private async Task<Instance?> FindByIdentifierLatestOnlyAsync(
+        string? identifier,
+        CancellationToken cancellationToken)
+    {
+        var query = await PrepareLatestOnlyDetailedQueryAsync();
+
+        using (PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan))
+        {
+            var instance = Guid.TryParse(identifier, out var instanceId)
+                ? await query.FirstOrDefaultAsync(p => p.Id == instanceId, cancellationToken)
+                : null;
+
+            // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
+            // keeps the fallback deterministic by returning the most recent instance for the key.
+            instance ??= await query
+                .Where(p => p.Key == identifier)
+                .OrderByDescending(p => p.CreatedAt)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (instance is null)
+            {
+                return null;
+            }
+
+            var context = await GetDbContextAsync();
+            await context.Entry(instance)
+                .Collection(i => i.ChildCorrelations)
+                .Query()
+                .Where(c => !c.IsCompleted)
+                .LoadAsync(cancellationToken);
+
+            return MarkIfPartiallyLoaded(instance);
+        }
+    }
+
+    /// <summary>
+    /// The latest-only counterpart of <see cref="PrepareDetailedQueryAsync"/>: the base includes
+    /// plus the at-most-one latest data row, as one single query, under the same
+    /// <c>Instance.Query.Prepare</c> span.
+    /// </summary>
+    private async Task<IQueryable<Instance>> PrepareLatestOnlyDetailedQueryAsync()
+    {
+        using (PipelineStepActivityHelper.StartOperationActivity(QueryPrepareSpan))
+        {
+            return (await base.WithDetailsAsync())
+                .Include(i => i.DataList.Where(d => d.IsLatest))
+                .AsSingleQuery();
+        }
     }
 
     /// <inheritdoc />
@@ -812,6 +986,11 @@ public sealed class EfCoreInstanceRepository(
     public async Task<Instance?> FindByIdentifierAsReadOnlyAsync(string identifier,
         CancellationToken cancellationToken = default)
     {
+        if (LatestOnlyLoading)
+        {
+            return await FindByIdentifierAsReadOnlyLatestOnlyAsync(identifier, cancellationToken);
+        }
+
         var query = (await PrepareDetailedQueryAsync())
             .AsNoTracking()
             .AsSplitQuery();
@@ -835,6 +1014,104 @@ public sealed class EfCoreInstanceRepository(
             .Where(p => p.Key == identifier)
             .OrderByDescending(p => p.CreatedAt)
             .FirstOrDefaultAsync(cancellationToken));
+    }
+
+    /// <summary>
+    /// The no-tracking twin of <see cref="FindByIdentifierLatestOnlyAsync"/> — the load behind every
+    /// read endpoint (GET instance, data/view/schema/master functions). Same aggregate shape as the
+    /// split path (latest data row + open child correlations) in two commands instead of three: the
+    /// latest data row is at most one row per instance, so it joins the instance row with nothing to
+    /// multiply, and the open correlations follow as one query keyed on the instance id. The
+    /// correlations are not joined too, for the reason the tracked twin gives. The tracked
+    /// collection loader does not apply to a detached aggregate, so the rows are attached through
+    /// <see cref="Instance.AcceptLoadedChildCorrelations"/>.
+    /// </summary>
+    private async Task<Instance?> FindByIdentifierAsReadOnlyLatestOnlyAsync(
+        string identifier,
+        CancellationToken cancellationToken)
+    {
+        var instance = await FindReadOnlyRootAsync(identifier, cancellationToken);
+        if (instance is null)
+        {
+            return null;
+        }
+
+        using (PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan))
+        {
+            var instanceId = instance.Id;
+            var openCorrelations = await (await GetDbContextAsync()).Set<InstanceCorrelation>()
+                .AsNoTracking()
+                .Where(c => c.ParentInstanceId == instanceId && !c.IsCompleted)
+                .ToListAsync(cancellationToken);
+            instance.AcceptLoadedChildCorrelations(openCorrelations);
+        }
+
+        return MarkIfPartiallyLoaded(instance);
+    }
+
+    /// <inheritdoc />
+    public async Task<(Instance? Instance, List<InstanceCorrelation> AllCorrelations)>
+        FindByIdentifierAsReadOnlyWithAllCorrelationsAsync(
+            string identifier,
+            CancellationToken cancellationToken = default)
+    {
+        var instance = await FindReadOnlyRootAsync(identifier, cancellationToken);
+        if (instance is null)
+        {
+            return (null, []);
+        }
+
+        List<InstanceCorrelation> allCorrelations;
+        using (PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan))
+        {
+            // One read for both consumers: the response's full correlation set (same filter and
+            // order as IInstanceCorrelationRepository.GetByParentAsync) and the aggregate's open
+            // subset, which the detail load would otherwise fetch with a filtered include.
+            var instanceId = instance.Id;
+            allCorrelations = await (await GetDbContextAsync()).Set<InstanceCorrelation>()
+                .AsNoTracking()
+                .Where(c => c.ParentInstanceId == instanceId)
+                .OrderBy(c => c.ParentState)
+                .ThenBy(c => c.CompletedAt)
+                .ToListAsync(cancellationToken);
+        }
+
+        instance.AcceptLoadedChildCorrelations(allCorrelations);
+        return (MarkIfPartiallyLoaded(instance), allCorrelations);
+    }
+
+    /// <summary>
+    /// The no-tracking instance row with its data rows and WITHOUT the correlation include, under
+    /// the usual identifier resolution (id first, then the most recent row for the key). Latest-only
+    /// loading: one single query (the latest row joins without multiplying). Full history: the
+    /// DataList stays a split query.
+    /// </summary>
+    private async Task<Instance?> FindReadOnlyRootAsync(
+        string identifier,
+        CancellationToken cancellationToken)
+    {
+        IQueryable<Instance> query;
+        using (PipelineStepActivityHelper.StartOperationActivity(QueryPrepareSpan))
+        {
+            var root = (await base.WithDetailsAsync()).AsNoTracking();
+            query = LatestOnlyLoading
+                ? root.Include(i => i.DataList.Where(d => d.IsLatest)).AsSingleQuery()
+                : root.Include(i => i.DataList).AsSplitQuery();
+        }
+
+        using (PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan))
+        {
+            var instance = Guid.TryParse(identifier, out var instanceId)
+                ? await query.FirstOrDefaultAsync(p => p.Id == instanceId, cancellationToken)
+                : null;
+
+            // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
+            // keeps the fallback deterministic by returning the most recent instance for the key.
+            return instance ?? await query
+                .Where(p => p.Key == identifier)
+                .OrderByDescending(p => p.CreatedAt)
+                .FirstOrDefaultAsync(cancellationToken);
+        }
     }
 
     /// <inheritdoc />
@@ -1234,7 +1511,7 @@ public sealed class EfCoreInstanceRepository(
     /// <param name="version">The version to search for. Supports:
     /// <list type="bullet">
     ///     <item><description>Full version (e.g., "1.0.0-pkg.1.17.0+account"): Exact match</description></item>
-    ///     <item><description>Artifact version (e.g., "1.0.0" or "1.0.0-alpha.1"): Returns highest pkg version for that artifact</description></item>
+    ///     <item><description>Artifact version (e.g., "1.0.0" or "1.0.0-alpha.1"): Returns highest pkg version for that artifact; a stored bare artifact row is returned only when no pkg row exists (see <see cref="InstanceDataVersionComparer.FindBestMatch"/>)</description></item>
     ///     <item><description>Partial version (e.g., "1.0"): Returns highest version matching the prefix</description></item>
     /// </list>
     /// </param>
@@ -1320,6 +1597,30 @@ public sealed class EfCoreInstanceRepository(
             .ToListAsync(cancellationToken);
     }
 
+    /// <inheritdoc />
+    public async Task<InstanceData?> FindLatestDataByKeyAsync(string key,
+        CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+
+        // No status filter on purpose: a registry transition commits with the instance Busy, and a
+        // Faulted one still carries the pointer its last committed row set.
+        var newestInstanceId = context.Instances
+            .Where(i => i.Key == key)
+            .OrderByDescending(i => i.CreatedAt)
+            .ThenByDescending(i => i.Id)
+            .Select(i => i.Id)
+            .Take(1);
+
+        return await context.InstancesData
+            .AsNoTracking()
+            .Where(d => newestInstanceId.Contains(d.InstanceId))
+            .OrderByDescending(d => d.IsLatest)
+            .ThenByDescending(d => d.EnteredAt)
+            .ThenByDescending(d => d.VersionNo)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
     private async Task<IQueryable<Instance>> GetFilteredQueryAsync(
         string? filter,
         SchemaFilterContext? schemaContext = null,
@@ -1376,6 +1677,36 @@ public sealed class EfCoreInstanceRepository(
         SchemaFilterContext? schemaContext = null,
         CancellationToken cancellationToken = default)
     {
+        var request = BuildRequestFromString(filter, groupBy, aggregations, sort, schemaContext);
+        return await GetPagedResultsWithGroupsAsync(page, pageSize, request, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<(HateoasPagedList<Instance> PagedList, List<GroupSummary>? Groups)> GetPagedResultsWithGroupsAsync(
+        int page,
+        int pageSize,
+        string? filter,
+        string? groupBy,
+        string? aggregations,
+        string? sort,
+        SchemaFilterContext? schemaContext,
+        Definitions.GraphQL.GraphQLFilterNode rowPredicate,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(rowPredicate);
+        var request = BuildRequestFromString(filter, groupBy, aggregations, sort, schemaContext);
+        request.RowPredicate = rowPredicate;
+        return await GetPagedResultsWithGroupsAsync(page, pageSize, request, cancellationToken);
+    }
+
+    /// <summary>
+    /// Parses the string list route (filter as plain node, envelope or legacy form; groupBy; aggregations; sort)
+    /// into one request. Shared by both string overloads so the row-security route parses exactly like the
+    /// unrestricted one.
+    /// </summary>
+    private static Definitions.GraphQL.GraphQLFilterRequest BuildRequestFromString(
+        string? filter, string? groupBy, string? aggregations, string? sort, SchemaFilterContext? schemaContext)
+    {
         var request = GraphQLFilterParser.ParseRequest(null, groupBy, aggregations);
         if (!string.IsNullOrWhiteSpace(filter))
         {
@@ -1390,7 +1721,100 @@ public sealed class EfCoreInstanceRepository(
         }
         request.OrderBy = GraphQLFilterParser.ParseOrderBy(sort);
         request.SchemaContext = schemaContext;
-        return await GetPagedResultsWithGroupsAsync(page, pageSize, request, cancellationToken);
+        return request;
+    }
+
+    /// <summary>
+    /// The single row-security merge point (vnext#1107): returns a request whose filter is the caller's filter
+    /// AND <see cref="Definitions.GraphQL.GraphQLFilterRequest.RowPredicate"/>, or the request itself when it
+    /// carries no row predicate (byte-identical SQL). The caller's request object is not mutated.
+    /// </summary>
+    /// <exception cref="FilterCompilationException">
+    /// The row predicate contains an empty node or an operator-less condition — the engine reads those as
+    /// "no restriction", so they are refused before any SQL is built.
+    /// </exception>
+    private static Definitions.GraphQL.GraphQLFilterRequest ApplyRowPredicate(Definitions.GraphQL.GraphQLFilterRequest request)
+    {
+        var rowPredicate = request.RowPredicate;
+        if (rowPredicate == null)
+            return request;
+        if (ContainsEmptyClause(rowPredicate))
+            throw new FilterCompilationException("row predicate contains an empty clause");
+
+        var callerFilter = request.Filter;
+        return new Definitions.GraphQL.GraphQLFilterRequest
+        {
+            Filter = callerFilter is null || callerFilter.NodeType == Definitions.GraphQL.FilterNodeType.Empty
+                ? rowPredicate
+                : new Definitions.GraphQL.GraphQLFilterNode { And = [callerFilter, rowPredicate] },
+            GroupBy = request.GroupBy,
+            Aggregations = request.Aggregations,
+            OrderBy = request.OrderBy,
+            SchemaContext = request.SchemaContext
+        };
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> IsVisibleAsync(
+        Guid instanceId,
+        Definitions.GraphQL.GraphQLFilterNode predicate,
+        SchemaFilterContext? schemaContext,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        // The same merge point as the list (empty-clause guard included); the instance is pinned inside the compiler
+        // by a uuid-typed condition, never by a caller-style `id` filter (that column binds text).
+        var request = ApplyRowPredicate(new Definitions.GraphQL.GraphQLFilterRequest
+        {
+            RowPredicate = predicate,
+            SchemaContext = schemaContext
+        });
+        var context = await GetDbContextAsync();
+        var schema = currentSchema.Name ?? DefaultSchemaName;
+        var readOptions = queryOptions?.CurrentValue ?? new InstanceQueryOptions();
+        var selected = await UnifiedFilterService.ExecutePageIdsAsync(
+            context, request, schema, 1, 1, schemaValidator, instanceId, readOptions.LatestJoin, cancellationToken);
+        return selected.Ids.Count == 1 && selected.Ids[0] == instanceId;
+    }
+
+    private static bool ContainsEmptyClause(Definitions.GraphQL.GraphQLFilterNode node) => node.NodeType switch
+    {
+        Definitions.GraphQL.FilterNodeType.And => node.And!.Exists(ContainsEmptyClause),
+        Definitions.GraphQL.FilterNodeType.Or => node.Or!.Exists(ContainsEmptyClause),
+        Definitions.GraphQL.FilterNodeType.Not => ContainsEmptyClause(node.Not!),
+        Definitions.GraphQL.FilterNodeType.Condition => node.Attributes!.Values.Any(IsEmptyCondition),
+        _ => true
+    };
+
+    /// <summary>
+    /// A field condition that compiles to no SQL somewhere: null, no operator and no nested field, or a nested
+    /// field that is itself empty. Nested conditions are walked the way the compiler walks them, so an
+    /// operator-less nested object never reaches the engine as "no restriction".
+    /// </summary>
+    private static bool IsEmptyCondition(Definitions.GraphQL.FieldCondition? condition) =>
+        condition is null
+        || (!condition.GetOperators().Any() && condition.NestedConditions is not { Count: > 0 })
+        || (condition.NestedConditions is { Count: > 0 } nested && nested.Values.Any(IsEmptyNestedValue));
+
+    /// <summary>
+    /// A nested condition value (JSON extension data). The compiler only reads a JSON object; anything else, an
+    /// object without keys, or an object holding an empty nested field compiles to nothing for that path.
+    /// </summary>
+    private static bool IsEmptyNestedValue(object? value)
+    {
+        if (value is not JsonElement { ValueKind: JsonValueKind.Object } element)
+            return true;
+
+        var any = false;
+        foreach (var property in element.EnumerateObject())
+        {
+            any = true;
+            if (!Definitions.GraphQL.GraphQLJsonFilterService.IsOperator(property.Name)
+                && IsEmptyNestedValue(property.Value))
+                return true;
+        }
+
+        return !any;
     }
 
     /// <summary>
@@ -1407,7 +1831,7 @@ public sealed class EfCoreInstanceRepository(
 
         var schema = currentSchema.Name ?? DefaultSchemaName;
 
-        request ??= new Definitions.GraphQL.GraphQLFilterRequest();
+        request = ApplyRowPredicate(request ?? new Definitions.GraphQL.GraphQLFilterRequest());
         var readOptions = queryOptions?.CurrentValue ?? new InstanceQueryOptions();
         if (readOptions.IdentityPaging && !readOptions.DisabledSchemas.Contains(schema, StringComparer.Ordinal) &&
             request.GroupBy?.GetFields().Count is not > 0 && request.Aggregations?.HasAggregations != true)

@@ -6,6 +6,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.SubFlow.Headers;
 using BBT.Workflow.Telemetry;
 using Microsoft.Extensions.Logging;
 
@@ -14,13 +15,15 @@ namespace BBT.Workflow.Execution.PostCommit;
 /// <summary>
 /// Applies post-handoff settlement and failure recovery to freshly reloaded parent state.
 /// </summary>
+/// <param name="carriedHeaderPolicy">Filters the request headers that ride the terminal event to the parent; null disables header capture, production DI always supplies it.</param>
 public sealed class PostCommitParentMutationService(
     IUnitOfWorkManager uowManager,
     IInstanceRepository instanceRepository,
     IInstanceStatusLock instanceStatusLock,
     IStateNotificationScheduler stateNotificationScheduler,
     ILogger<PostCommitParentMutationService> logger,
-    ISubItemEventDataResolver? subItemDataResolver = null) : IPostCommitParentMutationService
+    ISubItemEventDataResolver? subItemDataResolver = null,
+    ICarriedHeaderPolicy? carriedHeaderPolicy = null) : IPostCommitParentMutationService
 {
     public async Task<Result<TransitionOutput>> SettleAsync(
         PostCommitParentSnapshot source,
@@ -86,7 +89,8 @@ public sealed class PostCommitParentMutationService(
             }
 
             instance.Fault(source.Domain, source.CallerMode == ExecMode.Sync,
-                subItemData: await subItemDataResolver.ResolveOrStoredAsync(instance, cancellationToken));
+                subItemData: await subItemDataResolver.ResolveOrStoredAsync(instance, cancellationToken),
+                carriedHeaders: carriedHeaderPolicy?.Capture(source.Headers));
             await instanceRepository.UpdateAsync(instance, true, ct);
             return new ActivationVerdict(
                 TelemetryConstants.ActivationOutcomes.Faulted, CasFlipped: false, instance.GetCurrentState);

@@ -19,8 +19,11 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Shared;
 using BBT.Workflow.SubFlow;
+using BBT.Workflow.SubFlow.Headers;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
 using Shouldly;
@@ -96,6 +99,7 @@ public sealed class SubflowCompletionServiceTests
             .Setup(x => x.ApplyPreparedAsync(
                 It.IsAny<Instance>(), It.IsAny<Definitions.Workflow>(),
                 It.IsAny<SubflowOutputMappingPlan>(), It.IsAny<JsonElement?>(),
+                It.IsAny<IReadOnlyDictionary<string, string?>?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Ok());
 
@@ -117,6 +121,55 @@ public sealed class SubflowCompletionServiceTests
             It.IsAny<LockAcquireWait>(),
             It.IsAny<CancellationToken>()), Times.Once);
         _instanceRepository.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task CompletionAsync_WhenLockWaitEndsAndHolderHasSettled_ShouldNoOpInsteadOfThrowing()
+    {
+        // The backup that collided with the relay: the pre-lock probe still saw the correlation
+        // open, the wait was abandoned (or exhausted) and by then the relay had committed. One more
+        // lock-free probe must turn that into a no-op, never into a redelivery cycle.
+        var input = CreateInput(Guid.NewGuid(), Guid.NewGuid());
+        _lockScope.SetupGet(x => x.IsAcquired).Returns(false);
+        _terminalGuard
+            .SetupSequence(x => x.ProbeAsync(
+                input.InstanceId, input.SubInstanceId,
+                SubItemTerminalOutcome.Completed, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SubItemTerminalProbe.Proceed)
+            .ReturnsAsync(SubItemTerminalProbe.AlreadySettled);
+
+        await CreateService().CompletionAsync(input);
+
+        _instanceRepository.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task CompletionAsync_ShouldHandTheLockWaitTheCorrelationProbe()
+    {
+        // The wait re-probes between attempts through LockAcquireWait.KeepWaiting; it must be the
+        // terminal guard's probe for THIS correlation, answering "keep waiting" only while open.
+        var input = CreateInput(Guid.NewGuid(), Guid.NewGuid());
+        LockAcquireWait? captured = null;
+        _lockScopeFactory
+            .Setup(x => x.AcquireAsync(It.IsAny<string>(), It.IsAny<LockAcquireWait>(), It.IsAny<CancellationToken>()))
+            .Callback((string _, LockAcquireWait wait, CancellationToken _) => captured = wait)
+            .ReturnsAsync(_lockScope.Object);
+        _lockScope.SetupGet(x => x.IsAcquired).Returns(false);
+        _terminalGuard
+            .SetupSequence(x => x.ProbeAsync(
+                input.InstanceId, input.SubInstanceId,
+                SubItemTerminalOutcome.Completed, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SubItemTerminalProbe.Proceed)        // pre-lock
+            .ReturnsAsync(SubItemTerminalProbe.AlreadySettled) // late probe (the mocked factory never asks KeepWaiting)
+            .ReturnsAsync(SubItemTerminalProbe.Proceed)        // KeepWaiting, asked below
+            .ReturnsAsync(SubItemTerminalProbe.AlreadySettled); // KeepWaiting, asked below
+
+        await CreateService().CompletionAsync(input);
+
+        captured.ShouldNotBeNull();
+        captured.Value.KeepWaiting.ShouldNotBeNull();
+        (await captured.Value.KeepWaiting!(CancellationToken.None)).ShouldBeTrue();
+        (await captured.Value.KeepWaiting!(CancellationToken.None)).ShouldBeFalse();
     }
 
     [Fact]
@@ -605,6 +658,77 @@ public sealed class SubflowCompletionServiceTests
     }
 
     [Fact]
+    public async Task CompletionAsync_HandsTheTerminalOutcomeToTheResume_AndWritesNoSeparateMarker()
+    {
+        // The resume hop stamps SettledAt in its own unit of work (ClearBusyOnResumeStep); this
+        // service no longer opens one more after the resume for that single write.
+        var parentInstance = CreateParentInstance(out var subInstanceId);
+        var input = CreateInput(parentInstance.Id, subInstanceId);
+        var parentWorkflow = WorkflowFactory.CreateDefault("parent-flow", "bank", "1.0.0");
+
+        _instanceRepository
+            .Setup(x => x.FindWithAllCorrelationsAndDataAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentInstance);
+        _instanceRepository
+            .Setup(x => x.UpdateAsync(parentInstance, true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentInstance);
+        _componentCacheStore
+            .Setup(x => x.GetFlowAsync("bank", "parent-flow", "1.0.0", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Definitions.Workflow>.Ok(parentWorkflow));
+
+        WorkflowExecutionContext? captured = null;
+        _workflowExecutionService
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowExecutionContext, CancellationToken>((ctx, _) => captured = ctx)
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = parentInstance.Id,
+                Status = InstanceStatus.Active
+            }));
+
+        await CreateService().CompletionAsync(input, CancellationToken.None);
+
+        captured.ShouldNotBeNull();
+        captured.Execution!.SubFlowResumeTerminalOutcome.ShouldBe(SubItemTerminalOutcome.Completed);
+        captured.Execution.SubFlowResumeSettledAt.ShouldBe(input.CompletedAt);
+        _correlationRepository.Verify(
+            x => x.TryMarkSettledAsync(It.IsAny<Guid>(), It.IsAny<SubItemTerminalOutcome>(),
+                It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task CompletionAsync_WhenResumeStopsSoftly_StillWritesTheMarkerBestEffort()
+    {
+        // No automatic transition matched: the hop may not have reached the marker write, so the
+        // service keeps the separate best-effort write for that case only.
+        var parentInstance = CreateParentInstance(out var subInstanceId);
+        var input = CreateInput(parentInstance.Id, subInstanceId);
+        var parentWorkflow = WorkflowFactory.CreateDefault("parent-flow", "bank", "1.0.0");
+
+        _instanceRepository
+            .Setup(x => x.FindWithAllCorrelationsAndDataAsync(parentInstance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentInstance);
+        _instanceRepository
+            .Setup(x => x.UpdateAsync(parentInstance, true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentInstance);
+        _componentCacheStore
+            .Setup(x => x.GetFlowAsync("bank", "parent-flow", "1.0.0", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<Definitions.Workflow>.Ok(parentWorkflow));
+        _workflowExecutionService
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<TransitionOutput>.Fail(
+                Error.Validation(WorkflowErrorCodes.AutoTransitionConditionNotMet, "no match", "x")));
+
+        await CreateService().CompletionAsync(input, CancellationToken.None);
+
+        _correlationRepository.Verify(
+            x => x.TryMarkSettledAsync(subInstanceId, SubItemTerminalOutcome.Completed,
+                input.CompletedAt, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task CompletionAsync_WhenResumeFails_RevertsCorrelationViaUnfilteredLoad()
     {
         var parentInstance = CreateParentInstance(out var subInstanceId);
@@ -762,7 +886,8 @@ public sealed class SubflowCompletionServiceTests
         _outputMappingService
             .Setup(x => x.ApplyPreparedAsync(
                 It.IsAny<Instance>(), It.IsAny<Definitions.Workflow>(), It.IsAny<SubflowOutputMappingPlan>(),
-                It.IsAny<JsonElement?>(), It.IsAny<CancellationToken>()))
+                It.IsAny<JsonElement?>(), It.IsAny<IReadOnlyDictionary<string, string?>?>(),
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Fail(WorkflowErrors.SubFlowOutputMappingFailed(
                 parent.Id, "mapping script is invalid", "at Mapping.OutputHandler()")));
 
@@ -771,6 +896,60 @@ public sealed class SubflowCompletionServiceTests
         parent.Status.ShouldBe(InstanceStatus.Faulted);
         _uow.Verify(x => x.CommitAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
+
+
+    [Theory]
+    [InlineData(true, new[] { "sub" })]
+    [InlineData(false, null)]
+    public async Task CompletionAsync_ParentFaultCascade_RefiltersCarriedHeadersThroughLocalPolicy(
+        bool emit, string[]? expectedKeys)
+    {
+        var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubFlow);
+        MakeSubFlowChild(parent);
+        SetupCompletedCorrelationPath(parent);
+        _outputMappingService
+            .Setup(x => x.ApplyPreparedAsync(
+                It.IsAny<Instance>(), It.IsAny<Definitions.Workflow>(), It.IsAny<SubflowOutputMappingPlan>(),
+                It.IsAny<JsonElement?>(), It.IsAny<IReadOnlyDictionary<string, string?>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Fail(WorkflowErrors.SubFlowOutputMappingFailed(
+                parent.Id, "mapping script is invalid", "at Mapping.OutputHandler()")));
+
+        await CreateService(CreateEmitPolicy(emit)).CompletionAsync(
+            CreateInput(parent.Id, subInstanceId) with { CarriedHeaders = ForgedHeaders() });
+
+        var forwarded = GrandparentHeaders(parent);
+        if (expectedKeys is null)
+        {
+            forwarded.ShouldBeNull();
+        }
+        else
+        {
+            forwarded.ShouldNotBeNull();
+            forwarded.Keys.ShouldBe(expectedKeys);
+        }
+    }
+
+    private static void MakeSubFlowChild(Instance instance)
+    {
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = WorkflowType.SubFlow.Code;
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Id] = Guid.NewGuid().ToString();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Domain] = "bank";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Flow] = "grandparent-flow";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Version] = "1.0.0";
+    }
+
+    private static Dictionary<string, string?> ForgedHeaders() => new()
+    {
+        ["authorization"] = "Bearer forged", ["sub"] = "u1"
+    };
+
+    private static CarriedHeaderPolicy CreateEmitPolicy(bool emit) => new(
+        Options.Create(new SubFlowCarriedHeadersOptions { Emit = emit }),
+        NullLogger<CarriedHeaderPolicy>.Instance);
+
+    private static Dictionary<string, string?>? GrandparentHeaders(Instance parent) =>
+        parent.GetDomainEvents().Select(e => e.Event).OfType<InstanceSubFaultedEvent>().Single().CarriedHeaders;
 
     private static Instance CloneParentWithCompletedCorrelation(Instance source, Guid subInstanceId)
     {
@@ -783,7 +962,77 @@ public sealed class SubflowCompletionServiceTests
         return clone;
     }
 
-    private SubflowCompletionService CreateService()
+    [Theory]
+    [InlineData(false, new string[0])]
+    [InlineData(true, new[] { "role", "sub" })]
+    public async Task CompletionAsync_ResumeHeaders_FollowApplyToResume(bool applyToResume, string[] expectedKeys)
+    {
+        var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubFlow);
+        SetupCompletedCorrelationPath(parent);
+        WorkflowExecutionContext? captured = null;
+        _workflowExecutionService
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowExecutionContext, CancellationToken>((c, _) => captured = c)
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput { Id = parent.Id, Status = InstanceStatus.Active }));
+        var input = CreateInput(parent.Id, subInstanceId) with
+        {
+            CarriedHeaders = new Dictionary<string, string?>
+            {
+                ["role"] = "approver", ["sub"] = "u1", ["authorization"] = "Bearer forged"
+            }
+        };
+
+        await CreateService(CreatePolicy(applyToResume)).CompletionAsync(input);
+
+        captured.ShouldNotBeNull();
+        captured.Actor.ShouldBe(ExecutionActor.System);
+        captured.Headers.Keys.OrderBy(k => k).ShouldBe(expectedKeys.OrderBy(k => k));
+    }
+
+    [Fact]
+    public async Task CompletionAsync_NullCarriedHeaders_ResumesWithEmptyHeaders()
+    {
+        var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubFlow);
+        SetupCompletedCorrelationPath(parent);
+        WorkflowExecutionContext? captured = null;
+        _workflowExecutionService
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowExecutionContext, CancellationToken>((c, _) => captured = c)
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput { Id = parent.Id, Status = InstanceStatus.Active }));
+
+        await CreateService(CreatePolicy(applyToResume: true)).CompletionAsync(CreateInput(parent.Id, subInstanceId));
+
+        captured.ShouldNotBeNull();
+        captured.Headers.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task CompletionAsync_PassesCarriedHeadersToOutputMapping()
+    {
+        var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubFlow);
+        SetupCompletedCorrelationPath(parent);
+        IReadOnlyDictionary<string, string?>? seen = null;
+        _outputMappingService
+            .Setup(x => x.ApplyPreparedAsync(
+                It.IsAny<Instance>(), It.IsAny<Definitions.Workflow>(), It.IsAny<SubflowOutputMappingPlan>(),
+                It.IsAny<JsonElement?>(), It.IsAny<IReadOnlyDictionary<string, string?>?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<Instance, Definitions.Workflow, SubflowOutputMappingPlan, JsonElement?,
+                IReadOnlyDictionary<string, string?>?, CancellationToken>((_, _, _, _, h, _) => seen = h)
+            .ReturnsAsync(Result.Ok());
+        var carried = new Dictionary<string, string?> { ["sub"] = "u1" };
+
+        await CreateService().CompletionAsync(CreateInput(parent.Id, subInstanceId) with { CarriedHeaders = carried });
+
+        seen.ShouldNotBeNull();
+        seen["sub"].ShouldBe("u1");
+    }
+
+    private static CarriedHeaderPolicy CreatePolicy(bool applyToResume) => new(
+        Options.Create(new SubFlowCarriedHeadersOptions { ApplyToResume = applyToResume }),
+        NullLogger<CarriedHeaderPolicy>.Instance);
+
+    private SubflowCompletionService CreateService(ICarriedHeaderPolicy? policy = null)
         => new(
             _uowManager.Object,
             _componentCacheStore.Object,
@@ -796,7 +1045,8 @@ public sealed class SubflowCompletionServiceTests
             _terminalGuard.Object,
             _eventBus.Object,
             Options.Create(new WorkflowExecutionOptions()),
-            _logger.Object);
+            _logger.Object,
+            carriedHeaderPolicy: policy);
 
     private void SetupCompletedCorrelationPath(Instance parent)
     {

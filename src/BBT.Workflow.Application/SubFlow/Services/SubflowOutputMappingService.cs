@@ -6,11 +6,13 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.SubFlow.Headers;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.SubFlow;
 
 /// <inheritdoc cref="ISubflowOutputMappingService" />
+/// <remarks>Carried headers: the optional policy re-filters the headers carried from the child's settlement for output mapping and the resume context; null disables header carry, production DI always supplies it.</remarks>
 public sealed class SubflowOutputMappingService(
     IInstanceRepository instanceRepository,
     IInstanceDataWriteService instanceDataWriteService,
@@ -18,7 +20,8 @@ public sealed class SubflowOutputMappingService(
     IScriptContextFactory scriptContextFactory,
     IRuntimeInfoProvider runtimeInfoProvider,
     IGuidGenerator guidGenerator,
-    ILogger<SubflowOutputMappingService> logger)
+    ILogger<SubflowOutputMappingService> logger,
+    ICarriedHeaderPolicy? carriedHeaderPolicy = null)
     : ISubflowOutputMappingService
 {
     /// <inheritdoc />
@@ -27,7 +30,8 @@ public sealed class SubflowOutputMappingService(
         Definitions.Workflow parentWorkflow,
         string parentStateKey,
         JsonElement? childInstanceData,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyDictionary<string, string?>? carriedHeaders = null)
     {
         var preparation = await PrepareAsync(
             parentInstance.Id,
@@ -42,6 +46,7 @@ public sealed class SubflowOutputMappingService(
             parentWorkflow,
             preparation.Value!,
             childInstanceData,
+            carriedHeaders,
             cancellationToken);
     }
 
@@ -90,6 +95,7 @@ public sealed class SubflowOutputMappingService(
         Definitions.Workflow parentWorkflow,
         SubflowOutputMappingPlan plan,
         JsonElement? childInstanceData,
+        IReadOnlyDictionary<string, string?>? carriedHeaders,
         CancellationToken cancellationToken = default)
     {
         if (plan.ParentState is null || plan.MappingInstance is null)
@@ -99,12 +105,18 @@ public sealed class SubflowOutputMappingService(
         {
             logger.SubFlowOutputMappingStarted(parentInstance.Id);
 
-            var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
+            var builder = scriptContextFactory.NewBuilder(instanceRepository)
                 .WithWorkflow(parentWorkflow)
                 .WithInstance(parentInstance)
                 .WithRuntime(runtimeInfoProvider)
-                .WithBody(childInstanceData?.Deserialize<Dictionary<string, object>>() ?? new Dictionary<string, object>())
-                .BuildAsync(cancellationToken);
+                .WithBody(childInstanceData?.Deserialize<Dictionary<string, object>>() ?? new Dictionary<string, object>());
+
+            // The child's request headers reach the OutputHandler only when the policy exposes them,
+            // re-filtered on this side (the event is untrusted input).
+            if (carriedHeaderPolicy is { ExposeToOutputMapping: true })
+                builder = builder.WithHeaders(carriedHeaderPolicy.Apply(carriedHeaders));
+
+            var scriptContext = await builder.BuildAsync(cancellationToken);
 
             using var scriptActivity = ScriptActivityHelper.StartExecuteActivity("subflowOutputMapping");
 

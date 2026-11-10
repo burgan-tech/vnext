@@ -18,6 +18,10 @@ using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Files;
 using BBT.Workflow.Application.Files;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Instances.Events;
+using BBT.Workflow.SubFlow.Headers;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
@@ -108,6 +112,12 @@ public class TransitionPipelineTests
         _mockInstanceRepository
             .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(callInfo => Task.FromResult(callInfo.ArgAt<Instance>(0)));
+
+        // Default: the parked-Busy continuation claim is free (one updateData, no competitor).
+        _mockInstanceRepository
+            .TryClaimContinuationAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<DateTime>(),
+                Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+            .Returns(true);
 
         // The single-transition step runner now lives in TransitionExecutor (S2).
         // Wrap the mock steps in a real executor so pipeline behavior is preserved.
@@ -368,6 +378,38 @@ public class TransitionPipelineTests
         // Assert
         result.IsSuccess.ShouldBeTrue();
         executionOrder.ShouldContain(LifecycleOrder.OnEntry);
+    }
+
+    /// <summary>
+    /// A hop that hands off (post-commit work, e.g. a SubFlow start) ends without a settlement, so no Busy
+    /// release closes it: a same-state hop's pending ModifiedAt stamp is applied at the handoff, and the
+    /// runner's commit sends it.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunAsync_WhenAHopHandsOff_AppliesOnlyAPendingModifiedAtStamp(bool pending)
+    {
+        var longAgo = new DateTime(2000, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        context.Target = CreateStateWithNotification("waiting-for-post-commit");
+        context.Instance.Busy();
+        context.Instance.ModifiedAt = longAgo;
+        context.Directives.EnqueuePostCommit(Substitute.For<IPostCommitJob>());
+        if (pending)
+            context.Directives.DeferModifiedAtStamp();
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        if (pending)
+            context.Instance.ModifiedAt.ShouldNotBe(longAgo);
+        else
+            context.Instance.ModifiedAt.ShouldBe(longAgo);
     }
 
     [Fact]
@@ -840,6 +882,93 @@ public class TransitionPipelineTests
     }
 
     [Fact]
+    public async Task RunAsync_UpdateData_ParkedBusy_ClaimsTheStateItLeavesFromAndReleasesWhenTheChainEnds()
+    {
+        // The takeover is gated by a continuation claim on (instance, Busy, current state); the
+        // claim is cleared when the chain ends so a later signal can move the gate again.
+        var updateDataContext = CreateTransitionExecutionContext("update-parent-data");
+        var chainedContext = CreateTransitionExecutionContext("auto-transition");
+        var workflowContext = CreateWorkflowExecutionContext(updateDataContext);
+        var parkedState = updateDataContext.Current?.Key ?? updateDataContext.Instance.CurrentState;
+        parkedState.ShouldNotBeNull();
+
+        SetupChainedContextFactory(updateDataContext, chainedContext);
+        SetupAutoStepRequestingNextTransition("auto-transition");
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.Unconditional);
+        _mockAdmissionService
+            .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Fail(WorkflowErrors.InstanceBusy(
+                updateDataContext.InstanceId, updateDataContext.TransitionKey)));
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _mockInstanceRepository.Received(1).TryClaimContinuationAsync(
+            updateDataContext.InstanceId, parkedState!, Now, InstanceContinuationClaim.DefaultTtl,
+            Arg.Any<CancellationToken>());
+        await _mockInstanceRepository.Received(1)
+            .ReleaseContinuationClaimAsync(updateDataContext.InstanceId, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_UpdateData_ParkedBusy_WhenAConcurrentContinuationHoldsTheClaim_DropsWithoutTakingOver()
+    {
+        // Contract domain, measured: three children report "ready" within milliseconds, all three
+        // updateData executions satisfy the gate, and before the claim all three took the parked
+        // Busy over and ran all-documents-ready in parallel. The loser of the claim must drop.
+        var updateDataContext = CreateTransitionExecutionContext("update-parent-data");
+        var chainedContext = CreateTransitionExecutionContext("auto-transition");
+        var workflowContext = CreateWorkflowExecutionContext(updateDataContext);
+
+        var contextCallCount = SetupChainedContextFactory(updateDataContext, chainedContext);
+        SetupAutoStepRequestingNextTransition("auto-transition");
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.Unconditional);
+        _mockAdmissionService
+            .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Fail(WorkflowErrors.InstanceBusy(
+                updateDataContext.InstanceId, updateDataContext.TransitionKey)));
+        _mockInstanceRepository
+            .TryClaimContinuationAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<DateTime>(),
+                Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _mockAdmissionService.DidNotReceive()
+            .TakeOverAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+        updateDataContext.OwnsStatus.ShouldBeFalse();
+        contextCallCount().ShouldBe(1); // the chained transition never ran here
+        await _mockInstanceRepository.DidNotReceive()
+            .ReleaseContinuationClaimAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_UpdateData_ReservedFromActive_NeedsNoClaim()
+    {
+        // An Active instance is reserved by the Busy CAS itself, which is already exclusive.
+        var updateDataContext = CreateTransitionExecutionContext("update-parent-data");
+        var chainedContext = CreateTransitionExecutionContext("auto-transition");
+        var workflowContext = CreateWorkflowExecutionContext(updateDataContext);
+
+        SetupChainedContextFactory(updateDataContext, chainedContext);
+        SetupAutoStepRequestingNextTransition("auto-transition");
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.Unconditional);
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _mockInstanceRepository.DidNotReceive().TryClaimContinuationAsync(
+            Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<DateTime>(), Arg.Any<TimeSpan>(),
+            Arg.Any<CancellationToken>());
+        await _mockInstanceRepository.DidNotReceive()
+            .ReleaseContinuationClaimAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task RunAsync_UpdateData_BusySubtypeWaitWithArmedTimeout_TakesOverAndContinues()
     {
         // QA reproduction (digital-investment, contract-initial-wait): a Busy-subtype wait state
@@ -1020,6 +1149,83 @@ public class TransitionPipelineTests
         result.IsSuccess.ShouldBeTrue();
         await _mockAdmissionService.DidNotReceive()
             .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_NormalReserveWon_ShouldMirrorBusyOntoTheTrackedAggregateWithoutAWrite()
+    {
+        // The reserve's CAS committed Busy in its own unit of work after the load. The pipeline must
+        // mirror it with the tracker aligned (AcceptPersistedBusyAsync) — leaving it to SetBusyStep's
+        // in-memory flip made the transition-record insert carry a second UPDATE of Status.
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        Received.InOrder(() =>
+        {
+            _mockAdmissionService.ReserveAsync(context, Arg.Any<CancellationToken>());
+            _mockInstanceRepository.AcceptPersistedBusyAsync(context.Instance, Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Fact]
+    public async Task RunAsync_NormalReserveLost_ShouldNotMirrorBusy()
+    {
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        _mockAdmissionService
+            .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Fail(WorkflowErrors.InstanceBusy(context.InstanceId, context.TransitionKey)));
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        await _mockInstanceRepository.DidNotReceive()
+            .AcceptPersistedBusyAsync(Arg.Any<Instance>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_SubFlowResumeOnBusyParent_ShouldSkipTheNoOpBusyConfirm()
+    {
+        // The parent of an S SubFlow is Busy for the subflow's lifetime: on a fresh load that reads
+        // Busy, the Active → Busy CAS cannot match, so it is not issued.
+        var context = CreateTransitionExecutionContext();
+        context.Instance.Busy();
+        context.Directives.MarkAsSubFlowResume(Guid.NewGuid());
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.OwnerReentry);
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _mockBusyMarker.DidNotReceive()
+            .MarkBusyAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_SubFlowResumeOnActiveParent_ShouldStillConfirmBusy()
+    {
+        var context = CreateTransitionExecutionContext();
+        context.Directives.MarkAsSubFlowResume(Guid.NewGuid());
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.OwnerReentry);
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _mockBusyMarker.Received(1)
+            .MarkBusyAsync(context.InstanceId, Arg.Any<CancellationToken>());
     }
 
     /// <summary>
@@ -1391,6 +1597,40 @@ public class TransitionPipelineTests
     #endregion
 
     #region Fault Handling Tests
+
+    [Fact]
+    public async Task RunAsync_WhenStepFails_Stamps_Filtered_Request_Headers_On_SubFaultedEvent()
+    {
+        var policy = new CarriedHeaderPolicy(
+            Options.Create(new SubFlowCarriedHeadersOptions()), NullLogger<CarriedHeaderPolicy>.Instance);
+        var pipeline = new TransitionPipeline(
+            new TransitionExecutor(_mockSteps, Substitute.For<ILogger<TransitionExecutor>>()),
+            new ContinuationDispatcher(new IContinuationStrategy[] { new InlineContinuationStrategy() }),
+            _mockBusyMarker, _mockContextFactory, _mockInstanceRepository, _mockInstanceJobRepository,
+            _mockUowManager, _mockValidationService, new PipelineProfileResolver(),
+            _mockStateNotificationScheduler, _mockAdmissionService, _mockStatusLock, _fileAdmission,
+            _clock, _mockLogger, carriedHeaderPolicy: policy);
+        var context = CreateTransitionExecutionContext(headers: new Dictionary<string, string?>
+        {
+            ["sub"] = "u1", ["Authorization"] = "Bearer x", ["X-Custom"] = "v"
+        });
+        var instance = context.Instance;
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = WorkflowType.SubFlow.Code;
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Id] = Guid.NewGuid().ToString();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Domain] = "parent-domain";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Flow] = "parent-flow";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Version] = "1.0.0";
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<StepOutcome>.Fail(Error.Failure("step.failed", "boom"))));
+
+        await pipeline.RunAsync(CreateWorkflowExecutionContext(context), CancellationToken.None);
+
+        var evt = instance.GetDomainEvents().Select(e => e.Event).OfType<InstanceSubFaultedEvent>().Single();
+        evt.CarriedHeaders!.OrderBy(k => k.Key).ToDictionary(k => k.Key, k => k.Value)
+            .ShouldBe(new Dictionary<string, string?> { ["sub"] = "u1", ["x-custom"] = "v" });
+    }
 
     [Fact]
     public async Task RunAsync_WhenStepFails_ShouldMarkInstanceFaultedWithSuccessResult()
@@ -2038,7 +2278,8 @@ public class TransitionPipelineTests
         };
     }
 
-    private TransitionExecutionContext CreateTransitionExecutionContext(string transitionKey = "test-transition")
+    private TransitionExecutionContext CreateTransitionExecutionContext(
+        string transitionKey = "test-transition", Dictionary<string, string?>? headers = null)
     {
         var instanceId = Guid.NewGuid();
         var workflowKey = "test-workflow";
@@ -2065,6 +2306,7 @@ public class TransitionPipelineTests
             Transition = transition,
             Instance = instance,
             Data = null,
+            Headers = headers ?? new Dictionary<string, string?>(),
             TraceId = Guid.NewGuid().ToString("N"),
             SpanId = Guid.NewGuid().ToString("N")[..16]
         };

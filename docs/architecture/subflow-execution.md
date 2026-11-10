@@ -82,6 +82,12 @@ executor starts the child and creates the correlation itself —
 `SubFlowType.SubProcess` and calls `AddCorrelation` on the tracked parent. That is the only sanctioned
 path to a `P` relationship.
 
+**Correlation version**: `SubFlowVersion` on the correlation holds the child's RESOLVED version, taken
+from the `flowVersion` of the start response, not the authored reference (`1.0` or `latest`). An older
+remote runtime, or a SubProcess started through the remote-invoker path, returns no version and keeps
+the authored reference. The pin is best-effort: it lands right after the start returns (a sync child's
+own resume inside the start still sees the authored value), and a failed pin only logs a warning.
+
 The council session `2026-09-22-sync-subprocess-continuation-admission` closed `VOID` on this rule:
 the sync/async divergence was a **symptom of the invalid definition**, not a runtime defect to patch
 in admission.
@@ -116,6 +122,18 @@ open, so the settle could flip nothing, emit no verdict and publish nothing; the
 settles, and a terminal child always forces the fresh reload. The span awaiting the relay carries
 `vnext.settle.skipped=true`. Measured on vnext-example `subflow-depth-lab`: a depth-5 transition
 went from 4 settles, 5 lock pairs and 39 SELECTs to 1, 2 and 30.
+
+The same short-circuit applies to an **intermediate level of a nested start chain**
+(`TransitionRunner.IsSettleFreeStartSubflowHandoff`): an identity-only caller (the level above's
+`SubflowStarter`, which reads only the child's resolved version) whose only post-commit jobs are
+`StartSubflowJob`. The hop that entered the SubFlow state was marked terminal, so no status was
+deferred (`ContinuationSet.ResolvedStatus` is null; every inline hop gets fresh directives), and the
+settle could schedule no notification, flip nothing and publish nothing — whether the child is still
+running or completed inline and resumed this parent in its own scope. The client-facing root still
+settles from the authoritative reload, because its response projects the aggregate. `StartSubflowJobHandler`
+no longer re-reads the parent after a sync child either: that `ClientResponse` had no reader past the
+barrier. Measured on morph-idm `zeebe-approval` (test, 2026-11-03): nine `PostCommit.Settle` spans of
+58 ms average and four discarded re-reads of ~100 ms in one depth-4 start request.
 
 ## Completion and Parent Resume
 
@@ -152,6 +170,23 @@ commands still keep their explicit contract value.
 
 **Completion window.** If subflow is in terminal status (`Completed`/`Faulted`/`Passive`) while parent correlation is still open, State function shows **parent** main-flow transitions instead of subflow terminal view.
 
+## Carried Headers from the Child
+
+The child's terminal event carries the headers of the request that settled it; the contract, deny
+floor, caps and switches live in
+[Event Publish Modes](../runtime/event-publish-modes.md#carried-headers-on-sub-item-terminal-events).
+
+- **Output mapping.** On both the completion and the fault path the parent's output mapping reads them
+  as `context.Headers` (when `ExposeToOutputMapping`, default on), re-filtered on the parent side. With
+  nothing carried the dictionary is empty.
+- **Resume.** Completion, fault and cancel resumes apply them (`ApplyToResume`, default on; a domain
+  that wants the stricter behaviour sets it to `false`), so the resumed hop's conditions, tasks and the
+  next subflow's input mapping see the finisher's request. `Actor` stays `System`.
+- **Timer and cascade.** A timeout, timer, job-timeout recovery or downward cancel/fault cascade has no
+  caller request, so its event carries `null` and the mapping sees an empty set. An upward parent fault
+  (parent load or output-mapping failure) forwards the child's set to the grandparent after re-filtering
+  it through the local policy (`Emit=false` yields `null`). Only sub-item instances capture headers.
+
 ## Retry
 
 When retry descends from a faulted parent into its active child, `InstanceRetryAppService` builds
@@ -172,7 +207,12 @@ read. Do not replace these reads with the old parent object: it may still say Bu
 
 - Child start uses strict idempotency with a preassigned child instance id.
 - Durable correlations identify parent, child, relationship type and terminal outcome.
-- Terminal settlement uses a durable settled marker/guard to absorb relay/Inbox duplicates.
+- Terminal settlement uses a durable settled marker/guard to absorb relay/Inbox duplicates. For a
+  completion the marker (`InstanceCorrelation.SettledAt`) is written by the resume hop itself, in its
+  own unit of work (`ClearBusyOnResumeStep`, handed `ExecutionInfo.SubFlowResumeTerminalOutcome` by
+  `SubflowCompletionService`); the service opens a separate best-effort write only when the resume
+  stopped before its first step (no matching automatic transition, parent completed meanwhile). A
+  resume that fails later reverts the correlation, which clears the marker again.
 - Resume failure reopens the correlation and republishes/rearms terminal delivery subject to its
   retry cap.
 - A proxy pre-stamp of the parent `EffectiveStatus` is reverted (compare-and-set) if the forward fails.
@@ -201,4 +241,5 @@ read. Do not replace these reads with the old parent object: it may still say Bu
 - `src/BBT.Workflow.Application/SubFlow/Services/Relays/`
 - `src/BBT.Workflow.Application/Instances/InstanceRetryAppService.cs`
 - [Event Publish Modes](../runtime/event-publish-modes.md)
+- `src/BBT.Workflow.Application/SubFlow/Headers/`
 - [Inline Auto-Chain Context Reuse](inline-chain-context-reuse.md)

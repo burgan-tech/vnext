@@ -32,6 +32,12 @@ namespace BBT.Workflow.Caching;
 /// which request spellings its component participates in — <see cref="InstanceDataVersionComparer.FindBestMatch"/>
 /// also accepts leading-zero package-version aliases, and could accept more forms later — so instead of
 /// listing them, replacing the token makes all of them unreachable at once.
+/// <para>
+/// Both kinds are prefixed by the shape segment <see cref="ComponentCacheShape.Version"/>
+/// (<c>{component}:{domain}:{key}:{shape}:full:…</c>, <c>…:{shape}:res:…</c>), so pods of releases whose
+/// entity types differ never read each other's bodies. The L1 tier reuses these keys. The generation token
+/// (<c>…:gen</c>) carries no shape: it is opaque and stays shared.
+/// </para>
 /// </remarks>
 /// <typeparam name="T">The type of entity to cache</typeparam>
 public class CacheSet<T>(
@@ -41,11 +47,20 @@ public class CacheSet<T>(
     IOptions<ComponentCacheOptions> options,
     TimeProvider timeProvider,
     ILogger<CacheSet<T>> logger,
-    IComponentL1Cache l1Cache)
+    IComponentL1Cache l1Cache,
+    IVersionPolicySource? versionPolicy = null)
     : ICacheSet<T>
     where T : class, IDomainEntity, IReferenceSetter
 {
     private static readonly string ComponentKeyName = T.ComponentTypeKey;
+
+    /// <summary>
+    /// Keys of system components, which the default-version policy never applies to. The policy's own
+    /// registry is such a component, so applying it there would recurse.
+    /// </summary>
+    private const string SystemKeyPrefix = "sys-";
+
+    private readonly IVersionPolicySource _versionPolicy = versionPolicy ?? NoVersionPolicySource.Instance;
 
     /// <summary>
     /// Resolutions in flight, so concurrent misses for the same component and spelling share one
@@ -225,7 +240,7 @@ public class CacheSet<T>(
         var resolution = _inFlightResolutions.GetOrAdd(
             redisKey,
             _ => new Lazy<Task<Result<T>>>(
-                () => ResolveFromBackendAsync(domain, key, requested, spelling, redisKey, cancellationToken),
+                () => ResolveFromBackendAsync(domain, key, requested, spelling, redisKey, activity, cancellationToken),
                 LazyThreadSafetyMode.ExecutionAndPublication));
 
         CacheActivityHelper.SetCoalesced(activity, resolution.IsValueCreated);
@@ -246,6 +261,7 @@ public class CacheSet<T>(
         string? requested,
         string spelling,
         string redisKey,
+        Activity? activity,
         CancellationToken cancellationToken)
     {
         var allResult = await backend.LoadAllByKeyAsync(domain, key, cancellationToken);
@@ -259,8 +275,24 @@ public class CacheSet<T>(
         // under the key another request reads. Normalization only trims and lowercases, and every
         // comparison in FindBestMatch that can see letters is already case-insensitive, so resolution
         // semantics are unchanged.
-        var bestMatch = InstanceDataVersionComparer.FindBestMatch(
-            allVersions.Select(e => e.Version), spelling);
+        string? bestMatch;
+        if (AppliesVersionPolicy(key))
+        {
+            // Policy failures (registry unreadable, not activated, invalid pointer) are returned without
+            // a negative entry: none of them means "no such version", and each clears on its own — a
+            // registry recovering, or a pointer move, which bumps the generation anyway.
+            var policyResult = await ResolveByPolicyAsync(
+                domain, key, requested, spelling, allVersions.Select(e => e.Version).ToList(), activity, cancellationToken);
+            if (!policyResult.IsSuccess)
+                return Result<T>.Fail(policyResult.Error);
+
+            bestMatch = policyResult.Value;
+        }
+        else
+        {
+            bestMatch = InstanceDataVersionComparer.FindBestMatch(
+                allVersions.Select(e => e.Version), spelling);
+        }
 
         if (string.IsNullOrEmpty(bestMatch))
             return await CacheNegativeAsync(domain, key, requested, spelling, redisKey, cancellationToken);
@@ -290,6 +322,67 @@ public class CacheSet<T>(
 
         return Result<T>.Ok(matched);
     }
+
+    /// <summary>
+    /// Resolves a floating spelling through the component's default-version pointer.
+    /// </summary>
+    /// <returns>
+    /// The winning version; <c>Ok(null)</c> when no published version matches at all (the caller's
+    /// ordinary negative-cache path); a failure for a policy error that must not be negative-cached.
+    /// </returns>
+    private async Task<Result<string?>> ResolveByPolicyAsync(
+        string domain,
+        string key,
+        string? requested,
+        string spelling,
+        IReadOnlyCollection<string> versions,
+        Activity? activity,
+        CancellationToken cancellationToken)
+    {
+        var pointerResult = await _versionPolicy.GetDefaultVersionAsync(domain, key, cancellationToken);
+        if (!pointerResult.IsSuccess)
+        {
+            // Fail closed: falling back to the newest version would activate one nobody activated.
+            logger.VersionRegistryReadFailed(domain, key, pointerResult.Error.Code, null);
+            return Result<string?>.Fail(pointerResult.Error);
+        }
+
+        var pointer = pointerResult.Value;
+        var resolution = DefaultVersionResolver.Resolve(versions, pointer, spelling);
+        CacheActivityHelper.SetVersionPolicy(activity, pointer, resolution.Source);
+
+        switch (resolution.Outcome)
+        {
+            case VersionResolutionOutcome.PointerInvalid:
+                logger.FlowDefaultVersionInvalid(domain, key, pointer!);
+                return Result<string?>.Fail(WorkflowErrors.FlowDefaultVersionInvalid(domain, key, pointer!));
+
+            case VersionResolutionOutcome.NotActivated:
+                return Result<string?>.Fail(WorkflowErrors.FlowVersionNotActivated(
+                    domain, key, requested ?? spelling, resolution.EffectiveDefault!));
+
+            case VersionResolutionOutcome.Resolved:
+                if (pointer is not null)
+                {
+                    logger.FlowVersionResolvedByPolicy(
+                        domain, key, spelling, pointer, resolution.Version!, CacheActivityHelper.ToTagValue(resolution.Source));
+                }
+
+                return Result<string?>.Ok(resolution.Version);
+
+            default:
+                return Result<string?>.Ok(null);
+        }
+    }
+
+    /// <summary>
+    /// Whether floating resolutions of <paramref name="key"/> go through the default-version policy.
+    /// A set wired without a policy source skips the step entirely, so it resolves exactly as it did
+    /// before the policy existed; system components are always exempt.
+    /// </summary>
+    private bool AppliesVersionPolicy(string key)
+        => _versionPolicy is not NoVersionPolicySource
+           && !key.StartsWith(SystemKeyPrefix, StringComparison.OrdinalIgnoreCase);
 
     private async Task<Result<T>> CacheNegativeAsync(
         string domain,
@@ -371,10 +464,26 @@ public class CacheSet<T>(
         CancellationToken cancellationToken)
     {
         List<T> candidates;
+        var applyPolicy = AppliesVersionPolicy(key);
+        string? pointer = null;
         try
         {
             var allResult = await backend.LoadAllByKeyAsync(domain, key, cancellationToken);
             candidates = allResult.IsSuccess ? allResult.Value! : [];
+
+            if (applyPolicy)
+            {
+                // Read once for every spelling. Unreadable → warm nothing: guessing without the pointer
+                // would warm the newest version, which is exactly the answer the policy may forbid.
+                var pointerResult = await _versionPolicy.GetDefaultVersionAsync(domain, key, cancellationToken);
+                if (!pointerResult.IsSuccess)
+                {
+                    logger.VersionRegistryReadFailed(domain, key, pointerResult.Error.Code, null);
+                    return;
+                }
+
+                pointer = pointerResult.Value;
+            }
         }
         catch (Exception ex)
         {
@@ -395,7 +504,14 @@ public class CacheSet<T>(
 
         foreach (var spelling in DeriveCommonSpellings(entity.Version))
         {
-            var bestMatch = InstanceDataVersionComparer.FindBestMatch(versions, spelling);
+            // Under the policy only a Resolved answer is warmed: a not-activated or invalid-pointer
+            // spelling is an error, and errors are never cached.
+            var bestMatch = applyPolicy
+                ? DefaultVersionResolver.Resolve(versions, pointer, spelling) is
+                    { Outcome: VersionResolutionOutcome.Resolved } resolution
+                    ? resolution.Version
+                    : null
+                : InstanceDataVersionComparer.FindBestMatch(versions, spelling);
             if (string.IsNullOrEmpty(bestMatch))
                 continue;
 
@@ -568,10 +684,10 @@ public class CacheSet<T>(
     };
 
     private static string CreateFullKey(string domain, string key, string fullVersion)
-        => $"{ComponentKeyName}:{domain}:{key}:full:{InstanceDataVersionComparer.CanonicalFullVersion(fullVersion)}";
+        => $"{ComponentKeyName}:{domain}:{key}:{ComponentCacheShape.Version}:full:{InstanceDataVersionComparer.CanonicalFullVersion(fullVersion)}";
 
     private static string CreateResolutionKey(string domain, string key, string generation, string spelling)
-        => $"{ComponentKeyName}:{domain}:{key}:res:{generation}:{spelling}";
+        => $"{ComponentKeyName}:{domain}:{key}:{ComponentCacheShape.Version}:res:{generation}:{spelling}";
 
     private static string LegacyLatestKey(string domain, string key)
         => $"{ComponentKeyName}:{domain}:{key}:latest";

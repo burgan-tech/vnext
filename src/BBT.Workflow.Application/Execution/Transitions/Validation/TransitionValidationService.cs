@@ -7,6 +7,7 @@ using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Shared;
 using BBT.Workflow.Validation;
+using BBT.Workflow.Versions;
 using System.Diagnostics;
 using BBT.Aether.Results;
 
@@ -16,7 +17,8 @@ namespace BBT.Workflow.Execution.Validation;
 public class TransitionValidationService(
     TransitionExecutionPolicy transitionExecutionPolicy,
     IJsonSchemaValidator schemaValidator,
-    IComponentCacheStore componentCacheStore) : ITransitionValidationService
+    IComponentCacheStore componentCacheStore,
+    IVersionRegistryWriteGuard versionRegistryWriteGuard) : ITransitionValidationService
 {
     /// <inheritdoc />
     /// <summary>
@@ -83,6 +85,19 @@ public class TransitionValidationService(
             EncryptedValueFormat.FindIntroducedToken(payload, context.Instance?.LatestData?.Data.JsonElement) is { } path)
         {
             return Result.Fail(WorkflowErrors.EncryptedValueReserved(path));
+        }
+
+        // sys-version-registry: a pointer matching no published version would fail closed every start of the
+        // flow, so it is refused here — with the other request rejections, before admission reserves Busy and
+        // before the pipeline runs (a failing pipeline step would fault the registry instance instead).
+        // Start (ValidateStartTransitionAsync) and every transition accept both pass through here.
+        if (string.Equals(context.WorkflowKey, RuntimeSysSchemaInfo.VersionRegistry, StringComparison.Ordinal)
+            && !string.IsNullOrWhiteSpace(context.Instance?.Key))
+        {
+            var guardResult = await versionRegistryWriteGuard.ValidateAsync(
+                context.Domain, context.Instance!.Key!, context.DataElement, cancellationToken);
+            if (!guardResult.IsSuccess)
+                return guardResult;
         }
 
         // Guard: No schema defined

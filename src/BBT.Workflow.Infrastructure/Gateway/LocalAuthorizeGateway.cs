@@ -37,7 +37,7 @@ public sealed class LocalAuthorizeGateway : IAuthorizeGateway
         AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteWithWorkflowAsync(domain, workflow, version, async (sp, ct) =>
+        return _serviceScopeFactory.ExecuteReadWithWorkflowAsync(domain, workflow, version, async (sp, ct) =>
         {
             var authorizeAppService = sp.GetRequiredService<IAuthorizeAppService>();
             return await authorizeAppService.GetAuthorizeResultForInstanceAsync(
@@ -54,7 +54,7 @@ public sealed class LocalAuthorizeGateway : IAuthorizeGateway
         string? version,
         CancellationToken cancellationToken = default)
     {
-        return _serviceScopeFactory.ExecuteWithWorkflowAsync(domain, workflow, version, async (sp, ct) =>
+        return _serviceScopeFactory.ExecuteReadWithWorkflowAsync(domain, workflow, version, async (sp, ct) =>
         {
             var authorizeAppService = sp.GetRequiredService<IAuthorizeAppService>();
             return await authorizeAppService.GetAuthorizationMatrixForInstanceAsync(

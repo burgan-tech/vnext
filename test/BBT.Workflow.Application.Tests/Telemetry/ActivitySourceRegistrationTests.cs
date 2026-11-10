@@ -147,7 +147,9 @@ public sealed class ActivitySourceRegistrationTests
     private static string RepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, ".git")))
+        // A git worktree has a .git FILE; stop there too, or the scan climbs into the main checkout
+        // and reads every other worktree's sources.
+        while (directory is not null && !Path.Exists(Path.Combine(directory.FullName, ".git")))
             directory = directory.Parent;
 
         directory.ShouldNotBeNull("could not locate the repository root from the test output directory");

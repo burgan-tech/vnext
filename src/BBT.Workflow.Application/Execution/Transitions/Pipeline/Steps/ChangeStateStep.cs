@@ -75,7 +75,8 @@ public sealed class ChangeStateStep(
 
         var fromState = context.Instance.GetCurrentState;
 
-        context.Instance.ChangeState(context.Target);
+        var moved = context.Instance.ChangeState(context.Target);
+        DeferModifiedAtStampIfUnmoved(context, moved);
         context.ExtractAndDeferInstanceEvents();
         await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
 
@@ -95,6 +96,25 @@ public sealed class ChangeStateStep(
             }));
 
         return Result<StepOutcome>.Ok(StepOutcome.Continue());
+    }
+
+    /// <summary>
+    /// Completes this hop's <c>Instances.ModifiedAt</c> plan after <see cref="Instance.ChangeState"/>, which
+    /// stamps it when the state moved — riding the UPDATE that writes the new state. A hop that did not move
+    /// (the start transition into the pre-positioned initial state, a <c>$self</c> shared transition, a timeout
+    /// into the same state) changes no column of its own, so the stamp is left pending:
+    /// <c>TransitionSettlement</c> (or the post-commit handoff) applies it at the end of the hop unless the
+    /// write that closes the hop stamps the row itself (the Busy release, the long-poll arm). A hop that
+    /// continues in-process (an inline automatic transition) never reaches either: its directives go with it,
+    /// and the next hop's own outcome stamps the instance. updateData is never pending — its data rows stamp
+    /// it. Status ownership is deliberately not consulted: a job re-entry is classified as the owner without
+    /// having flipped anything (a parent waiting on its SubFlow), so only the hop's outcome says which write
+    /// closes it.
+    /// </summary>
+    private static void DeferModifiedAtStampIfUnmoved(TransitionExecutionContext context, bool moved)
+    {
+        if (!moved && !context.SkipsStateLifecycle())
+            context.Directives.DeferModifiedAtStamp();
     }
 
     /// <summary>
@@ -133,10 +153,24 @@ public sealed class ChangeStateStep(
             return Result<StateTransitionInfo>.Fail(stateResult.Error);
         }
         
-        context.Instance.ChangeState(stateResult.Value!);
+        var target = stateResult.Value!;
+
+        // Entering a Finish state that runs no OnEntry task: nothing between this step (50) and
+        // HandleFinishStep (100) reads the persisted state — no task, no subflow, no automatic
+        // transition, no timer — and HandleFinishStep saves the same tracked aggregate with the
+        // completion columns. Saving here too made every finishing hop pay two autocommit
+        // transactions (two WAL fsyncs) for one row. A Finish state WITH OnEntry tasks keeps the
+        // save: its tasks must run against a persisted state, exactly as any other state's do.
+        var deferToFinish = target.StateType == Definitions.StateType.Finish && target.OnEntries.Count == 0;
+
+        // A deferred Finish save leaves the stamp to the completion at order 100: stamped now and flushed
+        // later, it would overwrite a newer set-based stamp taken in between (the long-poll arm at 75).
+        var moved = context.Instance.ChangeState(target, markModified: !deferToFinish);
+        DeferModifiedAtStampIfUnmoved(context, moved);
         context.ExtractAndDeferInstanceEvents();
-        await instanceRepository.UpdateAsync(context.Instance, true, cancellationToken);
-        
+
+        await instanceRepository.UpdateAsync(context.Instance, !deferToFinish, cancellationToken);
+
         return Result<StateTransitionInfo>.Ok(info);
     }
 

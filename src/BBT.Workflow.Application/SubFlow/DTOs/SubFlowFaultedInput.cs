@@ -171,4 +171,14 @@ public record SubFlowFaultedInput
     /// <c>null</c>/<c>0</c> for an original delivery. See <c>FlowCompletedInput.RearmAttempt</c>.
     /// </summary>
     public int? RearmAttempt { get; init; }
+
+    /// <summary>
+    /// Headers of the request that settled the sub-item, already filtered by the carried-header policy,
+    /// to be applied to the parent's resume. <c>null</c> means an older producer or nothing to carry.
+    /// <para>
+    /// Carried in this internal-only body rather than a header, exactly like <c>TraceRoot</c>: a public
+    /// endpoint must not be able to inject them.
+    /// </para>
+    /// </summary>
+    public Dictionary<string, string?>? CarriedHeaders { get; init; }
 }

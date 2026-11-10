@@ -41,11 +41,13 @@ public sealed class FileFunctionHandlerTests
         new("vnext-blob-local", "11111111-1111-1111-1111-111111111111", name, mime, 3, "abc123",
             new FileOwner("core", "kyc", "i1"));
 
-    private void Returns(Result<InstanceFileContent> r) =>
-        _files.ReadAsync(Arg.Any<InstanceFileRequest>(), Arg.Any<CancellationToken>()).Returns(r);
+    private void Returns(Result<InstanceFileStream> r) =>
+        _files.OpenAsync(Arg.Any<InstanceFileRequest>(), Arg.Any<CancellationToken>()).Returns(r);
 
     private void ReturnsContent(bool notModified = false, FileHandle? handle = null) =>
-        Returns(Result<InstanceFileContent>.Ok(new InstanceFileContent(handle ?? Handle(), "passport", notModified ? null : Bytes, notModified)));
+        _files.OpenAsync(Arg.Any<InstanceFileRequest>(), Arg.Any<CancellationToken>()).Returns(_ =>
+            Result<InstanceFileStream>.Ok(new InstanceFileStream(
+                handle ?? Handle(), "passport", notModified ? null : new System.IO.MemoryStream(Bytes), notModified)));
 
     private async Task<WebApplication> StartAsync()
     {
@@ -239,13 +241,13 @@ public sealed class FileFunctionHandlerTests
         var response = await app.GetTestClient().GetAsync("/f");
 
         response.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
-        await _files.DidNotReceiveWithAnyArgs().ReadAsync(default!, default);
+        await _files.DidNotReceiveWithAnyArgs().OpenAsync(default!, default);
     }
 
     [Fact]
     public async Task Get_FileNotFound_Returns404()
     {
-        Returns(Result<InstanceFileContent>.Fail(WorkflowErrors.FileNotFound("x")));
+        Returns(Result<InstanceFileStream>.Fail(WorkflowErrors.FileNotFound("x")));
         await using var app = await StartAsync();
 
         (await app.GetTestClient().GetAsync(Url)).StatusCode.ShouldBe(HttpStatusCode.NotFound);
@@ -254,7 +256,7 @@ public sealed class FileFunctionHandlerTests
     [Fact]
     public async Task Get_QueryRolesDenied_Returns403()
     {
-        Returns(Result<InstanceFileContent>.Fail(WorkflowErrors.QueryAccessDenied("s1")));
+        Returns(Result<InstanceFileStream>.Fail(WorkflowErrors.QueryAccessDenied("s1")));
         await using var app = await StartAsync();
 
         (await app.GetTestClient().GetAsync(Url)).StatusCode.ShouldBe(HttpStatusCode.Forbidden);
@@ -263,7 +265,7 @@ public sealed class FileFunctionHandlerTests
     [Fact]
     public async Task Get_StoreUnavailable_Returns503()
     {
-        Returns(Result<InstanceFileContent>.Fail(WorkflowErrors.FileStoreUnavailable("vnext-blob-local")));
+        Returns(Result<InstanceFileStream>.Fail(WorkflowErrors.FileStoreUnavailable("vnext-blob-local")));
         await using var app = await StartAsync();
 
         (await app.GetTestClient().GetAsync(Url)).StatusCode.ShouldBe(HttpStatusCode.ServiceUnavailable);
@@ -277,7 +279,7 @@ public sealed class FileFunctionHandlerTests
 
         await app.GetTestClient().GetAsync(Url);
 
-        await _files.Received(1).ReadAsync(
+        await _files.Received(1).OpenAsync(
             Arg.Is<InstanceFileRequest>(r => r.Domain == "core" && r.Flow == "kyc" && r.Instance == "i1"
                 && r.File == "11111111-1111-1111-1111-111111111111" && r.Authorization != null),
             Arg.Any<CancellationToken>());

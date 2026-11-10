@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
+using BBT.Workflow.Execution.Core.Invocation;
 using BBT.Workflow.Execution.Metrics;
 using BBT.Workflow.Execution.Services;
 using Dapr.Client;
@@ -51,98 +52,30 @@ public sealed class DaprBindingTaskInvoker(
         DaprBindingTaskBinding binding,
         CancellationToken cancellationToken)
     {
-        var startTimestamp = Stopwatch.GetTimestamp();
-        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
+        // The call, the response shaping and the failure reason are the shared core's (DaprBindingInvocation), the
+        // same body the Orchestrator's in-process path runs; this host only meters and logs.
+        Exception? failure = null;
+        var result = await DaprBindingInvocation.ExecuteAsync(daprClient, binding, TaskType, cancellationToken, taskKey,
+            onFailure: ex => failure = ex);
+        var operation = result.Metadata?.TryGetValue("Operation", out var op) == true ? op?.ToString() ?? binding.Operation : binding.Operation;
 
-        try
+        if (result.IsSuccess)
         {
-            var metadata = binding.Metadata ?? new Dictionary<string, string>();
-            
-            // Get operation from metadata (method), override task operation if present
-            var operation = metadata.TryGetValue("method", out var method) && !string.IsNullOrEmpty(method)
-                ? method
-                : binding.Operation;
-
-            // Remove internal metadata keys before sending
-            var cleanMetadata = metadata
-                .Where(kvp => kvp.Key != "method" && kvp.Key != "ForwardingHeaders")
-                .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
-
-            // Bindings bypass HttpClient's DiagnosticsHandler, so propagate the live W3C trace
-            // context explicitly. Always the LIVE context — a traceparent copied into the task
-            // definition would detach the downstream component from the current trace.
-            // Kept inline rather than shared with BBT.Workflow.Logging.DaprTraceMetadata (used by
-            // the Application-layer notification dispatchers): the Execution service deliberately
-            // does not reference BBT.Workflow.Domain, and a layering edge is not worth six lines.
-            var currentActivity = Activity.Current;
-            if (currentActivity is not null)
-            {
-                cleanMetadata["traceparent"] = currentActivity.Id!;
-                if (!string.IsNullOrEmpty(currentActivity.TraceStateString))
-                    cleanMetadata["tracestate"] = currentActivity.TraceStateString;
-            }
-
-            // Parse body data
-            object? data = string.IsNullOrEmpty(binding.Body)
-                ? null
-                : JsonSerializer.Deserialize<object>(binding.Body);
-
-            prepareActivity?.Dispose();
-            await daprClient.InvokeBindingAsync(
-                binding.BindingName,
-                operation,
-                data,
-                cleanMetadata,
-                cancellationToken);
-
             _metrics.RecordDaprBindingInvocation(binding.BindingName, operation, "success");
-
-            return TaskInvocationResult.Success(
-                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
-                taskType: TaskType,
-                metadata: new Dictionary<string, object>
-                {
-                    ["BindingName"] = binding.BindingName,
-                    ["Operation"] = operation
-                });
         }
-        catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
+        else if (result.Metadata?.ContainsKey("Cancelled") == true)
         {
-            prepareActivity?.Dispose();
-            _metrics.RecordDaprBindingInvocation(binding.BindingName, binding.Operation, "cancelled");
+            _metrics.RecordDaprBindingInvocation(binding.BindingName, operation, "cancelled");
             logger.LogWarning("Dapr binding invocation was cancelled: {BindingName}, Operation: {Operation}",
-                binding.BindingName, binding.Operation);
-
-            return TaskInvocationResult.Failure(
-                error: "Dapr binding invocation was cancelled",
-                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
-                taskType: TaskType,
-                metadata: new Dictionary<string, object>
-                {
-                    ["BindingName"] = binding.BindingName,
-                    ["Operation"] = binding.Operation,
-                    ["Cancelled"] = true,
-                    ["ExceptionType"] = ex.GetType().Name
-                });
+                binding.BindingName, operation);
         }
-        catch (Exception ex)
+        else
         {
-            prepareActivity?.Dispose();
-            _metrics.RecordDaprBindingInvocation(binding.BindingName, binding.Operation, "failure");
-            logger.LogError(ex, "Dapr binding invocation failed: {BindingName}, Operation: {Operation}",
-                binding.BindingName, binding.Operation);
-
-            return TaskInvocationResult.Failure(
-                error: ex.Message,
-                executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
-                taskType: TaskType,
-                metadata: new Dictionary<string, object>
-                {
-                    ["BindingName"] = binding.BindingName,
-                    ["Operation"] = binding.Operation,
-                    ["ExceptionType"] = ex.GetType().Name,
-                    ["StackTrace"] = ex.StackTrace ?? string.Empty
-                });
+            _metrics.RecordDaprBindingInvocation(binding.BindingName, operation, "failure");
+            logger.LogError(failure, "Dapr binding invocation failed: {BindingName}, Operation: {Operation}, Reason: {Reason}",
+                binding.BindingName, operation, result.ErrorMessage);
         }
+
+        return result;
     }
 }

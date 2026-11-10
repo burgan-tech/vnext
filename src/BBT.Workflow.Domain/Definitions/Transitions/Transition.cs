@@ -84,6 +84,30 @@ public sealed class Transition : IHasKey
     public TransitionKind? TriggerKind { get; private set; }
 
     /// <summary>
+    /// The priority used when this state has several automatic transitions (vnext#1133).
+    /// </summary>
+    /// <remarks>
+    /// Lower values are evaluated first; the first automatic transition whose rule passes wins.
+    /// Transitions with an equal priority keep their declaration order. Absent means
+    /// <see cref="DefaultPriority"/>. A <see cref="TransitionKind.DefaultAutoTransition"/> is always
+    /// evaluated last, whatever its priority. Ignored for non-automatic transitions.
+    /// </remarks>
+    [JsonInclude]
+    [JsonPropertyName("priority")]
+    public int? Priority { get; private set; }
+
+    /// <summary>
+    /// The priority applied to an automatic transition that declares none.
+    /// </summary>
+    public const int DefaultPriority = 100;
+
+    /// <summary>
+    /// <see cref="Priority"/>, or <see cref="DefaultPriority"/> when it is not declared.
+    /// </summary>
+    [JsonIgnore]
+    public int EffectivePriority => Priority ?? DefaultPriority;
+
+    /// <summary>
     /// Optional execution mode for this transition (vnext#1003). When set, it is the source of truth and
     /// overrides the caller's <c>sync</c> query parameter; a transition's setting (inner) wins over the
     /// flow's (outer). Absent ⇒ the flow's <c>executionType</c>, else the caller's query parameter.

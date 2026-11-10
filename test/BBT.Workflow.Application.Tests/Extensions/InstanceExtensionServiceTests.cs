@@ -440,7 +440,6 @@ public class InstanceExtensionServiceTests
             taskCoordinator,
             runtimeInfoProvider,
             Substitute.For<ICurrentSchema>(),
-            Substitute.For<IServiceScopeFactory>(),
             logger ?? NullLogger<InstanceExtensionService>.Instance);
     }
 

@@ -61,6 +61,16 @@ public sealed class PipelineDirectives
     public Guid? SubFlowResumeInstanceId { get; private set; }
 
     /// <summary>
+    /// Gets the terminal outcome of the completing sub item for a subflow-resume execution, when
+    /// the resume hop is to stamp the correlation's settlement marker itself (see
+    /// <c>ClearBusyOnResumeStep</c>). Null when the caller keeps that write.
+    /// </summary>
+    public SubItemTerminalOutcome? SubFlowResumeTerminalOutcome { get; private set; }
+
+    /// <summary>Gets the instant to record as <c>SettledAt</c> alongside <see cref="SubFlowResumeTerminalOutcome"/>.</summary>
+    public DateTime? SubFlowResumeSettledAt { get; private set; }
+
+    /// <summary>
     /// Gets a value indicating whether this execution is resuming from a long-poll acknowledge
     /// (declarative long-poll termination on state entry — client acknowledged or fallback fired).
     /// </summary>
@@ -139,10 +149,18 @@ public sealed class PipelineDirectives
     /// Marks this execution as a subflow resume scenario.
     /// </summary>
     /// <param name="subInstanceId">The completing SubFlow instance id; scopes the resume lock per sub-instance.</param>
-    public void MarkAsSubFlowResume(Guid? subInstanceId = null)
+    /// <param name="terminalOutcome">The completing sub item's terminal outcome when the resume hop
+    /// should stamp the correlation's settlement marker; null leaves the marker to the caller.</param>
+    /// <param name="settledAt">The instant recorded as <c>SettledAt</c> with <paramref name="terminalOutcome"/>.</param>
+    public void MarkAsSubFlowResume(
+        Guid? subInstanceId = null,
+        SubItemTerminalOutcome? terminalOutcome = null,
+        DateTime? settledAt = null)
     {
         IsSubFlowResume = true;
         SubFlowResumeInstanceId = subInstanceId;
+        SubFlowResumeTerminalOutcome = terminalOutcome;
+        SubFlowResumeSettledAt = settledAt;
     }
 
     /// <summary>
@@ -223,6 +241,24 @@ public sealed class PipelineDirectives
 
     /// <summary>Marks that the next hop was enqueued as a separate job.</summary>
     public void MarkContinuationEnqueued() => ContinuationEnqueued = true;
+
+    /// <summary>
+    /// True when this hop changed no state and left its <c>Instances.ModifiedAt</c> stamp to the write
+    /// that closes it. Set by <c>ChangeStateStep</c>; cleared by the long-poll arm, which stamps the row
+    /// itself; read by <c>TransitionSettlement</c> and the post-commit handoff in <c>TransitionPipeline</c>,
+    /// which stamp the instance unless the Busy release flipped (it did not happen — the hop ends parked
+    /// in Busy or does not hold the status — or its CAS was lost).
+    /// </summary>
+    public bool ModifiedAtStampPending { get; private set; }
+
+    /// <summary>Marks that this hop's <c>ModifiedAt</c> stamp is left to the write that closes it.</summary>
+    public void DeferModifiedAtStamp() => ModifiedAtStampPending = true;
+
+    /// <summary>
+    /// Marks that a write closing this hop has stamped <c>ModifiedAt</c> itself (the long-poll arm), so
+    /// the settlement must not stamp it again.
+    /// </summary>
+    public void CloseModifiedAtStamp() => ModifiedAtStampPending = false;
 
     /// <summary>
     /// Enqueues a post-commit job to be executed after the distributed lock is released.

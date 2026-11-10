@@ -7,8 +7,8 @@
     <RootNamespace>BBT.Workflow.Execution.Core</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Shared by BOTH hosts. Deliberately excludes pythonnet, KubernetesClient and Dapr.AI:
-         those belong to the Execution host alone and must never enter the Orchestration image. -->
+    <!-- Shared by BOTH hosts. Deliberately excludes Dapr.AI:
+         it belongs to the Execution host alone and must never enter the Orchestration image. -->
     <PackageReference Include="Dapr.Client" Version="$(DaprPackageVersion)" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="$(MicrosoftPackageVersion)" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="$(MicrosoftPackageVersion)" />

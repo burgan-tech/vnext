@@ -1,3 +1,4 @@
+using BBT.Workflow.Instances;
 using BBT.Workflow.Files;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Scripting.Functions;
@@ -26,6 +27,8 @@ public static class GatewayServiceCollectionExtensions
         // Local gateways - execute locally with schema context
         services.AddScoped<LocalInstanceCommandGateway>();
         services.AddScoped<LocalInstanceQueryGateway>();
+        // Local-only key -> id lookup for DirectTrigger; deliberately has no routed/remote form.
+        services.AddScoped<IInstanceIdResolver, LocalInstanceIdResolver>();
 
         // Remote gateways - delegate to HTTP clients
         services.AddScoped<RemoteInstanceCommandGateway>();
@@ -84,6 +87,9 @@ public static class GatewayServiceCollectionExtensions
         // scripting services: ScriptServices takes it as an optional dependency, so a host without the gateway
         // stack simply gets scripts whose GetFileAsync reports the reader as unavailable.
         services.TryAddScoped<IScriptFileReader, ScriptFileReader>();
+        // IScriptFileWriter is NOT registered here: ScriptFileWriter needs IComponentCacheStore and
+        // IFileOffloadService, which only the Application module provides. It lives in
+        // AddInfrastructureRuntimeServices so minimal hosts (DbMigrator) never see an unresolvable registration.
 
         return services;
     }

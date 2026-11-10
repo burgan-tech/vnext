@@ -20,12 +20,17 @@ public interface ISubflowOutputMappingService
         string parentStateKey,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Executes a previously prepared mapping against authoritative locked state.</summary>
+    /// <summary>
+    /// Executes a previously prepared mapping against authoritative locked state.
+    /// <paramref name="carriedHeaders"/> are the headers carried on the child's terminal event; they
+    /// are re-filtered and exposed to the script only when the carried-header policy allows it.
+    /// </summary>
     Task<Result> ApplyPreparedAsync(
         Instance parentInstance,
         Definitions.Workflow parentWorkflow,
         SubflowOutputMappingPlan plan,
         JsonElement? childInstanceData,
+        IReadOnlyDictionary<string, string?>? carriedHeaders,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -39,7 +44,8 @@ public interface ISubflowOutputMappingService
         Definitions.Workflow parentWorkflow,
         string parentStateKey,
         JsonElement? childInstanceData,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        IReadOnlyDictionary<string, string?>? carriedHeaders = null);
 }
 
 public sealed record SubflowOutputMappingPlan(State? ParentState, object? MappingInstance);

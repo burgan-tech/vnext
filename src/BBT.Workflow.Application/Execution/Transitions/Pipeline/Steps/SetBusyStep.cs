@@ -34,18 +34,14 @@ public sealed class SetBusyStep(
         // Skip if instance is already Busy (admission reserve or chained auto transitions).
         if (context.Instance.IsBusy)
         {
-            logger.LogDebug(
-                "Instance {InstanceId} is already Busy, skipping SetBusyStep",
-                context.InstanceId);
+            logger.SetBusySkippedAlreadyBusy(context.InstanceId);
             return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
         // Skip if instance is completed (should not happen, but defensive)
         if (context.Instance.IsCompleted)
         {
-            logger.LogDebug(
-                "Instance {InstanceId} is already completed, skipping SetBusyStep",
-                context.InstanceId);
+            logger.SetBusySkippedCompleted(context.InstanceId);
             return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
@@ -55,18 +51,16 @@ public sealed class SetBusyStep(
             return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
-        // Admission (Reserve/TakeOver) flipped the ROW under its status lock, in its own
-        // RequiresNew DbContext — so this pipeline's aggregate can still read Active. Settlement's
+        // Admission (TakeOver, or an accept the job re-enters pre-reserved) flipped the ROW in its
+        // own RequiresNew DbContext — so this pipeline's aggregate can still read Active. (The sync
+        // reserve aligns the aggregate itself and arrives here Busy: TransitionPipeline.RunAsync.) Settlement's
         // owner guard reads context.Instance.IsBusy, so the in-memory aggregate MUST be aligned
         // here or the chain never settles back to Active (stranded Busy). No DB call: the row is
         // already Busy, and the status value simply rides along the next tracked flush.
         if (context.OwnsStatus)
         {
             context.Instance.Busy();
-            logger.LogDebug(
-                "Instance {InstanceId} aggregate aligned to admission's Busy for transition {TransitionKey}",
-                context.InstanceId,
-                context.TransitionKey);
+            logger.SetBusyAlignedToAdmission(context.InstanceId, context.TransitionKey);
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
@@ -78,17 +72,11 @@ public sealed class SetBusyStep(
         var flipped = await instanceRepository.TryMarkBusyAsync(context.Instance, cancellationToken);
         if (flipped)
         {
-            logger.LogDebug(
-                "Instance {InstanceId} set to Busy for transition {TransitionKey}",
-                context.InstanceId,
-                context.TransitionKey);
+            logger.SetBusyFlipped(context.InstanceId, context.TransitionKey);
         }
         else
         {
-            logger.LogDebug(
-                "Instance {InstanceId} was no longer Active at SetBusy for transition {TransitionKey}; continuing without the flip",
-                context.InstanceId,
-                context.TransitionKey);
+            logger.SetBusyFlipLost(context.InstanceId, context.TransitionKey);
         }
 
         return Result<StepOutcome>.Ok(StepOutcome.Continue());

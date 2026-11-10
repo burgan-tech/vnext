@@ -42,4 +42,17 @@ public static class WorkflowMetrics
         "workflow_resource_lock_hold_duration_ms",
         unit: "ms",
         description: "Acquire-to-release duration of a transition-level resource lock.");
+
+    /// <summary>
+    /// One count per resume request of a pipeline paused for declarative long-poll termination.
+    /// Tagged by <c>vnext.domain</c>, <c>vnext.flow.key</c>, <c>vnext.activation.trigger</c>
+    /// (<c>ack</c> = the client acknowledged, <c>ack-timeout</c> = the fallback job fired because it
+    /// never did) and <c>vnext.longpoll.ack_resume.outcome</c> (<c>resumed</c>, <c>not_awaiting</c>,
+    /// <c>instance_not_found</c>, <c>failed</c>). A flow whose <c>ack-timeout</c> count tracks its
+    /// <c>resumed</c> count has a client that never acknowledges: every approval waits the whole
+    /// <c>fallbackTimeoutSeconds</c> window (morph-idm, test, 2026-11-03: 36 of 36).
+    /// </summary>
+    public static readonly Counter<long> LongPollResumes = Meter.CreateCounter<long>(
+        "workflow_longpoll_resume_total",
+        description: "Resume requests of a pipeline paused for long-poll termination, by trigger and outcome.");
 }

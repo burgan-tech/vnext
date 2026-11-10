@@ -2,170 +2,218 @@
 
 ## Purpose
 
-`PythonTask` is the built-in trusted-code task (`TaskType = 22`, JSON discriminator `"22"`,
-Execution route `python`). Orchestration sends the task's fixed JSON input in a strongly typed
-binding to the Execution service. Execution invokes CPython through
-one explicitly selected runtime: `pythonNet`, `process`, or `container`.
+`PythonTask` (`TaskType = 23`, JSON discriminator `"23"`) calls a named **handler** in the
+domain's own Python runtime container. vNext acts as a wrapper: it builds the request from the
+standard task mapping, calls the runtime with a versioned contract, applies the timeout and turns
+the answer into a standard task result. The error boundary and the transition pipeline do not
+know that the task was Python.
 
-Python code must define exactly one callable entry point named `main`:
-
-```python
-def main(input):
-    return {"total": sum(input["values"])}
+```
+Orchestration ──(InputHandler → invoke → OutputHandler)──▶ Dapr invoke {app-id} POST v1/invoke
+                                                              │
+                                     python-runtime Deployment (opt-in, per domain)
+                                     FROM ghcr.io/burgan-tech/vnext/python-runtime
+                                     + domain handlers + pinned requirements
 ```
 
-Python tasks do not execute Orchestration `InputHandler`/`OutputHandler` mappings, and their
-scripts do not define Python `input_handler` or `output_handler` functions. The only executable
-contract is `main(input)` in the Execution service. Put the complete JSON argument in
-`PythonTask.config.input`; the strict JSON return becomes the standard task result.
+- **No Execution hop.** The Orchestration host calls the runtime directly from its own sidecar.
+- **No Python in vNext.** No vNext image carries CPython, `pythonnet` or a Kubernetes client.
+  A domain that does not use Python deploys nothing extra.
+- **Code is in the image, not in the task.** Handlers and their packages are installed when the
+  domain builds its runtime image; nothing is installed at container start.
 
-The argument and return value cross the runtime boundary as JSON. Code and input are never
-concatenated. The return value must be accepted by `json.dumps(..., allow_nan=False)`. Convert
-NumPy and pandas objects in the workflow script with `.tolist()`, `.item()`, or `.to_dict()`.
-
-## Task contract
+## Task definition
 
 ```json
 {
   "type": "23",
   "config": {
-    "script": {
-      "location": "inline.py",
-      "code": "def main(input):\n    return {'total': sum(input['values'])}",
-      "type": "LOC",
-      "encoding": "NAT"
-    },
-    "executionMode": "process",
-    "input": { "values": [2, 3, 5] },
-    "timeoutSeconds": 30
+    "handler": "risk_score",
+    "input": { "income": 85000 },
+    "timeoutSeconds": 20
   }
 }
 ```
 
 | Field | Required | Contract |
 | --- | --- | --- |
-| `script` | yes | Existing `ScriptCode` shape. Only `NAT` and `B64` are accepted. `REF`, global mappings, and filesystem paths are rejected. `location` is diagnostic metadata, not a file to load. |
-| `executionMode` | no | `pythonNet`, `process`, or `container`. Defaults to `Python:DefaultMode`. A disabled or unavailable mode fails; it never falls back to another mode. |
-| `input` | no | Any JSON value, including null, scalar, array, or object. |
-| `timeoutSeconds` | no | Default 30; bounded by `Python:MaxTimeoutSeconds` (default 50), which must remain below the Dapr invocation timeout. |
+| `handler` | yes | Name of a handler registered in the runtime: `^[A-Za-z_][A-Za-z0-9_.-]{0,127}$`. |
+| `input` | no | Any JSON value. The default input; an input mapping may replace it. At most 2 MiB as authored. |
+| `timeoutSeconds` | no | Handler timeout, 1–50, default 30. Orchestration waits `timeoutSeconds + Workflow:PythonRuntime:TimeoutGraceSeconds`. |
 
-Default limits are 256 KiB of decoded code, 2 MiB of input, 2 MiB of output, and 32 KiB
-each for captured stdout and stderr. All limits are configurable in the Execution host.
+### Mapping
 
-## Runtime modes
+Python tasks use the standard `IMapping` like every other task. `InputHandler` shapes the request by
+calling `SetInput` on the task, `OutputHandler` reads the handler output from the task response:
 
-| Mode | Isolation and limits | Default concurrency |
-| --- | --- | --- |
-| `pythonNet` | In-process CPython 3.12 under the GIL, with a fresh Python scope per invocation. Timeout interruption is best effort; native extensions cannot be forcibly stopped and memory/CPU limits are not guaranteed. | 1 |
-| `process` | `python -I runner.py` with the shared JSON protocol. Timeout or cancellation kills the process tree. Linux uses `prlimit` for CPU, address-space, and open-file limits. | 2 |
-| `container` | A new hardened runner container per invocation, controlled by the explicitly selected Docker Engine or Kubernetes driver. It is always removed in `finally`. | 2 |
+```csharp
+public class RiskScoreMapping : IMapping
+{
+    public Task<ScriptResponse> InputHandler(WorkflowTask task, ScriptContext context)
+    {
+        ((PythonTask)task).SetInput(new { income = context.Instance.Data.income });
+        return Task.FromResult(new ScriptResponse());
+    }
 
-The container driver defaults to 1 CPU, 2 GiB memory, 128 PIDs, a read-only root filesystem,
-tmpfs `/tmp`, UID/GID 65532, dropped capabilities, `no-new-privileges`, no host mounts, and
-network `none`. Operators may select a pre-created Docker network. Container execution is
-opt-in; the normal development Compose file does not mount the Docker socket. Use
-`etc/docker/docker-compose.python-container.yml` only in an explicitly approved environment.
+    public Task<ScriptResponse> OutputHandler(ScriptContext context) =>
+        Task.FromResult(new ScriptResponse { Data = new { risk = context.Body?.data } });
+}
+```
 
-The Kubernetes driver creates one `batch/v1` Job per invocation with `backoffLimit: 0`, an
-active deadline, a memory-backed `/tmp`, no service-account token in the runner pod, and the same
-container security/resource settings. It waits for the Job pod, sends the JSON request over the
-Kubernetes `pods/attach` streaming API, reads stdout/stderr separately, then deletes the Job in a
-`finally` path. The runner reads an explicit UTF-8 byte count, so code and input are not stored in
-a ConfigMap, Secret, command line, or environment variable.
+Without a mapping the task result is the handler output as is.
 
-Kubernetes does not expose a portable per-Pod PID limit. `PidsLimit` is recorded on the Job as
-requested policy metadata, but operators must enforce it through the node/container runtime or a
-compatible admission/runtime policy. `NetworkMode=none` is expressed through runner labels; the
-Helm chart installs a default-deny NetworkPolicy for those pods. Named network policies are
-operator-defined and require a NetworkPolicy-capable CNI.
+## Writing handlers
 
-## Packages and imports
+A handler is a function decorated with `@handler("name")`. It receives the JSON input, and
+optionally a read-only context, and returns a strict-JSON value:
 
-Both the Execution venv and `ghcr.io/burgan-tech/vnext/python-runner:<version>` install the
-same hash-locked `execution/python/requirements.lock`. The initial package set is NumPy 2.5.1,
-pandas 3.0.5, and scikit-learn 1.9.0 plus their locked transitive dependencies. Runtime package
-installation is disabled (`PIP_NO_INDEX=1`); update and review the lock file at build time.
+```python
+# handlers/calculations.py
+from vnext_runtime import HandlerContext, handler
 
-`Python:AllowedModules` defaults to `["*"]`. A narrower list is enforced by the shared runner
-bootstrap in every mode, including dynamic imports. This is an administrative dependency policy,
-not a security sandbox. Python task source is trusted platform code. Do not use Python.NET for
-untrusted input; use an independently secured isolation boundary outside this feature.
+@handler("sum_values")
+def sum_values(input):
+    return {"total": sum(input["values"])}
 
-## Execution configuration
+@handler("risk_score")
+def risk_score(input, context: HandlerContext):
+    return {"score": min(100, input["income"] // 1000), "instanceId": context.instance_id}
+```
+
+The return value must pass `json.dumps(..., allow_nan=False)`. Convert NumPy and pandas values
+with `.tolist()`, `.item()` or `.to_dict()`. An exception becomes a `handler_error` failure.
+
+`HandlerContext` fields: `domain`, `workflow`, `workflow_version`, `instance_id`, `task_key`,
+`correlation_id`, `timeout_ms`. Treat the input as raw instance data, including personal data.
+
+### Domain image
+
+```dockerfile
+ARG VNEXT_PYTHON_RUNTIME=ghcr.io/burgan-tech/vnext/python-runtime:<version>
+FROM ${VNEXT_PYTHON_RUNTIME}
+
+USER root
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --only-binary :all: --require-hashes -r /tmp/requirements.txt && rm /tmp/requirements.txt
+COPY handlers /opt/vnext-python/app/handlers
+USER 65532:65532
+```
+
+Pin every requirement (preferably with hashes, `pip-compile --generate-hashes`) so the image is
+reproducible and can be scanned before it ships. A complete example is in
+`runtimes/python/example/`. Every module under the `handlers` package is imported at start
+(`VNEXT_PYTHON_HANDLERS` names a different package).
+
+## Runtime contract (version 1)
+
+Every endpoint answers `application/json`.
+
+### `POST v1/invoke`
+
+Request (sent by Orchestration):
 
 ```json
 {
-  "Python": {
-    "Enabled": true,
-    "DefaultMode": "pythonNet",
-    "EnabledModes": ["pythonNet", "process"],
-    "MaxTimeoutSeconds": 50,
-    "MaxCodeBytes": 262144,
-    "MaxInputBytes": 2097152,
-    "MaxOutputBytes": 2097152,
-    "MaxStdoutBytes": 32768,
-    "MaxStderrBytes": 32768,
-    "AllowedModules": ["*"],
-    "PythonNet": {
-      "PythonDll": "libpython3.12.so.1.0",
-      "PythonHome": "/usr",
-      "PythonPath": "/opt/vnext-python/venv/lib/python3.12/site-packages",
-      "RunnerDirectory": "/opt/vnext-python",
-      "MaxConcurrency": 1
-    },
-    "Process": {
-      "PythonExecutable": "/opt/vnext-python/venv/bin/python",
-      "RunnerPath": "/opt/vnext-python/runner.py",
-      "MaxConcurrency": 2,
-      "UsePrlimit": true
-    },
-    "Container": {
-      "Driver": "kubernetes",
-      "Image": "ghcr.io/burgan-tech/vnext/python-runner:<version>",
-      "NetworkMode": "none",
-      "Kubernetes": {
-        "Namespace": "workflow",
-        "ContainerName": "python-runner",
-        "RunnerServiceAccountName": null,
-        "ImagePullSecrets": [],
-        "PodStartTimeoutSeconds": 30,
-        "PollIntervalMilliseconds": 250,
-        "JobTtlSecondsAfterFinished": 60,
-        "RuntimeClassName": null
-      }
-    }
+  "contractVersion": "1",
+  "handler": "risk_score",
+  "input": { "income": 85000 },
+  "timeoutMs": 20000,
+  "context": {
+    "domain": "core",
+    "workflow": "loan-application",
+    "workflowVersion": "1.2.0",
+    "instanceId": "8f1c…",
+    "taskKey": "calculate-risk",
+    "correlationId": "…"
   }
 }
 ```
 
-Active modes are checked during Execution startup and readiness: the interpreter and locked
-packages must import. Docker mode checks its Engine endpoint and image; Kubernetes mode checks
-API access in the configured namespace. A driver that is unavailable never falls back to the
-other container driver.
+Success (`200`):
 
-For Kubernetes, the Execution service account needs namespace-scoped access to create/get/list/
-watch/delete Jobs, get/list/watch Pods, and create/get `pods/attach`. The Helm chart can create a
-dedicated Execution service account, Role, and RoleBinding. The short-lived runner pod always has
-`automountServiceAccountToken: false`, even when a runner service-account name is supplied for
-image-pull or admission policy purposes.
+```json
+{ "contractVersion": "1", "status": "success", "output": { "score": 85 }, "durationMs": 12 }
+```
 
-## Observability and failures
+Failure:
 
-The invoker records task type, execution mode, duration, outcome, and runtime version in
-activities/metrics. Script, input, and output values are never emitted. Captured stdout/stderr
-are size-limited; their contents are not emitted, and Debug logs contain only byte counts.
+```json
+{ "contractVersion": "1", "status": "error", "error": { "code": "handler_error", "message": "KeyError: 'income'" } }
+```
 
-Syntax errors, a missing/non-callable `main`, Python exceptions, non-JSON results, NaN, timeout,
-cancellation, output overflow, disabled modes, and runtime unavailability return a failed standard
-task response. Orchestration therefore sends the failure through the existing task and error-boundary
-flow; no transition-pipeline behavior is special-cased for Python.
+| HTTP | `error.code` | Meaning |
+| --- | --- | --- |
+| 400 | `bad_request`, `unsupported_contract` | The body is not JSON / not an object, or `contractVersion` is not `1`. |
+| 404 | `unknown_handler` | No handler with that name is registered in the image. |
+| 413 | `request_too_large` | Body larger than `VNEXT_PYTHON_MAX_REQUEST_BYTES` (4 MiB). |
+| 422 | `handler_error` | The handler raised. |
+| 422 | `invalid_output`, `output_too_large` | The result is not strict JSON, or larger than `VNEXT_PYTHON_MAX_OUTPUT_BYTES` (4 MiB). |
+| 504 | `timeout` | The handler did not finish within `timeoutMs`. |
+
+On the vNext side a success makes `output` the task result. A failure is a failed task whose
+`StatusCode` is the HTTP status and whose `ErrorMessage` is `"<code>: <message>"`, so error-boundary
+rules can match on either. Three failures come from Orchestration itself, without the runtime's
+envelope: **503** when the domain has no runtime (`Workflow:PythonRuntime:AppId` is empty, no call
+is made), **413** `request_too_large` when the input after the input mapping exceeds 2 MiB (no call
+is made; publish checks only the authored `config.input`) and **408** when the runtime did not
+answer within `timeoutSeconds + TimeoutGraceSeconds`.
+
+### `GET v1/health` and `GET v1/manifest`
+
+`health` answers `{"status":"ok"}` for liveness and readiness probes. `manifest` lists the
+contract version, runtime version, Python version and the registered handler names.
+
+## Configuration
+
+Orchestration (`Workflow:PythonRuntime`, set by the Helm chart when the runtime is enabled):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `AppId` | empty | Dapr app-id of the domain's Python runtime. Empty = no runtime; Python tasks fail with 503. |
+| `InvokeMethod` | `v1/invoke` | Invoke route of the contract. |
+| `TimeoutGraceSeconds` | `5` | Extra wait beyond the handler timeout so the runtime's own 504 arrives first. |
+
+Runtime container (environment):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `VNEXT_PYTHON_PORT` | `8080` | Listen port (the Dapr app port). |
+| `VNEXT_PYTHON_HANDLERS` | `handlers` | Package whose modules register the handlers. |
+| `VNEXT_PYTHON_MAX_WORKERS` | `4` | Concurrent handler calls per pod. |
+| `VNEXT_PYTHON_MAX_REQUEST_BYTES` / `VNEXT_PYTHON_MAX_OUTPUT_BYTES` | 4 MiB | Body limits. |
+
+## Operating notes
+
+- **Isolation.** Calls share one process per pod. A handler that leaks memory or keeps global state
+  affects the calls after it. A timed-out call keeps its worker thread until it returns (Python
+  cannot kill a thread), so keep handlers inside their timeout and size `MAX_WORKERS` and replicas
+  for the slowest handler. CPU-bound work is limited by the GIL: scale with replicas.
+- **Security.** Handler code is trusted domain code. Run the runtime with a read-only root
+  filesystem, non-root user, dropped capabilities, no service-account token and a NetworkPolicy
+  that admits only the Orchestration sidecar. Secrets come from the Dapr secret store or the pod
+  environment, never from the task definition.
+- **Who can reach the runtime.** The server binds `0.0.0.0` inside its pod only so its own Dapr
+  sidecar can reach it; there is no other caller by design. The Helm chart (`pythonRuntime`)
+  enforces this with three controls, all on by default: an ingress NetworkPolicy that admits only
+  this release's Orchestration pods (`pythonRuntime.networkPolicy.enabled: true`), Dapr mTLS
+  between the sidecars (`dapr.mtls.enabled: true`), and pod hardening (non-root,
+  `automountServiceAccountToken: false`). A cluster that needs app-id level allow-listing on top
+  can add a Dapr `Configuration` `accessControl` policy for the runtime's sidecar that admits only
+  the Orchestration app-id.
+- **Load limits.** Request bodies are capped (`MAX_REQUEST_BYTES`; Orchestration rejects mapped
+  input over 2 MiB with 413 before calling), at most `MAX_WORKERS` handler calls run at once per
+  pod, and a call is answered 504 at its timeout. Further calls wait in the pod's queue, and
+  that wait counts against their own timeout.
+- **Timeout layering.** Handler `timeoutMs` < Orchestration wait (`+ TimeoutGraceSeconds`) <
+  transition job budget. The wait is at most 50 + 30 = 80 s and is not validated against
+  `WorkflowExecution:TransitionJobTimeoutSeconds` (default 300); keep the job budget above the longest Python
+  wait in the flow.
+- **Observability.** The call is a Dapr service invocation from Orchestration and is traced like
+  any `daprservice` call (`Invoke.Prepare` span plus the sidecar's spans). Payloads are not logged
+  on either side.
 
 ## References
 
 - `src/BBT.Workflow.Domain/Definitions/Tasks/PythonTask.cs`
-- `src/BBT.Workflow.Application/Tasks/Executors/Remote/PythonTaskExecutor.cs`
-- `src/BBT.Workflow.Execution/Python/`
-- `src/BBT.Workflow.Execution/Python/Containers/KubernetesContainerExecutionDriver.cs`
-- `src/BBT.Workflow.Execution/Invokers/PythonTaskInvoker.cs`
-- `execution/python/`
-- `etc/docker/docker-compose.python-container.yml`
+- `src/BBT.Workflow.Application/Tasks/Executors/Python/`
+- `runtimes/python/` — base image, `vnext_runtime` package, example domain image, contract tests

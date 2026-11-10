@@ -1,0 +1,43 @@
+name: Python Runtime
+
+on:
+  pull_request:
+    paths:
+      - "runtimes/python/**"
+      - ".github/workflows/python-runtime.yml"
+  push:
+    branches: [master]
+    paths:
+      - "runtimes/python/**"
+
+permissions:
+  contents: read
+
+jobs:
+  contract-and-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run runtime contract tests
+        run: python -I -m unittest discover -s runtimes/python/tests -v
+
+      - name: Build base and example images
+        run: |
+          docker build -f runtimes/python/Dockerfile -t vnext-python-runtime:test .
+          docker build --build-arg VNEXT_PYTHON_RUNTIME=vnext-python-runtime:test \
+            -t vnext-python-example:test runtimes/python/example
+
+      - name: Smoke test the example image
+        run: |
+          docker run -d --name py --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+            -p 8080:8080 vnext-python-example:test
+          for i in $(seq 1 20); do curl -sf localhost:8080/v1/health && break; sleep 0.5; done
+          curl -sf -X POST localhost:8080/v1/invoke -H 'content-type: application/json' \
+            -d '{"contractVersion":"1","handler":"sum_values","input":{"values":[2,3,5]},"timeoutMs":5000,"context":{}}' \
+            | tee /tmp/python-runtime-response.json
+          jq -e '.status == "success" and .output.total == 10' /tmp/python-runtime-response.json

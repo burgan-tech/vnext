@@ -1941,4 +1941,171 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
     }
 
     #endregion
+
+    #region Auto Transition Priority Validation Tests
+
+    [Fact]
+    public void Validate_ShouldFail_WhenPriorityIsLessThanOne()
+    {
+        var workflow = DeserializeWorkflow(PriorityWorkflowJson(
+            stateTransitions: """[ {"key": "a", "target": "done", "triggerType": "automatic", "priority": 0} ]"""));
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("priority must be at least 1", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenPriorityOnManualTransition()
+    {
+        var workflow = DeserializeWorkflow(PriorityWorkflowJson(
+            stateTransitions: """[ {"key": "a", "target": "done", "triggerType": "manual", "priority": 5} ]"""));
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("only allowed on state-level automatic transitions", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenPriorityOnStartTransition()
+    {
+        var workflow = DeserializeWorkflow(PriorityWorkflowJson(
+            stateTransitions: "[]", startPriority: 5));
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("only allowed on state-level automatic transitions", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenPriorityOnAutomaticStartTransition()
+    {
+        var workflow = DeserializeWorkflow(PriorityWorkflowJson(
+            stateTransitions: "[]", startPriority: 5, startTriggerType: "automatic"));
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("only allowed on state-level automatic transitions", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenPriorityOnSharedTransition()
+    {
+        var workflow = DeserializeWorkflow(PriorityWorkflowJson(
+            stateTransitions: "[]",
+            sharedTransitions: """[ {"key": "sh", "target": "done", "triggerType": "automatic", "priority": 5, "availableIn": ["initial"]} ]"""));
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("only allowed on state-level automatic transitions", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ShouldFail_WhenPriorityOnDefaultAutoTransition()
+    {
+        var workflow = DeserializeWorkflow(PriorityWorkflowJson(
+            stateTransitions: """[ {"key": "d", "target": "done", "triggerType": "automatic", "triggerKind": 10, "priority": 5} ]"""));
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("cannot have a priority", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ShouldWarn_WhenAutoTransitionsSharePriority()
+    {
+        var workflow = DeserializeWorkflow(PriorityWorkflowJson(stateTransitions: """
+            [ {"key": "a", "target": "done", "triggerType": "automatic", "priority": 5},
+              {"key": "b", "target": "done", "triggerType": "automatic", "priority": 5} ]
+            """));
+
+        var result = _validator.Validate(workflow);
+
+        result.Warnings.ShouldContain(w =>
+            w.ErrorMessage!.Contains("share priority 5", StringComparison.Ordinal) &&
+            w.ErrorMessage.Contains("'a', 'b'", StringComparison.Ordinal));
+        AssertNoPriorityErrors(result);
+    }
+
+    [Fact]
+    public void Validate_ShouldNotWarn_WhenNoAutoTransitionHasPriority()
+    {
+        var workflow = DeserializeWorkflow(PriorityWorkflowJson(stateTransitions: """
+            [ {"key": "a", "target": "done", "triggerType": "automatic"},
+              {"key": "b", "target": "done", "triggerType": "automatic"} ]
+            """));
+
+        var result = _validator.Validate(workflow);
+
+        result.Warnings.ShouldNotContain(w =>
+            w.ErrorMessage!.Contains("share priority", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_ShouldPass_WhenPrioritiesAreDistinct()
+    {
+        var workflow = DeserializeWorkflow(PriorityWorkflowJson(stateTransitions: """
+            [ {"key": "a", "target": "done", "triggerType": "automatic", "priority": 1},
+              {"key": "b", "target": "done", "triggerType": "automatic", "priority": 2},
+              {"key": "c", "target": "done", "triggerType": "automatic"} ]
+            """));
+
+        var result = _validator.Validate(workflow);
+
+        result.Warnings.ShouldNotContain(w =>
+            w.ErrorMessage!.Contains("share priority", StringComparison.Ordinal));
+        AssertNoPriorityErrors(result);
+    }
+
+    private static void AssertNoPriorityErrors(WorkflowValidationResult result)
+    {
+        result.ValidationErrors.ShouldNotContain(e =>
+            e.ErrorMessage!.Contains("priority must be at least 1", StringComparison.Ordinal) ||
+            e.ErrorMessage.Contains("only allowed on state-level automatic transitions", StringComparison.Ordinal) ||
+            e.ErrorMessage.Contains("cannot have a priority", StringComparison.Ordinal));
+    }
+
+    private static string PriorityWorkflowJson(
+        string stateTransitions,
+        string sharedTransitions = "[]",
+        int? startPriority = null,
+        string startTriggerType = "manual")
+    {
+        var startPriorityJson = startPriority is null ? "" : $", \"priority\": {startPriority}";
+        return $$"""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": {{stateTransitions}}
+                },
+                {
+                    "key": "done",
+                    "stateType": "finish",
+                    "labels": [{"label": "Done", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "sharedTransitions": {{sharedTransitions}},
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "{{startTriggerType}}",
+                "labels": [{"label": "Start", "language": "en"}]{{startPriorityJson}}
+            }
+        }
+        """;
+    }
+
+    #endregion
 }

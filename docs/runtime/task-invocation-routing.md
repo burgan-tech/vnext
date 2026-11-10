@@ -87,20 +87,27 @@ binds this exact shipped file.
 for a plugin story that was never built, and would otherwise behave as an inert `Remote` with no
 indication anything is wrong.
 
-**A third key lives under the same section but is absent from the shipped file:**
-`Workflow:TaskInvocation:MaxConnectionsPerServer` (int, `[Range(1, int.MaxValue)]`,
-`TaskInvocationOptions.MaxConnectionsPerServer`). It is the per-target connection cap
-(`HttpClientHandler.MaxConnectionsPerServer`) for the named HTTP clients shared by every
-in-process `http`/`soap` task and by the (deprecated) type-`22` External HTTP task. Before
-issue #1007 this was hardcoded at `10`, written only for type 22's traffic; now that type `6`
-and `soap` also egress from Orchestration by default, it bounds all of that traffic, so the
-shipped default moved to **`50`** — as a code default (`TaskInvocationOptions`), not an entry in
-`appsettings.json`. An operator who needs a different cap sets
-`Workflow:TaskInvocation:MaxConnectionsPerServer` explicitly; nothing needs to change in the
-file otherwise. This value only ever applies to Orchestration's own named HTTP clients — the
-Execution host's equivalent clients are a separate, still-hardcoded `10` (see
-[What the local path loses](#what-the-local-path-loses) and Reverting a type to Remote below for
-why that gap matters when reverting under load).
+**Three pool keys live under the same section but are absent from the shipped file**
+(`TaskInvocationOptions`, each `[Range(1, int.MaxValue)]`):
+
+| Key | Default | What it sets |
+|---|---|---|
+| `Workflow:TaskInvocation:MaxConnectionsPerServer` | `50` | per-target connection cap (`SocketsHttpHandler.MaxConnectionsPerServer`) |
+| `Workflow:TaskInvocation:PooledConnectionLifetimeSeconds` | `600` | maximum age of a pooled connection — how long a DNS/gateway change can go unnoticed |
+| `Workflow:TaskInvocation:PooledConnectionIdleTimeoutSeconds` | `120` | idle retention of a pooled connection; keep it below the gateway's keep-alive timeout |
+
+They shape the named HTTP clients shared by every in-process `http`/`soap` task and by the
+(deprecated) type-`22` External HTTP task. Before issue #1007 the cap was hardcoded at `10`,
+written only for type 22's traffic; now that type `6` and `soap` also egress from Orchestration by
+default, it bounds all of that traffic, so the shipped default moved to **`50`** — as a code
+default, not an entry in `appsettings.json`. The primary handler is a pooled `SocketsHttpHandler`
+built by `WorkflowHttpMessageHandlerFactory` and registered with an infinite handler lifetime:
+`IHttpClientFactory` no longer rotates it every two minutes (which discarded every warm TCP+TLS
+connection to the gateway at low traffic — measured 244 ms first call vs 76 ms warm to one APISIX
+host), connection retirement is `PooledConnectionLifetime`'s job instead. The Execution host's
+equivalent clients read the same three dials from their own `WorkflowHttpClient` section
+(`WorkflowHttpClientOptions`, same defaults; its cap was a hardcoded `10` before) through the same
+factory, so a task sees one connection policy whichever host performs the call.
 
 **A fourth key, also absent from the shipped file:**
 `Workflow:TaskInvocation:LocalInvocationTimeoutSeconds` (int, `[Range(1, int.MaxValue)]`,
@@ -117,6 +124,7 @@ for what it bounds and why it matters most for `daprservice`/`statestore`.
 | `daprservice` | Dapr service invocation (type `3`) | `LocalDaprServiceTaskInvoker` | Calls another domain app directly from Orchestration instead of relaying through Execution. |
 | `soap` | SOAP (type `16`) | `LocalSoapTaskInvoker` | Shares the same named HTTP clients (and the same connection cap) as `http`. |
 | `statestore` | State Store (type `17`) | `LocalStateStoreTaskInvoker` | Runs through `StateStoreInvocation` over the shared `IStateStoreClient`; also backs the function response cache (`StateStoreCacheGateway`). See [State Store Task](state-store-task.md). |
+| `daprbinding` | Dapr Binding (type `2`) | `LocalDaprBindingTaskInvoker` | Runs through `DaprBindingInvocation`, the core the Execution service's `DaprBindingTaskInvoker` shares. **Not in the shipped `Modes`** (stays Remote): binding components scoped to the Execution app-id would break if flipped. Set `"daprbinding": "Local"` for flows that read, list or delete x-storage objects, whose components live on the orchestration sidecar ([File Storage § Deleting and listing](file-storage.md#deleting-and-listing-objects)). |
 
 **Cache-Aside (type `18`) has no wire type of its own.** Its executor runs the read-through in
 Orchestration; the cache get/set goes through `IStateStoreCacheGateway` (the same gateway as the
@@ -125,8 +133,13 @@ function response cache), which dispatches `statestore` envelopes — so cache I
 own executor and routes by that type's own mode. See [Cache-Aside Task](cache-aside-task.md).
 
 Every other wire type (`daprbinding`, `daprhttpendpoint`, `daprpubsub`, `daprconversation`,
-`python`, trigger/query types, …) has no local invoker today, so the capability gate always
+trigger/query types, …) has no local invoker today, so the capability gate always
 resolves them to `Remote` regardless of configuration.
+
+**Python (type `23`) is outside this router.** It has one path only: `PythonTaskExecutor` calls the
+domain's Python runtime container from Orchestration over Dapr. The Execution host carries no
+Python, so there is no Remote path to fall back to and no `python` entry belongs in `Modes`.
+See [Python Task](python-task.md).
 
 ## What the local path loses
 
@@ -294,12 +307,13 @@ either way.
 To revert every type at once, set `DefaultMode` to `Remote` and remove the `Modes` entries (this
 is already the shipped default for every type without an entry).
 
-**Reverting `http`/`soap` to Remote under load also drops the per-target connection ceiling**
-from `Workflow:TaskInvocation:MaxConnectionsPerServer` (default `50`, applies only to
-Orchestration's own named HTTP clients) down to the Execution host's still-hardcoded `10` for
-that same target, once the traffic starts flowing through Execution's named clients instead.
-Reverting a hot single-target type back to Remote without also accounting for that drop can turn
-a config rollback into a new throughput bottleneck.
+**Reverting `http`/`soap` to Remote under load moves the per-target connection ceiling** from
+`Workflow:TaskInvocation:MaxConnectionsPerServer` (Orchestration's named clients) to
+`WorkflowHttpClient:MaxConnectionsPerServer` on the Execution host, once the traffic starts
+flowing through Execution's named clients instead. Both default to `50` today (the Execution side
+was a hardcoded `10` until the pool dials were unified); if an environment overrides one, override
+the other to match before reverting a hot single-target type, or the config rollback becomes a
+new throughput bottleneck.
 
 ## References
 

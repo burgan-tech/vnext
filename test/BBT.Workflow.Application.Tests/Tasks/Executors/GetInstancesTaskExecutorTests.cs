@@ -171,6 +171,25 @@ public sealed class GetInstancesTaskExecutorTests
         result.Value!.Metadata!["ItemCount"].ShouldBe(1);
     }
 
+    /// <summary>Row security (vnext#1107) applies to the GetInstances task exactly as to the list endpoint.</summary>
+    [Fact]
+    public async Task ExecuteAsync_LocalList_AppliesRowSecurity()
+    {
+        var task = WorkflowTaskFactory.CreateGetInstancesTask(domain: "test-domain", flow: "test-flow");
+        GetInstanceListInput? captured = null;
+        var gateway = Substitute.For<IInstanceQueryGateway>();
+        gateway.GetInstanceListAsync(Arg.Do<GetInstanceListInput>(i => captured = i), Arg.Any<CancellationToken>())
+            .Returns(Result.Ok(new InstanceListWithGroupsResponse<GetInstanceOutput>()));
+        var runtime = Substitute.For<IRuntimeInfoProvider>();
+        runtime.Domain.Returns("test-domain");
+
+        (await CreateExecutor(gateway, runtime).ExecuteAsync(CreateContext(task), CancellationToken.None))
+            .IsSuccess.ShouldBeTrue();
+
+        captured.ShouldNotBeNull();
+        captured.ApplyRowSecurity.ShouldBeTrue();
+    }
+
     [Theory]
     // Unsupported operator using the schema-side spelling.
     [InlineData("""{"attributes":{"amount":{"gte":100}}}""")]

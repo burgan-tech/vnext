@@ -174,6 +174,13 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     [JsonInclude] [JsonPropertyName("event")]
     public Event? Event { get; private set; }
 
+    /// <summary>
+    /// Optional row-level security (<c>attributes.rowSecurity</c>, vnext#1107): role-scoped filters that
+    /// restrict which instances a caller can list or read. Null means the flow is not row-secured.
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("rowSecurity")]
+    public RowSecurity.RowSecurityDefinition? RowSecurity { get; private set; }
+
 
     [JsonInclude] [JsonPropertyName("labels")]
     private List<LanguageLabel> labels = new();
@@ -481,6 +488,16 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
 
         return null;
     }
+
+    /// <summary>
+    /// True when <paramref name="key"/> names this workflow's updateData transition: the reserved alias
+    /// or the configured key, case-insensitively. The single answer behind
+    /// <c>TransitionExecutionContext.IsUpdateDataTransition</c> and the task-output writer.
+    /// </summary>
+    public bool IsUpdateDataKey(string? key) =>
+        key is not null
+        && (key.Equals(WellKnownTransitionKeys.UpdateData, StringComparison.OrdinalIgnoreCase)
+            || UpdateData?.Key.Equals(key, StringComparison.OrdinalIgnoreCase) == true);
 
     /// <summary>
     /// True when the key names a well-known workflow-level transition, whether by reserved alias or by

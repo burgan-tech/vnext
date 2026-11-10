@@ -42,6 +42,14 @@ public sealed class GraphQLFilterRequest
     [JsonIgnore]
     public SchemaFilterContext? SchemaContext { get; set; }
 
+    /// <summary>
+    /// Row-security predicate planned by the runtime for the caller (vnext#1107), ANDed with
+    /// <see cref="Filter"/> at the repository merge point. Never bound from the wire: a client cannot
+    /// supply or replace it.
+    /// </summary>
+    [JsonIgnore]
+    public GraphQLFilterNode? RowPredicate { get; set; }
+
 }
 
 /// <summary>
@@ -164,6 +172,15 @@ public class GraphQLFilterNode
     /// </remarks>
     [JsonIgnore]
     public List<string>? UnrecognizedProperties { get; set; }
+
+    /// <summary>
+    /// True on nodes the row-security planner emitted: the subtree is runtime policy, not caller
+    /// input, so schema filterability / operator whitelisting does not apply to it (encryption guards
+    /// and type casts still do). Never read or written by <see cref="GraphQLFilterNodeConverter"/>, so a
+    /// caller cannot set it.
+    /// </summary>
+    [JsonIgnore]
+    public bool PolicyExempt { get; init; }
 
     /// <summary>
     /// Determines the type of this filter node

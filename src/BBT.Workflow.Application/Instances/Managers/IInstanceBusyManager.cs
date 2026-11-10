@@ -55,6 +55,16 @@ public interface IInstanceBusyManager
     Task<BusyMarkOutcome> TryMarkBusyWithPropagationAsync(Guid instanceId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// <see cref="TryMarkBusyWithPropagationAsync(Guid,CancellationToken)"/> for a caller that has
+    /// just loaded the aggregate (the pipeline's admission): the CAS runs straight away instead of
+    /// re-reading the row, and the subflow to propagate to is taken from
+    /// <paramref name="loaded"/>'s open correlations. The row is read only when the CAS loses, to
+    /// tell <see cref="BusyMarkOutcome.Skipped"/> (terminal or gone) from
+    /// <see cref="BusyMarkOutcome.AlreadyBusy"/> exactly as the re-reading overload would.
+    /// </summary>
+    Task<BusyMarkOutcome> TryMarkBusyWithPropagationAsync(Instance loaded, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Releases a reservation whose follow-up work never ran (compensation): settles Busy back
     /// to Active. No-ops when the instance is not Busy or is Completed. Must be called under
     /// the short status lock and only by the accept path that performed the reserve.

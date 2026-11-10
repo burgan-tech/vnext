@@ -50,6 +50,23 @@ public interface ICallerRoleResolver
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Resolves the caller's role set together with how it was obtained, so row security can tell
+    /// "resolution failed" from "the caller holds no roles". Additive: <see cref="ResolveRolesAsync"/>
+    /// keeps its semantics unchanged.
+    /// <para>
+    /// Override to take part in row security. The default reports <see cref="CallerRoleOutcome.Failed"/>
+    /// (fail-closed): a provider that does not state its own outcome is never trusted to have resolved.
+    /// </para>
+    /// </summary>
+    /// <param name="headers">Request headers; may be null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The roles and the outcome; never throws for a resolution failure.</returns>
+    Task<CallerRoleResolution> ResolveRoleSetAsync(
+        IReadOnlyDictionary<string, string?>? headers,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(new CallerRoleResolution([], CallerRoleOutcome.Failed, "unverified"));
+
+    /// <summary>
     /// How the <c>role</c> request parameter of <c>authorize</c> composes with this provider's answer.
     /// </summary>
     /// <remarks>

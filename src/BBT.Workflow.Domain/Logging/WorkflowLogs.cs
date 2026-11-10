@@ -341,6 +341,36 @@ public static partial class WorkflowLogs
         string? errorCode);
 
     /// <summary>
+    /// Logs when an updateData execution found the instance parked Busy with no live owner but lost
+    /// the continuation claim to a concurrent updateData that satisfied the same auto gate. The
+    /// winner is already running the chain from the same state; running it a second time would
+    /// repeat every side effect of that chain.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10182,
+        Level = LogLevel.Information,
+        Message = "UpdateData {TransitionKey} on instance {InstanceId} lost the continuation claim for {NextTransitionKey} in state {StateKey}; a concurrent continuation owns it")]
+    public static partial void UpdateDataContinuationClaimLost(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        string nextTransitionKey,
+        string? stateKey);
+
+    /// <summary>
+    /// Logs when clearing an updateData continuation claim failed. Harmless for correctness: the
+    /// claim expires after its TTL; until then a later continuation from the same state drops.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10183,
+        Level = LogLevel.Warning,
+        Message = "Failed to release the continuation claim on instance {InstanceId}; it expires after its TTL")]
+    public static partial void UpdateDataContinuationClaimReleaseFailed(
+        this ILogger logger,
+        Exception exception,
+        Guid instanceId);
+
+    /// <summary>
     /// Logs when the InstanceData write funnel could not acquire the per-instance FOR UPDATE
     /// row lock within lock_timeout — a concurrent writer held it for the whole wait budget.
     /// </summary>
@@ -1026,6 +1056,218 @@ public static partial class WorkflowLogs
     public static partial void ScheduledTransitionTookOverInteractionWait(
         this ILogger logger, Guid instanceId, string stateKey, string transitionKey);
 
+    // ---- Task execution / per-hop step hot-path logs (10240–10262, one contiguous block) ----
+
+    /// <summary>
+    /// Per-task start of the error-aware execution loop (TaskExecutionEngine). Was Information; demoted to Debug — it fires on every task.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10240,
+        Level = LogLevel.Debug,
+        Message = "Executing task {TaskKey} with error-aware retry.")]
+    public static partial void TaskExecutionStarting(
+        this ILogger logger, string taskKey);
+
+    /// <summary>
+    /// Per-task success of the error-aware execution loop. Was Information; demoted to Debug — it fires on every task.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10241,
+        Level = LogLevel.Debug,
+        Message = "Task {TaskKey} completed successfully. Total duration: {Duration}ms")]
+    public static partial void TaskExecutionSucceeded(
+        this ILogger logger, string taskKey, long duration);
+
+    /// <summary>
+    /// Business failure with no ErrorBoundary; the flow continues through auto-transitions.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10242,
+        Level = LogLevel.Debug,
+        Message = "Task {TaskKey} failed with business error but no ErrorBoundary defined. Flow will continue with auto-transitions.")]
+    public static partial void TaskBusinessFailureWithoutBoundary(
+        this ILogger logger, string taskKey);
+
+    /// <summary>
+    /// No task-journal persistence strategy exists for the execution origin.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10243,
+        Level = LogLevel.Debug,
+        Message = "No persistence strategy found for origin {TaskExecutionOrigin}, skipping persistence")]
+    public static partial void TaskPersistenceStrategyNotFound(
+        this ILogger logger, string taskExecutionOrigin);
+
+    /// <summary>
+    /// One execution attempt of a task (TaskExecutionEngine.ExecuteCoreAsync).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10244,
+        Level = LogLevel.Debug,
+        Message = "Executing task {TaskKey} of type {TaskType} for instance {InstanceId} (retry attempt)")]
+    public static partial void TaskExecutionAttemptStarting(
+        this ILogger logger, string taskKey, string taskType, Guid? instanceId);
+
+    /// <summary>
+    /// A task executor starts its template-method lifecycle (TaskExecutorBase).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10245,
+        Level = LogLevel.Debug,
+        Message = "Executing task {TaskKey} with executor {Executor}")]
+    public static partial void TaskExecutorStarting(
+        this ILogger logger, string taskKey, string executor);
+
+    /// <summary>
+    /// SetBusyStep skipped: the instance is already Busy.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10246,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} is already Busy, skipping SetBusyStep")]
+    public static partial void SetBusySkippedAlreadyBusy(
+        this ILogger logger, Guid instanceId);
+
+    /// <summary>
+    /// SetBusyStep skipped: the instance is already completed.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10247,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} is already completed, skipping SetBusyStep")]
+    public static partial void SetBusySkippedCompleted(
+        this ILogger logger, Guid instanceId);
+
+    /// <summary>
+    /// SetBusyStep aligned the in-memory aggregate to the Busy row admission already wrote.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10248,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} aggregate aligned to admission's Busy for transition {TransitionKey}")]
+    public static partial void SetBusyAlignedToAdmission(
+        this ILogger logger, Guid instanceId, string transitionKey);
+
+    /// <summary>
+    /// SetBusyStep's CAS flipped the row to Busy.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10249,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} set to Busy for transition {TransitionKey}")]
+    public static partial void SetBusyFlipped(
+        this ILogger logger, Guid instanceId, string transitionKey);
+
+    /// <summary>
+    /// SetBusyStep's CAS found the row no longer Active.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10250,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} was no longer Active at SetBusy for transition {TransitionKey}; continuing without the flip")]
+    public static partial void SetBusyFlipLost(
+        this ILogger logger, Guid instanceId, string transitionKey);
+
+    /// <summary>
+    /// ResolveAvailableStep deferred the Active status to after post-commit.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10251,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} deferred Available status after transition to state {TargetState}")]
+    public static partial void ResolveAvailableDeferred(
+        this ILogger logger, Guid instanceId, string targetState);
+
+    /// <summary>
+    /// ResolveAvailableStep skipped: this execution does not own the status.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10252,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} status not owned by this execution, skipping ResolveAvailableStep")]
+    public static partial void ResolveAvailableSkippedNotOwner(
+        this ILogger logger, Guid instanceId);
+
+    /// <summary>
+    /// ResolveAvailableStep skipped: not Busy or already completed.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10253,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} is not Busy or already completed, skipping ResolveAvailableStep")]
+    public static partial void ResolveAvailableSkippedNotBusy(
+        this ILogger logger, Guid instanceId);
+
+    /// <summary>
+    /// ResolveAvailableStep keeps Busy: an automatic transition continues the chain.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10254,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} has NextTransition ({NextTransition}), staying Busy")]
+    public static partial void ResolveAvailableStayBusyNextTransition(
+        this ILogger logger, Guid instanceId, string nextTransition);
+
+    /// <summary>
+    /// ResolveAvailableStep keeps Busy: terminal reached.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10255,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} reached terminal state {TargetState}, staying Busy")]
+    public static partial void ResolveAvailableStayBusyTerminal(
+        this ILogger logger, Guid instanceId, string targetState);
+
+    /// <summary>
+    /// ResolveAvailableStep found no target state (defensive).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10256,
+        Level = LogLevel.Warning,
+        Message = "Instance {InstanceId} has null target state, skipping ResolveAvailableStep")]
+    public static partial void ResolveAvailableNullTarget(
+        this ILogger logger, Guid instanceId);
+
+    /// <summary>
+    /// ResolveAvailableStep keeps Busy: the target state has the Busy subtype.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10257,
+        Level = LogLevel.Warning,
+        Message = "Instance {InstanceId} has Busy subtype in state {TargetState}, skipping ResolveAvailableStep")]
+    public static partial void ResolveAvailableBusySubtype(
+        this ILogger logger, Guid instanceId, string targetState);
+
+    /// <summary>
+    /// ResolveAvailableStep leaves a Finish state to HandleFinishStep.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10258,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} is in Finish state, status will be Completed")]
+    public static partial void ResolveAvailableFinishState(
+        this ILogger logger, Guid instanceId);
+
+    /// <summary>
+    /// ResolveAvailableStep keeps Busy: the target state has automatic transitions.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10259,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} target state {TargetState} has auto transitions, staying Busy")]
+    public static partial void ResolveAvailableStayBusyAutoTransitions(
+        this ILogger logger, Guid instanceId, string targetState);
+
+    /// <summary>
+    /// ResolveAvailableStep: all conditions for Available are met.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10260,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} meets all conditions for Available status in state {TargetState}")]
+    public static partial void ResolveAvailableConditionsMet(
+        this ILogger logger, Guid instanceId, string targetState);
+
     /// <summary>
     /// Logs when task instance resolution fails (for DirectTrigger, GetInstanceData).
     /// </summary>
@@ -1415,6 +1657,20 @@ public static partial class WorkflowLogs
         int delayMs);
 
     /// <summary>
+    /// Logs when a bounded transition lock wait is abandoned because the caller's
+    /// <c>LockAcquireWait.KeepWaiting</c> check reported the work as no longer needed.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40141,
+        Level = LogLevel.Debug,
+        Message = "Transition lock {LockKey} wait abandoned after attempt {Attempt}/{MaxAttempts}: the holder has settled the work")]
+    public static partial void TransitionLockWaitAbandoned(
+        this ILogger logger,
+        string lockKey,
+        int attempt,
+        int maxAttempts);
+
+    /// <summary>
     /// Logs when a correlation is marked as completed.
     /// </summary>
     [LoggerMessage(
@@ -1549,6 +1805,22 @@ public static partial class WorkflowLogs
         string reason);
 
     /// <summary>
+    /// Logs when a SubFlow state change reporting the child's terminal <c>Completed</c> status is
+    /// dropped before the lock: the terminal event (<c>sub:completed</c> / <c>sub:canceled</c>) owns
+    /// that transition, writes the child's final state onto the correlation and re-derives the
+    /// parent's projection itself.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40139,
+        Level = LogLevel.Debug,
+        Message = "SubFlow state event for {SubInstanceId} reports terminal status {NewStatus} to parent {ParentInstanceId}; superseded by the terminal event, skipped without taking the lock")]
+    public static partial void SubFlowStateChangeTerminalSuperseded(
+        this ILogger logger,
+        Guid subInstanceId,
+        Guid parentInstanceId,
+        string newStatus);
+
+    /// <summary>
     /// Logs when a SubFlow state changed event is received by the hook.
     /// </summary>
     [LoggerMessage(
@@ -1648,6 +1920,21 @@ public static partial class WorkflowLogs
         Guid parentInstanceId);
 
     /// <summary>
+    /// Logs when persisting the child's resolved flow version on the correlation failed or updated no
+    /// row; the child start itself succeeded and the authored version stays.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40995,
+        Level = LogLevel.Warning,
+        Message = "SubFlow version pin to {ResolvedVersion} skipped for correlation {CorrelationId}, parent {ParentInstanceId}: {Reason}")]
+    public static partial void SubFlowVersionPinFailed(
+        this ILogger logger,
+        Guid correlationId,
+        Guid parentInstanceId,
+        string resolvedVersion,
+        string reason);
+
+    /// <summary>
     /// Logs when a SubFlow start operation completes successfully.
     /// </summary>
     [LoggerMessage(
@@ -1672,6 +1959,19 @@ public static partial class WorkflowLogs
         Guid parentInstanceId,
         string errorCode,
         string errorMessage);
+
+    /// <summary>
+    /// Logs the outcome of filtering carried headers (counts only, never values).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40140,
+        Level = LogLevel.Debug,
+        Message = "SubFlow carried headers filtered: kept {Kept}, denied {Denied}, overflow {Overflow}")]
+    public static partial void SubFlowCarriedHeadersFiltered(
+        this ILogger logger,
+        int kept,
+        int denied,
+        int overflow);
 
     /// <summary>
     /// Logs when instance is not found during subflow start.
@@ -1952,6 +2252,21 @@ public static partial class WorkflowLogs
         this ILogger logger,
         string eventName,
         int depth);
+
+    /// <summary>
+    /// Logs when a registered relay declined one event (<c>PostCommitRelayTarget.SkipReason</c>). The
+    /// event still travels the outbox; only the immediate command is not sent.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40138,
+        Level = LogLevel.Debug,
+        Message = "Post-commit relay skipped for {EventName} (sub {SubInstanceId} -> parent {ParentInstanceId}): {Reason}")]
+    public static partial void PostCommitEventRelaySkipped(
+        this ILogger logger,
+        string eventName,
+        Guid subInstanceId,
+        Guid parentInstanceId,
+        string reason);
 
     /// <summary>
     /// Logs when a terminal-revert re-publishes the subflow terminal event as a durable-delivery
@@ -3447,6 +3762,28 @@ public static partial class WorkflowLogs
         bool allowed);
 
     /// <summary>
+    /// Logs when <c>authorize?queryRoles=true</c> descended to an active SubFlow whose child instance
+    /// could not be loaded yet, and the deepest existing instance decided instead (vnext#1181).
+    /// </summary>
+    /// <remarks>
+    /// The window opens when the parent commits its SubFlow correlation and closes when the child's row
+    /// is created by the post-commit start job. Without this line a refusal inside that window logged the
+    /// same <c>Allowed: False</c> as a genuine grant refusal and the two could not be told apart.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 50046,
+        Level = LogLevel.Information,
+        Message = "Authorize leaf missing, decided at deepest existing instance. Domain: {Domain}, Workflow: {Workflow}, Instance: {InstanceId}, MissingSubFlow: {SubFlow}, MissingSubInstance: {SubInstanceId}, Allowed: {Allowed}")]
+    public static partial void AuthorizeLeafMissingFallback(
+        this ILogger logger,
+        string domain,
+        string workflow,
+        string instanceId,
+        string subFlow,
+        string subInstanceId,
+        bool allowed);
+
+    /// <summary>
     /// Logs when authorization matrix system function is invoked.
     /// </summary>
     [LoggerMessage(
@@ -3722,6 +4059,21 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Guid instanceId,
         string state);
+
+    /// <summary>
+    /// Logs when a paused pipeline resumes because the acknowledge fallback job fired — the client
+    /// never posted <c>longpoll/ack</c> inside the <c>fallbackTimeoutSeconds</c> window. Distinct from
+    /// <see cref="LongPollAckResumed"/> (20301, the client acknowledged) so a flow whose every resume
+    /// is this event stands out in the logs.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20308,
+        Level = LogLevel.Information,
+        Message = "Long-poll fallback timeout resumed pipeline for instance {InstanceId} ({Flow}); the client never acknowledged")]
+    public static partial void LongPollFallbackResumed(
+        this ILogger logger,
+        Guid instanceId,
+        string flow);
 
     #endregion
 
@@ -4830,6 +5182,244 @@ public static partial class WorkflowLogs
         Guid instanceId,
         string path,
         string component);
+
+    /// <summary>
+    /// Logs that an x-storage object was stored inside an HTTP/1.1 chunked frame (an upload a Dapr binding framed, kept
+    /// as is by a store that does not decode it) and the decoded payload, which matches the handle, was served instead.
+    /// The 2049x block is full; file events continue above the 205xx block.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20512,
+        Level = LogLevel.Warning,
+        Message = "File {File} in {Component} of instance {InstanceId} is stored in a chunked frame ({StoredLength} bytes for {Size}); the decoded payload matches its handle and is served")]
+    public static partial void FileRecoveredFromChunkedFrame(
+        this ILogger logger,
+        Guid instanceId,
+        string component,
+        string file,
+        long storedLength,
+        long size);
+
+    /// <summary>Logs that the bytes read from the store do not match the handle (size or sha256); they are not served.</summary>
+    [LoggerMessage(
+        EventId = 20513,
+        Level = LogLevel.Error,
+        Message = "File {File} in {Component} of instance {InstanceId} does not match its handle: stored {StoredLength} bytes, handle {Size} bytes / eTag {ETag}; the read is refused")]
+    public static partial void FileIntegrityMismatch(
+        this ILogger logger,
+        Guid instanceId,
+        string component,
+        string file,
+        long storedLength,
+        long size,
+        string eTag);
+
+    /// <summary>Logs a streamed upload stored and staged for a start or transition. Content is never logged.</summary>
+    [LoggerMessage(
+        EventId = 20515,
+        Level = LogLevel.Information,
+        Message = "File uploaded: flow {Flow}, path {Path}, component {Component}, file {File}, size {Size}")]
+    public static partial void FileUploaded(
+        this ILogger logger,
+        string flow,
+        string path,
+        string component,
+        string file,
+        long size);
+
+    /// <summary>Logs a streamed upload refused before anything was stored.</summary>
+    [LoggerMessage(
+        EventId = 20516,
+        Level = LogLevel.Warning,
+        Message = "File upload rejected: flow {Flow}, path {Path}, reason {Reason}")]
+    public static partial void FileUploadRejected(
+        this ILogger logger,
+        string flow,
+        string path,
+        string reason);
+
+    /// <summary>Logs a staged upload claimed by an instance: it became that instance's handle.</summary>
+    [LoggerMessage(
+        EventId = 20517,
+        Level = LogLevel.Information,
+        Message = "Uploaded file claimed: instance {InstanceId}, path {Path}, component {Component}, file {File}")]
+    public static partial void FileUploadClaimed(
+        this ILogger logger,
+        Guid instanceId,
+        string path,
+        string component,
+        string file);
+
+    /// <summary>Logs a file a script stored with PutFileAsync. Content is never logged.</summary>
+    [LoggerMessage(
+        EventId = 20518,
+        Level = LogLevel.Information,
+        Message = "File written by script: domain {Domain}, flow {Flow}, instance {Instance}, component {Component}, file {File}, size {Size}")]
+    public static partial void FileWrittenByScript(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string instance,
+        string component,
+        string file,
+        long size);
+
+    #endregion
+
+    #region Flow Version Policy (205xx)
+
+    /// <summary>Logs that a flow version request was resolved through the version policy (default version / ceiling).</summary>
+    [LoggerMessage(
+        EventId = 20500,
+        Level = LogLevel.Debug,
+        Message = "Flow version resolved by policy: {Domain}/{Flow} requested {Requested}, pointer {Pointer}, resolved {Resolved} ({Source})")]
+    public static partial void FlowVersionResolvedByPolicy(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string requested,
+        string? pointer,
+        string resolved,
+        string source);
+
+    /// <summary>Logs that a flow's registered default version does not resolve to a published version.</summary>
+    [LoggerMessage(
+        EventId = 20501,
+        Level = LogLevel.Warning,
+        Message = "Flow default version is invalid: {Domain}/{Flow} pointer {Pointer}")]
+    public static partial void FlowDefaultVersionInvalid(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string pointer);
+
+    /// <summary>Logs that the version registry could not be read; the resolution fails instead of falling back to latest.</summary>
+    [LoggerMessage(
+        EventId = 20502,
+        Level = LogLevel.Warning,
+        Message = "Version registry read failed: {Domain}/{Flow} ({ErrorCode})")]
+    public static partial void VersionRegistryReadFailed(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string errorCode,
+        Exception? exception);
+
+    /// <summary>Logs that a flow's cached version registry entry was invalidated.</summary>
+    [LoggerMessage(
+        EventId = 20503,
+        Level = LogLevel.Information,
+        Message = "Version registry invalidated: {Domain}/{Flow}")]
+    public static partial void VersionRegistryInvalidated(
+        this ILogger logger,
+        string domain,
+        string flow);
+
+    /// <summary>Logs that the post-commit generation bump failed; the registry data is already committed, so the request is not failed.</summary>
+    [LoggerMessage(
+        EventId = 20504,
+        Level = LogLevel.Warning,
+        Message = "Version registry invalidation failed: {Domain}/{Flow} ({Reason})")]
+    public static partial void VersionRegistryInvalidationFailed(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string reason,
+        Exception? exception);
+
+    #endregion
+
+    #region Row Security (205xx)
+
+    // 20505-20509: the row-security read path (vnext#1107). Parameters are names, rule indexes, error codes
+    // and coarse kinds only — never a parameter, header or identity value and never exception text.
+
+    /// <summary>Logs the row-security decision of one read (only for a flow that declares <c>rowSecurity</c>).</summary>
+    [LoggerMessage(
+        EventId = 20505,
+        Level = LogLevel.Information,
+        Message = "Row security applied: {Domain}/{Flow}@{FlowVersion} {Surface} outcome={Outcome} matchedRules=[{MatchedRules}]")]
+    public static partial void RowSecurityApplied(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string? flowVersion,
+        string surface,
+        string outcome,
+        string matchedRules);
+
+    /// <summary>Logs that a single-instance GET found the instance outside the caller's row predicate (answered as not found).</summary>
+    [LoggerMessage(
+        EventId = 20506,
+        Level = LogLevel.Information,
+        Message = "Row security excluded instance: {Domain}/{Flow} {InstanceId}")]
+    public static partial void RowSecurityInstanceExcluded(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string instanceId);
+
+    /// <summary>Logs that an applicable row-security rule contributed nothing to the read (fail-closed).</summary>
+    [LoggerMessage(
+        EventId = 20507,
+        Level = LogLevel.Warning,
+        Message = "Row security rule dropped: {Domain}/{Flow} rule={RuleIndex} reason={Reason} parameters=[{ParameterNames}]")]
+    public static partial void RowSecurityRuleDropped(
+        this ILogger logger,
+        string domain,
+        string flow,
+        int ruleIndex,
+        string reason,
+        string parameterNames);
+
+    /// <summary>Logs that the caller's role resolution failed, so the read returns no rows.</summary>
+    [LoggerMessage(
+        EventId = 20508,
+        Level = LogLevel.Warning,
+        Message = "Row security denied, role resolution failed: {Domain}/{Flow} kind={FailureKind}")]
+    public static partial void RowSecurityDeniedRoleResolutionFailed(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string failureKind);
+
+    /// <summary>Logs that the flow definition carrying the rule set could not be loaded, so the read is denied.</summary>
+    [LoggerMessage(
+        EventId = 20509,
+        Level = LogLevel.Warning,
+        Message = "Row security rule set unavailable, read denied: {Domain}/{Flow} ({ErrorCode})")]
+    public static partial void RowSecurityRuleSetUnavailable(
+        this ILogger logger,
+        string domain,
+        string flow,
+        string errorCode);
+
+    /// <summary>
+    /// Logs that a flow declaring <c>rowSecurity</c> was published while its master schema could not be
+    /// resolved: the schema-aware publish checks were skipped (RS-W0) and protected-path rules are dropped
+    /// at read time instead.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20510,
+        Level = LogLevel.Warning,
+        Message = "Row security schema checks skipped at publish: {ComponentKey} (schema {SchemaKey} not resolvable)")]
+    public static partial void RowSecurityPublishSchemaChecksSkipped(
+        this ILogger logger,
+        string componentKey,
+        string schemaKey);
+
+    /// <summary>
+    /// Logs that a flow declaring <c>rowSecurity</c> has a SubFlow state whose child instances do not
+    /// inherit the parent's row security (RS-W7).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20511,
+        Level = LogLevel.Information,
+        Message = "Row security is not inherited by SubFlow children: {ComponentKey} state {StateKey}")]
+    public static partial void RowSecuritySubFlowNotInherited(
+        this ILogger logger,
+        string componentKey,
+        string stateKey);
 
     #endregion
 

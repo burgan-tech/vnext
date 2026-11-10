@@ -27,6 +27,9 @@ if(builder.Configuration.GetValue<bool>("Vault:Enabled", false)){
     builder.Configuration.AddDaprSecretStore(builder.Configuration["DAPR_SECRET_STORE_NAME"] ?? "vnext-secret", daprClient);
 }
 
+// After every connection-string source: adds Application Name when the string has none.
+builder.Configuration.ApplyDatabaseConnectionDefaults("vnext-orchestration");
+
 
 builder.WebHost.ConfigureKestrel(options =>
 {

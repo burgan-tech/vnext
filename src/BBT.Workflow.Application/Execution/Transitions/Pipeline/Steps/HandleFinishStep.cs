@@ -4,6 +4,7 @@ using BBT.Aether.Uow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.SubFlow.Headers;
 using BBT.Workflow.Telemetry;
 using Microsoft.Extensions.Logging;
 
@@ -23,6 +24,11 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// cleanup path (InstanceCancellationService) stays as an idempotent backstop for the terminal paths
 /// that never reach this step.
 /// </summary>
+/// <param name="instanceRepository">Persists the finished instance.</param>
+/// <param name="logger">Step logger.</param>
+/// <param name="subItemDataResolver">Opens the data a sub-item hands its parent; null uses the stored row.</param>
+/// <param name="instanceDataWriteService">Flushes buffered data for <c>history: none</c> flows.</param>
+/// <param name="carriedHeaderPolicy">Filters the request headers that ride the terminal event to the parent; null disables header capture, production DI always supplies it.</param>
 public sealed class HandleFinishStep(
     IInstanceRepository instanceRepository,
     ILogger<HandleFinishStep> logger,
@@ -30,7 +36,8 @@ public sealed class HandleFinishStep(
     IInstanceDataWriteService? instanceDataWriteService = null,
     IResourceLockService? resourceLockService = null,
     IUnitOfWorkManager? uowManager = null,
-    IClock? clock = null) : ITransitionStep
+    IClock? clock = null,
+    ICarriedHeaderPolicy? carriedHeaderPolicy = null) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.Finish;
@@ -188,18 +195,23 @@ public sealed class HandleFinishStep(
     /// </summary>
     private void UpdateInstanceStatus(TransitionExecutionContext context, System.Text.Json.JsonElement? subItemData)
     {
+        // The headers of the request that settles this child ride the terminal event to the parent;
+        // a root instance has no parent to carry them to.
+        var carriedHeaders = context.Instance.IsSubItem ? carriedHeaderPolicy?.Capture(context.Headers) : null;
         if (context.IsCancelTransition())
         {
             logger.InstanceCanceling(context.Instance.Id);
             context.Instance.Cancel(
                 context.Domain,
                 context.CallerMode == ExecMode.Sync,
-                context.Termination);
+                context.Termination,
+                carriedHeaders: carriedHeaders);
         }
         else
         {
             logger.InstanceCompleting(context.Instance.Id);
-            context.Instance.Complete(context.Domain, context.CallerMode == ExecMode.Sync, subItemData);
+            context.Instance.Complete(context.Domain, context.CallerMode == ExecMode.Sync, subItemData,
+                carriedHeaders: carriedHeaders);
         }
     }
 }

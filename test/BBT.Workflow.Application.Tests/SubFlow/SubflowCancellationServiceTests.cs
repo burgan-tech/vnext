@@ -17,8 +17,11 @@ using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Shared;
 using BBT.Workflow.SubFlow;
+using BBT.Workflow.SubFlow.Headers;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
 using Shouldly;
@@ -501,7 +504,56 @@ public sealed class SubflowCancellationServiceTests
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    private SubflowCancellationService CreateService() => new(
+    [Theory]
+    [InlineData(false, new string[0])]
+    [InlineData(true, new[] { "role", "sub" })]
+    public async Task CancellationAsync_ResumeHeaders_FollowApplyToResume(bool applyToResume, string[] expectedKeys)
+    {
+        var parent = CreateParentInstance(out var subInstanceId);
+        SetupBlockingParent(parent);
+        WorkflowExecutionContext? captured = null;
+        _workflowExecution
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowExecutionContext, CancellationToken>((c, _) => captured = c)
+            .ReturnsAsync(Success(parent));
+        var input = CreateCanceledInput(parent.Id, subInstanceId) with
+        {
+            CarriedHeaders = new Dictionary<string, string?>
+            {
+                ["role"] = "approver", ["sub"] = "u1", ["authorization"] = "Bearer forged"
+            }
+        };
+
+        await CreateService(CreatePolicy(applyToResume)).CancellationAsync(input);
+
+        captured.ShouldNotBeNull();
+        captured.Actor.ShouldBe(ExecutionActor.System);
+        captured.Headers.Keys.OrderBy(k => k).ShouldBe(expectedKeys.OrderBy(k => k));
+    }
+
+    [Fact]
+    public async Task CancellationAsync_NullCarriedHeaders_ResumesWithEmptyHeaders()
+    {
+        var parent = CreateParentInstance(out var subInstanceId);
+        SetupBlockingParent(parent);
+        WorkflowExecutionContext? captured = null;
+        _workflowExecution
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .Callback<WorkflowExecutionContext, CancellationToken>((c, _) => captured = c)
+            .ReturnsAsync(Success(parent));
+
+        await CreateService(CreatePolicy(applyToResume: true))
+            .CancellationAsync(CreateCanceledInput(parent.Id, subInstanceId));
+
+        captured.ShouldNotBeNull();
+        captured.Headers.ShouldBeEmpty();
+    }
+
+    private static CarriedHeaderPolicy CreatePolicy(bool applyToResume) => new(
+        Options.Create(new SubFlowCarriedHeadersOptions { ApplyToResume = applyToResume }),
+        NullLogger<CarriedHeaderPolicy>.Instance);
+
+    private SubflowCancellationService CreateService(ICarriedHeaderPolicy? policy = null) => new(
         _uowManager.Object,
         _componentCacheStore.Object,
         _instanceRepository.Object,
@@ -510,7 +562,8 @@ public sealed class SubflowCancellationServiceTests
         _terminalGuard.Object,
         _eventBus.Object,
         Options.Create(new WorkflowExecutionOptions()),
-        _logger.Object);
+        _logger.Object,
+        policy);
 
     private void SetupBlockingParent(Instance parent)
     {

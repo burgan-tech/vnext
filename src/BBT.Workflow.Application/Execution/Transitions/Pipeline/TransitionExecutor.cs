@@ -101,37 +101,37 @@ public sealed class TransitionExecutor
     }
 
     /// <summary>
-    /// Builds a log scope dictionary for the current transition.
+    /// Builds the log scope for the current transition. Same keys and values as the dictionary it
+    /// replaced (OpenObserve queries key on them), captured now — exactly as the dictionary did — but in
+    /// a single fixed-size list instead of a hashed dictionary per hop.
     /// </summary>
-    private static Dictionary<string, object> BuildLogScope(TransitionExecutionContext context)
+    private static TransitionLogScope BuildLogScope(TransitionExecutionContext context)
     {
-        var props = new Dictionary<string, object>
-        {
-            [TelemetryConstants.TagNames.Domain]    = context.Domain,
-            [TelemetryConstants.TagNames.Flow]    = context.Workflow.Key,
-            [TelemetryConstants.TagNames.FlowVersion]    = context.Workflow.Version,
-            [TelemetryConstants.TagNames.InstanceId]    = context.InstanceId,
-            [TelemetryConstants.TagNames.InstanceKey]    = context.Instance.Key ?? "N/A",
-            [TelemetryConstants.TagNames.StateFrom]     = context.Transition?.From ?? context.Instance.GetCurrentState,
-            [TelemetryConstants.TagNames.StateTo]       = context.Transition?.Target ?? "N/A",
-            [TelemetryConstants.TagNames.TransitionKey] = context.TransitionKey,
-            [TelemetryConstants.TagNames.TriggerType]    = context.Transition?.TriggerType.ToString() ?? "N/A",
-            [TelemetryConstants.TagNames.CorrelationId] = context.CorrelationId,
-            ["ChainDepth"] = context.ChainDepth,
-            ["PipelineProfile"] = context.Profile?.Name ?? "unknown",
-        };
+        Guid? parentInstanceId = null;
         if (context.Headers.TryGetValue(TelemetryConstants.HeaderNames.ParentInstanceId, out var raw)
             && Guid.TryParse(raw, out var parentId))
         {
-            props[TelemetryConstants.TagNames.ParentInstanceId] = parentId;
+            parentInstanceId = parentId;
         }
+
         // Stamp root instance ID for every subflow pipeline execution (no-op on root instances)
         var rootId = context.Instance.GetRootInstanceId();
-        if (rootId != context.InstanceId)
-        {
-            props[TelemetryConstants.TagNames.RootInstanceId] = rootId;
-        }
-        return props;
+
+        return new TransitionLogScope(
+            context.Domain,
+            context.Workflow.Key,
+            context.Workflow.Version,
+            context.InstanceId,
+            context.Instance.Key ?? "N/A",
+            context.Transition?.From ?? context.Instance.GetCurrentState,
+            context.Transition?.Target ?? "N/A",
+            context.TransitionKey,
+            context.Transition?.TriggerType.ToString() ?? "N/A",
+            context.CorrelationId,
+            context.ChainDepth,
+            context.Profile?.Name ?? "unknown",
+            parentInstanceId,
+            rootId != context.InstanceId ? rootId : null);
     }
 
     /// <summary>
@@ -191,7 +191,7 @@ public sealed class TransitionExecutor
             context.InstanceId.ToString("D").ToLowerInvariant());
 
         activity.SetBaggage(TelemetryConstants.TagNames.Flow, context.Workflow.Key);
-        activity.SetBaggage(TelemetryConstants.TagNames.FlowVersion, context.Workflow.Version);
+        activity.SetBaggage(TelemetryConstants.TagNames.FlowVersion, BaggageValueFormatter.Format(context.Workflow.Version));
         activity.SetBaggage(TelemetryConstants.TagNames.InstanceId, context.InstanceId.ToString());
         activity.SetBaggage(TelemetryConstants.TagNames.CorrelationId, context.CorrelationId);
         activity.SetBaggage(TelemetryConstants.TagNames.WorkflowInstanceId,

@@ -101,6 +101,77 @@ public class DataFunctionCacheTests
         sut.ComputeEtag(input, fingerprint with { Id = Guid.NewGuid() }).ShouldNotBe(baseline);
         sut.ComputeEtag(input, fingerprint with { LatestDataEtag = "01JD2G4YV0OTHERULID000000" }).ShouldNotBe(baseline);
         sut.ComputeEtag(input, fingerprint with { FlowVersion = "2.0.0" }).ShouldNotBe(baseline);
+        sut.ComputeEtag(input, fingerprint with { EffectiveState = "approved" }).ShouldNotBe(baseline);
+    }
+
+    /// <summary>
+    /// The case the state component exists for: a transition that writes no instance data. The data
+    /// row is untouched, so <c>LatestDataEtag</c> is identical and every other component is equal —
+    /// only the state moved. Without it in the material the two reads share an ETag and the second
+    /// is answered 304, handing the caller the previous state's enrichment (observed in the field as
+    /// a client replaying the previous state's nextTransition and being rejected).
+    /// </summary>
+    [Fact]
+    public void ComputeEtag_ChangesWhenOnlyTheStateMoved()
+    {
+        var sut = CreateSut();
+        var input = CreateInput();
+        var beforeHop = CreateFingerprint();
+        var afterHop = beforeHop with { EffectiveState = "approved" };
+
+        // Same instance, same data row, same flow version, same caller — only the state differs.
+        afterHop.LatestDataEtag.ShouldBe(beforeHop.LatestDataEtag);
+
+        sut.ComputeEtag(input, afterHop).ShouldNotBe(sut.ComputeEtag(input, beforeHop));
+    }
+
+    /// <summary>
+    /// The counterpart: the state moving must NOT retire the cached body. An entry holds the
+    /// field-filtered data payload only, which a data-less transition leaves untouched — folding the
+    /// state into the cache identity would discard a still-correct body on every such hop
+    /// (auto-transition chains included) and pay for the x-roles filtering pass again for nothing.
+    /// </summary>
+    [Fact]
+    public void ComputeDataEtag_IsUnchangedWhenOnlyTheStateMoved()
+    {
+        var sut = CreateSut();
+        var input = CreateInput();
+        var beforeHop = CreateFingerprint();
+        var afterHop = beforeHop with { EffectiveState = "approved" };
+
+        sut.ComputeDataEtag(input, afterHop).ShouldBe(sut.ComputeDataEtag(input, beforeHop));
+    }
+
+    /// <summary>
+    /// The cache identity still has to react to everything that DOES change the stored body, so the
+    /// split must not have dropped a component on the way.
+    /// </summary>
+    [Fact]
+    public void ComputeDataEtag_ChangesWithEveryBodyAffectingComponent()
+    {
+        var sut = CreateSut();
+        var input = CreateInput();
+        var fingerprint = CreateFingerprint();
+        var baseline = sut.ComputeDataEtag(input, fingerprint);
+
+        sut.ComputeDataEtag(input, fingerprint with { Id = Guid.NewGuid() }).ShouldNotBe(baseline);
+        sut.ComputeDataEtag(input, fingerprint with { LatestDataEtag = "01JD2G4YV0OTHERULID000000" }).ShouldNotBe(baseline);
+        sut.ComputeDataEtag(input, fingerprint with { FlowVersion = "2.0.0" }).ShouldNotBe(baseline);
+        sut.ComputeDataEtag(CreateInput(roles: ["admin"]), fingerprint).ShouldNotBe(baseline);
+    }
+
+    /// <summary>
+    /// The two identities must never coincide for the same input — a single hash serving both
+    /// purposes is exactly the conflation this split removes.
+    /// </summary>
+    [Fact]
+    public void ComputeEtagAndComputeDataEtag_AreDistinct()
+    {
+        var sut = CreateSut();
+        var input = CreateInput();
+        var fingerprint = CreateFingerprint();
+
+        sut.ComputeEtag(input, fingerprint).ShouldNotBe(sut.ComputeDataEtag(input, fingerprint));
     }
 
     [Fact]

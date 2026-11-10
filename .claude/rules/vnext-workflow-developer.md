@@ -92,7 +92,8 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 - Pipeline steps do NOT call EF `Include` directly — includes are applied at load time:
   `GetActiveAsync` → `GetResultAsync` → `FindByIdentifierAsync` → `EfCoreInstanceRepository.WithDetailsAsync()`
   (`DataList` or latest-only under `WorkflowExecution:LatestOnlyInstanceLoading`, plus
-  `Include(ChildCorrelations.Where(!IsCompleted))`, split queries).
+  `Include(ChildCorrelations.Where(!IsCompleted))`, split queries; under latest-only the tracked
+  finder joins the ≤1 latest row and loads open correlations explicitly — two commands, no jsonb repeat).
 - `GetResultAsync(includeDetails: false)` is lean; history paths use `AsNoTracking` + filtered includes.
 - Post-commit settlement (`FindForPostCommitSettlementAsync(id, includeLatestData)`) always loads open
   correlations; add a new `LatestData` reader to `PostCommitParentMutationService.NeedsLatestDataForSettle`,
@@ -153,7 +154,11 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   Swap runs after schema validation, before persist/enqueue; a forwarded request is swapped at the leaf; External
   bodies are reference-checked against `LatestData`, Trusted (runtime-produced) ones are not. Codes
   `Instance:100047` (503) / `100048` (400) / `100049` (404). Reads: `functions/file` (`queryRoles` + `x-roles`),
-  `internal/file` has no auth. Full guide: `docs/runtime/file-storage.md`.
+  `internal/file` has no auth; every read is verified against `size`+`eTag` (never serve unverified bytes).
+- Swap keeps the node's non-handle members. Every store is its Dapr binding, never a store SDK; reads recover
+  chunked frames a Dapr binding wrote. `x-storage.transport` `inline|stream|any` gates `POST …/workflows/{flow}/files`
+  (staged, claimed once). Scripts: stream carve-outs + member bans live in `BannedApiAnalyzer` only.
+  Full guide: `docs/runtime/file-storage.md`.
 
 ## Task / Action History (system functions)
 
@@ -198,7 +203,7 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   (`CallerScopeHash`) only. Never read `currentUser.Roles` directly — use `currentUser.ResolveCallerRoles(headers)`.
 - Batch: one evaluator per instance/schema; pass every surface the same `AuthorizationRequestContext`.
 - `queryRoles` is ANSWERED (by `authorize?queryRoles=true`), not enforced on read paths — do not add
-  the gate back. `authorize` decides queryRoles at the deepest active subflow leaf only (no chain AND; a parent restricts via `subFlow.overrides.states.<state>.queryRoles`); `?ack=true` is the long-poll ack pre-flight.
+  the gate back. `authorize` decides queryRoles at the deepest active subflow leaf only (no chain AND; a parent restricts via `subFlow.overrides.states.<state>.queryRoles`); a child not created yet (`reason: instance-not-found`) makes the parent the leaf; `?ack=true` is the long-poll ack pre-flight.
 - The `queryRoles` gate reads the instance's OWN `CurrentState`, never `EffectiveState`.
 - `transition.roles` is not enforced at execution, by design — do not "fix" it. `cancel`/`exit` are
   parent-retained. Under `morph-idm` a non-blank `role` header replaces the service's answer.
@@ -255,6 +260,17 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   One unit-of-work root = one database: cross-database local calls go through `CoHostedDatabaseBoundary`.
 - Full guide: `docs/runtime/multi-domain-hosting.md`.
 
+## Row Security (`attributes.rowSecurity`)
+
+- A flow with `rowSecurity` is deny by default (no `default`); rules are role-keyed, ORed, ANDed with the caller's filter. Rule set = `GetFlowAsync(domain, workflow, null)` (default version else latest); no `rowSecurity` (or no published definition) reads unfiltered; any other lookup failure fails the read with that error for every flow (tag `denied-flow-load`, warning 20509).
+- One compiler: the predicate is ANDed at the repository merge point; GET probes with `id AND predicate` before the ETag. Parameter failures never widen.
+- Applied by the public list + single GET endpoints and the GetInstances / GetInstance tasks (same- and cross-domain), via opt-in `ApplyRowSecurity` (`[JsonIgnore]`). GetInstanceData, view resolution, transitions and state/data/view/schema/master/history/`internal/*` read unfiltered — a documented known gap, not a boundary.
+- Full guide: `docs/domain/row-security.md`.
+
+## Flow default version
+
+- A flow's `sys-version-registry` pointer caps floating version requests; `sys-*` and full versions bypass it, a bad pointer fails closed. Full guide: `docs/runtime/flow-default-version.md`.
+
 ## Status / State / Type Semantics
 
 Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGENTS.md` § Status / State / Type Semantics.
@@ -276,8 +292,11 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
 - `S`: completion → output mapping → `ResumePipelineAsync` from `ClearBusyOnResumeStep` (79).
   `P`: correlation complete, no parent resume. On resume failure the correlation is reverted in a new UoW.
 - Runtime child calls force `sync=true` and set `SuppressResponseEnrichment` (identity-only answer) —
-  never read attributes off a sub-start or forward response.
+  never read attributes off a sub-start or forward response. A sync one still carries
+  `currentState`/`effectiveState`, copied from the pipeline's instance — never a reload (`docs/runtime/execution-type.md`).
 - Completion window: child terminal while parent correlation open ⇒ state function shows parent transitions.
+- Terminal events carry the settling request's headers (deny floor, `ApplyToResume` default on):
+  `docs/runtime/event-publish-modes.md#carried-headers-on-sub-item-terminal-events`.
 - Full guide: `docs/architecture/subflow-execution.md`.
 - **Initial state is optional:** with none declared the instance is born in the implicit `$start` state and
   `startTransition.target` (mandatory, a declared state key) decides the entry; see
@@ -294,7 +313,10 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
 ### `sub:state-changed` and `SubflowStateService`
 
 - `Instance.ChangeState` only ARMS the event; `Instance.PublishPendingSubStateChange()` publishes it
-  once per episode at the rest point. Excluded: open SubFlow correlation, `Faulted`.
+  once per episode at the rest point. Excluded: open SubFlow correlation, `Faulted`. A terminal
+  `Completed` notification is published but never applied — relay skips it, the receiver drops it
+  (`SubStateTerminalStatus`); the terminal event owns it
+  (`docs/runtime/event-publish-modes.md#substate-changed-is-emitted-once-per-activation-episode`).
 - Never remove the explicit flush at creation in `InstanceCommandAppService` — it is the parent's only
   notification when the start transition targets the initial state.
 - `SubflowStateService` takes the per-sub-item lock; equal `ChangedAt` is re-applied, only older rejected.
@@ -319,6 +341,9 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
   (`InstanceDataBuffer`, outside the EF navigation) and flushed at Finish, SubFlow handoff or fault; a
   non-Finish rest faults (`Instance:100046`); a `none` parent needs `none` S children (`Instance:100044`);
   `/retry` → 409. Full guide: `docs/runtime/history-mode.md`.
+- `Instances.ModifiedAt`: never rely on Aether's audit interceptor (null-only), nor on `OwnsStatus`. Stamp on a write the
+  hop makes (`Instance.ChangeState` when it moves, else `DeferModifiedAtStamp` → `TransitionSettlement`; `Complete/Cancel/Fault`;
+  updateData via `AppendAsync(touchInstance)`); a new `ExecuteUpdate` on `Instances` must set it. Full guide: `docs/runtime/instance-filtering-and-queries.md`.
 
 ## Related Instance Access (scripts)
 

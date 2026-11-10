@@ -153,9 +153,18 @@ public static class TaskServiceCollectionExtensions
         services.AddTaskExecutor<ExternalHttpTaskExecutor>();
         services.AddTaskExecutor<DaprServiceTaskExecutor>();
         services.AddTaskExecutor<DaprBindingTaskExecutor>();
+        // In-process Dapr binding invoker: the orchestration sidecar holds the x-storage components, so a flow that
+        // lists, reads or deletes stored files routes 'daprbinding' Local. Capability only; the default stays Remote.
+        services.AddLocalTaskInvoker<LocalDaprBindingTaskInvoker>();
         services.AddTaskExecutor<DaprHttpEndpointTaskExecutor>();
         services.AddTaskExecutor<DaprPubSubTaskExecutor>();
         services.AddTaskExecutor<DaprConversationTaskExecutor>();
+        // Python tasks call the domain's own Python runtime container from this host (no Execution hop);
+        // an empty AppId means the domain has no runtime and Python tasks fail with 503.
+        services.AddOptions<PythonRuntimeOptions>()
+            .BindConfiguration(PythonRuntimeOptions.SectionName)
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
         services.AddTaskExecutor<PythonTaskExecutor>();
 
         // Shared Dapr state-store gateway, also used by the function response cache (issue #1007).

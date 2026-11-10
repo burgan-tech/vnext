@@ -242,6 +242,11 @@ services:
   postgres:
     container_name: vnext-postgres
     image: postgres:latest
+    # Group commit: with >= commit_siblings (5) other transactions active, a committing backend
+    # waits up to commit_delay microseconds so one WAL fsync covers several commits. No durability
+    # loss. The runtime's hop is not transactional — every bookkeeping write is its own commit —
+    # so under concurrent traffic this is what keeps write latency from scaling with fsync count.
+    command: ["postgres", "-c", "commit_delay=1000"]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres

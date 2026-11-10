@@ -282,9 +282,20 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     public DateTime CreatedAt { get; set; }
 
     /// <summary>
-    /// Modified at
+    /// When the instance last changed. The aggregate stamps it where a transition decides its outcome
+    /// (<see cref="ChangeState"/>, <see cref="Complete"/>, <see cref="Cancel"/>, <see cref="Fault"/>,
+    /// <see cref="MarkModified"/> at the end of a same-state hop), so it rides in the UPDATE that save
+    /// sends. The set-based status writes in the repository and the instance-data writer (for
+    /// <c>updateData</c>) stamp it in SQL. Aether's audit interceptor never does: it fills only a null
+    /// value, and this one is set at birth.
     /// </summary>
     public DateTime? ModifiedAt { get; set; }
+
+    /// <summary>
+    /// Records that the instance changed now: stamps <see cref="ModifiedAt"/>. Persisted by the
+    /// caller's next save of this aggregate, in the UPDATE it sends.
+    /// </summary>
+    public void MarkModified() => ModifiedAt = DateTime.UtcNow;
     
     /// <summary>
     /// Creator user identifier.
@@ -593,6 +604,36 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     public InstanceCorrelation? Subflow =>
         ChildCorrelations.FirstOrDefault(p => !p.IsCompleted && p.SubFlowType.Equals(SubFlowType.SubFlow));
 
+    /// <summary>
+    /// Fills <see cref="ChildCorrelations"/> on a <b>no-tracking</b> aggregate from correlation rows
+    /// read by a separate query, producing exactly the shape the detail load's filtered include
+    /// (<c>ChildCorrelations.Where(c =&gt; !c.IsCompleted)</c>) would: completed rows are ignored, open
+    /// rows are added in <see cref="InstanceCorrelation"/> id order, and a row already present is not
+    /// duplicated. It exists so a read path that needs the FULL correlation set (the state function)
+    /// can read it once and derive the open subset, instead of paying a second round trip for the
+    /// include, and so the read-only load can fetch the open set without the tracked-entity
+    /// collection loader.
+    /// </summary>
+    /// <remarks>
+    /// Never call it on a change-tracked aggregate: these rows already exist in the database, and a
+    /// tracking DbContext would discover them as NEW children of a tracked root and insert them
+    /// (compare <see cref="AcceptLoadedIncidents"/>, which keeps its rows off the navigation for the
+    /// same reason). The repository's read-only finders are the only callers.
+    /// Rows keep the order the caller read them in: the filtered include this replaces had no
+    /// ordering of its own, and <c>FirstOrDefault</c> readers (<see cref="Subflow"/>, by-name
+    /// lookups) must not see a different pick than before.
+    /// </remarks>
+    public void AcceptLoadedChildCorrelations(IEnumerable<InstanceCorrelation> correlations)
+    {
+        foreach (var correlation in correlations.Where(c => !c.IsCompleted))
+        {
+            if (_childCorrelations.All(existing => existing.Id != correlation.Id))
+            {
+                _childCorrelations.Add(correlation);
+            }
+        }
+    }
+
     public Instance CreateSnapshot()
     {
         var snapshot = new Instance
@@ -676,10 +717,13 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// The data a SubFlow/SubProcess hands to its parent, already opened by the caller
     /// (<c>ISubItemEventDataResolver</c>): the parent cannot open this instance's tokens. Null means the row as stored.
     /// </param>
-    public void Complete(string domain, bool sync = false, System.Text.Json.JsonElement? subItemData = null)
+    /// <param name="carriedHeaders">Filtered headers of the settling request, stamped only on the <see cref="InstanceSubCompletedEvent"/>; null when none.</param>
+    public void Complete(string domain, bool sync = false, System.Text.Json.JsonElement? subItemData = null,
+        Dictionary<string, string?>? carriedHeaders = null)
     {
         Status = InstanceStatus.Completed;
         CompletedAt = DateTime.UtcNow;
+        ModifiedAt = CompletedAt;
         Duration = CompletedAt - CreatedAt;
         ForceEffectiveFromOwnTerminalState();
 
@@ -714,7 +758,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                     CompletedAt = CompletedAt.Value,
                     Duration = Duration,
                     RootInstanceId = rootId != Id ? rootId : (Guid?)null,
-                    Sync = sync
+                    Sync = sync,
+                    CarriedHeaders = carriedHeaders
                 });
             }
         }
@@ -729,13 +774,15 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// <param name="sync">Whether the faulting pipeline chain runs with a synchronous caller (sync=true).</param>
     /// <param name="termination">Typed context for direct or parent-cascaded termination.</param>
     /// <param name="subItemData">See <see cref="Complete"/>: the data handed to the parent, opened by the caller.</param>
+    /// <param name="carriedHeaders">See <see cref="Complete"/>: stamped only on the <see cref="InstanceSubFaultedEvent"/>.</param>
     public void Fault(string domain, bool sync = false, TerminationContext? termination = null,
-        System.Text.Json.JsonElement? subItemData = null)
+        System.Text.Json.JsonElement? subItemData = null, Dictionary<string, string?>? carriedHeaders = null)
     {
         var effectiveTermination = termination ?? TerminationContext.Direct(Id);
         var childTermination = effectiveTermination.AsParentCascade();
         Status = InstanceStatus.Faulted;
         CompletedAt = DateTime.UtcNow;
+        ModifiedAt = CompletedAt;
         Duration = CompletedAt - CreatedAt;
         ResyncEffectiveStatus();
 
@@ -806,7 +853,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                     SubItemType = subItemType,
                     TerminationOrigin = effectiveTermination.Origin,
                     InitiatorInstanceId = effectiveTermination.InitiatorInstanceId,
-                    CascadeId = effectiveTermination.CascadeId
+                    CascadeId = effectiveTermination.CascadeId,
+                    CarriedHeaders = carriedHeaders
                 });
             }
         }
@@ -917,12 +965,15 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     /// <param name="domain">The domain of the instance.</param>
     /// <param name="sync">Whether the canceling pipeline chain runs with a synchronous caller.</param>
     /// <param name="termination">Typed context for direct or parent-cascaded termination.</param>
-    public void Cancel(string domain, bool sync = false, TerminationContext? termination = null)
+    /// <param name="carriedHeaders">See <see cref="Complete"/>: stamped only on the <see cref="InstanceSubCanceledEvent"/>.</param>
+    public void Cancel(string domain, bool sync = false, TerminationContext? termination = null,
+        Dictionary<string, string?>? carriedHeaders = null)
     {
         var effectiveTermination = termination ?? TerminationContext.Direct(Id);
         var childTermination = effectiveTermination.AsParentCascade();
         Status = InstanceStatus.Completed;
         CompletedAt = DateTime.UtcNow;
+        ModifiedAt = CompletedAt;
         Duration = CompletedAt - CreatedAt;
         ForceEffectiveFromOwnTerminalState();
 
@@ -959,7 +1010,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
                     Sync = sync,
                     TerminationOrigin = effectiveTermination.Origin,
                     InitiatorInstanceId = effectiveTermination.InitiatorInstanceId,
-                    CascadeId = effectiveTermination.CascadeId
+                    CascadeId = effectiveTermination.CascadeId,
+                    CarriedHeaders = carriedHeaders
                 });
             }
         }
@@ -1115,18 +1167,34 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         return correlation;
     }
 
+    /// <summary>
+    /// Sets the instance key. A change stamps <see cref="ModifiedAt"/>, riding the UPDATE the column
+    /// causes anyway.
+    /// </summary>
     public void SetKey(string key)
     {
-        Key = Check.NotNullOrWhiteSpace(key, nameof(key), InstanceConstants.MaxKeyLength);
+        key = Check.NotNullOrWhiteSpace(key, nameof(key), InstanceConstants.MaxKeyLength);
+        if (string.Equals(Key, key, StringComparison.Ordinal))
+            return;
+
+        Key = key;
+        MarkModified();
     }
 
     /// <summary>
-    /// Sets the instance stage label. Accepts null to clear.
+    /// Sets the instance stage label. Accepts null to clear. A change stamps <see cref="ModifiedAt"/>:
+    /// the column is written anyway, so the stamp costs nothing — and an updateData that changes only
+    /// the stage writes no data row that could carry it.
     /// </summary>
     /// <param name="stage">Stage value (max <see cref="InstanceConstants.MaxStageLength"/> characters), or null.</param>
     public void SetStage(string? stage)
     {
-        Stage = Check.Length(stage, nameof(stage), InstanceConstants.MaxStageLength);
+        stage = Check.Length(stage, nameof(stage), InstanceConstants.MaxStageLength);
+        if (string.Equals(Stage, stage, StringComparison.Ordinal))
+            return;
+
+        Stage = stage;
+        MarkModified();
     }
 
     private void SetState(string currentState)
@@ -1350,10 +1418,26 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         }
     }
 
-    public void ChangeState(State state)
+    /// <summary>
+    /// Moves the instance to <paramref name="state"/>. Like <see cref="SetStage"/>, <see cref="SetKey"/> and
+    /// <see cref="AddTags"/>, it stamps <see cref="ModifiedAt"/> only when it changes something: when the state
+    /// actually moves, the stamp rides the UPDATE that writes the new state. A same-state call changes no column
+    /// and stamps nothing; the caller decides which write of its hop carries that hop's stamp.
+    /// </summary>
+    /// <param name="state">The state entered; may be the current one (a <c>$self</c> transition).</param>
+    /// <param name="markModified">
+    /// <c>false</c> leaves the stamp to a later write of the same hop even when the state moves — a Finish
+    /// save deferred to the completion, which stamps it.
+    /// </param>
+    /// <returns><c>true</c> when the state moved.</returns>
+    public bool ChangeState(State state, bool markModified = true)
     {
         var previousState = GetCurrentState;
+        var moved = !string.Equals(previousState, state.Key, StringComparison.Ordinal);
         SetState(state.Key);
+
+        if (markModified && moved)
+            MarkModified();
 
         CurrentStateType = state.StateType;
         CurrentStateSubType = state.SubType;
@@ -1384,11 +1468,13 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         // 6 facts per 908 ms chain against a ~1.3 s delivery, with 7.5% of deliveries writing
         // nothing at the receiver — and moved the parent's state-function ETag on every hop, so a
         // long-polling client woke for states it could not use.
-        if (IsSubFlow && !string.Equals(previousState, state.Key, StringComparison.Ordinal))
+        if (IsSubFlow && moved)
         {
             _pendingSubStateChangeFrom ??= previousState;
             _hasPendingSubStateChange = true;
         }
+
+        return moved;
     }
 
     /// <summary>
@@ -1446,15 +1532,20 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     {
         tags ??= [];
 
-        Tags.RemoveAll(existingTag => !tags.Contains(existingTag));
+        var changed = Tags.RemoveAll(existingTag => !tags.Contains(existingTag)) > 0;
 
         foreach (var tag in tags)
         {
             if (!Tags.Contains(tag))
             {
                 Tags.Add(tag);
+                changed = true;
             }
         }
+
+        // A changed tag set is written anyway; the ModifiedAt stamp rides the same UPDATE.
+        if (changed)
+            MarkModified();
     }
 
     /// <summary>

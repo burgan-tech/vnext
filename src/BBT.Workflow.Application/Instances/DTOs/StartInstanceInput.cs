@@ -76,7 +76,13 @@ public sealed class StartInstanceInput(
                 Stage = Instance.Stage
             },
             IsReentry = false, // Start transitions are never re-entry
-            TrustedPayload = TrustedPayload
+            TrustedPayload = TrustedPayload,
+            // A runtime-internal child start (SubflowStarter, cross-domain sub-start) reads only the
+            // resolved version back: the runner may answer identity-only and skip the no-op
+            // settlement at that level (TransitionRunner.IsSettleFreeStartSubflowHandoff). The
+            // transition path has carried this flag since the forward relay's settle elision; the
+            // start path never did, so every intermediate level of a nested start chain settled.
+            IdentityOnlyResponse = SuppressResponseEnrichment
         };
     }
 }
@@ -103,6 +109,11 @@ public sealed class CreateInstanceInput: IHasExtraProperties
 
 public sealed class StartInstanceOutput : InstanceOutputBase
 {
+    /// <summary>
+    /// The full flow version the runtime resolved for this instance — a floating request ("1.0")
+    /// answers with the concrete version it landed on. Null from a runtime that predates the field.
+    /// </summary>
+    public string? FlowVersion { get; set; }
 }
 
 /// <summary>

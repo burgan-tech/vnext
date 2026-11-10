@@ -12,12 +12,14 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Shared;
+using BBT.Workflow.SubFlow.Headers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.SubFlow;
 
 /// <inheritdoc cref="ISubflowCancellationService" />
+/// <remarks>Carried headers: the optional policy re-filters the headers carried from the child's settlement for output mapping and the resume context; null disables header carry, production DI always supplies it.</remarks>
 public sealed class SubflowCancellationService(
     IUnitOfWorkManager uowManager,
     IComponentCacheStore componentCacheStore,
@@ -27,7 +29,8 @@ public sealed class SubflowCancellationService(
     ISubItemTerminalGuard terminalGuard,
     IDistributedEventBus eventBus,
     IOptions<WorkflowExecutionOptions> executionOptions,
-    ILogger<SubflowCancellationService> logger)
+    ILogger<SubflowCancellationService> logger,
+    ICarriedHeaderPolicy? carriedHeaderPolicy = null)
     : ISubflowCancellationService
 {
     /// <summary>
@@ -121,12 +124,27 @@ public sealed class SubflowCancellationService(
         }
 
         // Bounded wait rather than fail-fast: absorbs duplicates that collide with the original
-        // while its transaction is still open.
+        // while its transaction is still open. Re-probes between attempts and stops waiting once
+        // the holder has committed — see SubflowCompletionService.
+        var terminalLockWait = TerminalLockWait.WhileCorrelationOpen(
+            terminalGuard, input.InstanceId, input.SubInstanceId, SubItemTerminalOutcome.Canceled);
         await using (var lockScope = await transitionLockScopeFactory.AcquireAsync(
-                         lockKey, TerminalLockWait, cancellationToken))
+                         lockKey, terminalLockWait, cancellationToken))
         {
             if (!lockScope.IsAcquired)
             {
+                var lateProbe = await terminalGuard.ProbeAsync(
+                    input.InstanceId, input.SubInstanceId, SubItemTerminalOutcome.Canceled, cancellationToken);
+                if (lateProbe != SubItemTerminalProbe.Proceed)
+                {
+                    activity?.SetTag("vnext.subflow.result",
+                        lateProbe == SubItemTerminalProbe.AlreadySettled
+                            ? "correlation_already_settled_during_wait"
+                            : "terminal_outcome_conflict_during_wait");
+                    SubFlowActivityHelper.SetSuccess(activity);
+                    return;
+                }
+
                 logger.SubItemTerminalLockNotAcquired(lockKey, SubItemTerminalOutcome.Canceled.ToString());
                 throw new SubflowTerminalLockNotAcquiredException(
                     input.Domain,
@@ -235,6 +253,7 @@ public sealed class SubflowCancellationService(
             parentWorkflow!,
             input,
             lockKey,
+            activity,
             cancellationToken);
 
         await MarkSettlementBestEffortAsync(
@@ -270,10 +289,14 @@ public sealed class SubflowCancellationService(
         Definitions.Workflow parentWorkflow,
         SubItemCanceledInput input,
         string parentLockKey,
+        Activity? activity,
         CancellationToken cancellationToken)
     {
         try
         {
+            var resumeHeaders = carriedHeaderPolicy.ResolveResumeHeaders(input.CarriedHeaders);
+            SubFlowActivityHelper.SetCarriedHeaderCount(activity, resumeHeaders.Count);
+
             var context = new WorkflowExecutionContext
             {
                 Domain = parentWorkflow.Domain,
@@ -284,6 +307,7 @@ public sealed class SubflowCancellationService(
                 TriggerType = TriggerType.Automatic,
                 Mode = ExecMode.Resume,
                 CallerMode = input.Sync ? ExecMode.Sync : ExecMode.Async,
+                Headers = resumeHeaders,
                 Actor = ExecutionActor.System,
                 RequestedAt = DateTimeOffset.UtcNow,
                 Execution = new ExecutionInfo
@@ -394,7 +418,7 @@ public sealed class SubflowCancellationService(
     /// <see cref="CancellationAsync"/>), so this is the only kind the revert path ever sees. The
     /// input carries no <c>SubItemType</c> field to round-trip because of that invariant.
     /// </remarks>
-    private static InstanceSubCanceledEvent BuildTerminalEventFromInput(
+    internal static InstanceSubCanceledEvent BuildTerminalEventFromInput(
         SubItemCanceledInput input,
         int rearmAttempt)
     {
@@ -420,6 +444,7 @@ public sealed class SubflowCancellationService(
             EpisodeTrigger = input.EpisodeTrigger,
             EpisodeTransitionKey = input.EpisodeTransitionKey,
             EpisodeTraceRoot = input.EpisodeTraceRoot,
+            CarriedHeaders = input.CarriedHeaders,
             RearmAttempt = rearmAttempt
         };
     }

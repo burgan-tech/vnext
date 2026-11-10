@@ -30,6 +30,14 @@ public static class TaskBindingMapper
     }
 
     /// <summary>
+    /// Maps a WorkflowTask to its binding object and wire task type WITHOUT serializing it — for callers
+    /// that hand the object to <c>ITaskInvocationDispatcher.DispatchAsync&lt;TBinding&gt;</c>, which only
+    /// serializes when the call actually leaves the process. Same mapping and error results as
+    /// <see cref="CreateEnvelope"/>.
+    /// </summary>
+    public static Result<(string TaskType, object Binding)> CreateBinding(WorkflowTask task) => MapToBinding(task);
+
+    /// <summary>
     /// Maps a WorkflowTask to its corresponding binding type and task type string.
     /// </summary>
     private static Result<(string TaskType, object Binding)> MapToBinding(WorkflowTask task)
@@ -46,7 +54,6 @@ public static class TaskBindingMapper
                 DaprHttpEndpointTask daprHttpEndpoint => (TaskTypes.DaprHttpEndpoint, MapDaprHttpEndpointTask(daprHttpEndpoint)),
                 DaprPubSubTask daprPubSub => (TaskTypes.DaprPubSub, MapDaprPubSubTask(daprPubSub)),
                 DaprConversationTask daprConversation => (TaskTypes.DaprConversation, (object)MapDaprConversationTask(daprConversation)),
-                PythonTask python => (TaskTypes.Python, (object)MapPythonTask(python)),
                 StateStoreTask stateStore => (TaskTypes.StateStore, (object)MapStateStoreTask(stateStore)),
 
                 // Trigger tasks (basic mapping - runtime context handled by invokers)
@@ -382,15 +389,6 @@ public static class TaskBindingMapper
             Parameters = ToStringDictionary(task.Parameters)
         };
     }
-
-    private static PythonTaskBinding MapPythonTask(PythonTask task) => new()
-    {
-        Script = task.Script?.DecodedCode ?? string.Empty,
-        Location = task.Script?.Location ?? ScriptCode.DefaultLocation,
-        ExecutionMode = task.ExecutionMode,
-        Input = task.Input,
-        TimeoutSeconds = task.TimeoutSeconds
-    };
 
     /// <summary>
     /// Converts an optional JSON object into a string dictionary, coercing non-string values to their raw JSON text.

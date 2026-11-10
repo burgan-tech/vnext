@@ -219,9 +219,19 @@ public static class UnifiedFilterService
     /// Selects only the ordered page identities and one sentinel. Hydration is performed only for
     /// the returned identities; no root entity or history is loaded for skipped rows or the sentinel.
     /// </summary>
-    public static async Task<(List<Guid> Ids, bool HasNext)> ExecutePageIdsAsync(
+    public static Task<(List<Guid> Ids, bool HasNext)> ExecutePageIdsAsync(
         DbContext dbContext, GraphQLFilterRequest request, string schema, int page, int pageSize,
         ISchemaValidator? schemaValidator = null, CancellationToken cancellationToken = default, bool useLatestJoin = true)
+        => ExecutePageIdsAsync(dbContext, request, schema, page, pageSize, schemaValidator, pinnedInstanceId: null,
+            useLatestJoin, cancellationToken);
+
+    /// <summary>
+    /// <see cref="ExecutePageIdsAsync(DbContext, GraphQLFilterRequest, string, int, int, ISchemaValidator?, CancellationToken, bool)"/>
+    /// with the result optionally pinned to one instance by a uuid-typed id condition (the row-security GET probe).
+    /// </summary>
+    internal static async Task<(List<Guid> Ids, bool HasNext)> ExecutePageIdsAsync(
+        DbContext dbContext, GraphQLFilterRequest request, string schema, int page, int pageSize,
+        ISchemaValidator? schemaValidator, Guid? pinnedInstanceId, bool useLatestJoin, CancellationToken cancellationToken)
     {
         if (page < 1 || pageSize < 1 || pageSize == int.MaxValue || (long)(page - 1) * pageSize > int.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(page));
@@ -229,7 +239,8 @@ public static class UnifiedFilterService
         var (sql, parameters) = GraphQLJsonFilterService.BuildInstanceQuery(
             request.Filter ?? new GraphQLFilterNode(), "Data", "Instances", schema, schemaValidator,
             orderByClause: order, schemaContext: request.SchemaContext,
-            offset: (page - 1) * pageSize, limit: pageSize + 1, useLatestJoin: useLatestJoin);
+            offset: (page - 1) * pageSize, limit: pageSize + 1, useLatestJoin: useLatestJoin,
+            pinnedInstanceId: pinnedInstanceId);
         // This is an internal compiler-owned projection, never caller-supplied SQL.
         sql = sql.Replace("SELECT s.*", "SELECT s.\"Id\" AS \"Value\"");
         var ids = await dbContext.Database.SqlQueryRaw<Guid>(sql, parameters).ToListAsync(cancellationToken);

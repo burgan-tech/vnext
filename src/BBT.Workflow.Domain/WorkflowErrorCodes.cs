@@ -138,6 +138,26 @@ public static class WorkflowErrorCodes
     /// </summary>
     public const string FileSchemaUnavailable = "Instance:100050";
 
+    /// <summary>
+    /// The requested flow version is published but not activated: the flow's version registry holds a default
+    /// (<c>defaultVersion</c>) that is lower than the request, so the version is above the activation ceiling.
+    /// Maps to HTTP 404.
+    /// </summary>
+    public const string FlowVersionNotActivated = "Instance:100051";
+
+    /// <summary>
+    /// The flow's version registry points at a default version that does not resolve to any published version
+    /// (or is not a valid pointer). A configuration conflict, never silently replaced by the latest version.
+    /// Maps to HTTP 409.
+    /// </summary>
+    public const string FlowDefaultVersionInvalid = "Instance:100052";
+
+    /// <summary>
+    /// The version registry could not be read (database or registry flow failure), so the flow's default version
+    /// cannot be determined. Transient; the resolution fails instead of falling back to latest. Maps to HTTP 503.
+    /// </summary>
+    public const string VersionRegistryUnavailable = "Instance:100053";
+
     #endregion
     
     #region Transition Errors (100xxx)

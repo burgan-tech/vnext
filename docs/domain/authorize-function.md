@@ -99,6 +99,19 @@ Resolution at the deciding (leaf or standalone) instance, highest first:
 An empty grant set allows. The override **replaces**, it does not merge — a parent that narrowed a
 child's visibility meant to narrow it.
 
+**The leaf is the deepest instance that EXISTS.** A parent commits its SubFlow correlation in its own
+transaction (`HandleSubFlowStep`, order 70); the child's row is created afterwards by the post-commit
+`StartSubflowJob`. In between — hundreds of milliseconds under load, indefinitely if the start fails —
+the correlation points at a child that cannot be loaded. The child answers `allowed: false` with
+`reason: "instance-not-found"` (no grant was evaluated), and the parent then decides with its **own**
+resolution above, as if it were the leaf. This is what the state function shows in the same window (it
+falls back to the main flow's view when the descent fails), and there is no child data to expose yet.
+Before this, every `queryRoles` probe in the window was denied and the gateway answered `403` on the
+client's state poll (vnext#1181). Only `queryRoles` falls back: a transition or function forwarded to a
+child that does not exist cannot execute either, so `false` stays the answer there. The fallback reads
+the `reason` field, so it works over the remote (cross-domain) descent too; a child on an older runtime
+omits it and the previous behaviour applies.
+
 Two mistakes this resolution order has already cost real work:
 
 - **It reads `CurrentState`, never `EffectiveState`.** `EffectiveState` is the *deepest active
@@ -209,6 +222,12 @@ same tuple for every call a caller makes against a flow, so one refusal cannot b
 The decision itself is spanned (`Authorization.Decide`); the subflow descent is spanned separately and
 **only around the forward**, so "this trace has no `Subflow.Descend`" keeps meaning "nothing
 descended".
+
+A `queryRoles` decision taken at the parent because the child does not exist yet is additionally
+logged as `WorkflowLogs.AuthorizeLeafMissingFallback` (EventId 50046, with the missing child's flow and
+id), and its `Authorization.Decide` span carries `vnext.auth.fallback = leaf-missing`. A response body
+with `reason: "instance-not-found"` marks a refusal that evaluated no grant — the addressed instance
+could not be loaded — as opposed to a grant refusal, which carries no `reason`.
 
 ## Related
 

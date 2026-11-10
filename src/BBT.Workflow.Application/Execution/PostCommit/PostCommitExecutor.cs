@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Reflection;
 using BBT.Aether.DependencyInjection;
 using BBT.Aether.Results;
 using BBT.Workflow.Logging;
@@ -210,8 +212,17 @@ public sealed class PostCommitExecutor(
     }
 
     /// <summary>
+    /// Per job type: the closed <c>IPostCommitHandler&lt;TJob&gt;</c> service type and a typed invoker for
+    /// its <c>HandleAsync</c>. This runs once per post-commit job on every hop that produces one, so the
+    /// <c>MakeGenericType</c> / <c>GetMethod</c> / <c>MethodInfo.Invoke</c> work is done once per job
+    /// type instead of per call (same idea as <c>PostCommitRelayDispatcher.Bindings</c>). The cache holds
+    /// no service instances — handlers are still resolved per call, from the caller's scope.
+    /// </summary>
+    private static readonly ConcurrentDictionary<Type, PostCommitHandlerBinding> HandlerBindings = new();
+
+    /// <summary>
     /// Dispatches a job to its corresponding handler.
-    /// Dynamically resolves IPostCommitHandler&lt;TJob&gt; from DI using reflection.
+    /// Dynamically resolves IPostCommitHandler&lt;TJob&gt; from DI; the closed type and invoker are cached per job type.
     /// </summary>
     private static async Task<Result> DispatchAsync(
         IPostCommitJob job,
@@ -220,9 +231,9 @@ public sealed class PostCommitExecutor(
         CancellationToken cancellationToken)
     {
         var jobType = job.GetType();
-        var handlerInterfaceType = typeof(IPostCommitHandler<>).MakeGenericType(jobType);
+        var binding = HandlerBindings.GetOrAdd(jobType, PostCommitHandlerBinding.For);
 
-        var handler = serviceProvider.GetService(handlerInterfaceType);
+        var handler = serviceProvider.GetService(binding.HandlerInterfaceType);
         if (handler is null)
         {
             return Result.Fail(WorkflowErrors.ConfigInvalid(
@@ -230,10 +241,40 @@ public sealed class PostCommitExecutor(
                 $"No post-commit handler registered for: {jobType.Name}"));
         }
 
-        // Invoke HandleAsync via reflection
-        var handleMethod = handlerInterfaceType.GetMethod(nameof(IPostCommitHandler<IPostCommitJob>.HandleAsync))!;
-        var resultTask = (Task<Result>)handleMethod.Invoke(handler, [job, context, cancellationToken])!;
+        return await binding.Invoke(handler, job, context, cancellationToken);
+    }
 
-        return await resultTask;
+    /// <summary>Cached closed handler type + typed <c>HandleAsync</c> invoker for one job type.</summary>
+    internal sealed class PostCommitHandlerBinding
+    {
+        private static readonly MethodInfo CreateInvokerMethod =
+            typeof(PostCommitHandlerBinding).GetMethod(nameof(CreateInvoker), BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        private PostCommitHandlerBinding(
+            Type handlerInterfaceType,
+            Func<object, IPostCommitJob, TransitionExecutionContext, CancellationToken, Task<Result>> invoke)
+        {
+            HandlerInterfaceType = handlerInterfaceType;
+            Invoke = invoke;
+        }
+
+        /// <summary>The closed <c>IPostCommitHandler&lt;TJob&gt;</c> service type.</summary>
+        public Type HandlerInterfaceType { get; }
+
+        /// <summary>Calls <c>HandleAsync</c> on a resolved handler instance.</summary>
+        public Func<object, IPostCommitJob, TransitionExecutionContext, CancellationToken, Task<Result>> Invoke { get; }
+
+        public static PostCommitHandlerBinding For(Type jobType)
+        {
+            var handlerInterfaceType = typeof(IPostCommitHandler<>).MakeGenericType(jobType);
+            var invoke = (Func<object, IPostCommitJob, TransitionExecutionContext, CancellationToken, Task<Result>>)
+                CreateInvokerMethod.MakeGenericMethod(jobType).Invoke(null, null)!;
+            return new PostCommitHandlerBinding(handlerInterfaceType, invoke);
+        }
+
+        private static Func<object, IPostCommitJob, TransitionExecutionContext, CancellationToken, Task<Result>> CreateInvoker<TJob>()
+            where TJob : IPostCommitJob
+            => static (handler, job, context, cancellationToken) =>
+                ((IPostCommitHandler<TJob>)handler).HandleAsync((TJob)job, context, cancellationToken);
     }
 }

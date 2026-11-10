@@ -296,7 +296,15 @@ public sealed class State : IHasKey
         return Transitions.FirstOrDefault(t => t.Key == key);
     }
 
-    public IEnumerable<Transition> AutoTransitions => Transitions.Where(p => p.TriggerType == TriggerType.Automatic);
+    /// <summary>
+    /// The automatic transitions of this state in evaluation order: ascending
+    /// <see cref="Transition.EffectivePriority"/>, ties in declaration order (stable sort), with a
+    /// <see cref="TransitionKind.DefaultAutoTransition"/> always last.
+    /// </summary>
+    public IEnumerable<Transition> AutoTransitions => Transitions
+        .Where(p => p.TriggerType == TriggerType.Automatic)
+        .OrderBy(p => p.TriggerKind == TransitionKind.DefaultAutoTransition ? 1 : 0)
+        .ThenBy(p => p.EffectivePriority);
     
     public IEnumerable<Transition> ScheduledTransitions => Transitions.Where(p => p.TriggerType == TriggerType.Scheduled);
 

@@ -10,6 +10,7 @@ using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Files;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
+using BBT.Workflow.SubFlow.Headers;
 using BBT.Workflow.Telemetry;
 using Microsoft.Extensions.Logging;
 
@@ -27,6 +28,7 @@ public class TransitionPipeline
     private readonly ISubItemEventDataResolver? _subItemDataResolver;
     /// <summary>Optional: when absent, a routable step failure simply faults as before.</summary>
     private readonly IErrorBoundaryResolver? _errorBoundaryResolver;
+    private readonly ICarriedHeaderPolicy? _carriedHeaderPolicy;
     private readonly ContinuationDispatcher _continuationDispatcher;
     private readonly IInstanceBusyManager _busyMarker;
     private readonly ITransitionContextFactory _contextFactory;
@@ -101,6 +103,7 @@ public class TransitionPipeline
     /// <summary>
     /// Initializes a new instance of the TransitionPipeline.
     /// </summary>
+    /// <param name="carriedHeaderPolicy">Filters the request headers that ride the terminal event to the parent; null disables header capture, production DI always supplies it.</param>
     public TransitionPipeline(
         TransitionExecutor executor,
         ContinuationDispatcher continuationDispatcher,
@@ -119,9 +122,11 @@ public class TransitionPipeline
         ILogger<TransitionPipeline> logger,
         ISubItemEventDataResolver? subItemDataResolver = null,
         IInstanceDataWriteService? instanceDataWriteService = null,
-        IErrorBoundaryResolver? errorBoundaryResolver = null)
+        IErrorBoundaryResolver? errorBoundaryResolver = null,
+        ICarriedHeaderPolicy? carriedHeaderPolicy = null)
     {
         _errorBoundaryResolver = errorBoundaryResolver;
+        _carriedHeaderPolicy = carriedHeaderPolicy;
         _subItemDataResolver = subItemDataResolver;
         _instanceDataWriteService = instanceDataWriteService;
         _executor = executor;
@@ -248,7 +253,12 @@ public class TransitionPipeline
                 // SubFlow resume resumes an already-Busy instance; confirm the busy mark.
                 // (Long-poll acknowledge resume is intentionally NOT re-marked: a redundant
                 // resume that no-ops must not strand an already-advanced instance in Busy.)
-                if (context.Directives.IsSubFlowResume)
+                //
+                // The parent of an S SubFlow is Busy for the subflow's whole lifetime, so on the
+                // freshly loaded aggregate the confirm is normally a CAS (Active → Busy) that cannot
+                // match — one UPDATE and one commit per completion for nothing. Issue it only when
+                // the load actually saw the row not Busy.
+                if (context.Directives.IsSubFlowResume && !context.Instance.IsBusy)
                     await _busyMarker.MarkBusyAsync(context.InstanceId, cancellationToken);
 
                 context.OwnsStatus = true;
@@ -286,6 +296,12 @@ public class TransitionPipeline
                 if (!reserve.IsSuccess)
                     return Result<TransitionExecutionContext>.Fail(reserve.Error);
 
+                // The reserve's CAS committed Busy in its own unit of work, after this aggregate was
+                // loaded Active. Mirror it here with the tracker's baseline aligned: left to
+                // SetBusyStep's in-memory flip, the status rode the transition-record insert as a
+                // second, guard-less UPDATE of a value the row already holds.
+                await _instanceRepository.AcceptPersistedBusyAsync(context.Instance, cancellationToken);
+
                 context.OwnsStatus = true;
                 return await RunChainAsync(context, cancellationToken);
             }
@@ -303,7 +319,10 @@ public class TransitionPipeline
     {
         var context = initialContext;
         var hop = 0;
+        var continuationClaimHeld = false;
 
+        try
+        {
         while (true)
         {
             hop++;
@@ -402,6 +421,17 @@ public class TransitionPipeline
             // NO duplicate transition-record guard downstream to catch the loser — only the
             // per-hop policy checks do. Duplicate REQUESTS are stopped one layer up, by the
             // accept-time active-job guard inside the admission lock.
+            //
+            // Parked Busy has no owner, so the live-owner probe cannot tell two updateData
+            // executions of the SAME key apart (each excludes its own key): N children reporting
+            // "ready" within milliseconds all satisfied the gate and all took it over, running the
+            // same chain N times in parallel (measured: contract domain, all-documents-ready two to
+            // three times per contract, duplicated parent notifications and finalize calls). The
+            // takeover is therefore gated by a set-based continuation claim — Busy, still in the
+            // state this execution's auto transition leaves from, and no unexpired claim. One
+            // execution wins; the others drop, because the winner already advances from that state.
+            // The claim is released when this chain ends (it may park again in the same gate and a
+            // later signal must be able to move it); a crashed owner's claim expires after its TTL.
             var reservedForHandoff = false;
             if (context.Directives.NextTransition is { } handoff
                 && !context.OwnsStatus
@@ -412,8 +442,26 @@ public class TransitionPipeline
 
                 if (!handedOff && !await HasLiveTransitionOwnerAsync(context, cancellationToken))
                 {
-                    var takeover = await _admissionService.TakeOverAsync(context, cancellationToken);
-                    handedOff = takeover.IsSuccess;
+                    // The state this execution evaluated its auto gate in (an updateData targets $self,
+                    // so it is also the instance's persisted CurrentState). No state at all cannot
+                    // occur for a parked instance; keep the unclaimed takeover rather than stall.
+                    var stateKey = context.Current?.Key ?? context.Instance.CurrentState;
+                    var claimed = stateKey is null
+                        || await _instanceRepository.TryClaimContinuationAsync(
+                            context.InstanceId, stateKey, _clock.UtcNow,
+                            InstanceContinuationClaim.DefaultTtl, cancellationToken);
+
+                    if (claimed)
+                    {
+                        continuationClaimHeld = stateKey is not null;
+                        var takeover = await _admissionService.TakeOverAsync(context, cancellationToken);
+                        handedOff = takeover.IsSuccess;
+                    }
+                    else
+                    {
+                        _logger.UpdateDataContinuationClaimLost(
+                            context.InstanceId, context.TransitionKey, handoff.TransitionKey, stateKey);
+                    }
                 }
 
                 if (handedOff)
@@ -436,6 +484,12 @@ public class TransitionPipeline
             // Do not consume the jobs: it returns the intact directives to the runner.
             if (context.Directives.PostCommitJobs.Count > 0)
             {
+                // The handoff ends the hop without a settlement, so no Busy release in this unit of work
+                // closes it: a same-state hop's pending ModifiedAt stamp is applied here, and the runner's
+                // commit sends it (see TransitionSettlement for the settled path).
+                if (context.Directives.ModifiedAtStampPending)
+                    context.Instance.MarkModified();
+
                 // history: none — the handoff ends the stage; HandleSubFlowStep already wrote the
                 // buffer, this only covers a handoff that did not go through it.
                 await FlushBufferedDataAsync(context, cancellationToken);
@@ -486,6 +540,28 @@ public class TransitionPipeline
                 return await FailChainAsync(context, nextContextResult.Error, cancellationToken);
 
             context = nextContextResult.Value!;
+        }
+        }
+        finally
+        {
+            if (continuationClaimHeld)
+                await ReleaseContinuationClaimAsync(initialContext.InstanceId);
+        }
+    }
+
+    /// <summary>
+    /// Clears this chain's continuation claim. Not bound to the request's cancellation: a cancelled
+    /// request must still release, or the gate stays closed until the claim's TTL.
+    /// </summary>
+    private async Task ReleaseContinuationClaimAsync(Guid instanceId)
+    {
+        try
+        {
+            await _instanceRepository.ReleaseContinuationClaimAsync(instanceId, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.UpdateDataContinuationClaimReleaseFailed(ex, instanceId);
         }
     }
 
@@ -788,7 +864,8 @@ public class TransitionPipeline
         }
 
         instance.Fault(context.Domain, context.CallerMode == ExecMode.Sync,
-            subItemData: await _subItemDataResolver.ResolveOrStoredAsync(instance, cancellationToken));
+            subItemData: await _subItemDataResolver.ResolveOrStoredAsync(instance, cancellationToken),
+            carriedHeaders: _carriedHeaderPolicy?.Capture(context.Headers));
         await _instanceRepository.UpdateAsync(instance, true, cancellationToken);
         ActivityContext commitContext;
         using (var commitActivity = PipelineStepActivityHelper.StartTransitionActivity(

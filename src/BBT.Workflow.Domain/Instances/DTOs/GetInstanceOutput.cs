@@ -835,6 +835,18 @@ public sealed class HumanTaskItemOutput
     /// <summary>Human task description extracted from instance data.</summary>
     public string? Description { get; set; }
 
+    /// <summary>
+    /// Optional deadline, <c>humanTask.dueBy</c> from the leaf's latest data. Null when the data
+    /// does not carry it or carries something that is not an ISO 8601 date.
+    /// </summary>
+    public DateTimeOffset? DueBy { get; set; }
+
+    /// <summary>
+    /// Optional priority, <c>humanTask.priority</c> from the leaf's latest data. Null when the data
+    /// does not carry it or carries something that is not a number.
+    /// </summary>
+    public decimal? Priority { get; set; }
+
     /// <summary>When the instance was created.</summary>
     public DateTime CreatedAt { get; set; }
 

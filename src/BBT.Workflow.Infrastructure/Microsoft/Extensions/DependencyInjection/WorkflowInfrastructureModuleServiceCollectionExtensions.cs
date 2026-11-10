@@ -114,13 +114,18 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
             sp => sp.GetRequiredService<BBT.Workflow.Encryption.InstanceDataProtector>());
         services.TryAddScoped<IInstanceSecretPreloader, BBT.Workflow.Encryption.InstanceSecretPreloader>();
         
-        // x-storage blob store over a Dapr output binding; KeyPrefix is the only setting.
+        // x-storage blob store: always the Dapr output binding named by the component (no store SDK in the runtime).
         services.AddOptions<BBT.Workflow.Files.FileStorageOptions>()
-            .BindConfiguration(BBT.Workflow.Files.FileStorageOptions.Section);
+            .BindConfiguration(BBT.Workflow.Files.FileStorageOptions.Section)
+            .ValidateOnStart();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            Microsoft.Extensions.Options.IValidateOptions<BBT.Workflow.Files.FileStorageOptions>,
+            BBT.Workflow.Files.FileStorageOptionsValidator>());
         services.TryAddSingleton<BBT.Workflow.Files.IFileBlobStore, BBT.Workflow.Files.DaprBindingFileBlobStore>();
 
         // Explicit InstanceData persist path (per-instance FOR UPDATE lock + versioning).
         services.AddScoped<IInstanceDataWriteService, InstanceDataWriteService>();
+        services.AddScoped<BBT.Workflow.Execution.Persistence.IBookkeepingWriter, BookkeepingWriter>();
 
         // You can register your repositories here.
         services.AddScoped<IInstanceRepository, EfCoreInstanceRepository>();
@@ -178,6 +183,11 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
         // Embedded Script Services (needs IComponentCacheStore from Application layer)
         services.AddEmbeddedScriptServices();
 
+        // ScriptBase.PutFileAsync (needs IComponentCacheStore and IFileOffloadService from the Application
+        // layer). ScriptServices takes the writer as an optional dependency, so a host without it simply gets
+        // scripts whose PutFileAsync reports the writer as unavailable.
+        services.TryAddScoped<BBT.Workflow.Scripting.Functions.IScriptFileWriter, BBT.Workflow.Files.ScriptFileWriter>();
+
         // Notification channel resolver (needed by NotificationTaskExecutor in Application layer)
         services.AddNotificationChannelResolver();
 
@@ -187,51 +197,49 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
     /// <summary>
     /// Registers the named HTTP clients the external HTTP task executor
     /// (<c>BBT.Workflow.Tasks.Executors.ExternalHttpTaskInvoker</c>) and, since issue #1007, every
-    /// in-process <c>http</c>/<c>soap</c> task invoker send through. Shares client names,
-    /// decompression, cookie policy and SSL-bypass variant with the Execution host's
-    /// <c>AddWorkflowHttpClient</c> so a task behaves identically whichever host performs the
-    /// call — but the connection cap has DIVERGED since #1007: this side reads
-    /// <c>Workflow:TaskInvocation:MaxConnectionsPerServer</c> (default 50, see
-    /// <see cref="TaskInvocationOptions.MaxConnectionsPerServer"/>), while the Execution host's
-    /// clients are still hardcoded at 10. That is deliberate for this task — Execution's own
-    /// traffic on these clients is expected to shrink now that the five locally-routed types stay
-    /// on Orchestration, and raising a second host's egress concurrency is its own operational
-    /// change — not an oversight to "fix" by re-unifying the two without a separate decision. The
+    /// in-process <c>http</c>/<c>soap</c> task invoker send through. Shares client names and the
+    /// primary handler (<see cref="BBT.Workflow.Execution.Core.Http.WorkflowHttpMessageHandlerFactory"/>:
+    /// decompression, cookie policy, SSL-bypass variant, pooled <c>SocketsHttpHandler</c>) with the
+    /// Execution host's <c>AddWorkflowHttpClient</c> so a task behaves identically whichever host
+    /// performs the call. The pool dials come from <c>Workflow:TaskInvocation</c>
+    /// (<see cref="TaskInvocationOptions.MaxConnectionsPerServer"/>,
+    /// <see cref="TaskInvocationOptions.PooledConnectionLifetimeSeconds"/>,
+    /// <see cref="TaskInvocationOptions.PooledConnectionIdleTimeoutSeconds"/>); the Execution host
+    /// reads the same three from its own <c>WorkflowHttpClient</c> section with equal defaults. The
     /// 30s base timeout is overridden per request from the task's <c>timeoutSeconds</c> by the
     /// shared <c>HttpTaskInvocation</c> core.
     /// </summary>
-    private static IServiceCollection AddExternalHttpTaskClients(this IServiceCollection services)
+    private static void AddExternalHttpTaskClients(this IServiceCollection services)
     {
         // Orchestration is now the default egress host for HTTP and SOAP tasks (issue #1007), so
-        // this cap bounds every outbound task call to a given target, not just the type-22 ones it
-        // was written for. 10 is a throughput cliff for a hot single-target flow; make it an
-        // operator dial with the previous value as the floor-compatible default.
+        // the pool shape bounds every outbound task call to a given target, not just the type-22
+        // ones it was written for.
         //
         // Resolved from the bound TaskInvocationOptions (not a second raw-configuration read) so
-        // TaskInvocationOptions.MaxConnectionsPerServer is the single place the default and the
-        // [Range] guard live. It has to be resolved lazily, through the handler-factory overload
-        // that takes IServiceProvider, rather than read here directly: AddExternalHttpTaskClients
-        // runs while the service collection is still being assembled (AddApplicationModule runs
-        // before AddInfrastructureModule, but nothing has called BuildServiceProvider yet), so
+        // TaskInvocationOptions is the single place the defaults and the [Range] guards live. It
+        // has to be resolved lazily, through the handler-factory overload that takes
+        // IServiceProvider, rather than read here directly: AddExternalHttpTaskClients runs while
+        // the service collection is still being assembled (AddApplicationModule runs before
+        // AddInfrastructureModule, but nothing has called BuildServiceProvider yet), so
         // IOptions<TaskInvocationOptions> cannot be resolved yet — only registered. The handler
         // factory below runs lazily, the first time IHttpClientFactory actually creates the
         // handler, by which point the container is built and options binding has happened.
-        static int ResolveMaxConnectionsPerServer(IServiceProvider provider) =>
-            provider.GetRequiredService<IOptions<TaskInvocationOptions>>().Value.MaxConnectionsPerServer;
+        static BBT.Workflow.Execution.Core.Http.WorkflowHttpClientPoolSettings ResolvePoolSettings(IServiceProvider provider) =>
+            provider.GetRequiredService<IOptions<TaskInvocationOptions>>().Value.ToHttpClientPoolSettings();
 
-        // Default HTTP client with SSL validation enabled
+        // Default HTTP client with SSL validation enabled. The handler is never rotated by the
+        // factory (infinite lifetime): PooledConnectionLifetime retires connections one by one
+        // instead of dropping the whole warm pool every two minutes.
         services.AddHttpClient(BBT.Workflow.Execution.WorkflowHttpClientNames.Default, client =>
             {
                 client.Timeout = TimeSpan.FromSeconds(30);
                 client.MaxResponseContentBufferSize = int.MaxValue;
                 client.DefaultRequestHeaders.Add("Accept", "application/json");
             })
-            .ConfigurePrimaryHttpMessageHandler(provider => new HttpClientHandler
-            {
-                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
-                MaxConnectionsPerServer = ResolveMaxConnectionsPerServer(provider),
-                UseCookies = false
-            });
+            .SetHandlerLifetime(BBT.Workflow.Execution.Core.Http.WorkflowHttpMessageHandlerFactory.HandlerLifetime)
+            .ConfigurePrimaryHttpMessageHandler(provider =>
+                BBT.Workflow.Execution.Core.Http.WorkflowHttpMessageHandlerFactory.Create(
+                    ResolvePoolSettings(provider), validateSsl: true));
 
         // HTTP client with SSL validation disabled (validateSsl: false tasks)
         services.AddHttpClient(BBT.Workflow.Execution.WorkflowHttpClientNames.NoSslValidation, client =>
@@ -240,14 +248,9 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
                 client.MaxResponseContentBufferSize = int.MaxValue;
                 client.DefaultRequestHeaders.Add("Accept", "application/json");
             })
-            .ConfigurePrimaryHttpMessageHandler(provider => new HttpClientHandler
-            {
-                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
-                MaxConnectionsPerServer = ResolveMaxConnectionsPerServer(provider),
-                UseCookies = false,
-                ServerCertificateCustomValidationCallback = (_, _, _, _) => true
-            });
-
-        return services;
+            .SetHandlerLifetime(BBT.Workflow.Execution.Core.Http.WorkflowHttpMessageHandlerFactory.HandlerLifetime)
+            .ConfigurePrimaryHttpMessageHandler(provider =>
+                BBT.Workflow.Execution.Core.Http.WorkflowHttpMessageHandlerFactory.Create(
+                    ResolvePoolSettings(provider), validateSsl: false));
     }
 }

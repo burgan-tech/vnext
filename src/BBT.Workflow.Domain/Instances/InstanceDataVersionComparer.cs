@@ -34,7 +34,7 @@ namespace BBT.Workflow.Instances;
 /// <list type="bullet">
 ///     <item><description>"latest" or null/empty → Returns the highest available version</description></item>
 ///     <item><description>"1.0.0-pkg.1.17.0+account" (full version) → Exact match only</description></item>
-///     <item><description>"1.0.0" (artifact version) → Finds highest pkg version for that artifact</description></item>
+///     <item><description>"1.0.0" (artifact version) → Finds highest pkg version for that artifact; a bare "1.0.0" row is used only when no pkg row exists</description></item>
 ///     <item><description>"00.01.417" (package version) → Falls back to matching against package version part of stored versions</description></item>
 ///     <item><description>"1.0" (partial version) → Finds highest version matching the prefix</description></item>
 ///     <item><description>"1" (major-only version) → Finds highest version matching the major</description></item>
@@ -252,6 +252,30 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
     }
 
     /// <summary>
+    /// Whether <paramref name="version"/> is a well-formed full version:
+    /// <c>MAJOR.MINOR.PATCH[-PRERELEASE]-pkg.X.Y.Z</c> with an optional <c>+metadata</c>. Unlike
+    /// <see cref="IsFullVersion"/> (a "-pkg." substring test) a partial package form such as
+    /// "2.1.0-pkg.1.0" is rejected.
+    /// </summary>
+    public static bool IsWellFormedFullVersion(string? version) =>
+        !string.IsNullOrWhiteSpace(version) && WellFormedFullVersionRegex().IsMatch(version);
+
+    /// <summary>
+    /// Finds the published version whose canonical full form (build metadata ignored) equals that of
+    /// <paramref name="full"/>; case-insensitive. When several collide the ordinally first wins. Null when none matches.
+    /// </summary>
+    public static string? FindFullVersionMatch(IEnumerable<string> published, string? full)
+    {
+        var wanted = CanonicalFullVersion(full?.Trim());
+        // Several published versions can share a canonical form (+core / +customer): order ordinally
+        // so the pick is deterministic, the same tie-break as the cache backend's canonical load.
+        return published
+            .Where(v => string.Equals(CanonicalFullVersion(v), wanted, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(v => v, StringComparer.Ordinal)
+            .FirstOrDefault();
+    }
+
+    /// <summary>
     /// Checks if the version is a full version (contains package version).
     /// Alias for <see cref="HasPackageVersion"/>.
     /// </summary>
@@ -437,7 +461,10 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
     /// <list type="number">
     ///     <item><description>If requestedVersion is null/empty or "latest" → returns the latest version</description></item>
     ///     <item><description>If requestedVersion is a full version → exact match only</description></item>
-    ///     <item><description>If requestedVersion is an artifact version → finds highest pkg version for that artifact; if no artifact match, falls back to package version matching</description></item>
+    ///     <item><description>If requestedVersion is an artifact version → finds highest pkg version for that artifact. A stored bare
+    ///     artifact row (e.g. "1.0.0") never shadows a package-stamped row of the same artifact: it is returned only when no
+    ///     "-pkg." row exists for it. If no artifact match, falls back to package version matching</description></item>
+    ///     <item><description>Otherwise an exact (case-insensitive) spelling match wins first, then:</description></item>
     ///     <item><description>If requestedVersion is a partial version (MAJOR.MINOR) → finds highest version matching the prefix</description></item>
     ///     <item><description>If requestedVersion is a major-only version (e.g., "1") → finds highest version matching the major</description></item>
     /// </list>
@@ -456,20 +483,18 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
                 .FirstOrDefault();
         }
 
-        // 2. Try exact match first
-        var exactMatch = versionList.FirstOrDefault(v => 
-            string.Equals(v, requestedVersion, StringComparison.OrdinalIgnoreCase));
-        if (exactMatch != null)
-            return exactMatch;
-
-        // 3. If requestedVersion is a full version and no exact match → not found
+        // 2. If requestedVersion is a full version → exact match only, otherwise not found
         if (IsFullVersion(requestedVersion))
-            return null;
+            return FindExactMatch(versionList, requestedVersion);
 
-        // 4. If requestedVersion is an artifact version → find highest pkg version,
+        // 3. If requestedVersion is an artifact version → find highest pkg version,
         //    falling back to package-version-only match if no artifact match is found.
         //    This handles cases where the request contains only the package version part
         //    (e.g., "00.01.417" matching "1.0.0-pkg.00.01.417+onboarding").
+        //    There is deliberately no exact-match shortcut here (#1164): a stored bare "1.0.0"
+        //    row also satisfies MatchesArtifact, but it orders below every "1.0.0-pkg.*" row
+        //    (a missing package version compares lowest), so it is returned only when no
+        //    package-stamped row exists for the artifact.
         if (IsArtifactVersion(requestedVersion))
         {
             var artifactPrefix = $"{requestedVersion}-pkg.";
@@ -482,6 +507,13 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
             if (matched != null)
                 return matched;
 
+            // A spelling the artifact rule cannot parse but that exists verbatim (e.g. "1.0.0-PKG.1.0.0",
+            // which is not a full version for the case-sensitive "-pkg." test) keeps resolving exactly,
+            // so every spelling NormalizeRequest collapses still resolves the same row.
+            var exactArtifactSpelling = FindExactMatch(versionList, requestedVersion);
+            if (exactArtifactSpelling != null)
+                return exactArtifactSpelling;
+
             // No artifact match found; try matching as a package version
             var packageMatched = versionList
                 .Where(v => MatchesPackage(v, requestedVersion))
@@ -490,6 +522,11 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
 
             return packageMatched;
         }
+
+        // 4. Any other form (partial, major-only, free text) → an exact spelling wins first
+        var exactMatch = FindExactMatch(versionList, requestedVersion);
+        if (exactMatch != null)
+            return exactMatch;
 
         // 5. If requestedVersion is a partial version (MAJOR.MINOR) → find highest version matching prefix
         if (IsPartialVersion(requestedVersion))
@@ -515,6 +552,13 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
 
         return null;
     }
+
+    /// <summary>
+    /// Returns the first version whose spelling equals <paramref name="requestedVersion"/>
+    /// (case-insensitive), or null.
+    /// </summary>
+    private static string? FindExactMatch(List<string> versions, string? requestedVersion) =>
+        versions.FirstOrDefault(v => string.Equals(v, requestedVersion, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Extracts the artifact version from a full version string.
@@ -615,6 +659,12 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
     /// </remarks>
     [GeneratedRegex(@"^(?<artifact>\d+\.\d+\.\d+(?:-[a-zA-Z0-9]+(?:\.[a-zA-Z0-9]+)*)?)-pkg\.(?<package>\d+\.\d+\.\d+)$", RegexOptions.Compiled)]
     private static partial Regex ExtendedVersionRegex();
+
+    /// <summary>
+    /// Regex pattern for a well-formed full version: MAJOR.MINOR.PATCH[-PRERELEASE]-pkg.X.Y.Z[+METADATA]
+    /// </summary>
+    [GeneratedRegex(@"^\d+\.\d+\.\d+(?:-[a-zA-Z0-9]+(?:\.[a-zA-Z0-9]+)*)?-pkg\.\d+\.\d+\.\d+(?:\+[0-9A-Za-z.\-]+)?$", RegexOptions.Compiled)]
+    private static partial Regex WellFormedFullVersionRegex();
 
     /// <summary>
     /// Regex pattern for artifact version format: MAJOR.MINOR.PATCH[-PRERELEASE]

@@ -51,7 +51,7 @@ config, and what the local path trades away.
 | Cache-aside | `CacheAsideTaskExecutor` (type `18`) | No invoker and no wire type of its own: the read-through runs in the Orchestration executor, cache get/set goes through `IStateStoreCacheGateway` (the `statestore` wire type, so it follows `Modes.statestore`), and the source runs through its own type's executor ([details](cache-aside-task.md)) |
 | Fan-out | `FanOutTaskExecutor` (type `21`) | Orchestrates inner tasks; see [FanOut Task](../domain/fan-out-task.md) |
 | Script | `ScriptTaskExecutor` | Executes in Orchestration through scripting module |
-| Python | `PythonTaskExecutor` | `PythonTaskInvoker` selects an explicit Python.NET, process, or container runtime ([details](python-task.md)) |
+| Python | `PythonTaskExecutor` (type `23`) | No invoker and no Execution hop: the Orchestration executor calls the domain's own Python runtime container over Dapr (`Workflow:PythonRuntime:AppId`) with the v1 runtime contract ([details](python-task.md)) |
 | Human/notification | Human and notification executors | May remain application-owned depending on side effect type |
 
 ## Failure Modes
@@ -68,10 +68,6 @@ config, and what the local path trades away.
 Execution controller begins a log scope with domain, workflow key, instance id, task key,
 and task type from the trace context and envelope. Executors should preserve correlation
 and task metadata when sending remote envelopes.
-
-Python is the first task family with a second runtime registry behind its invoker. The
-`PythonTaskInvoker` resolves exactly one configured `IPythonExecutionRuntime`; a disabled or
-unavailable requested mode is a task failure and never causes a silent mode fallback.
 
 ## External HTTP tasks (type `22`, deprecated)
 
@@ -99,8 +95,10 @@ HttpClient>`). The Execution service's `HttpTaskInvoker` (type 6, remote path),
 `ExternalHttpTaskInvoker` (type 22, always local) are thin wrappers adding host-specific
 logging/metrics and, on the orchestrator side, the mapping to the orchestrator-side
 `TaskInvocationResult` twin. Named clients (`validateSsl: false` selects the SSL-bypass client,
-and its `MaxConnectionsPerServer` cap — configurable via
-`Workflow:TaskInvocation:MaxConnectionsPerServer`, default `50` — is shared by every HTTP/SOAP
+and its pool — `MaxConnectionsPerServer` / `PooledConnectionLifetimeSeconds` /
+`PooledConnectionIdleTimeoutSeconds` under `Workflow:TaskInvocation` on Orchestration, under
+`WorkflowHttpClient` on Execution, defaults `50` / `600` / `120`, one `SocketsHttpHandler` built by
+`WorkflowHttpMessageHandlerFactory` for both hosts — is shared by every HTTP/SOAP
 egress path from Orchestration, type 22 included), header/Content-Type semantics, response
 parsing and accepted-status-code matching are therefore identical by construction across all
 three.
@@ -134,6 +132,18 @@ default Local configuration — see
   definition, executor, `[JsonDerivedType]` discriminator, `TaskType` enum member, executor
   registration, and — if it declares `acceptedStatusCodes` — a match in
   `TaskExecutorBase.GetAcceptedStatusCodes` (External HTTP inherits the `HttpTask` arm).
+- **A database path reachable from a task opens its own unit of work.** Same-order tasks run as
+  parallel branches of one pipeline (`TaskCoordinator.ExecuteTaskGroupInParallelAsync`). Each branch
+  gets its own DI scope, but a `DbContext` is bound to the ambient (AsyncLocal) unit of work and keyed
+  by schema — a new scope alone leaves two branches touching one schema on one context, and the second
+  query fails with *"A second operation was started on this context instance"* (vnext#1161: four
+  same-domain `GetInstances` of one flow). Local reads go through `ExecuteReadWithWorkflowAsync`
+  (`LocalInstanceQueryGateway`, `LocalInstanceIdResolver`, `LocalRelatedInstanceReader`,
+  `LocalAuthorizeGateway`, `LocalInstanceFileGateway`) or `ExecuteInIsolatedUnitOfWorkAsync`
+  (`LocalHumanTaskLeafGateway`); writes go through a `RequiresNew` unit of work
+  (`LocalInstanceCommandGateway`, the task journal). A new local gateway or executor database call
+  must do the same. Pinned by `LocalReadGatewayUnitOfWorkIsolationTests` and vnext-example
+  `ParallelVariableKeyLab/TriggerFamilyParallelTests`.
 - Keep bindings strongly typed; do not pass opaque JSON when a stable contract exists.
 - Do not let invokers mutate workflow instance state.
 - Keep task result mapping in executors or application services, not in Execution host controllers.
@@ -148,4 +158,3 @@ default Local configuration — see
 - `execution/BBT.Workflow.Execution.HttpApi.Host/Controllers/Executions/ExecutionController.cs`
 - `src/BBT.Workflow.Execution/Invokers/`
 - `src/BBT.Workflow.Execution/Services/TaskInvokerRegistry.cs`
-- `src/BBT.Workflow.Execution/Python/PythonRuntimeRegistry.cs`

@@ -1,0 +1,53 @@
+{
+  "kinds": [
+    { "name": "bug", "type": "Bug", "color": "d73a4a", "description": "Something isn't working" },
+    { "name": "enhancement", "type": "Feature", "color": "a2eeef", "description": "New feature or request" },
+    { "name": "refactor", "type": "Task", "color": "fbca04", "description": "Code refactoring and cleanup" },
+    { "name": "performance", "type": "Task", "color": "0075ca", "description": "Performance improvements" },
+    { "name": "documentation", "type": "Task", "color": "0075ca", "description": "Improvements or additions to documentation" },
+    { "name": "question", "type": "Task", "color": "d876e3", "description": "Further information is requested" }
+  ],
+  "areas": [
+    { "name": "area:pipeline", "color": "1d76db", "description": "Transition pipeline, lifecycle steps, execution profiles" },
+    { "name": "area:subflow", "color": "1d76db", "description": "SubFlow / SubProcess lifecycle and parent notification" },
+    { "name": "area:locking", "color": "1d76db", "description": "Busy mutex, status locks, concurrency" },
+    { "name": "area:instance-data", "color": "1d76db", "description": "Instance data versions, merge, queries, secrets" },
+    { "name": "area:state-function", "color": "1d76db", "description": "State/data/view functions, long-polling, ETag" },
+    { "name": "area:authorization", "color": "1d76db", "description": "Roles, role grants, row security, masking" },
+    { "name": "area:error-boundary", "color": "1d76db", "description": "Error boundaries, incidents, retries" },
+    { "name": "area:tasks", "color": "1d76db", "description": "Task invokers and the Execution service" },
+    { "name": "area:scripting", "color": "1d76db", "description": "Roslyn script engine, mappings, plugins" },
+    { "name": "area:events", "color": "1d76db", "description": "Outbox, Inbox, distributed events, relays" },
+    { "name": "area:files", "color": "1d76db", "description": "x-storage file offload and streaming" },
+    { "name": "area:cross-domain", "color": "1d76db", "description": "Discovery, cross-domain invocation" },
+    { "name": "area:api", "color": "1d76db", "description": "Public HTTP contract, definitions, publish" },
+    { "name": "area:observability", "color": "1d76db", "description": "Traces, spans, metrics, logging" },
+    { "name": "area:infra", "color": "1d76db", "description": "Docker, Dapr components, DB migrations, Helm" },
+    { "name": "area:cache", "color": "1d76db", "description": "Component, function and response caches, L1 tiers, invalidation" },
+    { "name": "area:security", "color": "1d76db", "description": "Secrets, encryption, script sandbox, vulnerabilities" },
+    { "name": "area:configuration", "color": "1d76db", "description": "appsettings, options, environment variables, feature flags" },
+    { "name": "area:performance", "color": "1d76db", "description": "Latency, throughput, allocations, DB and Redis cost" }
+  ],
+  "priorities": [
+    { "name": "priority:P0", "color": "b60205", "description": "Production down or data loss; set by a maintainer only" },
+    { "name": "priority:P1", "color": "d93f0b", "description": "Severe; blocks a team or a release" },
+    { "name": "priority:P2", "color": "fbca04", "description": "Normal" },
+    { "name": "priority:P3", "color": "c5def5", "description": "Low; nice to have" }
+  ],
+  "status": [
+    { "name": "ai:triaged", "color": "5319e7", "description": "Enriched by the issue-triage agent" },
+    { "name": "ai:ready", "color": "0e8a16", "description": "Maintainer-approved for the local fix agent" },
+    { "name": "ai:in-progress", "color": "fbca04", "description": "The local fix agent is working on it" },
+    { "name": "ai:needs-human", "color": "b60205", "description": "An agent stopped and needs a maintainer" },
+    { "name": "ai:pr-opened", "color": "0e8a16", "description": "The local fix agent opened a draft PR" },
+    { "name": "needs-info", "color": "ededed", "description": "The reporter must add information" }
+  ],
+  "defaults": {
+    "milestone": "backlog",
+    "issueFields": {
+      "Priority": { "from": "priority", "values": { "priority:P1": "High", "priority:P2": "Medium", "priority:P3": "Low" } },
+      "Effort": { "from": "effort", "values": { "low": "Low", "medium": "Medium", "high": "High" } }
+    },
+    "project": { "title": "vNext", "fields": { "Project": "platform", "Priority": { "fromIssueField": "Priority" } } }
+  }
+}

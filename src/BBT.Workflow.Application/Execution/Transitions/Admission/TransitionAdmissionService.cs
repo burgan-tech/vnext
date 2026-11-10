@@ -192,7 +192,7 @@ public sealed class TransitionAdmissionService(
                     return Result<AcceptFlip>.Fail(admission.Error);
 
                 var outcome = await busyManager.TryMarkBusyWithPropagationAsync(
-                    context.InstanceId, cancellationToken);
+                    context.Instance, cancellationToken);
 
                 switch (outcome)
                 {
@@ -259,8 +259,10 @@ public sealed class TransitionAdmissionService(
         // sync 409 had no span saying why. Named per kind, outcome as a tag.
         using var activity = StartAdmissionActivity("Admission.Reserve", context);
 
+        // The pipeline loaded this aggregate a moment ago; the busy manager CASes straight away
+        // instead of reading the row a second time (it reads only when the CAS loses).
         var outcome = await busyManager.TryMarkBusyWithPropagationAsync(
-            context.InstanceId, cancellationToken);
+            context.Instance, cancellationToken);
 
         switch (outcome)
         {

@@ -1,0 +1,1 @@
+# Pin every package with hashes (pip-compile --generate-hashes); the image installs wheels only.

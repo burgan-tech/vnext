@@ -25,6 +25,19 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The read-only (no-tracking) load of <see cref="FindByIdentifierAsReadOnlyAsync"/> — same
+    /// identifier resolution, same data rows, same open-only <see cref="Instance.ChildCorrelations"/>
+    /// — that also hands back the instance's FULL correlation set (open and completed) from the same
+    /// single correlation query, ordered by <c>ParentState</c> then <c>CompletedAt</c> exactly like
+    /// <see cref="IInstanceCorrelationRepository.GetByParentAsync"/>. For readers that need both (the
+    /// state function), this replaces the open-correlation include plus a second, all-rows read.
+    /// <c>AllCorrelations</c> is empty when the instance is not found.
+    /// </summary>
+    Task<(Instance? Instance, List<InstanceCorrelation> AllCorrelations)> FindByIdentifierAsReadOnlyWithAllCorrelationsAsync(
+        string identifier,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Loads several instances by id for read-only projection, including only their data rows.
     /// Unlike <see cref="FindByIdentifierAsReadOnlyAsync"/> this omits the ChildCorrelations include,
     /// because callers of this method never read correlations. Ids with no matching row are omitted.
@@ -149,6 +162,20 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     Task<List<InstanceAndDataModel>> GetActiveDataListByKeyAsync(string key,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Returns the latest committed data row of the newest instance with <paramref name="key"/>, whatever
+    /// that instance's status (Active, Busy, Faulted, Passive, Completed), or null when no instance has the
+    /// key or it has no data. One row is selected in SQL — the data history is never loaded.
+    /// </summary>
+    /// <remarks>
+    /// The newest instance is the most recently created one (ties broken by id). Its row is the one marked
+    /// <see cref="InstanceData.IsLatest"/>; a legacy instance without such a row falls back to the last
+    /// entered one. Read without tracking. The caller sets the schema.
+    /// </remarks>
+    /// <param name="key">The instance key.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<InstanceData?> FindLatestDataByKeyAsync(string key, CancellationToken cancellationToken = default);
+
     Task<HateoasPagedList<Instance>> GetPagedResultsAsync(
         int page,
         int pageSize,
@@ -187,6 +214,56 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         int page,
         int pageSize,
         Definitions.GraphQL.GraphQLFilterRequest? request,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The string-route overload with a row-security predicate (vnext#1107): parses the caller's filter, groupBy,
+    /// aggregations and sort exactly like the overload without it, then ANDs <paramref name="rowPredicate"/> with
+    /// the caller's filter at the single merge point shared by every list route (identity paging, entity paging,
+    /// groupBy, aggregations).
+    /// </summary>
+    /// <param name="page">Page number for pagination (1-based).</param>
+    /// <param name="pageSize">Page size for pagination.</param>
+    /// <param name="filter">Optional filter JSON: a plain GraphQL node or a request envelope embedding groupBy/aggregations.</param>
+    /// <param name="groupBy">Optional groupBy JSON.</param>
+    /// <param name="aggregations">Optional standalone aggregations JSON (honored only without groupBy).</param>
+    /// <param name="sort">Optional orderBy JSON.</param>
+    /// <param name="schemaContext">Optional schema-driven filter/sort metadata.</param>
+    /// <param name="rowPredicate">
+    /// Runtime-planned row predicate (planner output: every node policy-exempt, no empty node). A predicate that
+    /// contains an empty node or an operator-less condition is refused before any SQL runs.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The paged instances, plus group summaries when grouping applies.</returns>
+    Task<(HateoasPagedList<Instance> PagedList, List<GroupSummary>? Groups)> GetPagedResultsWithGroupsAsync(
+        int page,
+        int pageSize,
+        string? filter,
+        string? groupBy,
+        string? aggregations,
+        string? sort,
+        SchemaFilterContext? schemaContext,
+        Definitions.GraphQL.GraphQLFilterNode rowPredicate,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Row-security probe of the single-instance GET (vnext#1107): true when the instance identified by
+    /// <paramref name="instanceId"/> is a row of the list under <paramref name="predicate"/>. Runs one ids-only
+    /// query through the list compiler (same merge guard, same latest-data join, same schema context), with the
+    /// instance pinned by a typed id condition; visibility is always evaluated on the instance's latest data.
+    /// </summary>
+    /// <param name="instanceId">The resolved instance id (never a business key).</param>
+    /// <param name="predicate">
+    /// Runtime-planned row predicate (planner output: every node policy-exempt, no empty node). A predicate that
+    /// contains an empty node or an operator-less condition is refused before any SQL runs.
+    /// </param>
+    /// <param name="schemaContext">The flow's master-schema filter metadata, as the list passes it.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>True when the instance is visible under <paramref name="predicate"/>.</returns>
+    Task<bool> IsVisibleAsync(
+        Guid instanceId,
+        Definitions.GraphQL.GraphQLFilterNode predicate,
+        SchemaFilterContext? schemaContext,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -235,6 +312,33 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         InstanceStatus? effectiveStatus = null);
 
     /// <summary>
+    /// Claims the right to continue a parked Busy instance from <paramref name="expectedState"/>:
+    /// a set-based compare-and-set on the instance row that succeeds only while the row is still
+    /// Busy in that state and no other execution holds an unexpired claim. Two <c>updateData</c>
+    /// executions that both find the auto gate satisfied race here, and exactly one wins; the loser
+    /// drops its continuation because the winner is already advancing from the same state.
+    /// </summary>
+    /// <param name="instanceId">The parked instance.</param>
+    /// <param name="expectedState">The state the caller's auto transition leaves from.</param>
+    /// <param name="utcNow">Claim timestamp.</param>
+    /// <param name="ttl">A claim older than this is treated as abandoned (a crashed owner), so the
+    /// gate can never stay closed for longer than the TTL.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>True when this call took the claim.</returns>
+    Task<bool> TryClaimContinuationAsync(
+        Guid instanceId,
+        string expectedState,
+        DateTime utcNow,
+        TimeSpan ttl,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Clears the continuation claim taken by <see cref="TryClaimContinuationAsync"/>. Called when
+    /// the claiming chain ends; best effort — an uncleared claim expires after its TTL.
+    /// </summary>
+    Task ReleaseContinuationClaimAsync(Guid instanceId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Writes <see cref="Instance.EffectiveStatus"/> alone, for an ancestor whose own status does
     /// not change when the level below it moves. One single-column UPDATE, no aggregate load and no
     /// guard on the current value beyond "not terminal" — the row below is the authority here.
@@ -265,6 +369,19 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// time. On a lost race the aggregate is left untouched.
     /// </summary>
     Task<bool> TryMarkBusyAsync(Instance instance, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Mirrors onto the change-tracked aggregate a Busy flip that a set-based CAS has ALREADY
+    /// committed for this row in another unit of work (sync admission's reserve): applies
+    /// <c>Busy()</c> in memory and aligns the tracker's baseline for the status column, so the
+    /// next SaveChanges in this unit of work does not write <c>Status</c> a second time — without
+    /// it the transition-record insert carried a redundant, guard-less <c>UPDATE Instances SET
+    /// Status</c>. Writes nothing. Call it only right after a CAS that this execution won.
+    /// Exception: while the audit interceptor would still stamp an empty <c>ModifiedBy</c> /
+    /// <c>ModifiedByBehalfOf</c> (the instance's first change), the status stays modified, because
+    /// that stamp rode the same write and <c>metadata.modifiedBy</c> must not change.
+    /// </summary>
+    Task AcceptPersistedBusyAsync(Instance instance, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Aggregate-aware counterpart of <see cref="TryReleaseBusyAsync(Guid,CancellationToken)"/>:

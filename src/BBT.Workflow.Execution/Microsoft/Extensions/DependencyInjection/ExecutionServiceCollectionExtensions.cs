@@ -1,11 +1,9 @@
-using System.Net;
+using BBT.Workflow.Execution.Core.Http;
 using BBT.Workflow.Execution;
 using Dapr.AI.Conversation.Extensions;
 using BBT.Workflow.Execution.Configuration;
 using BBT.Workflow.Execution.Invokers;
 using BBT.Workflow.Execution.Metrics;
-using BBT.Workflow.Execution.Python;
-using BBT.Workflow.Execution.Python.Containers;
 using BBT.Workflow.Execution.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -41,25 +39,8 @@ public static class ExecutionServiceCollectionExtensions
             services.Configure<TriggerRetryOptions>(_ => { });
         }
 
-        var pythonOptions = services.AddOptions<PythonOptions>();
-        if (configuration is not null)
-        {
-            pythonOptions.Bind(configuration.GetSection(PythonOptions.SectionName));
-        }
-        pythonOptions.ValidateOnStart();
-        services.TryAddEnumerable(
-            ServiceDescriptor.Singleton<IValidateOptions<PythonOptions>, PythonOptionsValidator>());
-        services.AddSingleton<PythonRunnerProtocol>();
-        services.AddSingleton<IContainerExecutionDriver, DockerContainerExecutionDriver>();
-        services.AddSingleton<IContainerExecutionDriver, KubernetesContainerExecutionDriver>();
-        services.AddSingleton<IPythonExecutionRuntime, PythonNetExecutionRuntime>();
-        services.AddSingleton<IPythonExecutionRuntime, ProcessPythonExecutionRuntime>();
-        services.AddSingleton<IPythonExecutionRuntime, ContainerPythonExecutionRuntime>();
-        services.AddSingleton<IPythonRuntimeRegistry, PythonRuntimeRegistry>();
-        services.AddHostedService<PythonRuntimeHostedService>();
-
         // Register WorkflowHttpClient instances
-        services.AddWorkflowHttpClient();
+        services.AddWorkflowHttpClient(configuration);
 
         // Register the registry
         services.AddSingleton<ITaskInvokerRegistry, TaskInvokerRegistry>();
@@ -90,7 +71,6 @@ public static class ExecutionServiceCollectionExtensions
         services.AddSingleton<ITaskInvoker, DaprHttpEndpointTaskInvoker>();
         services.AddSingleton<ITaskInvoker, DaprPubSubTaskInvoker>();
         services.AddSingleton<ITaskInvoker, DaprConversationTaskInvoker>();
-        services.AddSingleton<ITaskInvoker, PythonTaskInvoker>();
         services.AddSingleton<ITaskInvoker, StateStoreTaskInvoker>();
         
         // Register trigger task remote invokers (for cross-domain execution)
@@ -121,22 +101,36 @@ public static class ExecutionServiceCollectionExtensions
     /// Registers named HttpClient instances for workflow task execution.
     /// - WorkflowHttpClient: Default with SSL validation
     /// - WorkflowHttpClient.NoSslValidation: Without SSL validation
+    /// Pool shape from <see cref="WorkflowHttpClientOptions"/> (section <c>WorkflowHttpClient</c>);
+    /// the primary handler is the same <see cref="WorkflowHttpMessageHandlerFactory"/> build the
+    /// Orchestration host uses, so a task sees one connection policy whichever host calls out.
     /// </summary>
-    private static IServiceCollection AddWorkflowHttpClient(this IServiceCollection services)
+    private static IServiceCollection AddWorkflowHttpClient(
+        this IServiceCollection services,
+        IConfiguration? configuration)
     {
-        // Default HTTP client with SSL validation enabled
+        var httpClientOptions = services.AddOptions<WorkflowHttpClientOptions>();
+        if (configuration is not null)
+        {
+            httpClientOptions.Bind(configuration.GetSection(WorkflowHttpClientOptions.SectionName));
+        }
+        httpClientOptions.ValidateDataAnnotations().ValidateOnStart();
+
+        // Resolved lazily, the first time the factory builds the handler — options are bound by then.
+        static WorkflowHttpClientPoolSettings ResolvePoolSettings(IServiceProvider provider) =>
+            provider.GetRequiredService<IOptions<WorkflowHttpClientOptions>>().Value.ToPoolSettings();
+
+        // Default HTTP client with SSL validation enabled. Infinite handler lifetime: connection
+        // retirement is PooledConnectionLifetime's job, not a pool-wide drop every two minutes.
         services.AddHttpClient(WorkflowHttpClientNames.Default, client =>
             {
                 client.Timeout = TimeSpan.FromSeconds(30);
                 client.MaxResponseContentBufferSize = int.MaxValue;
                 client.DefaultRequestHeaders.Add("Accept", "application/json");
             })
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
-            {
-                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-                MaxConnectionsPerServer = 10,
-                UseCookies = false
-            });
+            .SetHandlerLifetime(WorkflowHttpMessageHandlerFactory.HandlerLifetime)
+            .ConfigurePrimaryHttpMessageHandler(provider =>
+                WorkflowHttpMessageHandlerFactory.Create(ResolvePoolSettings(provider), validateSsl: true));
 
         // HTTP client with SSL validation disabled
         services.AddHttpClient(WorkflowHttpClientNames.NoSslValidation, client =>
@@ -145,13 +139,9 @@ public static class ExecutionServiceCollectionExtensions
                 client.MaxResponseContentBufferSize = int.MaxValue;
                 client.DefaultRequestHeaders.Add("Accept", "application/json");
             })
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
-            {
-                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-                MaxConnectionsPerServer = 10,
-                UseCookies = false,
-                ServerCertificateCustomValidationCallback = (_, _, _, _) => true
-            });
+            .SetHandlerLifetime(WorkflowHttpMessageHandlerFactory.HandlerLifetime)
+            .ConfigurePrimaryHttpMessageHandler(provider =>
+                WorkflowHttpMessageHandlerFactory.Create(ResolvePoolSettings(provider), validateSsl: false));
 
         return services;
     }

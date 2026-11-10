@@ -520,7 +520,7 @@ public sealed class InstanceController(
         [FromServices] BBT.Workflow.Files.IInstanceFileAppService fileAppService,
         CancellationToken cancellationToken = default)
     {
-        var result = await fileAppService.ReadAsync(
+        var result = await fileAppService.OpenAsync(
             new BBT.Workflow.Files.InstanceFileRequest(domain, workflow, instance, file, IfNoneMatch: null, Authorization: null),
             cancellationToken);
         if (!result.IsSuccess)
@@ -534,7 +534,7 @@ public sealed class InstanceController(
         var contentType = Microsoft.Net.Http.Headers.MediaTypeHeaderValue.TryParse(content.Handle.MimeType, out _)
             ? content.Handle.MimeType!
             : "application/octet-stream";
-        return File(content.Bytes!, contentType);
+        return File(content.Content!, contentType);
     }
 
     /// <summary>
@@ -1071,6 +1071,7 @@ public sealed class InstanceController(
         CancellationToken cancellationToken = default)
     {
         var requestContext = HttpContext.GetRequestBindingContext();
+        var rawValues = HttpContext.GetRawRequestValues();
 
         var input = new GetInstanceInput
         {
@@ -1081,7 +1082,10 @@ public sealed class InstanceController(
             IfNoneMatch = ifNoneMatch,
             Version = version,
             Headers = requestContext.Headers,
-            QueryParameters = requestContext.QueryParameters
+            QueryParameters = requestContext.QueryParameters,
+            RawHeaders = rawValues.Headers,
+            RawQueryParameters = rawValues.Query,
+            ApplyRowSecurity = true
         };
 
         var result = await queryAppService.GetInstanceAsync(input, cancellationToken);
@@ -1127,6 +1131,7 @@ public sealed class InstanceController(
         CancellationToken cancellationToken = default)
     {
         var requestContext = HttpContext.GetRequestBindingContext();
+        var rawValues = HttpContext.GetRawRequestValues();
 
         var input = new GetInstanceListInput
         {
@@ -1139,7 +1144,10 @@ public sealed class InstanceController(
             Sort = orderBy ?? sort,
             Version = version,
             Headers = requestContext.Headers,
-            QueryParameters = requestContext.QueryParameters
+            QueryParameters = requestContext.QueryParameters,
+            RawHeaders = rawValues.Headers,
+            RawQueryParameters = rawValues.Query,
+            ApplyRowSecurity = true
         };
 
         var response = await queryAppService.GetInstanceListAsync(input, cancellationToken);
