@@ -204,7 +204,7 @@ sequenceDiagram
 | `ai-director.yml` *(dry-run)* | `issues: labeled`, hourly sweep (at most 3 issues, `ai:replan` first), manual | label is `ai:ready` / `ai:replan`; issue open | per issue |
 | `ai-council.yml` | `issues: labeled`, manual | label is `ai:council-required` | per issue |
 | `ai-developer.yml` | `issues: labeled`, manual | label is `ai:planned` / `ai:changes-required`; not `ai:blocked`, `ai:done`, `ai:human-approval`, `ai:semver-major`; with `ai:council-required` also `ai:council-approved` | per issue, never cancelled mid-push |
-| `ai-quality-gate.yml` | `workflow_run: completed` (test / Sonar / contract / e2e workflows), `pull_request: ready_for_review`, hourly sweep, manual | PR open; target `master` / `release-v*` | per PR, latest wins |
+| `ai-quality-gate.yml` *(dry-run)* | `workflow_run: completed` of `Unit Tests`, `SonarQube`, `PR Contract`; hourly sweep (2 PRs whose evidence changed); manual (`pr`, `force`) | PR open; base `master` / `release-v*` (`.github/ai/gate.json`) | per HEAD SHA, latest wins |
 | `ai-done.yml` | `pull_request: closed` | merged; linked issue carries an `ai:*` state | per issue |
 
 ### 7.1 Why labels are written with the GitHub App token
@@ -261,6 +261,30 @@ Evidence is read separately and never inferred from one another: **build**, **un
 
 **PRs not created by the pipeline** (no linked issue in an `ai:*` state, e.g. a human PR) get the
 same review comment, but the gate changes **no labels** and never triggers the Developer.
+
+**How it is built** ([`ai-quality-gate.yml`](../../.github/workflows/ai-quality-gate.yml),
+[`scripts/ai/gate/`](../../scripts/ai/gate/), core [`scripts/ai/lib/gate.mjs`](../../scripts/ai/lib/gate.mjs),
+evidence list [`.github/ai/gate.json`](../../.github/ai/gate.json)):
+
+1. The trusted collector reads, for the PR's HEAD SHA: the check runs (latest re-run per name),
+   commit statuses, the SonarCloud gate and its new-code bugs / vulnerabilities (`SONAR_TOKEN`),
+   the `PR-*` annotations of the `pr-contract` run, the linked issue and its Director plan.
+2. It evaluates that evidence **itself**: a required check missing or running → `INCONCLUSIVE`
+   (no agent run); a failed one blocks; a failed Sonar gate whose only failed conditions are
+   new-code coverage → `COVERAGE_WARNING`; a failed Sonar gate it cannot read → `INCONCLUSIVE`;
+   a `PR-AI-*` contract finding blocks a pipeline PR and only warns on a human PR; an
+   `ai:impact-low` pipeline PR whose diff matches `.github/ai/impact-paths.json` → `COUNCIL`
+   (no agent run; the issue gets `ai:impact-high` + `ai:council-required`).
+3. Only when the evidence is complete does the agent review the diff. Its findings can only add
+   to what blocks — a `blocking` finding or an unmet acceptance criterion gives `CHANGES_REQUIRED` —
+   and a missing or unusable review is `INCONCLUSIVE`, never `PASS`.
+4. After `AI_MAX_REPAIRS` distinct SHAs needed changes, `CHANGES_REQUIRED` becomes `ai:blocked`.
+
+`workflow_run` runs the gate from the default branch with secrets (§7.2). The tooling and the
+prompt come from that checkout; the PR's HEAD is fetched into a separate folder that the agent only
+reads — nothing from the PR is built or executed, and an agent that changes the folder has its review
+discarded. A PR opened before a required check existed (for example before `Unit Tests`) stays
+`INCONCLUSIVE` until a push or a re-run produces that check for its HEAD.
 
 **Idempotency** — one comment per PR, found by `<!-- ai-quality-gate:v1 -->`. A hidden fingerprint
 in it (HEAD SHA, check names and conclusions, test status, Sonar and security findings, verdict,
@@ -384,7 +408,7 @@ change of a contract product raises impact (§3).
 | 0 | **Unit tests in CI, green.** `pr-tests.yml` runs on every PR and push to master and fails on any failing test; every pre-existing red is fixed (no known-red baseline), then the `Unit Tests` check becomes required ([policy](../testing/unit-tests.md)) | master has zero failing unit tests and the check is required |
 | 1 | **Taxonomy.** Labels of §4 in `labels.json` (one group per row, pinned by `labels.test.mjs`), `sync-labels --apply`, deprecated labels documented | every label exists with a description |
 | 2 | **Guards.** `PR-AI-*` rules in the PR contract (§9), the path rules in `.github/ai/impact-paths.json` (§7.3), down-scoped App tokens checked by `ai-workflows.test.mjs` (§7.1) | governance script tests pass |
-| 3 | **Read-only roles** in `dry-run`, one PR per role: Director (`ai-director.yml`), then Quality Gate, then Council — comments only | a week of runs with no wrong state |
+| 3 | **Read-only roles** in `dry-run`, one PR per role: Director (`ai-director.yml`), Quality Gate (`ai-quality-gate.yml`), then Council — comments only | a week of runs with no wrong state |
 | 4 | **Developer** in `dry-run` (pushes to a branch, opens a draft PR, no label transitions), then `apply` | first low-impact issue reaches `ai:human-approval` |
 | 5 | **E2E in CI** (§10) | e2e evidence appears on AI PRs |
 | 6 | `apply` for every role | — |
