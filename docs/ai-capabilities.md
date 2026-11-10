@@ -182,7 +182,8 @@ never Urgent) and Effort (the agent's estimate), and the `vNext` org project wit
 app needs Issues and Organization projects read/write) and are skipped with a warning without it. Repository variable `TRIAGE_MODE` = `dry-run`
 (default, comment only) / `apply`; secret `CURSOR_API_KEY` (the
 shared CI Cursor account), without which the job is a no-op; `TRIAGE_MODEL` overrides the pinned model
-(`claude-sonnet-5-5-medium`; names from `agent --list-models`). Labels: `node scripts/triage/sync-labels.mjs [--apply]`. Tests:
+(`claude-sonnet-5-5-medium`; names from `agent --list-models`). Labels: `node scripts/triage/sync-labels.mjs [--apply]` writes every group of `labels.json`, the pipeline's
+`ai:*` groups included, and never deletes. Tests (also run by the `Unit Tests` workflow on every PR):
 `node --test "scripts/triage/test/*.test.mjs"`. Issue text is untrusted (public repo): the agent has
 no shell, write, network or GitHub access, and a changed working tree blocks the apply step.
 
