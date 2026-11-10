@@ -187,9 +187,14 @@ shared CI Cursor account), without which the job is a no-op; `TRIAGE_MODEL` over
 `node --test "scripts/triage/test/*.test.mjs"`. Issue text is untrusted (public repo): the agent has
 no shell, write, network or GitHub access, and a changed working tree blocks the apply step.
 
-**AI engineering pipeline** *(proposed, not built yet)* — extends the same model to planning,
+**AI engineering pipeline** *(being rolled out)* — extends the same model to planning,
 council, implementation and PR review, driven by `ai:*` labels:
-[AI engineering pipeline](governance/ai-engineering-pipeline.md).
+[AI engineering pipeline](governance/ai-engineering-pipeline.md). Built so far: the **Director**
+(`.github/workflows/ai-director.yml`, prompt `.github/ai/director.md`, scripts `scripts/ai/director/`)
+plans an issue when a maintainer adds `ai:ready` / `ai:replan`; `AI_MODE` = `dry-run` (default, plan
+comment only) / `apply` (labels via the GitHub App); model `AI_DIRECTOR_MODEL`. Locally:
+`node scripts/ai/director/collect.mjs --issue <n>` then `apply.mjs --print`. Tests:
+`node --test "scripts/ai/test/*.test.mjs"` (also in the `Unit Tests` workflow).
 
 ## 7. vnext-meta and documentation
 
