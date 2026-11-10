@@ -147,3 +147,9 @@ test('preDecide: open PR first, then a valid earlier plan, else plan', () => {
   assert.equal(preDecide({ labels: ['ai:replan'], linkedPrs: [], previousPlans: [plan] }), 'plan');
   assert.equal(preDecide({ labels: ['ai:ready'], linkedPrs: [{ state: 'closed' }], previousPlans: ['old plan without data'] }), 'plan');
 });
+
+test('tools resolve from fixed directories, never from PATH', async () => {
+  const { toolPath } = await import('../lib/tools.mjs');
+  assert.match(toolPath('git'), /^\/(usr\/(local\/)?bin|bin|opt\/homebrew\/bin)\/git$/);
+  assert.throws(() => toolPath('definitely-not-a-tool-xyz'), /not found/);
+});

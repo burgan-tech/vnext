@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { isPlanComment, preDecide } from '../lib/director.mjs';
 import { isTriageComment } from '../../triage/lib/triage.mjs';
+import { toolPath } from '../lib/tools.mjs';
 
 const args = Object.fromEntries(
   process.argv.slice(2).reduce((acc, a, i, all) => {
@@ -27,8 +28,9 @@ if (!repo || (!args.issue && !args.sweep)) {
   process.exit(2);
 }
 
-const gh = (path) => JSON.parse(execFileSync('gh', ['api', '--paginate', '--slurp', path], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })).flat();
-const ghOne = (path) => JSON.parse(execFileSync('gh', ['api', path], { encoding: 'utf8' }));
+const GH = toolPath('gh');
+const gh = (path) => JSON.parse(execFileSync(GH, ['api', '--paginate', '--slurp', path], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })).flat();
+const ghOne = (path) => JSON.parse(execFileSync(GH, ['api', path], { encoding: 'utf8' }));
 const labelsOf = (issue) => (issue.labels ?? []).map((l) => (typeof l === 'string' ? l : l.name));
 const eligible = (issue) => !issue.pull_request && issue.state === 'open' && labelsOf(issue).some((l) => l === 'ai:ready' || l === 'ai:replan');
 

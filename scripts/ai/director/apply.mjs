@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { extractResult } from '../../triage/lib/triage.mjs';
 import { compileImpactRules } from '../../governance/lib/ai-record.mjs';
 import { isPlanComment, readPlanData, validatePlan, classify, planLabels, renderPlanComment } from '../lib/director.mjs';
+import { toolPath } from '../lib/tools.mjs';
 
 const args = Object.fromEntries(
   process.argv.slice(2).reduce((acc, a, i, all) => {
@@ -40,10 +41,11 @@ if (!['dry-run', 'apply'].includes(mode)) {
 const rules = compileImpactRules(JSON.parse(readFileSync(args['impact-rules'] ?? '.github/ai/impact-paths.json', 'utf8')));
 const secrets = (process.env.AI_REDACT ?? '').split('\n').map((s) => s.trim()).filter(Boolean);
 const appToken = process.env.AI_APP_TOKEN;
-const gh = (ghArgs, input) => execFileSync('gh', ghArgs, { encoding: 'utf8', input });
-const ghApp = (ghArgs) => execFileSync('gh', ghArgs, { encoding: 'utf8', env: { ...process.env, GH_TOKEN: appToken } });
+const GH = toolPath('gh');
+const gh = (ghArgs, input) => execFileSync(GH, ghArgs, { encoding: 'utf8', input });
+const ghApp = (ghArgs) => execFileSync(GH, ghArgs, { encoding: 'utf8', env: { ...process.env, GH_TOKEN: appToken } });
 // Only committed files count as existing: the agent can create files, not add them to the index.
-const tracked = new Set(execFileSync('git', ['ls-files', '-z'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\0'));
+const tracked = new Set(execFileSync(toolPath('git'), ['ls-files', '-z'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\0'));
 
 function upsertComment(number, body) {
   const comments = JSON.parse(gh(['api', '--paginate', '--slurp', `repos/${repo}/issues/${number}/comments?per_page=100`])).flat();

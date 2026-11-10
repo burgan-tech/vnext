@@ -92,7 +92,7 @@ jobs:
           CURSOR_CLI_SHA256: 85296944e4600a83c4b764f578d1502bf9c416db200d33a593e8f3ecabfdc294
         run: |
           pkg="$RUNNER_TEMP/cursor-cli.tar.gz"
-          curl -fsSL -o "$pkg" "https://downloads.cursor.com/lab/$CURSOR_CLI_VERSION/linux/x64/agent-cli-package.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSL -o "$pkg" "https://downloads.cursor.com/lab/$CURSOR_CLI_VERSION/linux/x64/agent-cli-package.tar.gz"
           echo "$CURSOR_CLI_SHA256  $pkg" | sha256sum --check --strict
           mkdir -p "$RUNNER_TEMP/cursor-cli"
           tar --strip-components=1 -xzf "$pkg" -C "$RUNNER_TEMP/cursor-cli"
