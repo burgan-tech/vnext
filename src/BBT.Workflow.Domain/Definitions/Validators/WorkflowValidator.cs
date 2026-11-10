@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.RegularExpressions;
 using BBT.Workflow.Definitions.RowSecurity;
 using BBT.Workflow.Scripting.Rules;
 
@@ -8,8 +9,14 @@ namespace BBT.Workflow.Definitions.Validators;
 /// Provides consistent validation for workflow domain objects.
 /// Validates workflow structure, states, transitions, labels, and error boundaries according to business rules.
 /// </summary>
-public class WorkflowValidator
+public partial class WorkflowValidator
 {
+    private static readonly HashSet<string> AgentPromptRoles = new(StringComparer.OrdinalIgnoreCase) { "system", "user", "assistant" };
+    private static readonly string[] AgentContextRoots = ["data.", "body.", "instance."];
+
+    [GeneratedRegex("^[a-zA-Z0-9_-]{1,64}$")]
+    private static partial Regex AgentContextName();
+
     private readonly ErrorBoundaryValidator _errorBoundaryValidator = new();
 
     /// <summary>
@@ -741,6 +748,23 @@ public class WorkflowValidator
 
             if (binding.Prompt is null || (string.IsNullOrWhiteSpace(binding.Prompt.Template) && string.IsNullOrWhiteSpace(binding.Prompt.Code)))
                 result.AddError(new ValidationResult($"AiAgent state '{state.Key}' must declare a prompt (template or mapping).", [$"{agentPath}.prompt"]));
+
+            for (var i = 0; i < (binding.Prompt?.Messages?.Count ?? 0); i++)
+            {
+                var message = binding.Prompt!.Messages![i];
+                if (message.Role is not { } role || !AgentPromptRoles.Contains(role))
+                    result.AddError(new ValidationResult($"AiAgent state '{state.Key}': prompt.messages[{i}].role must be system, user or assistant.", [$"{agentPath}.prompt.messages[{i}].role"]));
+                if (string.IsNullOrWhiteSpace(message.Content))
+                    result.AddError(new ValidationResult($"AiAgent state '{state.Key}': prompt.messages[{i}].content is required.", [$"{agentPath}.prompt.messages[{i}].content"]));
+            }
+
+            foreach (var (name, path) in binding.Prompt?.Context ?? [])
+            {
+                if (!AgentContextName().IsMatch(name))
+                    result.AddError(new ValidationResult($"AiAgent state '{state.Key}': prompt.context name '{name}' must match ^[a-zA-Z0-9_-]{{1,64}}$.", [$"{agentPath}.prompt.context[{name}]"]));
+                if (string.IsNullOrWhiteSpace(path) || !AgentContextRoots.Any(root => path.Trim().StartsWith(root, StringComparison.Ordinal)))
+                    result.AddError(new ValidationResult($"AiAgent state '{state.Key}': prompt.context '{name}' must be a data., body. or instance. path.", [$"{agentPath}.prompt.context[{name}]"]));
+            }
 
             if (string.IsNullOrWhiteSpace(binding.Output?.Path) || !binding.Output!.Path!.StartsWith("$.", StringComparison.Ordinal))
                 result.AddError(new ValidationResult($"AiAgent state '{state.Key}' must declare output.path as a '$.' JSON path.", [$"{agentPath}.output.path"]));

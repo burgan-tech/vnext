@@ -24,6 +24,26 @@ public static partial class AgentTemplateRenderer
     public static string Render(string template, Scope scope) =>
         Placeholder().Replace(template, match => Resolve(match.Groups[1].Value.Trim(), scope) ?? string.Empty);
 
+    /// <summary>
+    /// Renders <c>prompt.context</c>: one <c>&lt;data name="…"&gt;</c> block per entry, in name order, holding the
+    /// resolved value (JSON for objects and arrays). A missing path renders an empty block, never an error.
+    /// </summary>
+    public static string RenderContext(IReadOnlyDictionary<string, string>? context, Scope scope)
+    {
+        if (context is null || context.Count == 0)
+            return string.Empty;
+
+        var builder = new System.Text.StringBuilder();
+        foreach (var (name, path) in context.OrderBy(e => e.Key, StringComparer.Ordinal))
+        {
+            var value = (Resolve(path.Trim(), scope) ?? string.Empty)
+                .Replace("</data", "<\\/data", StringComparison.OrdinalIgnoreCase);
+            builder.Append("\n\n<data name=\"").Append(name).Append("\">\n").Append(value).Append("\n</data>");
+        }
+
+        return builder.ToString();
+    }
+
     /// <summary>Resolves one path; null when it does not exist.</summary>
     public static string? Resolve(string path, Scope scope)
     {

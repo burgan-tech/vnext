@@ -137,8 +137,12 @@ public sealed class AgentStateRunner(
                     binding.Prompt.ToScriptCode(), flowScripts: context.Workflow.Scripts, cancellationToken: cancellationToken))
                 .Handler(scriptContext)
             : AgentTemplateRenderer.Render(binding.Prompt.Template ?? string.Empty, templateScope);
+        userPrompt += AgentTemplateRenderer.RenderContext(binding.Prompt.Context, templateScope);
         if (mode == AgentDecisionMode.Model)
             userPrompt += AgentDecisionSupport.DescribeCandidates(candidates);
+        var seedMessages = (binding.Prompt.Messages ?? [])
+            .Select(m => new AgentSeedMessage(m.Role!.ToLowerInvariant(), AgentTemplateRenderer.Render(m.Content ?? string.Empty, templateScope)))
+            .ToList();
 
         var schema = AgentDecisionSupport.AugmentSchema(agent.Output!.Schema!.Value, mode, candidates);
         var instructions = agent.Instructions!.Resolved;
@@ -209,7 +213,8 @@ public sealed class AgentStateRunner(
                     useProviderSession,
                     memory.MaxMessages ?? 40,
                     CaptureTranscript: (audit?.Transcript ?? AgentTranscriptMode.None) != AgentTranscriptMode.None,
-                    Compaction: memory.Compaction ?? AgentMemoryCompaction.Trim), cancellationToken);
+                    Compaction: memory.Compaction ?? AgentMemoryCompaction.Trim,
+                    SeedMessages: seedMessages), cancellationToken);
         }
 
         ApplyResult(run, result, recorder, audit, settings, schema, candidates, userPrompt, instructionsHash, tools);

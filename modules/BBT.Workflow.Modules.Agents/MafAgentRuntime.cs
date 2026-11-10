@@ -74,7 +74,11 @@ internal sealed class MafAgentRuntime(IChatClientProvider provider, ILoggerFacto
             }, loggerFactory);
 
             var session = await LoadSessionAsync(agent, request, deadline.Token);
-            var response = await agent.RunAsync(request.UserPrompt, session, null, deadline.Token);
+            var input = (request.SeedMessages ?? [])
+                .Select(m => new ChatMessage(new ChatRole(m.Role), m.Content))
+                .Append(new ChatMessage(ChatRole.User, request.UserPrompt))
+                .ToList();
+            var response = await agent.RunAsync(input, session, null, deadline.Token);
 
             var promptTokens = (int)(response.Usage?.InputTokenCount ?? 0);
             var completionTokens = (int)(response.Usage?.OutputTokenCount ?? 0);

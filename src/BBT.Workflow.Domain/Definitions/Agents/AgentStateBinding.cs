@@ -48,6 +48,19 @@ public sealed record AgentPrompt
     /// <summary>Encoding of <see cref="Code"/>.</summary>
     public string? Encoding { get; init; }
 
+    /// <summary>
+    /// Seed messages sent before the user prompt on every run (few-shot examples, extra instructions).
+    /// Each <c>content</c> is a template with the same placeholders as <see cref="Template"/>.
+    /// </summary>
+    public List<AgentPromptMessage>? Messages { get; init; }
+
+    /// <summary>
+    /// Named data blocks appended to the user prompt, each rendered as JSON inside
+    /// <c>&lt;data name="…"&gt;</c>, so the model reads them as data and not as instructions. The value is a
+    /// path: <c>data.customer</c>, <c>body.amount</c>, <c>instance.key</c>.
+    /// </summary>
+    public Dictionary<string, string>? Context { get; init; }
+
     /// <summary>True when the prompt is a C# mapping.</summary>
     [JsonIgnore]
     public bool IsScript => string.IsNullOrEmpty(Template) && !string.IsNullOrEmpty(Code);
@@ -58,6 +71,16 @@ public sealed record AgentPrompt
         string.Equals(Encoding, "Native", StringComparison.OrdinalIgnoreCase)
             ? ScriptCode.FromNative(Code ?? string.Empty, Location)
             : ScriptCode.FromBase64(Code ?? string.Empty, Location);
+}
+
+/// <summary>A seed message of an agent prompt.</summary>
+public sealed record AgentPromptMessage
+{
+    /// <summary><c>system</c>, <c>user</c> or <c>assistant</c>.</summary>
+    public string? Role { get; init; }
+
+    /// <summary>Template content.</summary>
+    public string? Content { get; init; }
 }
 
 /// <summary>Output placement of an agent state.</summary>

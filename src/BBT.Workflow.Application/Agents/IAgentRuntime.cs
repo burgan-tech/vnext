@@ -84,6 +84,11 @@ public sealed record AgentToolDefinition(
     JsonElement ParametersSchema,
     Func<AgentToolInvocation, CancellationToken, Task<AgentToolResult>> InvokeAsync);
 
+/// <summary>A seed message sent before the user prompt.</summary>
+/// <param name="Role"><c>system</c>, <c>user</c> or <c>assistant</c>.</param>
+/// <param name="Content">Rendered content.</param>
+public sealed record AgentSeedMessage(string Role, string Content);
+
 /// <summary>One agent run.</summary>
 /// <param name="RunId">Run id.</param>
 /// <param name="AgentKey">Agent key (telemetry).</param>
@@ -101,6 +106,7 @@ public sealed record AgentToolDefinition(
 /// <param name="MaxMessages">Messages kept in a local session.</param>
 /// <param name="CaptureTranscript">Whether to return the transcript.</param>
 /// <param name="Compaction">How a local session is kept within <paramref name="MaxMessages"/>.</param>
+/// <param name="SeedMessages">Messages sent before <paramref name="UserPrompt"/> on this run.</param>
 public sealed record AgentRunRequest(
     Guid RunId,
     string AgentKey,
@@ -117,7 +123,8 @@ public sealed record AgentRunRequest(
     bool UseProviderSession,
     int MaxMessages,
     bool CaptureTranscript,
-    AgentMemoryCompaction Compaction = AgentMemoryCompaction.Trim);
+    AgentMemoryCompaction Compaction = AgentMemoryCompaction.Trim,
+    IReadOnlyList<AgentSeedMessage>? SeedMessages = null);
 
 /// <summary>Outcome of one agent run.</summary>
 public sealed record AgentRunResult
