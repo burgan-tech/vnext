@@ -164,6 +164,7 @@ Rule ids: `PR-*` in [reviewer: evidence §4](code-review/reviewers/evidence.md),
 | [`scripts/governance/meta-lint.mjs`](../scripts/governance/meta-lint.mjs) | Deterministic lint of `vnext-meta/` (parse, shape, manifest order, `since` timeline, registry keys in code) | `[--milestone vX.Y.Z] [--json]`; also part of every PR Contract run, regardless of title |
 | [`scripts/governance/meta-stamp.mjs`](../scripts/governance/meta-stamp.mjs) | Release stamp: turns `vnext-meta/unreleased/` fragments into versioned data files, adds the manifest row, records and deletes the fragments, deletes back-merge leftovers ([format](../vnext-meta/unreleased/README.md)) | `--version X.Y.Z [--date YYYY-MM-DD] [--schema-version X.Y.Z] [--meta-dir <path>] [--notes-out <file>] [--dry-run]`; CI: the release `prepare` job, lint → stamp → lint |
 | [`scripts/governance/meta-sync.mjs`](../scripts/governance/meta-sync.mjs) | Syncs a patch line's released `vnext-meta/` into master (every manifest row master lacks, union of ids and feature keys, lower version wins) | `--source <dir> --target <dir> [--dry-run]`; CI: `sync-meta-to-master` job of the release workflow, for lines that are not the latest ([process](governance/release-lines.md)) |
+| [`scripts/ci/unit-tests-report.mjs`](../scripts/ci/unit-tests-report.mjs) | Summarises unit-test TRX files (failures grouped by error signature) and fails on any failure — the suite is kept green ([policy](testing/unit-tests.md)) | CI: `Unit Tests` workflow ([`pr-tests.yml`](../.github/workflows/pr-tests.yml); `UNIT_TESTS_MODE=report` is an outage-only switch). Locally: `--trx <file>... [--mode enforce\|report] [--summary <md>] [--failures-out <json>]`; tests: `node --test "scripts/ci/test/*.test.mjs"` |
 | [`.github/workflows/backport.yml`](../.github/workflows/backport.yml) | Opens a backport PR to `release-vX.Y` for a merged PR labelled `backport/release-vX.Y` | CI: `pull_request_target` on `closed` / `labeled`; process: [Release lines](governance/release-lines.md) |
 
 **Issue triage** — the one automation that writes to GitHub without a per-action approval, and only
@@ -184,6 +185,10 @@ shared CI Cursor account), without which the job is a no-op; `TRIAGE_MODEL` over
 (`claude-sonnet-5-5-medium`; names from `agent --list-models`). Labels: `node scripts/triage/sync-labels.mjs [--apply]`. Tests:
 `node --test "scripts/triage/test/*.test.mjs"`. Issue text is untrusted (public repo): the agent has
 no shell, write, network or GitHub access, and a changed working tree blocks the apply step.
+
+**AI engineering pipeline** *(proposed, not built yet)* — extends the same model to planning,
+council, implementation and PR review, driven by `ai:*` labels:
+[AI engineering pipeline](governance/ai-engineering-pipeline.md).
 
 ## 7. vnext-meta and documentation
 

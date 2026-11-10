@@ -326,7 +326,7 @@ public class ResultRuleEngineTests
         }
 
         public override bool IsApplicable(TestContext context) => true;
-        public override Result Validate(TestContext context) => Result.Fail(new Error(_errorCode, "Test error message"));
+        public override Result Validate(TestContext context) => Result.Fail(Error.Validation(_errorCode, "Test error message"));
     }
 
     private class TrackingRule : ResultBaseRule<TestContext>

@@ -77,6 +77,27 @@ public sealed class SubflowTerminalRevertRearmTests
                 It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<SubItemTerminalOutcome>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new SubItemTerminalProbeResult(SubItemTerminalProbe.Proceed, null, null));
 
+        // The service loads the parent through the narrow FindForSubflowCompletionAsync (#928) and
+        // runs the output mapping as Prepare + ApplyPrepared; bridge the load to the per-test
+        // FindWithAllCorrelationsAndDataAsync setup, as SubflowCompletionServiceTests does.
+        _instanceRepository
+            .Setup(x => x.FindForSubflowCompletionAsync(
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .Returns((Guid parentId, Guid _, CancellationToken ct) =>
+                _instanceRepository.Object.FindWithAllCorrelationsAndDataAsync(parentId, ct));
+        _outputMappingService
+            .Setup(x => x.PrepareAsync(
+                It.IsAny<Guid>(), It.IsAny<Definitions.Workflow>(), It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<SubflowOutputMappingPlan>.Ok(new(null, null)));
+        _outputMappingService
+            .Setup(x => x.ApplyPreparedAsync(
+                It.IsAny<Instance>(), It.IsAny<Definitions.Workflow>(),
+                It.IsAny<SubflowOutputMappingPlan>(), It.IsAny<JsonElement?>(),
+                It.IsAny<IReadOnlyDictionary<string, string?>?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result.Ok());
+
         _eventBus
             .Setup(x => x.PublishAsync(
                 It.IsAny<InstanceSubCompletedEvent>(),
@@ -109,10 +130,6 @@ public sealed class SubflowTerminalRevertRearmTests
         _componentCacheStore
             .Setup(x => x.GetFlowAsync("bank", "parent-flow", "1.0.0", It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<Definitions.Workflow>.Ok(parentWorkflow));
-        _outputMappingService
-            .Setup(x => x.ApplyAsync(parent, parentWorkflow, It.IsAny<string>(),
-                It.IsAny<JsonElement?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Ok());
 
         // Force phase-2 resume to fail (hard failure, not a soft AutoTransitionConditionNotMet /
         // InstanceCompleted) so the catch block in ResumePipelineAsync runs the revert.
@@ -200,10 +217,6 @@ public sealed class SubflowTerminalRevertRearmTests
         _componentCacheStore
             .Setup(x => x.GetFlowAsync("bank", "parent-flow", "1.0.0", It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<Definitions.Workflow>.Ok(parentWorkflow));
-        _outputMappingService
-            .Setup(x => x.ApplyAsync(parent, parentWorkflow, It.IsAny<string>(),
-                It.IsAny<JsonElement?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Result.Ok());
         _workflowExecutionService
             .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<TransitionOutput>.Fail(WorkflowErrors.InstanceLockConflict(parent.Id)));

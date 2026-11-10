@@ -1,0 +1,117 @@
+name: Unit Tests
+
+# Builds the solution and runs the unit-test projects under test/ (Domain, Application,
+# Infrastructure). Integration tests live in vnext-example and are not part of this job.
+# Policy: the suite is kept green — any failing unit test fails the check, there is no known-red
+# list. The repository variable UNIT_TESTS_MODE=report turns blocking off as an emergency switch
+# only (for example a broken runner image); unset, the job enforces.
+# Every run uploads the TRX files and `failing.json`; the job summary groups failures by signature.
+# Policy text: docs/testing/unit-tests.md.
+
+on:
+  pull_request:
+    branches: [master, 'release-*', 'sprint-*']
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [master, 'release-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unit-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      UNIT_TESTS_MODE: ${{ vars.UNIT_TESTS_MODE || 'enforce' }}
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          # Same set as the release pack job: PostSharp rolls its host forward to the runner's
+          # runtime and needs the matching AspNetCore.App.
+          dotnet-version: |
+            9.0.x
+            10.0.2xx
+            10.0.x
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Run report script tests
+        run: node --test "scripts/ci/test/*.test.mjs"
+
+      - name: Setup NETStandard.Library.Ref for PostSharp
+        run: ./scripts/setup-netstandard-ref.sh
+
+      - name: Restore
+        run: dotnet restore ./BBT.Workflow.slnx
+
+      - name: Build
+        run: dotnet build ./BBT.Workflow.slnx --configuration Release --no-restore
+
+      - name: Raise inotify limits
+        # Tests that build a host register a config file watcher each; the runner's default of
+        # 128 inotify instances per user fails ~500 Domain tests with "inotify instances ... reached".
+        run: |
+          sudo sysctl -w fs.inotify.max_user_instances=8192
+          sudo sysctl -w fs.inotify.max_user_watches=524288
+
+      - name: Test
+        id: test
+        # Every project runs even when an earlier one fails; the report step decides the outcome.
+        # A crashed or hung project leaves no TRX; the Report step fails the check for it, since a
+        # missing project would otherwise read as fewer tests, not as a failure.
+        run: |
+          mkdir -p "$RUNNER_TEMP/trx"
+          for p in Domain Application Infrastructure; do
+            echo "::group::BBT.Workflow.$p.Tests"
+            dotnet test "test/BBT.Workflow.$p.Tests" --configuration Release --no-build \
+              --logger "trx;LogFileName=$p.trx" --results-directory "$RUNNER_TEMP/trx" \
+              --blame-hang --blame-hang-timeout 10m \
+              || echo "::warning::BBT.Workflow.$p.Tests reported failures"
+            echo "::endgroup::"
+            [ -f "$RUNNER_TEMP/trx/$p.trx" ] || missing="$missing $p"
+          done
+          echo "missing=${missing# }" >> "$GITHUB_OUTPUT"
+
+      - name: Report
+        env:
+          MISSING_TRX: ${{ steps.test.outputs.missing }}
+        run: |
+          if [ -n "$MISSING_TRX" ]; then
+            echo "::error::No test results for: $MISSING_TRX (crashed or hung test host)"
+            echo "**No test results for: $MISSING_TRX** — the test host crashed or hung; see the job log and the blame artifacts." >> "$GITHUB_STEP_SUMMARY"
+            [ "$UNIT_TESTS_MODE" = report ] || fail=1
+          fi
+          node scripts/ci/unit-tests-report.mjs \
+            $(for f in "$RUNNER_TEMP"/trx/*.trx; do printf -- '--trx %s ' "$f"; done) \
+            --mode "$UNIT_TESTS_MODE" \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --failures-out "$RUNNER_TEMP/trx/failing.json"
+          exit "${fail:-0}"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: |
+            ${{ runner.temp }}/trx/*.trx
+            ${{ runner.temp }}/trx/failing.json
+            ${{ runner.temp }}/trx/**/Sequence_*.xml
+          if-no-files-found: warn
+          retention-days: 14
