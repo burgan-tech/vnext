@@ -101,6 +101,11 @@ dotnet test --filter "FullyQualifiedName~MyTest"  # Single test
 
 Test projects (`test/`, unit tests only): `Domain.Tests`, `Application.Tests`, `Infrastructure.Tests`, `TestBase` and `Shared` (shared utilities), `Benchmarks`.
 
+**The unit-test suite is always green.** Every PR leaves zero failing tests — including reds it did
+not cause — and the required `Unit Tests` check fails on any failure; there is no known-red list and
+no `Skip` to get green. Run the projects one at a time (`-c Release`), not the solution. Rule and
+reproduction: [docs/testing/unit-tests.md](docs/testing/unit-tests.md).
+
 **Integration tests** live in the sibling **vnext-example** repo (`tests/Core.IntegrationTests`, on the
 `VNext.Testing.Sdk` from **vnext-integration-test**) and run against the **locally built** runtime — never
 a container image. Required for changes to core processes (pipeline, transitions, subflows, locking,

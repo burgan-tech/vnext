@@ -55,8 +55,10 @@ public class ActorAuthorizationSpecificationTests
     }
 
     [Fact]
-    public void IsSatisfiedBy_ManualTrigger_WithSystemActor_ShouldReturnFailure()
+    public void IsSatisfiedBy_ManualTrigger_WithSystemActor_ShouldReturnSuccess()
     {
+        // Manual transitions accept any actor since da3f50127 (runtime-generated child calls
+        // and orchestration patterns drive manual transitions under the System actor).
         // Arrange
         var context = CreateContext(TriggerType.Manual, ExecutionActor.System);
 
@@ -64,8 +66,7 @@ public class ActorAuthorizationSpecificationTests
         var result = _specification.IsSatisfiedBy(context);
 
         // Assert
-        result.IsSuccess.ShouldBeFalse();
-        result.Error.Code.ShouldBe("Transition:100010");
+        result.IsSuccess.ShouldBeTrue();
     }
 
     [Fact]

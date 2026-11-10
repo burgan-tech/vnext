@@ -246,17 +246,29 @@ public sealed class WorkflowDbContextSchemaModelTests : IAsyncLifetime
     {
         // The real OpenTelemetry EF Core instrumentation records the query text before any interceptor
         // runs; the span must still name the schema the command ran against.
+        // The instrumentation listens process-wide, so EF spans of test classes running in parallel land
+        // in the processor too; keep only the spans under this test's own root activity.
         var spans = new List<System.Diagnostics.Activity>();
+        using var probeSource = new System.Diagnostics.ActivitySource(nameof(CommandSpans_NameTheRealSchema_NotThePlaceholder));
+        System.Diagnostics.ActivityTraceId probeTrace;
         using (OpenTelemetry.Sdk.CreateTracerProviderBuilder()
+                   .AddSource(probeSource.Name)
                    .AddEntityFrameworkCoreInstrumentation()
                    .AddProcessor(new CaptureProcessor(spans))
                    .Build())
         {
-            await InUnitOfWorkAsync(SchemaB, transactional: false,
-                ctx => ctx.Instances.AsNoTracking().Where(i => i.Key == "span-probe").ToListAsync());
+            using (var probe = probeSource.StartActivity("span-probe"))
+            {
+                probe.ShouldNotBeNull();
+                probeTrace = probe.TraceId;
+                await InUnitOfWorkAsync(SchemaB, transactional: false,
+                    ctx => ctx.Instances.AsNoTracking().Where(i => i.Key == "span-probe").ToListAsync());
+            }
         }
 
-        var texts = spans
+        List<System.Diagnostics.Activity> ownSpans;
+        lock (spans) ownSpans = spans.Where(s => s.TraceId == probeTrace).ToList();
+        var texts = ownSpans
             .Select(s => s.GetTagItem("db.query.text") as string ?? s.GetTagItem("db.statement") as string)
             .Where(t => t is not null && t.Contains("\"Instances\""))
             .ToList();

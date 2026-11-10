@@ -5,16 +5,18 @@
 //   --body-file <path> --title <t> [--milestone vX.Y.Z] [--files-from-git <base>]
 //                      [--base <branch>] [--labels a,b]   local draft
 //   --mode warn|enforce                warn (default) prints errors as warnings and exits 0
+//   --impact-rules <path>              high-impact path rules for AI PRs (default .github/ai/impact-paths.json)
 import { readFileSync, appendFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { checkPr, formatAnnotation } from './lib/pr-contract.mjs';
 import { lintMeta } from './lib/meta-lint.mjs';
+import { compileImpactRules } from './lib/ai-record.mjs';
 
 const COMMITS_CAP = 250;
 
-const NO_DASH = new Set(['pr', 'files-from-git', 'body-file', 'event']);
-const USAGE = '--event <path> | --pr <n> | --body-file <path> --title <t> [--milestone vX.Y.Z] [--files-from-git <base>] [--base <branch>] [--labels a,b] [--mode warn|enforce] [--meta-dir <path>] [--repo-root <path>]';
+const NO_DASH = new Set(['pr', 'files-from-git', 'body-file', 'event', 'impact-rules']);
+const USAGE = '--event <path> | --pr <n> | --body-file <path> --title <t> [--milestone vX.Y.Z] [--files-from-git <base>] [--base <branch>] [--labels a,b] [--mode warn|enforce] [--meta-dir <path>] [--repo-root <path>] [--impact-rules <path>]';
 
 function parseArgs(argv) {
   const out = {};
@@ -108,7 +110,9 @@ function main(args, mode) {
     return existsSync(full) ? readFileSync(full, 'utf8') : null;
   };
 
-  const findings = checkPr({ ...pr, readFile });
+  const rulesText = readFile(args['impact-rules'] ?? '.github/ai/impact-paths.json');
+  const impactRules = rulesText ? compileImpactRules(JSON.parse(rulesText)) : [];
+  const findings = checkPr({ ...pr, readFile, impactRules });
   const milestone = pr.milestone && /^v\d+\.\d+\.\d+$/.test(pr.milestone.title) ? pr.milestone.title : undefined;
   findings.push(...lintMeta({ metaDir, repoRoot, milestone }));
 

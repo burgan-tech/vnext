@@ -38,7 +38,7 @@ public abstract class InstanceTransitionRepositoryTests<TEntry> : DomainTestBase
         );
 
         // Act
-        var result = await Repository.InsertAsync(transition);
+        var result = await Repository.InsertAsync(transition, true);
 
         // Assert
         result.ShouldNotBeNull();
@@ -64,7 +64,7 @@ public abstract class InstanceTransitionRepositoryTests<TEntry> : DomainTestBase
             JsonData.CreateFrom("{}"),
             JsonData.CreateFrom("{}")
         );
-        await Repository.InsertAsync(transition);
+        await Repository.InsertAsync(transition, true);
 
         // Act
         transition.Completed("FinalState");
@@ -93,7 +93,7 @@ public abstract class InstanceTransitionRepositoryTests<TEntry> : DomainTestBase
             JsonData.CreateFrom("{}"),
             JsonData.CreateFrom("{}")
         );
-        await Repository.InsertAsync(transition);
+        await Repository.InsertAsync(transition, true);
 
         // Act
         transition.Completed(
@@ -107,6 +107,8 @@ public abstract class InstanceTransitionRepositoryTests<TEntry> : DomainTestBase
         // Assert — ALL columns Completed() mutates must be written by the set-based statement
         // itself. Three of them used to survive only via a tracked-entity flush, which both hid
         // the gap and double-wrote the row; this pin keeps the statement self-sufficient.
+        // Forget the tracked (already mutated) entity so the read below comes from the store.
+        await ForgetTrackedEntitiesAsync();
         var updated = await Repository.GetAsync(transition.Id);
         updated.ShouldNotBeNull();
         updated.ToState.ShouldBe("CompletedState");
@@ -135,10 +137,10 @@ public abstract class InstanceTransitionRepositoryTests<TEntry> : DomainTestBase
             JsonData.CreateFrom("{}"),
             JsonData.CreateFrom("{}")
         );
-        await Repository.InsertAsync(transition);
+        await Repository.InsertAsync(transition, true);
 
         // Act
-        await Repository.DeleteAsync(transition);
+        await Repository.DeleteAsync(transition, true);
 
         // Assert
         var deleted = await Repository.FindAsync(transition.Id);
@@ -146,12 +148,18 @@ public abstract class InstanceTransitionRepositoryTests<TEntry> : DomainTestBase
     }
 
     /// <summary>
+    /// Drops every entity the implementation tracks, so a following read reflects only what reached the
+    /// store. No-op for implementations without a change tracker.
+    /// </summary>
+    protected virtual Task ForgetTrackedEntitiesAsync() => Task.CompletedTask;
+
+    /// <summary>
     /// Helper method to create a test instance for transition tests.
     /// </summary>
     private async Task<Instance> CreateTestInstanceAsync()
     {
         var instance = Instance.Create(Guid.NewGuid(), "test-workflow", "1.0.0","test-key");
-        await InstanceRepository.InsertAsync(instance);
+        await InstanceRepository.InsertAsync(instance, true);
         return instance;
     }
 }

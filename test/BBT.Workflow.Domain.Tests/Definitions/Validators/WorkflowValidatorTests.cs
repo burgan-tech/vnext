@@ -714,7 +714,7 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
                             "key": "default-pending",
                             "target": "pending",
                             "triggerType": "automatic",
-                            "kind": "defaultAutoTransition"
+                            "triggerKind": "defaultAutoTransition"
                         }
                     ]
                 },
@@ -760,13 +760,13 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
                             "key": "default-1",
                             "target": "approved",
                             "triggerType": "automatic",
-                            "kind": "defaultAutoTransition"
+                            "triggerKind": "defaultAutoTransition"
                         },
                         {
                             "key": "default-2",
                             "target": "pending",
                             "triggerType": "automatic",
-                            "kind": "defaultAutoTransition"
+                            "triggerKind": "defaultAutoTransition"
                         }
                     ]
                 },
@@ -812,7 +812,7 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
                             "key": "invalid-default",
                             "target": "approved",
                             "triggerType": "manual",
-                            "kind": "defaultAutoTransition",
+                            "triggerKind": "defaultAutoTransition",
                             "labels": [{"label": "Invalid", "language": "en"}]
                         }
                     ]

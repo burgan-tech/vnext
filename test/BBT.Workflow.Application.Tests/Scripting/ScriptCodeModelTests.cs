@@ -94,7 +94,9 @@ public class ScriptCodeModelTests
         sc.CodeReference!.Key.ShouldBe("json-helper");
         sc.CodeReference.Flow.ShouldBe("sys-mappings");
         sc.HasMappingCode.ShouldBeTrue();
-        Should.Throw<InvalidOperationException>(() => _ = sc.DecodedCode);
+        // A reference has no inline body: DecodedCode is empty (ContentHash/TraceIdentity rely on it);
+        // the script engine resolves the body from the component store.
+        sc.DecodedCode.ShouldBeEmpty();
     }
 
     [Fact]

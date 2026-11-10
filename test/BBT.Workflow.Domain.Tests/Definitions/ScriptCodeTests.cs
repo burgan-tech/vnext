@@ -135,7 +135,7 @@ public class ScriptCodeTests
     }
 
     [Fact]
-    public void GetAtomicValues_ShouldReturnLocationAndCode()
+    public void GetAtomicValues_ShouldReturnLocationCodeTypeAndEncoding()
     {
         // Arrange
         var location = "test-location";
@@ -150,9 +150,12 @@ public class ScriptCodeTests
         // Assert
         Assert.NotNull(atomicValues);
         var valuesList = atomicValues.ToList();
-        Assert.Equal(2, valuesList.Count);
+        // Type (953a7391a) and Encoding (d5ada8a6b) take part in equality; CodeReference only when set.
+        Assert.Equal(4, valuesList.Count);
         Assert.Equal(location, valuesList[0]);
         Assert.Equal(code, valuesList[1]);
+        Assert.Equal(MappingType.Local, valuesList[2]);
+        Assert.Equal(CodeEncoding.Base64, valuesList[3]);
     }
 
     [Fact]
