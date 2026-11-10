@@ -10,16 +10,18 @@ import { readFileSync, writeFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const MODES = new Set(['enforce', 'report']);
+const byText = (a, b) => a.localeCompare(b);
+const OUTCOME_KIND = { Passed: 'passed', Failed: 'failed' };
 
 function attr(tagAttrs, name) {
-  const m = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(tagAttrs);
+  const m = new RegExp(String.raw`(?:^|\s)${name}\s*=\s*(?:"([^"]*)"|'([^']*)')`).exec(tagAttrs);
   return m ? (m[1] ?? m[2]) : null;
 }
 
 function decode(s) {
   return s
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'").replace(/&#xD;|&#xA;|&#13;|&#10;/g, '\n').replace(/&amp;/g, '&');
+    .replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&quot;', '"')
+    .replaceAll('&apos;', "'").replace(/&#xD;|&#xA;|&#13;|&#10;/g, '\n').replaceAll('&amp;', '&');
 }
 
 /** Totals and the failed results (name + first message line) of one TRX document. */
@@ -27,8 +29,7 @@ export function parseTrx(xml) {
   const totals = { passed: 0, failed: 0, skipped: 0, total: 0 };
   const failures = [];
   for (const m of xml.matchAll(/<UnitTestResult\b([^>]*?)(?:\/>|>([\s\S]*?)<\/UnitTestResult>)/g)) {
-    const outcome = attr(m[1], 'outcome');
-    const kind = outcome === 'Passed' ? 'passed' : outcome === 'Failed' ? 'failed' : 'skipped';
+    const kind = OUTCOME_KIND[attr(m[1], 'outcome')] ?? 'skipped';
     totals[kind]++;
     totals.total++;
     if (kind !== 'failed') continue;
@@ -56,7 +57,7 @@ export function groupBySignature(failures) {
     groups.get(key).push(f.name);
   }
   return [...groups.entries()]
-    .map(([sig, names]) => ({ signature: sig, count: names.length, tests: names.sort() }))
+    .map(([sig, names]) => ({ signature: sig, count: names.length, tests: names.sort(byText) }))
     .sort((a, b) => b.count - a.count || a.signature.localeCompare(b.signature));
 }
 
@@ -64,26 +65,25 @@ export function decide(mode, totals) {
   return mode === 'enforce' && totals.failed > 0 ? 'fail' : 'pass';
 }
 
-const esc = (s) => s.replace(/\|/g, '\\|').replace(/`/g, "'");
+const esc = (s) => s.replaceAll('|', String.raw`\|`).replaceAll('`', "'");
+const code = (s) => '`' + esc(s) + '`';
 
 export function renderSummary({ mode, perFile, totals, groups, verdict }) {
-  const lines = [];
-  lines.push('## Unit tests');
-  lines.push('');
-  lines.push(`Mode: \`${mode}\` · Result: **${verdict === 'fail' ? 'blocking failures' : 'not blocking'}**`);
-  lines.push('');
-  lines.push('| Project | Passed | Failed | Skipped | Total |');
-  lines.push('|---|---:|---:|---:|---:|');
+  const lines = [
+    '## Unit tests',
+    '',
+    `Mode: ${code(mode)} · Result: **${verdict === 'fail' ? 'blocking failures' : 'not blocking'}**`,
+    '',
+    '| Project | Passed | Failed | Skipped | Total |',
+    '|---|---:|---:|---:|---:|',
+  ];
   for (const f of perFile) lines.push(`| ${esc(f.name)} | ${f.totals.passed} | ${f.totals.failed} | ${f.totals.skipped} | ${f.totals.total} |`);
   lines.push(`| **All** | **${totals.passed}** | **${totals.failed}** | **${totals.skipped}** | **${totals.total}** |`);
   if (groups.length) {
-    lines.push('');
-    lines.push('### Failures by error signature');
-    lines.push('');
-    lines.push('| # | Signature | Example tests |');
-    lines.push('|---:|---|---|');
+    lines.push('', '### Failures by error signature', '', '| # | Signature | Example tests |', '|---:|---|---|');
     for (const g of groups.slice(0, 40)) {
-      lines.push(`| ${g.count} | \`${esc(g.signature)}\` | ${g.tests.slice(0, 3).map((t) => `\`${esc(t)}\``).join('<br>')} |`);
+      const examples = g.tests.slice(0, 3).map(code).join('<br>');
+      lines.push(`| ${g.count} | ${code(g.signature)} | ${examples} |`);
     }
   }
   return lines.join('\n') + '\n';
@@ -119,7 +119,7 @@ function main() {
   if (args.summary) writeFileSync(args.summary, md, { flag: 'a' });
   else process.stdout.write(md);
   if (args['failures-out']) {
-    writeFileSync(args['failures-out'], JSON.stringify({ failing: [...new Set(failures.map((f) => f.name))].sort() }, null, 2) + '\n');
+    writeFileSync(args['failures-out'], JSON.stringify({ failing: [...new Set(failures.map((f) => f.name))].sort(byText) }, null, 2) + '\n');
   }
   console.log(`unit-tests-report: ${totals.failed} failed of ${totals.total}; mode=${args.mode}; verdict=${verdict}`);
   if (verdict === 'fail') process.exit(1);
