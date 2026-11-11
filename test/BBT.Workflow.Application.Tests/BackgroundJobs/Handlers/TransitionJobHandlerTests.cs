@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Tracing;
 using BBT.Aether.Results;
+using BBT.Workflow.Application.Tests.Telemetry;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
@@ -122,14 +123,7 @@ public class TransitionJobHandlerTests
     {
         var payload = CreatePayload();
         var handler = CreateHandler();
-        var collected = new List<Activity>();
-        using var listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == "BBT.Workflow.BackgroundJobs",
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
-        };
-        ActivitySource.AddActivityListener(listener);
+        using var spans = new TraceSpanCollector("BBT.Workflow.BackgroundJobs");
 
         _executionService
             .Setup(s => s.ExecuteTransitionAsync(
@@ -138,7 +132,7 @@ public class TransitionJobHandlerTests
 
         await handler.HandleAsync(payload, CancellationToken.None);
 
-        Assert.Single(collected, a => a.DisplayName == "TransitionJob.Execute/go");
+        Assert.Single(spans.Spans, a => a.DisplayName == "TransitionJob.Execute/go");
     }
 
     /// <summary>
@@ -151,14 +145,7 @@ public class TransitionJobHandlerTests
     {
         var payload = CreatePayload();
         var handler = CreateHandler();
-        var collected = new List<Activity>();
-        using var listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == "BBT.Workflow.BackgroundJobs",
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
-        };
-        ActivitySource.AddActivityListener(listener);
+        using var spans = new TraceSpanCollector("BBT.Workflow.BackgroundJobs");
 
         _executionService
             .Setup(s => s.ExecuteTransitionAsync(
@@ -172,7 +159,7 @@ public class TransitionJobHandlerTests
 
         await handler.HandleAsync(payload, CancellationToken.None);
 
-        var job = Assert.Single(collected, a => a.DisplayName == "TransitionJob.Execute/go");
+        var job = Assert.Single(spans.Spans, a => a.DisplayName == "TransitionJob.Execute/go");
         Assert.Equal(ActivityStatusCode.Error, job.Status);
         Assert.Equal(true, job.GetTagItem(TelemetryConstants.TagNames.InstanceFaulted));
     }

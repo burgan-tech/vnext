@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Events;
 using BBT.Aether.Results;
+using BBT.Workflow.Application.Tests.Telemetry;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.PostCommit.Relay;
 using BBT.Workflow.Gateway;
@@ -31,23 +32,12 @@ namespace BBT.Workflow.Application.Tests.SubFlow;
 /// </summary>
 public sealed class PostCommitRelayDispatcherTests : IDisposable
 {
-    private readonly List<Activity> _collected = new();
-    private readonly ActivityListener _listener;
-
-    public PostCommitRelayDispatcherTests()
-    {
-        _listener = new ActivityListener
-        {
-            ShouldListenTo = s => s.Name == "BBT.Workflow.Pipeline",
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = _collected.Add
-        };
-        ActivitySource.AddActivityListener(_listener);
-    }
+    // xUnit builds one instance per test, so this collects only the running test's trace.
+    private readonly TraceSpanCollector _spans = new("BBT.Workflow.Pipeline");
 
     public void Dispose()
     {
-        _listener.Dispose();
+        _spans.Dispose();
         Activity.Current = null;
     }
 
@@ -267,7 +257,7 @@ public sealed class PostCommitRelayDispatcherTests : IDisposable
         await sut.RelayAsync([Envelope(evt)], CancellationToken.None);
 
         gateway.ReceivedCalls().ShouldBeEmpty();
-        var span = _collected.Single(a => a.DisplayName == "PostCommit.EventRelay");
+        var span = _spans.Spans.Single(a => a.DisplayName == "PostCommit.EventRelay");
         span.GetTagItem(TelemetryConstants.TagNames.RelayOutcome).ShouldBe(PostCommitRelayOutcomes.Skipped);
     }
 
@@ -310,7 +300,7 @@ public sealed class PostCommitRelayDispatcherTests : IDisposable
 
         await Should.NotThrowAsync(() => sut.RelayAsync([Envelope(CompletedEvent())], CancellationToken.None));
 
-        _collected.Single(a => a.DisplayName == "PostCommit.EventRelay")
+        _spans.Spans.Single(a => a.DisplayName == "PostCommit.EventRelay")
             .GetTagItem(TelemetryConstants.TagNames.RelayOutcome)
             .ShouldBe(PostCommitRelayOutcomes.Failed);
     }
@@ -345,7 +335,7 @@ public sealed class PostCommitRelayDispatcherTests : IDisposable
         await Dispatcher(Registrations(gateway), remoteRuntime)
             .RelayAsync([Envelope(CompletedEvent())], CancellationToken.None);
 
-        var spans = _collected.Where(a => a.DisplayName == "PostCommit.EventRelay").ToList();
+        var spans = _spans.Spans.Where(a => a.DisplayName == "PostCommit.EventRelay").ToList();
         spans.Count.ShouldBe(2);
         spans[0].GetTagItem(TelemetryConstants.TagNames.RelayRoute).ShouldBe("local");
         spans[1].GetTagItem(TelemetryConstants.TagNames.RelayRoute).ShouldBe("remote");
@@ -381,7 +371,7 @@ public sealed class PostCommitRelayDispatcherTests : IDisposable
         await Should.NotThrowAsync(() => Dispatcher(provider, remoteRuntime)
             .RelayAsync([Envelope(StateChangedEvent())], CancellationToken.None));
 
-        _collected.Single(a => a.DisplayName == "PostCommit.EventRelay")
+        _spans.Spans.Single(a => a.DisplayName == "PostCommit.EventRelay")
             .GetTagItem(TelemetryConstants.TagNames.RelayOutcome)
             .ShouldBe(PostCommitRelayOutcomes.Timeout);
     }

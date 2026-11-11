@@ -37,29 +37,9 @@ namespace BBT.Workflow.Application.Tests.Telemetry;
 [Collection(TracingDetailLevelCollection.Name)]
 public sealed class TransitionContextSpanTests : IDisposable
 {
-    private readonly List<ActivityListener> _listeners = new();
-
     public void Dispose()
     {
-        foreach (var listener in _listeners)
-        {
-            listener.Dispose();
-        }
-
         Activity.Current = null;
-    }
-
-    private ActivityListener CreateListener(string sourceName, List<Activity> collected)
-    {
-        var listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == sourceName,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
-        };
-        ActivitySource.AddActivityListener(listener);
-        _listeners.Add(listener);
-        return listener;
     }
 
     #region Transition.LoadContext (TransitionContextFactory.CreateAsync)
@@ -67,8 +47,7 @@ public sealed class TransitionContextSpanTests : IDisposable
     [Fact]
     public async Task CreateAsync_EmitsLoadContextSpan_EvenOnDomainValidationFailure()
     {
-        var collected = new List<Activity>();
-        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
 
         var runtimeInfo = Substitute.For<IRuntimeInfoProvider>();
         runtimeInfo.When(r => r.Check("bad")).Throw(new InvalidOperationException("wrong domain"));
@@ -91,7 +70,7 @@ public sealed class TransitionContextSpanTests : IDisposable
         var result = await sut.CreateAsync(input, CancellationToken.None);
 
         result.IsSuccess.ShouldBeFalse();
-        var span = collected.Single(a => a.DisplayName == "Transition.LoadContext");
+        var span = spans.Spans.Single(a => a.DisplayName == "Transition.LoadContext");
         span.Status.ShouldBe(ActivityStatusCode.Error);
         span.StatusDescription.ShouldNotBeNullOrEmpty();
     }
@@ -99,8 +78,7 @@ public sealed class TransitionContextSpanTests : IDisposable
     [Fact]
     public async Task CreateAsync_EmitsLoadContextSpan_OnSuccess_WithoutErrorStatus()
     {
-        var collected = new List<Activity>();
-        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
 
         const string domain = "test-domain";
         const string workflowKey = "test-workflow";
@@ -135,7 +113,7 @@ public sealed class TransitionContextSpanTests : IDisposable
         var result = await sut.CreateAsync(input, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        var span = collected.Single(a => a.DisplayName == "Transition.LoadContext");
+        var span = spans.Spans.Single(a => a.DisplayName == "Transition.LoadContext");
         span.Status.ShouldBe(ActivityStatusCode.Unset);
     }
 
@@ -146,8 +124,7 @@ public sealed class TransitionContextSpanTests : IDisposable
     [Fact]
     public async Task CreateAsync_EmitsInstanceLoadSpan_OnSuccess_WithoutErrorStatus()
     {
-        var collected = new List<Activity>();
-        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
 
         const string domain = "test-domain";
         const string workflowKey = "test-workflow";
@@ -182,15 +159,14 @@ public sealed class TransitionContextSpanTests : IDisposable
         var result = await sut.CreateAsync(input, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        var span = collected.Single(a => a.DisplayName == "Instance.Load");
+        var span = spans.Spans.Single(a => a.DisplayName == "Instance.Load");
         span.Status.ShouldBe(ActivityStatusCode.Unset);
     }
 
     [Fact]
     public async Task CreateAsync_EmitsInstanceLoadSpan_WithErrorStatus_WhenInstanceMissing()
     {
-        var collected = new List<Activity>();
-        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
 
         const string domain = "test-domain";
         const string workflowKey = "test-workflow";
@@ -226,12 +202,12 @@ public sealed class TransitionContextSpanTests : IDisposable
         result.IsSuccess.ShouldBeFalse();
 
         // The inner span reports the failure...
-        var instanceLoadSpan = collected.Single(a => a.DisplayName == "Instance.Load");
+        var instanceLoadSpan = spans.Spans.Single(a => a.DisplayName == "Instance.Load");
         instanceLoadSpan.Status.ShouldBe(ActivityStatusCode.Error);
 
         // ...and so does the outer span wrapping the whole railway chain — same failure,
         // observed at both levels of the trace.
-        var loadContextSpan = collected.Single(a => a.DisplayName == "Transition.LoadContext");
+        var loadContextSpan = spans.Spans.Single(a => a.DisplayName == "Transition.LoadContext");
         loadContextSpan.Status.ShouldBe(ActivityStatusCode.Error);
     }
 
@@ -242,8 +218,7 @@ public sealed class TransitionContextSpanTests : IDisposable
     [Fact]
     public async Task ValidateAsync_EmitsValidateSpan_OnSuccess_WithoutErrorStatus()
     {
-        var collected = new List<Activity>();
-        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
 
         var sut = new TransitionValidationService(
             CreatePolicyWithNoSpecifications(),
@@ -256,15 +231,14 @@ public sealed class TransitionContextSpanTests : IDisposable
         var result = await sut.ValidateAsync(context, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        var span = collected.Single(a => a.DisplayName == "Transition.Validate");
+        var span = spans.Spans.Single(a => a.DisplayName == "Transition.Validate");
         span.Status.ShouldBe(ActivityStatusCode.Unset);
     }
 
     [Fact]
     public async Task ValidateAsync_EmitsValidateSpan_WithErrorStatus_OnSchemaValidationFailure()
     {
-        var collected = new List<Activity>();
-        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
 
         var schemaRef = new Reference("test-schema", "test-domain", "sys-schemas", "1.0.0");
         var schemaDefinition = CreateSchemaDefinition("test-schema");
@@ -296,7 +270,7 @@ public sealed class TransitionContextSpanTests : IDisposable
         var result = await sut.ValidateAsync(context, CancellationToken.None);
 
         result.IsSuccess.ShouldBeFalse();
-        var span = collected.Single(a => a.DisplayName == "Transition.Validate");
+        var span = spans.Spans.Single(a => a.DisplayName == "Transition.Validate");
         span.Status.ShouldBe(ActivityStatusCode.Error);
         span.StatusDescription.ShouldBe(validationError.Message);
     }

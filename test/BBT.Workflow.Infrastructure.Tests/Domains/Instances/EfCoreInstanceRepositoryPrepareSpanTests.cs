@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Domain.EntityFrameworkCore;
 using BBT.Aether.MultiSchema;
+using BBT.Workflow.Application.Tests.Telemetry;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Data;
 using BBT.Workflow.DataSink;
@@ -106,18 +107,11 @@ public sealed class EfCoreInstanceRepositoryPrepareSpanTests : IAsyncLifetime
         await using var ctx = CreateContext();
         var repository = CreateRepository(ctx);
 
-        var collected = new List<Activity>();
-        using var listener = new ActivityListener
-        {
-            // Hardcoded source-name literal (matching DomainDiscoveryResolverSpanTests): the first
-            // access to PipelineStepActivityHelper.ActivitySource in a test process runs its static
-            // constructor, which notifies already-registered listeners synchronously — referencing
-            // the field here would observe it before assignment completes.
-            ShouldListenTo = s => s.Name == "BBT.Workflow.Pipeline",
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
-        };
-        ActivitySource.AddActivityListener(listener);
+        // Hardcoded source-name literal (matching DomainDiscoveryResolverSpanTests): the first
+        // access to PipelineStepActivityHelper.ActivitySource in a test process runs its static
+        // constructor, which notifies already-registered listeners synchronously — referencing
+        // the field here would observe it before assignment completes.
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
 
         // Simulates the real caller: TransitionContextFactory.LoadInstanceAsync wraps
         // instanceRepository.GetActiveAsync (which chains into FindByIdentifierAsync) in an
@@ -139,8 +133,8 @@ public sealed class EfCoreInstanceRepositoryPrepareSpanTests : IAsyncLifetime
         found.ShouldNotBeNull();
         found!.Id.ShouldBe(seeded.Id);
 
-        var prepare = collected.Single(a => a.DisplayName == "Instance.Query.Prepare");
-        var execute = collected.Single(a => a.DisplayName == "Instance.Query.Execute");
+        var prepare = spans.Spans.Single(a => a.DisplayName == "Instance.Query.Prepare");
+        var execute = spans.Spans.Single(a => a.DisplayName == "Instance.Query.Execute");
         prepare.ParentId.ShouldBe(ambient.Id);
         execute.ParentId.ShouldBe(ambient.Id);
         prepare.GetTagItem(TelemetryConstants.TagNames.SpanCategory)
@@ -156,19 +150,12 @@ public sealed class EfCoreInstanceRepositoryPrepareSpanTests : IAsyncLifetime
         await using var ctx = CreateContext();
         var repository = CreateRepository(ctx);
 
-        var collected = new List<Activity>();
-        using var listener = new ActivityListener
-        {
-            ShouldListenTo = s => s.Name == "BBT.Workflow.Pipeline",
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
-        };
-        ActivitySource.AddActivityListener(listener);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
 
         await repository.FindByIdentifierAsReadOnlyAsync(Guid.NewGuid().ToString(), CancellationToken.None);
 
-        collected.Count(a => a.DisplayName == "Instance.Query.Prepare").ShouldBe(1);
-        collected.Count(a => a.DisplayName == "Instance.Query.Execute").ShouldBe(1);
+        spans.Spans.Count(a => a.DisplayName == "Instance.Query.Prepare").ShouldBe(1);
+        spans.Spans.Count(a => a.DisplayName == "Instance.Query.Execute").ShouldBe(1);
     }
 
     private sealed class FixedDbContextProvider(WorkflowDbContext context)

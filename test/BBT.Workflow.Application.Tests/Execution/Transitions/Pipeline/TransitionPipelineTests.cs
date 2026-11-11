@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using BBT.Aether.Clock;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
+using BBT.Workflow.Application.Tests.Telemetry;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
@@ -650,14 +651,7 @@ public class TransitionPipelineTests
             }
         }
 
-        var collected = new List<Activity>();
-        using var listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == "BBT.Workflow.Pipeline",
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
-        };
-        ActivitySource.AddActivityListener(listener);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
 
         // Act
         var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
@@ -666,8 +660,8 @@ public class TransitionPipelineTests
         result.IsSuccess.ShouldBeTrue();
         contextCallCount.ShouldBe(2);
 
-        collected.Count(a => a.DisplayName == "Transition.auto-transition").ShouldBe(1);
-        collected.Any(a => a.DisplayName == "Transition.test-transition").ShouldBeFalse();
+        spans.Spans.Count(a => a.DisplayName == "Transition.auto-transition").ShouldBe(1);
+        spans.Spans.Any(a => a.DisplayName == "Transition.test-transition").ShouldBeFalse();
     }
 
     [Fact]

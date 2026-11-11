@@ -34,18 +34,16 @@ public sealed class ActivationActivityTests : IDisposable
         Activity.Current = null;
     }
 
-    private List<Activity> Listen(params string[] sourceNames)
+    // Sampling only: these tests read the activity Emit returns, never what the process-wide listener saw.
+    private void Listen(params string[] sourceNames)
     {
-        var collected = new List<Activity>();
         var listener = new ActivityListener
         {
             ShouldListenTo = source => Array.IndexOf(sourceNames, source.Name) >= 0,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded
         };
         ActivitySource.AddActivityListener(listener);
         _listeners.Add(listener);
-        return collected;
     }
 
     private Activity? Emit(

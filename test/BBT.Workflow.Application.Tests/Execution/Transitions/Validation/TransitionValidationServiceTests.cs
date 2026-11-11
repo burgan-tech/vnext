@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
+using BBT.Workflow.Application.Tests.Telemetry;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Policies;
@@ -175,16 +176,8 @@ public class TransitionValidationServiceTests
         });
         var schemaDefinition = CreateMockSchemaDefinition("test-schema");
         SchemaValidationOptions? capturedOptions = null;
-        var collected = new List<Activity>();
-        using var listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == "BBT.Workflow.Pipeline",
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
-                ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
-        };
-        ActivitySource.AddActivityListener(listener);
-        using var root = new Activity("schema-validation-test").Start();
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
+        var root = spans.Root;
 
         _mockComponentCacheStore
             .Setup(x => x.GetSchemaAsync(schemaRef.Domain, schemaRef.Key, schemaRef.Version, It.IsAny<CancellationToken>()))
@@ -207,7 +200,7 @@ public class TransitionValidationServiceTests
         capturedOptions!.Culture.ShouldBe("tr-TR");
         capturedOptions.IncludeVocabularyDetails.ShouldBeTrue();
         capturedOptions.CustomValidationEnabled.ShouldBeTrue();
-        var schemaSpan = collected.Single(a =>
+        var schemaSpan = spans.Spans.Single(a =>
             a.TraceId == root.TraceId && a.DisplayName == "Schema.Validate");
         schemaSpan.ParentId.ShouldNotBeNull();
         schemaSpan.GetTagItem(TelemetryConstants.TagNames.SpanCategory)

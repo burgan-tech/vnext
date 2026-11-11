@@ -26,31 +26,15 @@ namespace BBT.Workflow.Application.Tests.Telemetry;
 [Collection(TracingDetailLevelCollection.Name)]
 public sealed class UnattributedRegionSpanTests : IDisposable
 {
-    private readonly List<ActivityListener> _listeners = new();
-
     public void Dispose()
     {
-        foreach (var l in _listeners) l.Dispose();
         Activity.Current = null;
-    }
-
-    private void Listen(string sourceName, List<Activity> collected)
-    {
-        var listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == sourceName,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
-        };
-        ActivitySource.AddActivityListener(listener);
-        _listeners.Add(listener);
     }
 
     [Fact]
     public async Task ContinuationDispatch_IsSpanned_AndNamesItsMode()
     {
-        var collected = new List<Activity>();
-        Listen("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
 
         var strategy = Substitute.For<IContinuationStrategy>();
         strategy.Mode.Returns(ContinuationMode.Enqueue);
@@ -60,7 +44,7 @@ public sealed class UnattributedRegionSpanTests : IDisposable
 
         await sut.DispatchAsync(ContinuationMode.Enqueue, null!, CancellationToken.None);
 
-        var span = Assert.Single(collected, a => a.DisplayName.StartsWith("Transition.Continuation"));
+        var span = Assert.Single(spans.Spans, a => a.DisplayName.StartsWith("Transition.Continuation"));
         span.DisplayName.ShouldBe("Transition.Continuation/Enqueue");
         span.GetTagItem(TelemetryConstants.TagNames.ContinuationMode).ShouldBe("Enqueue");
         // Enqueue ends the in-process loop, so the tag records that no further hop followed.
@@ -70,8 +54,7 @@ public sealed class UnattributedRegionSpanTests : IDisposable
     [Fact]
     public async Task ContinuationDispatch_Failure_MarksTheSpanFailed()
     {
-        var collected = new List<Activity>();
-        Listen("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
 
         var strategy = Substitute.For<IContinuationStrategy>();
         strategy.Mode.Returns(ContinuationMode.Inline);
@@ -81,7 +64,7 @@ public sealed class UnattributedRegionSpanTests : IDisposable
 
         await sut.DispatchAsync(ContinuationMode.Inline, null!, CancellationToken.None);
 
-        var span = Assert.Single(collected, a => a.DisplayName.StartsWith("Transition.Continuation"));
+        var span = Assert.Single(spans.Spans, a => a.DisplayName.StartsWith("Transition.Continuation"));
         span.Status.ShouldBe(ActivityStatusCode.Error);
     }
 
@@ -90,15 +73,14 @@ public sealed class UnattributedRegionSpanTests : IDisposable
     {
         // The token read precedes every component resolution and is a real round trip; the
         // caller's Cache.Get span sits after it, so before this it was attributed to nothing.
-        var collected = new List<Activity>();
-        Listen("BBT.Workflow.Cache", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Cache");
 
         using (CacheActivityHelper.StartActivity(
                    CacheActivityHelper.OperationGenerationGet, "gen:sys-flows:core:login-flow", "sys-flows"))
         {
         }
 
-        var span = Assert.Single(collected);
+        var span = Assert.Single(spans.Spans);
         span.DisplayName.ShouldBe("Cache.GenerationGet/gen:sys-flows:core:login-flow");
         span.GetTagItem("cache.component_type").ShouldBe("sys-flows");
     }
