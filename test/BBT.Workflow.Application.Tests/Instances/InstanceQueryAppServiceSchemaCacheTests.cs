@@ -191,6 +191,29 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
     }
 
     [Fact]
+    public async Task GetSchemaAsync_WhenHeadersCarryIfNoneMatchAsBoundInProduction_Returns304()
+    {
+        var instanceId = Guid.NewGuid();
+        EnableCache();
+        SetupFingerprint(instanceId);
+
+        // Production copies the request headers wholesale into Headers, If-None-Match included.
+        var input = CreateInput(instanceId.ToString());
+        input.IfNoneMatch = "\"etag-current\"";
+        input.Headers = new Dictionary<string, string?>
+        {
+            ["if-none-match"] = "\"etag-current\"",
+            ["cache-control"] = "no-cache"
+        };
+
+        var result = await _service.GetSchemaAsync(input, TestTransition, CancellationToken.None);
+
+        result.IsNotModified.ShouldBeTrue();
+        await _instanceRepository.DidNotReceive()
+            .FindByIdentifierAsReadOnlyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task GetSchemaAsync_WhenCachedEtagMatchesCurrent_ServesFromCacheWithoutAggregateLoad()
     {
         var instanceId = Guid.NewGuid();
