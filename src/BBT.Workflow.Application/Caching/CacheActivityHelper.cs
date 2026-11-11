@@ -61,6 +61,10 @@ public static class CacheActivityHelper
     private const string TagCacheStore = "cache.store";
     private const string TagCacheItemCount = "cache.item_count";
     private const string TagComponentType = "cache.component_type";
+    private const string TagCandidateCount = "cache.candidate_count";
+    private const string TagCandidateVersions = "cache.candidate_versions";
+    private const string TagDroppedCount = "cache.dropped_count";
+    private const string TagResolvedVersion = "cache.resolved_version";
 
     /// <summary>
     /// Starts a new activity as a child of the current activity for a cache operation.
@@ -168,6 +172,30 @@ public static class CacheActivityHelper
     public static void SetCoalesced(Activity? activity, bool coalesced)
     {
         activity?.SetTag(TagCacheCoalesced, coalesced);
+    }
+
+    /// <summary>
+    /// Records what a backend version resolution was computed from: how many versions the backend
+    /// returned (bounded list included), how many stored versions it had to leave out, and the winner.
+    /// </summary>
+    /// <remarks>
+    /// The candidate list is what explains a resolution to an older build after the fact: the resolver
+    /// picks the highest match among what it sees, so a stale winner means a newer version was missing
+    /// from the list (issue #1192).
+    /// </remarks>
+    public static void SetResolutionCandidates(
+        Activity? activity,
+        int candidateCount,
+        string candidateVersions,
+        int droppedCount,
+        string? resolvedVersion)
+    {
+        if (activity is null) return;
+        activity.SetTag(TagCandidateCount, candidateCount);
+        activity.SetTag(TagCandidateVersions, candidateVersions);
+        activity.SetTag(TagDroppedCount, droppedCount);
+        if (!string.IsNullOrEmpty(resolvedVersion))
+            activity.SetTag(TagResolvedVersion, resolvedVersion);
     }
 
     /// <summary>

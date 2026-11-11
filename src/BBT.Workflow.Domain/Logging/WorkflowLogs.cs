@@ -5665,19 +5665,29 @@ public static partial class WorkflowLogs
         string token);
 
     /// <summary>
-    /// Logs when a version request was resolved from the backend because no cached resolution existed.
+    /// Logs when a version request was resolved from the backend because no cached resolution existed,
+    /// with the candidate versions the answer was chosen from.
     /// </summary>
+    /// <remarks>
+    /// Information, not Debug: this line fires once per component, spelling and generation (a cache
+    /// miss), and it is the only record of WHICH versions the resolver could see. Without the candidate
+    /// list a resolution to an older build cannot be told apart from a correct one after the fact
+    /// (issue #1192). <paramref name="candidateVersions"/> is bounded by the caller.
+    /// </remarks>
     [LoggerMessage(
         EventId = 70010,
-        Level = LogLevel.Debug,
-        Message = "Component cache resolved {ComponentType} {Domain}/{Key}@{Requested} to {Resolved}")]
+        Level = LogLevel.Information,
+        Message = "Component cache resolved {ComponentType} {Domain}/{Key}@{Requested} to {Resolved} from {CandidateCount} candidate(s) [{CandidateVersions}], {DroppedCount} dropped")]
     public static partial void ComponentCacheResolvedFromBackend(
         this ILogger logger,
         string componentType,
         string domain,
         string key,
         string requested,
-        string resolved);
+        string resolved,
+        int candidateCount,
+        string candidateVersions,
+        int droppedCount);
 
     /// <summary>
     /// Logs when a version request matched no published version and a short-lived negative entry
@@ -5737,6 +5747,28 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Exception exception,
         string schema);
+
+    /// <summary>
+    /// Logs when a backend load of a component's versions left out stored versions it could not load,
+    /// so a version resolution was computed from a partial candidate list.
+    /// </summary>
+    /// <remarks>
+    /// The resolution is still answered, but it may name an older build than the one that should win,
+    /// so it is cached only for the short negative TTL instead of the full resolution TTL (issue #1192).
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 70022,
+        Level = LogLevel.Warning,
+        Message = "Component cache resolved {ComponentType} {Domain}/{Key}@{Requested} from a partial candidate list: {DroppedCount} stored version(s) could not be loaded [{DroppedVersions}]; the answer is cached for {TtlSeconds}s only")]
+    public static partial void ComponentCacheCandidatesDropped(
+        this ILogger logger,
+        string componentType,
+        string domain,
+        string key,
+        string requested,
+        int droppedCount,
+        string droppedVersions,
+        int ttlSeconds);
 
     #endregion
 

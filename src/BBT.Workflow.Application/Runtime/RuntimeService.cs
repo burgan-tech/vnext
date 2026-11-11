@@ -78,13 +78,21 @@ public sealed class RuntimeService(
     public async Task<IEnumerable<T?>> GetAsync<T>(string key, CancellationToken cancellationToken = default)
         where T : class, IDomainEntity, IReferenceSetter
     {
+        var candidates = await GetCandidatesAsync<T>(key, cancellationToken);
+        return candidates.Entities;
+    }
+
+    public async Task<ComponentCandidateSet<T>> GetCandidatesAsync<T>(string key, CancellationToken cancellationToken = default)
+        where T : class, IDomainEntity, IReferenceSetter
+    {
         var schemaName = runtimeOptions.Value.GetSchemaNameByType(typeof(T));
         var schemaInfo = runtimeOptions.Value.Schemas[schemaName];
 
         using (currentSchema.Change(schemaInfo.Schema))
         {
             var items = await instanceRepository.GetActiveDataListByKeyAsync(key, cancellationToken);
-            var result = new List<T?>();
+            var result = new List<T>();
+            var dropped = new List<string>();
 
             foreach (var item in items)
             {
@@ -93,29 +101,36 @@ public sealed class RuntimeService(
                     var flow = item.InstanceData.Data.JsonElement
                         .Deserialize<T>(JsonSerializerConstants.JsonOptions);
 
-                    if (flow != null)
+                    if (flow is null)
                     {
-                        flow.SetReference(new Reference(
-                            item.Instance.Key ?? string.Empty,
-                            runtimeInfoProvider.Domain,
-                            schemaInfo.Name,
-                            item.InstanceData.Version
-                        ));
+                        // A stored "null" body is a published row the resolver cannot use; record it
+                        // like a failed one so the gap is visible to the caller.
+                        dropped.Add(item.InstanceData.Version);
+                        continue;
                     }
+
+                    flow.SetReference(new Reference(
+                        item.Instance.Key ?? string.Empty,
+                        runtimeInfoProvider.Domain,
+                        schemaInfo.Name,
+                        item.InstanceData.Version
+                    ));
 
                     result.Add(flow);
                 }
                 catch (JsonException ex)
                 {
                     logger.InstanceDeserializationFailed(ex, schemaName, item.Instance.Key, item.InstanceData.Version);
+                    dropped.Add(item.InstanceData.Version);
                 }
                 catch (Exception ex)
                 {
                     logger.InstanceDeserializationFailed(ex, schemaName, item.Instance.Key, item.InstanceData.Version);
+                    dropped.Add(item.InstanceData.Version);
                 }
             }
 
-            return result.Where(f => f != null);
+            return new ComponentCandidateSet<T>(result, dropped);
         }
     }
 

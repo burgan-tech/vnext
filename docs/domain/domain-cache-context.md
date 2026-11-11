@@ -124,13 +124,43 @@ Version resolution:
 - Infrastructure failures from runtime backend are allowed to bubble up.
 - Cache writes return success after logging write errors, so callers should not treat cache
   population as the source of truth.
+- A backend load that leaves out a stored version (its body fails to deserialize) still answers, but
+  from a **partial** candidate list: it logs `ComponentCacheCandidatesDropped` (EventId 70022, Warning,
+  with the dropped versions) and caches that resolution for `NegativeTtlSeconds` only, never for
+  `ResolutionTtlSeconds`. `RuntimeCacheBackend` reports the gap through `ICacheCandidateSource<T>`;
+  a backend without it is treated as complete.
+
+### Resolution after the warm entries expire (issue #1192)
+
+A publish warms the common spellings (`latest`, artifact, `M.m`, `M`) with the published entity added
+to the candidates. Once the generation token (`GenerationTtlSeconds`) or the resolution entry
+(`ResolutionTtlSeconds`) expires, the next request resolves on the **cold path**: the versions
+`RuntimeService.GetCandidatesAsync` returns (active instances of the key, every data row), then
+`DefaultVersionResolver` / `FindBestMatch`. Both pick the highest match among what they are given, so a
+cold answer that names an older build than the stored one always means the newer build was **missing
+from the backend candidate list** at that moment. To diagnose one:
+
+- Read EventId 70010 `ComponentCacheResolvedFromBackend` (Information): requested spelling, winner,
+  candidate count, the candidate versions (highest first, at most 20) and the dropped count. The same
+  values are on the cache span as `cache.candidate_count`, `cache.candidate_versions`,
+  `cache.dropped_count` and `cache.resolved_version`.
+- EventId 70022 (dropped versions) and 40076 `InstanceDeserializationFailed` name a row that exists but
+  could not be loaded.
+- For `latest` / empty on a flow, check the default-version pointer first: a pointer is never moved by
+  a publish, so `latest` stays on it ([Flow Default Version](../runtime/flow-default-version.md)). An
+  artifact request (`"1.0.0"`) is explicit and is never capped by the pointer.
+- Forcing re-resolution: `POST /api/v1/utilities/invalidate` bumps the generation, but it re-casts and
+  therefore re-warms with the entity added again. It hides a candidate-list gap for another TTL rather
+  than proving it gone; use it as a workaround only.
 
 ## Observability
 
 `CacheActivityHelper` creates `BBT.Workflow.Cache` activities for get, set, remove,
 warmup, and generation operations. Activities include cache key, component type,
 cache store, hit/miss, `cache.l1.hit` (whether the in-process layer answered),
-generation token, coalescing, item count, and error status. The metrics-aware store records
+generation token, coalescing, item count, and error status. A backend resolution also carries
+`cache.candidate_count`, `cache.candidate_versions`, `cache.dropped_count` and
+`cache.resolved_version`. The metrics-aware store records
 cache hit/miss counts and approximate cache size/entry gauges by component type.
 
 ## Change Safety
