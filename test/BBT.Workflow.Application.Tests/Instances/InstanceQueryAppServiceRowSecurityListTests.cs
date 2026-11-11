@@ -420,6 +420,7 @@ public sealed class InstanceQueryAppServiceRowSecurityListTests : IDisposable
             humanTaskFunctionCache: Substitute.For<Caching.IHumanTaskFunctionCache>(),
             currentUser: currentUser,
             descentLimiter: new HumanTaskDescentLimiter(Options.Create(new HumanTaskFunctionOptions())),
+            transitionSchemaResolver: NSubstitute.Substitute.For<BBT.Workflow.Execution.Validation.ITransitionSchemaResolver>(),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>(),
             rowSecurityService: new RowSecurityService(_resolver, currentUser, Options.Create(new RowSecurityOptions())));
     }

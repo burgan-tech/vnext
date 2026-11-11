@@ -68,6 +68,7 @@ public sealed class InstanceQueryAppService(
     Caching.IInstanceSchemaFunctionCache instanceSchemaFunctionCache,
     Caching.IHumanTaskFunctionCache humanTaskFunctionCache,
     HumanTask.HumanTaskDescentLimiter descentLimiter,
+    Execution.Validation.ITransitionSchemaResolver transitionSchemaResolver,
     ILogger<InstanceQueryAppService> logger,
     IRowSecurityService? rowSecurityService = null)
     : ApplicationService(serviceProvider), IInstanceQueryAppService
@@ -2273,7 +2274,7 @@ public sealed class InstanceQueryAppService(
                         transition = currentWorkflow.ResolveTransition(key, currentStateValue);
                         hasView = transition?.View is { Views.Count: > 0 };
                         loadData = false;
-                        hasSchema = transition?.Schema != null;
+                        hasSchema = transition?.HasSchema ?? false;
                         annotations = transition?.Annotations;
                     }
 
@@ -2321,7 +2322,7 @@ public sealed class InstanceQueryAppService(
             {
                 var transition = currentWorkflow.ResolveTransition(transitionKey, currentStateValue);
                 var hasView = transition?.View is { Views.Count: > 0 };
-                var hasSchema = transition?.Schema != null;
+                var hasSchema = transition?.HasSchema ?? false;
                 return WithDefinitionDescriptors(new TransitionItem
                 {
                     Name = transitionKey,
@@ -3357,7 +3358,24 @@ public sealed class InstanceQueryAppService(
 
         var transition = currentWorkflow.ResolveTransition(transitionKey, currentState);
 
-        if (transition?.Schema == null)
+        if (transition == null || !transition.HasSchema)
+        {
+            return Result<GetSchemaOutput>.Fail(
+                Error.NotFound("notfound",
+                    $"Schema not found for transition {transitionKey} in state {instance.CurrentState}"));
+        }
+
+        var resolved = await transitionSchemaResolver.ResolveAsync(
+            currentWorkflow, instance, transition, input.Headers, cancellationToken);
+        if (!resolved.IsSuccess)
+        {
+            return Result<GetSchemaOutput>.Fail(
+                Error.NotFound("notfound",
+                    $"No schema entry matched for transition {transitionKey} in state {instance.CurrentState}"));
+        }
+
+        var schemaReference = resolved.Value;
+        if (schemaReference == null)
         {
             return Result<GetSchemaOutput>.Fail(
                 Error.NotFound("notfound",
@@ -3366,9 +3384,9 @@ public sealed class InstanceQueryAppService(
 
         // Fetch and return the schema using Railway pattern
         return await componentCacheStore.GetSchemaAsync(
-                transition.Schema.Domain,
-                transition.Schema.Key,
-                transition.Schema.Version,
+                schemaReference.Domain,
+                schemaReference.Key,
+                schemaReference.Version,
                 cancellationToken)
             .MapAsync(schema => new GetSchemaOutput
             {
