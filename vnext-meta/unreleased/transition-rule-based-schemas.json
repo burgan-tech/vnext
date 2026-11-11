@@ -1,0 +1,18 @@
+{
+  "releaseNote": {
+    "summary": "Transitions accept a rule-based schemas list next to schema; the first matching entry validates the request and a declared list with no match is rejected with 400 Transition:100025.",
+    "breaking": false,
+    "docs": []
+  },
+  "features": {
+    "engine": {
+      "transitionRuleBasedSchemas": {
+        "since": "next",
+        "status": "stable",
+        "description": "Every transition kind (state, shared, start, cancel, updateData, exit) may declare schemas, a rule-based list of schema entries next to the unchanged schema, mirroring view/views. Entries are walked in declaration order, the first matching rule wins, a rule-less entry is the fallback and must be last; schemas wins over schema; automatic and scheduled transitions may not declare schemas. The rule context is workflow, instance, runtime, transition, body (the instance's latest data, or {} when none) and the request headers; there are no query parameters. WRITE PATH: no schema declared accepts the request; a declared schemas list with no matching entry rejects it with 400 Transition:100025 and leaves the instance in its state. READ PATH: the instance schema function serves the matched entry; no match is 404. hasSchema in transition lists is declared-only (schema or a non-empty schemas), like hasView. The schema-function cache key and ETag also hash the non-volatile request headers (RequestHeaderHash), so header-driven rules never receive another header value's cached entry or a false 304. PURELY ADDITIVE: a transition declaring only schema behaves as before. Requires a vnext-schema release with transitions[].schemas.",
+        "schemaPath": "transitions[].schemas, sharedTransitions[].schemas, startTransition.schemas, cancel.schemas, updateData.schemas, exit.schemas",
+        "documentation": "docs/runtime/function-contract-resolution.md"
+      }
+    }
+  }
+}

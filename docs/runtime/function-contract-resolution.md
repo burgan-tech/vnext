@@ -99,6 +99,26 @@ unchanged.
 
 Views and `outputSchema` behave as before on no match. `outputSchema` is never enforced at runtime — it is declarative, surfaced for clients and tooling.
 
+## Transitions
+
+A transition (state-level, shared, start, cancel, updateData, exit) declares its payload schema the same
+way: `schema` (one reference, unchanged) or `schemas` (rule-based entries, like `views`). Entries are
+walked in declaration order, the first matching `rule` wins, a rule-less entry is the fallback and must
+be last; `schemas` wins over `schema`; automatic and scheduled transitions may not declare `schemas`.
+
+- **Rule context:** workflow, instance, runtime, transition, `body` (the instance's latest data, `{}`
+  when none) and the request headers. There are no query parameters.
+- **Write path:** nothing declared, accept. Declared but no entry matches, `400` `Transition:100025`
+  (the instance keeps its state and is not faulted).
+- **Read path:** the schema function serves the matched entry; no match is `404`
+  ("No schema entry matched for transition {key} in state {state}"). `hasSchema` in transition lists is
+  declared-only (`schema` or a non-empty `schemas`), like `hasView`.
+- **Cache:** the schema-function cache key and ETag also hash the non-volatile request headers
+  (`RequestHeaderHash`, shared with the HumanTask function cache), so a header-driven rule never gets
+  another header value's entry or a false `304`.
+- **Functions differ in one respect:** a rule-based function `inputSchema` with no match rejects with
+  `400` `Function:800006` (above), where a transition reports `Transition:100025`.
+
 ## Access control
 
 Every surface above runs `IFunctionAccessPolicy` — the shared scope and role gate — before it

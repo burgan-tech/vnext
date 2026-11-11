@@ -76,8 +76,9 @@ declares neither accepts every routed verb and any body, which is the pre-existi
 | `outputSchema` | Never enforced; declarative contract for clients only. |
 
 All four contract slots may be authored as a single reference **or** as rule-based entries evaluated
-in declaration order. When no entry matches, no contract applies: the body is not validated, `/info`
-reports `hasView`/`hasSchema` false, and the content routes return `404` (`Function:800004`).
+in declaration order. When no entry matches, no contract applies to a view: `/info` reports
+`hasView`/`hasSchema` false and the content routes return `404` (`Function:800004`). A rule-based
+`inputSchema` with no match rejects a request that carries a body with `400` (`Function:800006`).
 An unrecognized `target` is `400` (`Function:800005`). See
 [Function Contract Resolution](../runtime/function-contract-resolution.md).
 
