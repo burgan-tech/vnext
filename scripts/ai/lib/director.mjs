@@ -27,7 +27,7 @@ const LEVELS = new Set(['patch', 'minor', 'major']);
 const DECISIONS = new Set(['plan', 'resolved', 'needs-info']);
 const CONFIDENCE = new Set(['low', 'medium', 'high']);
 const MAX_TEXT = 1500;
-const MAX_ITEM = 400;
+const MAX_ITEM = 1200;
 const MAX_LIST = 12;
 
 export const isPlanComment = (c) => BOT_LOGINS.includes(c?.user?.login) && String(c?.body ?? '').includes(PLAN_MARKER);

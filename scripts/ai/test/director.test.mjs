@@ -153,3 +153,9 @@ test('tools resolve from fixed directories, never from PATH', async () => {
   assert.match(toolPath('git'), /^\/(usr\/(local\/)?bin|bin|opt\/homebrew\/bin)\/git$/);
   assert.throws(() => toolPath('definitely-not-a-tool-xyz'), /not found/);
 });
+
+test('a long plan step survives sanitizing whole', () => {
+  const step = `Reproduce in a unit test: ${'x'.repeat(900)}`;
+  const { result } = validatePlan(raw({ plan: { ...raw().plan, strategy: [step] } }));
+  assert.equal(result.plan.strategy[0], step);
+});

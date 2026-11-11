@@ -18,7 +18,7 @@ const CONFIDENCE = new Set(['low', 'medium', 'high']);
 const RESOLUTIONS = new Set(['accepted', 'countered', 'open']);
 const CORE_ROLES = Object.freeze(['Solution Architect', 'Pragmatic Engineer', 'Test & Evidence']);
 const MAX_TEXT = 1500;
-const MAX_ITEM = 500;
+const MAX_ITEM = 1200;
 const MAX_LIST = 12;
 const MAX_CELL = 300;
 

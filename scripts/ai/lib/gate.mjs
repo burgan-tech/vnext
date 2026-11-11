@@ -61,11 +61,15 @@ export function evaluateEvidence({ checks, statuses, sonar, contract, isAiPr }, 
   const rows = [];
   const sv = sonarVerdict(sonar, config.sonar?.coverageMetrics ?? []);
 
+  // A check that has not reported is only missing once nothing else is running for this SHA: until then
+  // it is most likely produced by a run that is still queued (Sonar reports after `Build and analyze`).
+  const ciRunning = [...runs.values()].some((r) => r.status !== 'completed') || (statuses ?? []).some((s) => s.state === 'pending');
+  const notReported = ciRunning ? 'not reported yet — other CI for this SHA is still running' : 'not reported for this SHA — push a commit or re-run CI to produce it';
   for (const spec of config.checks) {
     const run = runs.get(spec.name);
     if (!run || run.status !== 'completed') {
       const state = run ? run.status : 'not reported';
-      if (spec.required) pending.push(`${spec.name}: ${run ? state : 'not reported for this SHA — push a commit or re-run CI to produce it'}`);
+      if (spec.required) pending.push(`${spec.name}: ${run ? state : notReported}`);
       rows.push({ name: spec.name, kind: spec.kind, result: state });
       continue;
     }
