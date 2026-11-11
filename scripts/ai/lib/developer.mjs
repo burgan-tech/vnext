@@ -110,13 +110,64 @@ const ADDED_FORBIDDEN = Object.freeze([
   [/<PackageReference\b/i, 'adds a package reference'],
   [/<TreatWarningsAsErrors>\s*false/i, 'turns warnings-as-errors off'],
 ]);
+/** In MSBuild files, anything that runs code or changes analysis at build time. */
+const BUILD_FILE = /\.(csproj|props|targets|proj)$/i;
+const BUILD_FORBIDDEN = Object.freeze([
+  [/<\s*(Target|Exec|Import|UsingTask|ProjectReference)\b/i, 'adds a build target, task, import or project reference'],
+  [/<\s*(RunAnalyzers|RunAnalyzersDuringBuild|EnforceCodeStyleInBuild|AnalysisMode|AnalysisLevel|CodeAnalysisRuleSet|WarningsNotAsErrors|WarningLevel|Nullable|GenerateDocumentationFile)\b/i, 'changes analyzer or warning settings'],
+]);
 const TEST_ATTR = /\[\s*(Fact|Theory)\b/;
 const MAX_FILES = 80;
 const MAX_LINES = 4000;
 
 /**
- * The diff policy. `files` = [{ path, status }] (`git diff --name-status`, status A/M/D/R…),
- * `patch` = the unified diff. Returns the violations; any one stops the push.
+ * Parses a `git diff` by structure: a file starts at `diff --git`, its path comes from that line,
+ * and only lines inside a hunk (after `@@`, within the hunk's line counts) are content. A content
+ * line that happens to start with `+++` or `---` is content, never a header.
+ * Returns [{ path, binary, added: string[], removed: string[] }].
+ */
+export function parsePatch(patch) {
+  const out = [];
+  let cur = null;
+  let oldLeft = 0;
+  let newLeft = 0;
+  for (const line of String(patch ?? '').split('\n')) {
+    if (oldLeft > 0 || newLeft > 0) {
+      if (line.startsWith('+')) {
+        cur.added.push(line.slice(1));
+        newLeft--;
+      } else if (line.startsWith('-')) {
+        cur.removed.push(line.slice(1));
+        oldLeft--;
+      } else if (line.startsWith('\\')) {
+        // "\ No newline at end of file"
+      } else {
+        oldLeft--;
+        newLeft--;
+      }
+      continue;
+    }
+    const header = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
+    if (header) {
+      cur = { path: header[2], from: header[1], binary: false, added: [], removed: [] };
+      out.push(cur);
+      continue;
+    }
+    if (!cur) continue;
+    const hunk = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(line);
+    if (hunk) {
+      oldLeft = hunk[1] === undefined ? 1 : Number(hunk[1]);
+      newLeft = hunk[2] === undefined ? 1 : Number(hunk[2]);
+    } else if (line.startsWith('GIT binary patch') || /^Binary files .* differ$/.test(line)) {
+      cur.binary = true;
+    }
+  }
+  return out;
+}
+
+/**
+ * The diff policy. `files` = [{ path, status }] (`git diff --name-status`, status A/M/D/…, taken
+ * from git in the write job), `patch` = the unified diff. Returns the violations; any one stops the push.
  */
 export function checkDiff(files, patch) {
   const v = [];
@@ -127,28 +178,23 @@ export function checkDiff(files, patch) {
     const rule = FORBIDDEN_PATHS.find((re) => re.test(f.path));
     if (rule) v.push(`${f.path}: the pipeline may not change this path`);
     if (/^D/.test(f.status) && /^test\//.test(f.path)) v.push(`${f.path}: deletes a test file`);
-    if (/^R/.test(f.status) && /^test\//.test(f.path) && !/^test\//.test(f.to ?? f.path)) v.push(`${f.path}: moves a test file out of test/`);
   }
-  let file = null;
+  const parsed = parsePatch(patch);
+  const listed = new Set(files.map((f) => f.path));
   let changed = 0;
   let testsAdded = 0;
   let testsRemoved = 0;
-  for (const line of String(patch ?? '').split('\n')) {
-    if (line.startsWith('+++ ')) {
-      file = line.slice(4).replace(/^b\//, '');
-      continue;
-    }
-    if (line.startsWith('--- ')) continue;
-    if (line.startsWith('GIT binary patch') || /^Binary files .* differ$/.test(line)) v.push(`${file}: binary change`);
-    const added = line.startsWith('+');
-    const removed = line.startsWith('-');
-    if (!added && !removed) continue;
-    changed++;
-    if (added) {
-      for (const [re, what] of ADDED_FORBIDDEN) if (re.test(line)) v.push(`${file}: ${what}`);
-      if (/^test\//.test(file ?? '') && /\bSkip\s*=/.test(line)) v.push(`${file}: skips a test`);
+  for (const f of parsed) {
+    if (!listed.has(f.path)) v.push(`${f.path}: in the patch but not in the file list`);
+    if (f.binary) v.push(`${f.path}: binary change`);
+    changed += f.added.length + f.removed.length;
+    for (const line of f.added) {
+      for (const [re, what] of ADDED_FORBIDDEN) if (re.test(line)) v.push(`${f.path}: ${what}`);
+      if (BUILD_FILE.test(f.path)) for (const [re, what] of BUILD_FORBIDDEN) if (re.test(line)) v.push(`${f.path}: ${what}`);
+      if (/^test\//.test(f.path) && /\bSkip\s*=/.test(line)) v.push(`${f.path}: skips a test`);
       if (TEST_ATTR.test(line)) testsAdded++;
-    } else if (TEST_ATTR.test(line)) testsRemoved++;
+    }
+    for (const line of f.removed) if (TEST_ATTR.test(line)) testsRemoved++;
   }
   if (changed > MAX_LINES) v.push(`changes ${changed} lines (limit ${MAX_LINES})`);
   if (testsRemoved > testsAdded) v.push(`removes ${testsRemoved - testsAdded} more test(s) than it adds`);
@@ -167,15 +213,11 @@ const SECRET_SHAPES = Object.freeze([
  */
 export function findSecrets(patch, secrets = []) {
   const hits = new Set();
-  let file = null;
-  for (const line of String(patch ?? '').split('\n')) {
-    if (line.startsWith('+++ ')) {
-      file = line.slice(4).replace(/^b\//, '');
-      continue;
+  for (const f of parsePatch(patch)) {
+    for (const line of f.added) {
+      if (secrets.some((x) => x && x.length >= 8 && line.includes(x))) hits.add(`${f.path}: contains a secret this job holds`);
+      if (SECRET_SHAPES.some((re) => re.test(line))) hits.add(`${f.path}: contains a token-shaped string`);
     }
-    if (!line.startsWith('+')) continue;
-    if (secrets.some((x) => x && x.length >= 8 && line.includes(x))) hits.add(`${file}: contains a secret this job holds`);
-    if (SECRET_SHAPES.some((re) => re.test(line))) hits.add(`${file}: contains a token-shaped string`);
   }
   return [...hits];
 }

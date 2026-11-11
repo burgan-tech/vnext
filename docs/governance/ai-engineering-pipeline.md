@@ -476,8 +476,11 @@ change of a contract product raises impact (§3).
   guidance, `Directory.Build.props` / `Directory.Packages.props`, `global.json`, `nuget.config`,
   `.editorconfig`, analyzer / Sonar / coverage settings or `etc/`; deletes, moves or skips a test or
   removes more tests than it adds; adds `#pragma warning disable`, `[SuppressMessage]`, `<NoWarn>` or
-  a package reference; is binary or over 80 files / 4000 lines; or carries a secret the job holds or a
-  token-shaped string.
+  a package reference; adds a `<Target>`, `<Exec>`, `<Import>`, `<UsingTask>` or `<ProjectReference>`
+  or changes analyzer / warning settings in an MSBuild file; is binary or over 80 files / 4000 lines;
+  or carries a secret the job holds or a token-shaped string. The policy runs on what `git apply`
+  changed in the write job (file list and diff from git, the patch parsed by hunk structure), and a
+  mismatch with the agent job's own file list also stops the push.
 - Nothing merges, deploys, changes thresholds or edits branch protection.
 
 ## 14. Day-to-day use

@@ -8,7 +8,7 @@ import { PRODUCTS as TEMPLATE_PRODUCTS } from '../../governance/lib/pr-body.mjs'
 import { compileImpactRules } from '../../governance/lib/ai-record.mjs';
 import {
   PRODUCTS, DEV_MARKER, branchFor, decideMode, validateResult, checkDiff, pickMilestone, prLabels, developerLabels,
-  extractCouncilRow, insertLogRow, findSecrets, renderPrBody, updateRepairs, renderDeveloperComment, isDeveloperComment,
+  extractCouncilRow, insertLogRow, findSecrets, parsePatch, renderPrBody, updateRepairs, renderDeveloperComment, isDeveloperComment,
 } from '../lib/developer.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -75,7 +75,7 @@ test('diff policy: forbidden paths, deleted or skipped tests, suppressions, pack
   assert.match(bad('+    <PackageReference Include="Evil" Version="1.0" />', 'src/A.csproj'), /package reference/);
   assert.match(bad('+    [Fact(Skip = "flaky")]', 'test/A.cs'), /skips a test/);
   assert.match(bad('-    [Fact]', 'test/A.cs'), /removes 1 more test/);
-  assert.match(checkDiff([{ path: 'src/a.png', status: 'A' }], 'GIT binary patch').join(), /binary/);
+  assert.match(checkDiff([{ path: 'src/a.png', status: 'A' }], 'diff --git a/src/a.png b/src/a.png\nnew file mode 100644\nGIT binary patch\nliteral 4').join(), /binary/);
   const many = Array.from({ length: 81 }, (_, i) => ({ path: `src/F${i}.cs`, status: 'M' }));
   assert.match(checkDiff(many, '').join(), /81 files/);
 });
@@ -141,4 +141,29 @@ test('a patch carrying a secret is never pushed', () => {
   assert.match(findSecrets(p('+// cursor-key-123456'), ['cursor-key-123456']).join(), /a secret this job holds/);
   assert.match(findSecrets(p('+var t = "ghs_abcdefghijklmnopqrstuvwxyz012345";')).join(), /token-shaped/);
   assert.deepEqual(findSecrets(p('-var t = "ghs_abcdefghijklmnopqrstuvwxyz012345";')), []);
+});
+
+test('a content line that starts with +++ or --- is content, never a file header', () => {
+  // Review finding on #1214: an added line `++ x` shows up in the patch as `+++ x`.
+  const patch = [
+    'diff --git a/docs/a.md b/docs/a.md', '--- a/docs/a.md', '+++ b/docs/a.md', '@@ -1,0 +1,2 @@',
+    '+++ ghp_abcdefghijklmnopqrstuvwxyz012345', '+--- not a header',
+    'diff --git a/test/A.cs b/test/A.cs', '--- a/test/A.cs', '+++ b/test/A.cs', '@@ -1,0 +1,2 @@',
+    '+++ x', '+    [Fact(Skip = "flaky")]',
+  ].join('\n');
+  assert.deepEqual(parsePatch(patch).map((f) => [f.path, f.added.length]), [['docs/a.md', 2], ['test/A.cs', 2]]);
+  assert.match(findSecrets(patch).join(), /docs\/a\.md: contains a token-shaped string/);
+  const files = [{ path: 'docs/a.md', status: 'M' }, { path: 'test/A.cs', status: 'M' }];
+  assert.match(checkDiff(files, patch).join(), /test\/A\.cs: skips a test/);
+  assert.match(checkDiff([files[0]], patch).join(), /test\/A\.cs: in the patch but not in the file list/);
+});
+
+test('project files may not add targets, imports or analyzer changes', () => {
+  const csproj = (line) => checkDiff([{ path: 'src/A/A.csproj', status: 'M' }], patchOf('src/A/A.csproj', [line])).join();
+  assert.match(csproj('+  <Target Name="X" BeforeTargets="Build"><Exec Command="curl x" /></Target>'), /build target/);
+  assert.match(csproj('+  <Import Project="../../evil.props" />'), /build target/);
+  assert.match(csproj('+    <RunAnalyzers>false</RunAnalyzers>'), /analyzer or warning/);
+  assert.match(csproj('+    <WarningsNotAsErrors>CS8600</WarningsNotAsErrors>'), /analyzer or warning/);
+  // The same text in a C# file is just text.
+  assert.deepEqual(checkDiff([{ path: 'src/A/B.cs', status: 'M' }], patchOf('src/A/B.cs', ['+// <Target Name="X" />'])), []);
 });

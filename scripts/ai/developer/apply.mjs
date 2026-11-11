@@ -5,8 +5,9 @@
 // still stops it):
 //   1. reads the agent job's artifact: patch.diff, files.tsv (git diff --name-status), result.json,
 //      base.txt (the commit the agent worked on), runner.json (its sandboxed build/test, informational);
-//   2. validates the result and runs the diff policy and the secret scan — any violation: nothing is pushed;
-//   3. applies the patch on base, adds the council decision-log row (NEW / RECOVERY with an approved
+//   2. validates the result, applies the patch on base and runs the diff policy and the secret scan on
+//      what git applied (not on the agent job's own listing) — any violation: nothing is pushed;
+//   3. adds the council decision-log row (NEW / RECOVERY with an approved
 //      council), commits, pushes `ai/issue-<n>` with the App token, opens the draft PR (NEW /
 //      RECOVERY) or updates it (FIX), and labels the PR with the issue's classification;
 //   4. apply mode only: moves the issue's state label. One sticky status comment on the issue.
@@ -78,14 +79,30 @@ function editLabels(number, add, remove) {
   ghApp(edit);
 }
 
-/** Commits the patch on `base` and pushes `branch`; returns the new HEAD SHA. */
-function commitAndPush(base, patch, result, council) {
-  const auth = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${appToken}`).toString('base64')}`;
-  const remote = `https://github.com/${repo}.git`;
-  git(['-c', `http.extraheader=${auth}`, 'fetch', '--no-tags', '--depth', '50', remote, base]);
+const auth = () => `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${appToken}`).toString('base64')}`;
+const remote = `https://github.com/${repo}.git`;
+const parseStatus = (text) => text.split('\n').filter(Boolean).map((l) => {
+  const [status, path] = l.split('\t');
+  return { status, path };
+});
+
+/**
+ * Applies the patch on `base` in the index and returns what git itself says changed: the file
+ * list and the diff the policy is checked on. Nothing from the agent job's own listing is trusted.
+ */
+function stage(base, patch) {
+  git(['-c', `http.extraheader=${auth()}`, 'fetch', '--no-tags', '--depth', '50', remote, base]);
   git(['switch', '--force-create', branch, base]);
   writeFileSync(join(art, '.apply.diff'), patch);
   git(['apply', '--index', '--whitespace=nowarn', join(art, '.apply.diff')]);
+  return {
+    files: parseStatus(git(['diff', '--cached', '--no-renames', '--name-status', base])),
+    diff: git(['diff', '--cached', '--no-renames', '--binary', base]),
+  };
+}
+
+/** Commits what `stage` applied (plus the council log row) and pushes `branch`; returns the new HEAD SHA. */
+function commitAndPush(result, council) {
   if (council) {
     const path = 'docs/agent-council/sessions/README.md';
     const next = insertLogRow(readFileSync(path, 'utf8'), council);
@@ -98,7 +115,7 @@ function commitAndPush(base, patch, result, council) {
   git(['-c', 'user.name=vnext-ai-developer', '-c', 'user.email=ai-developer@users.noreply.github.com', 'commit', '--quiet', '-F', '-'], { input: message });
   // NEW / RECOVERY replace a stale branch left by a closed attempt; FIX only fast-forwards the PR branch.
   const force = result.mode === 'FIX' ? [] : ['--force'];
-  git(['-c', `http.extraheader=${auth}`, 'push', '--quiet', ...force, remote, `HEAD:refs/heads/${branch}`]);
+  git(['-c', `http.extraheader=${auth()}`, 'push', '--quiet', ...force, remote, `HEAD:refs/heads/${branch}`]);
   return git(['rev-parse', 'HEAD']).trim();
 }
 
@@ -123,11 +140,13 @@ try {
     reason = `the agent found nothing to change${result.notes ? `: ${result.notes}` : ''}`;
   } else {
     const patch = read('patch.diff') ?? '';
-    const changed = (read('files.tsv') ?? '').split('\n').filter(Boolean).map((l) => {
-      const [status, path, to] = l.split('\t');
-      return { status, path, to };
-    });
-    violations = [...checkDiff(changed, patch), ...findSecrets(patch, secrets)];
+    const listed = parseStatus(read('files.tsv') ?? '');
+    // --print checks the artifact as it is; a real run checks what git applied, and refuses when
+    // the two disagree.
+    const applied = args.print ? { files: listed, diff: patch } : stage(base, patch);
+    violations = [...checkDiff(applied.files, applied.diff), ...findSecrets(applied.diff, secrets)];
+    const key = (fs) => fs.map((f) => `${f.status[0]} ${f.path}`).sort().join('\n');
+    if (key(listed) !== key(applied.files)) violations.push('the applied change differs from the file list the agent job recorded');
     if (!result.title) violations.push('no valid Conventional Commits title (type(scope): subject, at most 72 characters)');
     if (violations.length) {
       outcome = 'rejected';
@@ -137,7 +156,7 @@ try {
       reason = 'print only — nothing pushed';
     } else {
       const councilRow = input.mode !== 'FIX' && input.labels.includes('ai:council-approved') ? extractCouncilRow(input.council) : null;
-      const sha = commitAndPush(base, patch, result, councilRow);
+      const sha = commitAndPush(result, councilRow);
       const runner = JSON.parse(read('runner.json') ?? '{}');
       for (const k of Object.keys(runner)) runner[k].detail = `${runner[k].detail ?? ''} (sandboxed runner, informational)`.trim();
       const labels = prLabels(input.labels);
