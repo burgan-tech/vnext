@@ -159,6 +159,30 @@ public sealed class AgentPersistenceTests : IAsyncLifetime
         (await ctx.InstanceAgentToolCalls.CountAsync(c => c.InstanceId == instance.Id)).ShouldBe(0);
     }
 
+    [Fact]
+    public async Task Finishing_instance_deletes_its_own_sessions_in_one_statement_and_keeps_shared_ones()
+    {
+        var instance = await SeedInstanceAsync();
+        var other = await SeedInstanceAsync();
+        await using var ctx = CreateContext(null);
+        var store = new EfCoreAgentSessionStore(new FixedProvider(ctx));
+        await store.SaveAsync(Write($"i:{instance.Id:N}:flow:classifying", instance.Id, [1], null), instance.Id);
+        await store.SaveAsync(Write($"i:{instance.Id:N}:flow", instance.Id, [1], null), instance.Id);
+        await store.SaveAsync(Write($"i:{other.Id:N}:flow", other.Id, [1], null), other.Id);
+        var shared = Write($"k:core:triage:{instance.Id:N}", instance.Id, [1], null);
+        shared.Session.OwnerInstanceId = null;
+        await store.SaveAsync(shared, instance.Id);
+
+        var recorder = new CommandRecorder();
+        await using var counted = CreateContext(recorder);
+        (await new EfCoreAgentSessionStore(new FixedProvider(counted)).DeleteInstanceSessionsAsync(instance.Id)).ShouldBe(2);
+        recorder.Commands.Count.ShouldBe(1);
+
+        (await ctx.AgentSessions.CountAsync(s => s.OwnerInstanceId == instance.Id)).ShouldBe(0);
+        (await store.FindAsync(shared.ScopeKey, instance.Id)).Snapshot.ShouldNotBeNull();
+        (await store.FindAsync($"i:{other.Id:N}:flow", other.Id)).Snapshot.ShouldNotBeNull();
+    }
+
     private static AgentSessionWrite Write(string scope, Guid instanceId, byte[] messages, uint? expected) => new(
         scope,
         new AgentSession

@@ -749,7 +749,8 @@ public static class InstancesModelCreatingExtensions
                 .HasFilter("\"ExpiresAt\" IS NOT NULL")
                 .HasDatabaseName("IX_AgentSessions_ExpiresAt");
 
-            // i:* rows die with their instance (crypto-shredding: the key is on the row).
+            // i:* rows are deleted when their instance completes or is cancelled (HandleFinishStep), and with
+            // the instance row itself. The index serves that delete.
             b.HasIndex(p => p.OwnerInstanceId).HasDatabaseName("IX_AgentSessions_OwnerInstanceId");
             b.HasOne<Instance>().WithMany().HasForeignKey(p => p.OwnerInstanceId).OnDelete(DeleteBehavior.Cascade);
         });

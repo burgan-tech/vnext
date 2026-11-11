@@ -179,7 +179,7 @@ public sealed record AgentMemory
     /// <summary>How the session is kept within <see cref="MaxMessages"/> (local storage only).</summary>
     public AgentMemoryCompaction? Compaction { get; init; }
 
-    /// <summary>Retention after the owner settles.</summary>
+    /// <summary>Days a session is kept after its last write; an instance session is deleted earlier, when its instance completes or is cancelled.</summary>
     public int? RetentionDays { get; init; }
 
     /// <summary>Reset triggers: <c>agentVersionChange</c>, <c>instructionsChange</c>.</summary>

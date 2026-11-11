@@ -108,6 +108,15 @@ public sealed class EfCoreAgentSessionStore(IAetherDbContextProvider<WorkflowDbC
         return affected == 1;
     }
 
+    /// <inheritdoc />
+    public async Task<int> DeleteInstanceSessionsAsync(Guid instanceId, CancellationToken cancellationToken = default)
+    {
+        var context = await dbContextProvider.GetDbContextAsync(cancellationToken);
+        return await context.AgentSessions
+            .Where(s => s.OwnerInstanceId == instanceId)
+            .ExecuteDeleteAsync(cancellationToken);
+    }
+
     private static NpgsqlParameter Param(string name, NpgsqlDbType type, object? value) =>
         new(name, type) { Value = value ?? DBNull.Value };
 

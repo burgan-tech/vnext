@@ -195,8 +195,15 @@ An instance row (`i:*`) has one writer under the instance's Busy mutex and is wr
 row (`k:*`) is guarded by `xmin`: a writer that did not read the row, or read an older version, loses,
 logs `30008`, re-reads the row and writes once more. A session is reset (logged `30007`) when the agent version
 changes (`resetOn: agentVersionChange`, default) or the instructions change (`instructionsChange`).
-Rows expire `retentionDays` after their last write; `AgentSessionSweeperHostedService` deletes them in
-batches of 1000 every `AiAgent:SessionSweepIntervalMinutes` (0 disables it), and reads ignore expired rows.
+The default `memory.mode` is `state`, so an agent state keeps an instance row unless it sets `none`. A
+run held for approval keeps one even with `none`, because the resume continues from it.
+
+An instance's `i:*` rows are deleted when it completes or is cancelled (`HandleFinishStep`, same
+transaction, one statement, only for flows with an AiAgent state). A faulted instance keeps them, since
+a retry may re-enter the agent state. Shared `k:*` rows outlive any instance. Every row also expires
+`retentionDays` after its last write (agent or state setting, default 30); `AgentSessionSweeperHostedService`
+deletes expired rows in batches of 1000 every `AiAgent:SessionSweepIntervalMinutes` (0 disables it), and
+reads ignore expired rows. For `i:*` rows the expiry only matters for an instance that stays open.
 
 ## Read surface
 

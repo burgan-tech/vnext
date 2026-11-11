@@ -151,6 +151,32 @@ public class HandleFinishStepTests
         policy.DidNotReceiveWithAnyArgs().Capture(default);
     }
 
+    /// <summary>
+    /// A finishing instance of a flow with an AiAgent state drops the agent sessions it owns, on
+    /// completion and on cancel; a flow without one issues no statement.
+    /// </summary>
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public async Task Finish_Deletes_The_Instance_Agent_Sessions_Only_For_Agent_Flows(bool cancel, bool hasAgentState)
+    {
+        var sessions = Substitute.For<BBT.Workflow.Instances.Agents.IAgentSessionStore>();
+        var step = new HandleFinishStep(Substitute.For<IInstanceRepository>(),
+            Substitute.For<ILogger<HandleFinishStep>>(), agentSessionStore: sessions);
+        var instance = InstanceFactory.CreateDefault();
+        var context = cancel
+            ? CreateCancelContext(instance, TerminationContext.Direct(Guid.NewGuid()))
+            : CreateFinishContext(instance);
+        if (hasAgentState)
+            context.Workflow.AddState(StateFactory.CreateDefault("classify", StateType.AiAgent));
+
+        (await step.ExecuteAsync(context, CancellationToken.None)).IsSuccess.ShouldBeTrue();
+
+        await sessions.Received(hasAgentState ? 1 : 0)
+            .DeleteInstanceSessionsAsync(instance.Id, Arg.Any<CancellationToken>());
+    }
+
     private static TransitionExecutionContext CreateFinishContext(Instance instance, Dictionary<string, string?>? headers = null)
     {
         var workflow = Definitions.Workflow.Create();
