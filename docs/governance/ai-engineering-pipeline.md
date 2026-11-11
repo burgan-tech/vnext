@@ -469,7 +469,8 @@ change of a contract product raises impact (§3).
   `workers`, `modules`); its one shell command is `ai-dotnet build|test`
   ([`ai-dotnet.sh`](../../scripts/ai/developer/ai-dotnet.sh)), staged root-owned outside the tree
   with its paths fixed. It runs dotnet in its own network namespace (loopback only — packages are
-  restored, and one ordinary build fills PostSharp's dependency cache, before the agent), PID namespace (the agent's `/proc/<pid>/environ` is invisible) and
+  restored, and one ordinary build of the default branch fills PostSharp's dependency cache, before the
+  target is checked out and long before the agent), PID namespace (the agent's `/proc/<pid>/environ` is invisible) and
   mount namespace (the runner temp dir and CLI config hidden, the home directory and `.git`
   read-only with the workspace writable, a private `/tmp`, the docker socket masked), with `env -i`, as the runner uid with `no_new_privs`, no capabilities and no supplementary
   groups — so code inside cannot `sudo`, reach docker or undo the mounts. Only the collect step holds

@@ -128,8 +128,8 @@ const BUILD_FORBIDDEN = Object.freeze([
 ]);
 /** Analyzer / warning settings: neither added, changed nor removed in an MSBuild file. */
 const BUILD_SETTING = /<\s*(RunAnalyzers|RunAnalyzersDuringBuild|EnforceCodeStyleInBuild|AnalysisMode|AnalysisLevel|CodeAnalysisRuleSet|WarningsNotAsErrors|WarningLevel|TreatWarningsAsErrors|Nullable|GenerateDocumentationFile)\b/i;
-/** A live test attribute: the trimmed line starts with it (a commented-out one does not count). */
-const TEST_ATTR = /^\[\s*(Fact|Theory)\b/;
+/** A live test or test case: the trimmed line starts with it (a commented-out one does not count). */
+const TEST_ATTR = /^\[\s*(Fact|Theory|InlineData|MemberData|ClassData)\b/;
 const MAX_FILES = 80;
 const MAX_LINES = 4000;
 

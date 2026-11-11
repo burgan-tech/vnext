@@ -216,3 +216,36 @@ test('build events, compile removal, removed analyzer settings, suppressions and
   const added = ['diff --git a/src/B.cs b/src/B.cs', 'new file mode 100644', 'index 0000000..1', '--- /dev/null', '+++ b/src/B.cs', '@@ -0,0 +1 @@', '+class B {}'].join('\n');
   assert.deepEqual(checkDiff([{ path: 'src/B.cs', status: 'A' }], added), []);
 });
+
+// The writer itself, in --print mode (no GitHub, no git): the controls that stop a push.
+import { mkdtempSync, writeFileSync as writeFile, mkdirSync as mkdir } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+
+function runApply({ mode = 'NEW', exit = '0', base = 'a'.repeat(40), headSha, files, patch, result }) {
+  const dir = mkdtempSync(join(tmpdir(), 'ai-dev-'));
+  mkdir(join(dir, 'in'));
+  mkdir(join(dir, 'art'));
+  const input = { number: 7, mode, title: 't', labels: ['ai:planned', 'ai:semver-patch', 'ai:impact-low'], directorPlan: plan('patch'), milestone: 'v0.0.105', repairs: 0, maxRepairs: 3 };
+  if (mode === 'FIX') input.pr = { number: 9, branch: 'ai/issue-7', headSha: headSha ?? base };
+  writeFile(join(dir, 'in', '7.json'), JSON.stringify(input));
+  writeFile(join(dir, 'art', 'agent.exit'), exit);
+  writeFile(join(dir, 'art', 'base.txt'), base);
+  writeFile(join(dir, 'art', 'files.z'), files);
+  writeFile(join(dir, 'art', 'patch.diff'), patch);
+  writeFile(join(dir, 'art', 'result.json'), JSON.stringify({ decision: 'implemented', title: 'fix(cache): keep the newest build', summary: ['x'], ...result }));
+  const r = spawnSync(process.execPath, [join(root, 'scripts/ai/developer/apply.mjs'), '--in', join(dir, 'in'), '--artifact', join(dir, 'art'), '--print'], {
+    encoding: 'utf8', env: { ...process.env, GITHUB_REPOSITORY: 'o/r', GITHUB_STEP_SUMMARY: '' },
+  });
+  return `${r.stdout}${r.stderr}`;
+}
+const goodPatch = patchOf('src/A.cs', ['+// fix']);
+
+test('writer: a clean result passes; an unfinished agent, a list mismatch or a moved PR never push', () => {
+  assert.match(runApply({ files: 'M\0src/A.cs\0', patch: goodPatch }), /\| #7 \| NEW \| pushed \|.*print only/);
+  assert.match(runApply({ exit: '124', files: 'M\0src/A.cs\0', patch: goodPatch }), /failed .*the agent did not finish \(exit 124\)/);
+  const two = `${goodPatch}\n${patchOf('src/B.cs', ['+// b'])}`;
+  assert.match(runApply({ files: 'M\0src/A.cs\0', patch: two }), /rejected[\s\S]*the patch has 2 file\(s\), the file list 1/);
+  assert.match(runApply({ mode: 'FIX', headSha: 'b'.repeat(40), files: 'M\0src/A.cs\0', patch: goodPatch }), /the PR moved while the agent worked/);
+  assert.match(runApply({ files: 'M\0src/A.cs\0', patch: goodPatch, result: { title: 'did stuff' } }), /no valid Conventional Commits title/);
+});

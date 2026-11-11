@@ -95,15 +95,6 @@ jobs:
           # Setup scripts run from this copy, not from the target (in FIX the target is a PR branch).
           cp scripts/setup-netstandard-ref.sh "$TOOLS/setup-netstandard-ref.sh"
 
-      - name: Check out the target
-        # NEW / RECOVERY: the default branch as checked out. FIX: the PR head the collector read.
-        if: env.HAS_AUTH == 'true' && steps.collect.outputs.mode == 'FIX'
-        env:
-          REF: ${{ steps.collect.outputs.ref }}
-        run: |
-          git fetch --no-tags --depth 50 origin "$REF"
-          git checkout --quiet --detach "$REF"
-
       - name: Setup .NET
         if: env.HAS_AUTH == 'true' && steps.collect.outputs.mode != 'skip'
         uses: actions/setup-dotnet@v4
@@ -113,23 +104,39 @@ jobs:
             10.0.2xx
             10.0.x
 
-      - name: Restore (the last step with network for .NET)
+      - name: Seal the tooling, then warm up on the default branch
+        # The staged tooling becomes root-owned before any build runs. The warm-up build (network, no
+        # token) runs on the default branch only, never on the target: PostSharp restores its compiler
+        # dependencies during a build, and this fills that cache for the offline sandbox builds.
         if: env.HAS_AUTH == 'true' && steps.collect.outputs.mode != 'skip'
         run: |
-          git rev-parse HEAD > "$AI_ART/base.txt"
-          bash "$TOOLS/setup-netstandard-ref.sh"
-          dotnet restore ./BBT.Workflow.slnx
-          # PostSharp restores its compiler dependencies during the build: one ordinary build here, with
-          # network and no token, fills its cache so the sandboxed builds work offline.
-          dotnet build ./BBT.Workflow.slnx --configuration Release --no-restore -v q
-          sudo sysctl -w fs.inotify.max_user_instances=8192
-          sudo sysctl -w fs.inotify.max_user_watches=524288
           droot="$(dirname "$(readlink -f "$(command -v dotnet)")")"
           sed -i -e "s|@DOTNET_ROOT@|$droot|" -e "s|@RUNNER_TEMP@|$RUNNER_TEMP|" \
                  -e "s|@WORKSPACE@|$GITHUB_WORKSPACE|" -e "s|@HOME@|$HOME|" "$TOOLS/bin/ai-dotnet"
           sudo chown -R root:root "$TOOLS"
           sudo chmod -R a+rX,go-w "$TOOLS"
           sudo chmod 755 "$TOOLS/bin/ai-dotnet"
+          sudo sysctl -w fs.inotify.max_user_instances=8192
+          sudo sysctl -w fs.inotify.max_user_watches=524288
+          bash "$TOOLS/setup-netstandard-ref.sh"
+          dotnet restore ./BBT.Workflow.slnx
+          dotnet build ./BBT.Workflow.slnx --configuration Release --no-restore -v q
+
+      - name: Check out the target and restore it
+        # NEW / RECOVERY: the default branch as already restored. FIX: the PR head the collector read,
+        # restored only (no build: restore evaluates project files, which the diff policy keeps free of
+        # targets, tasks and imports). Packages cannot change: the policy refuses package references.
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.mode != 'skip'
+        env:
+          MODE: ${{ steps.collect.outputs.mode }}
+          REF: ${{ steps.collect.outputs.ref }}
+        run: |
+          if [ "$MODE" = FIX ]; then
+            git fetch --no-tags --depth 50 origin "$REF"
+            git checkout --quiet --detach "$REF"
+            dotnet restore ./BBT.Workflow.slnx
+          fi
+          git rev-parse HEAD > "$AI_ART/base.txt"
 
       - name: Install Cursor CLI
         if: env.HAS_AUTH == 'true' && steps.collect.outputs.mode != 'skip'
