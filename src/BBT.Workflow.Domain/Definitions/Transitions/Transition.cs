@@ -203,7 +203,7 @@ public sealed class Transition : IHasKey
     /// declares; used to name the offending JSON member in validation errors.
     /// </summary>
     [JsonIgnore]
-    public bool HasSchemasList => schemas is { Schemas.Count: > 0 };
+    internal bool HasSchemasList =>schemas is { Schemas.Count: > 0 };
 
     /// <summary>
     /// View definition for the transition. Supports both old "view" and new "views" JSON formats.

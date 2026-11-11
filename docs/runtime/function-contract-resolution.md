@@ -119,8 +119,10 @@ be last; `schemas` wins over `schema`; automatic and scheduled transitions may n
   cache-directive headers (`If-None-Match`, `Cache-Control`, ...) are excluded, otherwise a revalidating
   client would never match its own ETag; `x-forwarded-for` / `x-real-ip` stay in because a rule may read them.
 - **Order:** `TransitionValidationService.ValidateAsync` resolves the schema (including any rule script)
-  before the transition policy check, so a caller the policy would refuse can receive `400`
-  `Transition:100025` instead of `403` when no entry matches for them.
+  before the state-machine / actor-type policy check (`TransitionExecutionPolicy`), so a request that
+  policy would refuse (wrong state, wrong actor) receives `400` `Transition:100025` first when no entry
+  matches. Role authorization is not decided on this write path (the gateway decides it), so there is no
+  `403` here to pre-empt.
 - **Bodyless requests:** a function request without a body is accepted even when no `inputSchema` entry
   matches (`FunctionRequestValidationService` returns before rule evaluation), whereas a transition with
   `schemas` and no matching entry is rejected regardless of the body.
