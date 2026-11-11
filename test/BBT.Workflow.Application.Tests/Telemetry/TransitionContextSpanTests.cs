@@ -249,7 +249,8 @@ public sealed class TransitionContextSpanTests : IDisposable
             CreatePolicyWithNoSpecifications(),
             Substitute.For<IJsonSchemaValidator>(),
             Substitute.For<IComponentCacheStore>(),
-            Substitute.For<BBT.Workflow.Versions.IVersionRegistryWriteGuard>());
+            Substitute.For<BBT.Workflow.Versions.IVersionRegistryWriteGuard>(),
+            NoSchemaResolver());
 
         var context = CreateValidTransitionContext();
 
@@ -284,11 +285,17 @@ public sealed class TransitionContextSpanTests : IDisposable
             .Validate(schemaDefinition.Schema, Arg.Any<JsonElement?>(), Arg.Any<SchemaValidationOptions>())
             .Returns(Result.Fail(validationError));
 
+        var schemaResolver = Substitute.For<BBT.Workflow.Execution.Validation.ITransitionSchemaResolver>();
+        schemaResolver
+            .ResolveAsync(default!, default!, default!, default, default)
+            .ReturnsForAnyArgs(Task.FromResult(Result<Reference?>.Ok(schemaRef)));
+
         var sut = new TransitionValidationService(
             CreatePolicyWithNoSpecifications(),
             schemaValidator,
             componentCacheStore,
-            Substitute.For<BBT.Workflow.Versions.IVersionRegistryWriteGuard>());
+            Substitute.For<BBT.Workflow.Versions.IVersionRegistryWriteGuard>(),
+            schemaResolver);
 
         var context = CreateValidTransitionContext();
         typeof(Transition).GetProperty(nameof(Transition.Schema))!.SetValue(context.Transition, schemaRef);
@@ -302,6 +309,14 @@ public sealed class TransitionContextSpanTests : IDisposable
     }
 
     #endregion
+
+    private static BBT.Workflow.Execution.Validation.ITransitionSchemaResolver NoSchemaResolver()
+    {
+        var resolver = Substitute.For<BBT.Workflow.Execution.Validation.ITransitionSchemaResolver>();
+        resolver.ResolveAsync(default!, default!, default!, default, default)
+            .ReturnsForAnyArgs(Task.FromResult(Result<Reference?>.Ok(null)));
+        return resolver;
+    }
 
     private static TransitionExecutionPolicy CreatePolicyWithNoSpecifications()
     {

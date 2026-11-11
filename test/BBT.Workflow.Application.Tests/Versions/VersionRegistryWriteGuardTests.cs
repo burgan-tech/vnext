@@ -200,7 +200,8 @@ public class VersionRegistryWriteGuardTests
                     [], Substitute.For<ILogger<CompositeTransitionSpecification>>())),
             Substitute.For<IJsonSchemaValidator>(),
             Substitute.For<IComponentCacheStore>(),
-            guard);
+            guard,
+            NoSchemaResolver());
         var context = CreateContext(RuntimeSysSchemaInfo.VersionRegistry, Flow, """{"defaultVersion":"2.4"}""");
 
         var result = await service.ValidateAsync(context, CancellationToken.None);
@@ -222,7 +223,8 @@ public class VersionRegistryWriteGuardTests
                     [], Substitute.For<ILogger<CompositeTransitionSpecification>>())),
             Substitute.For<IJsonSchemaValidator>(),
             Substitute.For<IComponentCacheStore>(),
-            guard);
+            guard,
+            NoSchemaResolver());
         var context = CreateContext("customer-onboarding", "abc", """{"defaultVersion":"zzz"}""");
 
         var result = await service.ValidateSchemaAsync(context, CancellationToken.None);
@@ -242,7 +244,8 @@ public class VersionRegistryWriteGuardTests
                     [], Substitute.For<ILogger<CompositeTransitionSpecification>>())),
             Substitute.For<IJsonSchemaValidator>(),
             Substitute.For<IComponentCacheStore>(),
-            guard);
+            guard,
+            NoSchemaResolver());
         var context = CreateContext(RuntimeSysSchemaInfo.VersionRegistry, Flow, """{"defaultVersion":"2.1"}""");
 
         var result = await service.ValidateSchemaAsync(context, CancellationToken.None);
@@ -252,6 +255,14 @@ public class VersionRegistryWriteGuardTests
             Domain, Flow,
             Arg.Is<JsonElement?>(e => e!.Value.GetProperty("defaultVersion").GetString() == "2.1"),
             Arg.Any<CancellationToken>());
+    }
+
+    private static BBT.Workflow.Execution.Validation.ITransitionSchemaResolver NoSchemaResolver()
+    {
+        var resolver = Substitute.For<BBT.Workflow.Execution.Validation.ITransitionSchemaResolver>();
+        resolver.ResolveAsync(default!, default!, default!, default, default)
+            .ReturnsForAnyArgs(Task.FromResult(Result<Reference?>.Ok(null)));
+        return resolver;
     }
 
     [Fact]
@@ -276,6 +287,7 @@ public class VersionRegistryWriteGuardTests
                 [], Substitute.For<ILogger<CompositeTransitionSpecification>>())));
         services.AddSingleton(Substitute.For<IJsonSchemaValidator>());
         services.AddSingleton(Substitute.For<IComponentCacheStore>());
+        services.AddSingleton(NoSchemaResolver());
 
         using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
         using var scope = provider.CreateScope();
