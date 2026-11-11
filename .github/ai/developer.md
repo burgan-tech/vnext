@@ -88,3 +88,9 @@ Your final message is exactly this JSON object and nothing else (no prose, no fe
 `vnext-helm-charts`, `vnext-docs`, `vnext-workflow-cli`, `vnext-runtime`, `vnext-template`,
 `vnext-integration-test`, `vnext-example`, `vnext-ai-toolkit`); a `needed: true` entry names its
 handoff file. `no-change` means the issue is already fixed on the target: say where in `notes`.
+
+`e2eSuites` are folder names under vnext-example's `tests/Core.IntegrationTests/Tests` (for example
+`ChainBusy`, `ErrorBoundaryLab`, `SubflowOrchestration`; `Smoke` for the smoke test), chosen from
+the runtime areas you touched. CI runs them against this PR's runtime; leave the list empty only
+when no runtime behaviour changed (CI then runs `Smoke` alone). A name that is not a suite folder
+makes CI run the full set.

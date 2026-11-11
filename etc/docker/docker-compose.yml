@@ -12,6 +12,9 @@ services:
       - npm-cache:/app/.npm-cache
     ports:
       - "3005:3000"
+    extra_hosts:
+      # VNEXT_APP_URL defaults to host.docker.internal: Docker Desktop and OrbStack define it, Linux does not.
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 10s
