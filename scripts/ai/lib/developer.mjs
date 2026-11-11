@@ -111,17 +111,23 @@ export const FORBIDDEN_PATHS = Object.freeze([
 ]);
 const ADDED_FORBIDDEN = Object.freeze([
   [/#pragma\s+warning\s+disable/, 'adds `#pragma warning disable`'],
-  [/\[\s*(assembly:\s*)?SuppressMessage\b/, 'adds `[SuppressMessage]`'],
-  [/<NoWarn>/i, 'adds `<NoWarn>`'],
+  [/\bSuppressMessage\b/, 'adds `[SuppressMessage]`'],
+  [/<NoWarn\b/i, 'adds `<NoWarn>`'],
+  [/#\s*nullable\s+disable/, 'adds `#nullable disable`'],
+  [/\bNOSONAR\b/, 'adds `NOSONAR`'],
+  [/\bExcludeFromCodeCoverage\b/, 'adds `[ExcludeFromCodeCoverage]`'],
   [/<PackageReference\b/i, 'adds a package reference'],
   [/<TreatWarningsAsErrors>\s*false/i, 'turns warnings-as-errors off'],
 ]);
 /** In MSBuild files, anything that runs code or changes analysis at build time. */
 const BUILD_FILE = /\.(csproj|props|targets|proj)$/i;
 const BUILD_FORBIDDEN = Object.freeze([
-  [/<\s*(Target|Exec|Import|UsingTask|ProjectReference)\b/i, 'adds a build target, task, import or project reference'],
-  [/<\s*(RunAnalyzers|RunAnalyzersDuringBuild|EnforceCodeStyleInBuild|AnalysisMode|AnalysisLevel|CodeAnalysisRuleSet|WarningsNotAsErrors|WarningLevel|Nullable|GenerateDocumentationFile)\b/i, 'changes analyzer or warning settings'],
+  [/<\s*(Target|Exec|Import|UsingTask|ProjectReference|PreBuildEvent|PostBuildEvent|Analyzer|Reference)\b/i, 'adds a build target, task, event, import or reference'],
+  [/<\s*(Compile|None|Content|EmbeddedResource)\b[^>]*\b(Remove|Include|Update)\s*=/i, 'changes which files are compiled or packed'],
+  [/<\s*DefineConstants\b/i, 'changes compile constants'],
 ]);
+/** Analyzer / warning settings: neither added, changed nor removed in an MSBuild file. */
+const BUILD_SETTING = /<\s*(RunAnalyzers|RunAnalyzersDuringBuild|EnforceCodeStyleInBuild|AnalysisMode|AnalysisLevel|CodeAnalysisRuleSet|WarningsNotAsErrors|WarningLevel|TreatWarningsAsErrors|Nullable|GenerateDocumentationFile)\b/i;
 /** A live test attribute: the trimmed line starts with it (a commented-out one does not count). */
 const TEST_ATTR = /^\[\s*(Fact|Theory)\b/;
 const MAX_FILES = 80;
@@ -163,8 +169,8 @@ export function parsePatch(patch) {
       // A quoted header (`diff --git "a/…" "b/…"`) is a path git had to escape: kept, but unmapped.
       const header = /^diff --git a\/(\S+) b\/(\S+)$/.exec(line);
       cur = header
-        ? { path: header[2], from: header[1], binary: false, added: [], removed: [] }
-        : { path: null, header: line, binary: false, added: [], removed: [] };
+        ? { path: header[2], from: header[1], binary: false, modes: [], added: [], removed: [] }
+        : { path: null, header: line, binary: false, modes: [], added: [], removed: [] };
       out.push(cur);
       continue;
     }
@@ -175,6 +181,9 @@ export function parsePatch(patch) {
       newLeft = hunk[2] === undefined ? 1 : Number(hunk[2]);
     } else if (line.startsWith('GIT binary patch') || /^Binary files .* differ$/.test(line)) {
       cur.binary = true;
+    } else {
+      const mode = /^(new file|deleted file|old|new) mode (\d+)$/.exec(line);
+      if (mode) cur.modes.push({ kind: mode[1], mode: mode[2] });
     }
   }
   return out;
@@ -218,16 +227,23 @@ export function checkDiff(files, patch) {
     }
     if (!listed.has(f.path)) v.push(`${f.path}: in the patch but not in the file list`);
     if (f.binary) v.push(`${f.path}: binary change`);
+    // Only ordinary files (100644) are written: no symlink (120000), submodule (160000) or mode change.
+    if (f.modes.some((m) => m.kind === 'old' || m.kind === 'new')) v.push(`${f.path}: changes the file mode`);
+    if (f.modes.some((m) => m.mode !== '100644' && m.kind !== 'deleted file')) v.push(`${f.path}: not a regular file (mode ${f.modes.map((m) => m.mode).join('/')})`);
     changed += f.added.length + f.removed.length;
     let testsAdded = 0;
     let testsRemoved = 0;
     for (const line of f.added) {
       for (const [re, what] of ADDED_FORBIDDEN) if (re.test(line)) v.push(`${f.path}: ${what}`);
       if (BUILD_FILE.test(f.path)) for (const [re, what] of BUILD_FORBIDDEN) if (re.test(line)) v.push(`${f.path}: ${what}`);
+      if (BUILD_FILE.test(f.path) && BUILD_SETTING.test(line)) v.push(`${f.path}: changes analyzer or warning settings`);
       if (/^test\//.test(f.path) && (/\bSkip\s*=/.test(line) || /^\s*#if\s+(false|0)\b/.test(line))) v.push(`${f.path}: skips or disables a test`);
       if (TEST_ATTR.test(line.trim())) testsAdded++;
     }
-    for (const line of f.removed) if (TEST_ATTR.test(line.trim())) testsRemoved++;
+    for (const line of f.removed) {
+      if (TEST_ATTR.test(line.trim())) testsRemoved++;
+      if (BUILD_FILE.test(f.path) && BUILD_SETTING.test(line)) v.push(`${f.path}: changes analyzer or warning settings`);
+    }
     // Per file: a test removed here is not paid for by a new test elsewhere.
     if (testsRemoved > testsAdded) v.push(`${f.path}: removes or comments out ${testsRemoved - testsAdded} test(s)`);
   }

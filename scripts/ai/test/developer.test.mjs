@@ -196,3 +196,23 @@ test('commenting out a test, or paying for it with a test in another file, is re
   ].join('\n');
   assert.match(checkDiff([{ path: 'test/A.cs', status: 'M' }, { path: 'test/B.cs', status: 'M' }], two).join(), /test\/A\.cs: removes or comments out 1 test/);
 });
+
+test('build events, compile removal, removed analyzer settings, suppressions and symlinks are refused', () => {
+  const csproj = (lines) => checkDiff([{ path: 'test/A/A.csproj', status: 'M' }], patchOf('test/A/A.csproj', lines)).join();
+  assert.match(csproj(['+    <PreBuildEvent>curl x | sh</PreBuildEvent>']), /build target, task, event/);
+  assert.match(csproj(['+    <Compile Remove="**/*Tests.cs" />']), /which files are compiled/);
+  assert.match(csproj(['-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>']), /analyzer or warning settings/);
+  assert.match(csproj(['-    <Nullable>enable</Nullable>']), /analyzer or warning settings/);
+  const cs = (line) => checkDiff([{ path: 'src/A.cs', status: 'M' }], patchOf('src/A.cs', [line])).join();
+  assert.match(cs('+[System.Diagnostics.CodeAnalysis.SuppressMessage("x", "y")]'), /SuppressMessage/);
+  assert.match(cs('+#nullable disable'), /nullable disable/);
+  assert.match(cs('+var x = 1; // NOSONAR'), /NOSONAR/);
+  assert.match(cs('+[ExcludeFromCodeCoverage]'), /ExcludeFromCodeCoverage/);
+  assert.match(checkDiff([{ path: 'src/A.csproj', status: 'M' }], patchOf('src/A.csproj', ['+  <NoWarn Condition="x">CS1</NoWarn>'])).join(), /NoWarn/);
+  const link = ['diff --git a/src/link b/src/link', 'new file mode 120000', 'index 0000000..1', '--- /dev/null', '+++ b/src/link', '@@ -0,0 +1 @@', '+../.github/workflows'].join('\n');
+  assert.match(checkDiff([{ path: 'src/link', status: 'A' }], link).join(), /not a regular file \(mode 120000\)/);
+  const exec = ['diff --git a/src/a.sh b/src/a.sh', 'old mode 100644', 'new mode 100755'].join('\n');
+  assert.match(checkDiff([{ path: 'src/a.sh', status: 'M' }], exec).join(), /changes the file mode/);
+  const added = ['diff --git a/src/B.cs b/src/B.cs', 'new file mode 100644', 'index 0000000..1', '--- /dev/null', '+++ b/src/B.cs', '@@ -0,0 +1 @@', '+class B {}'].join('\n');
+  assert.deepEqual(checkDiff([{ path: 'src/B.cs', status: 'A' }], added), []);
+});

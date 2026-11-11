@@ -119,6 +119,9 @@ jobs:
           git rev-parse HEAD > "$AI_ART/base.txt"
           bash "$TOOLS/setup-netstandard-ref.sh"
           dotnet restore ./BBT.Workflow.slnx
+          # PostSharp restores its compiler dependencies during the build: one ordinary build here, with
+          # network and no token, fills its cache so the sandboxed builds work offline.
+          dotnet build ./BBT.Workflow.slnx --configuration Release --no-restore -v q
           sudo sysctl -w fs.inotify.max_user_instances=8192
           sudo sysctl -w fs.inotify.max_user_watches=524288
           droot="$(dirname "$(readlink -f "$(command -v dotnet)")")"
