@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Guids;
 using BBT.Aether.Results;
+using BBT.Workflow.Application.Tests.Telemetry;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Instances;
@@ -48,31 +49,13 @@ public sealed class TaskExecutionEngineTests : IDisposable
     private readonly IErrorActionExecutor _actionExecutor = new ErrorActionExecutor(NullLogger<ErrorActionExecutor>.Instance);
     private readonly IExecutionErrorFactory _errorFactory = new ExecutionErrorFactory(new ErrorNormalizer());
 
-    private readonly ActivityListener _listener;
-    private readonly List<Activity> _startedActivities = [];
-
-    private List<Activity> StartedActivities
-    {
-        get { lock (_startedActivities) return [.. _startedActivities]; }
-    }
-
     public TaskExecutionEngineTests()
     {
         _guidGenerator.Create().Returns(_ => Guid.NewGuid());
-
-        _listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == TaskSourceName,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
-                ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStarted = a => { lock (_startedActivities) _startedActivities.Add(a); }
-        };
-        ActivitySource.AddActivityListener(_listener);
     }
 
     public void Dispose()
     {
-        _listener.Dispose();
         Activity.Current = null;
     }
 
@@ -280,7 +263,8 @@ public sealed class TaskExecutionEngineTests : IDisposable
         ArrangeSuccessfulExecution(task);
         var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
 
-        using var ambient = new Activity("test-root").Start();
+        // Only this test's trace: other classes run "mock-api" tasks in parallel on the same source.
+        using var spans = new TraceSpanCollector(TaskSourceName);
 
         var result = await CreateEngine().ExecuteAsync(
             onExecute, Guid.NewGuid(), TaskTrigger.OnExecute, TaskExecutionOrigin.Flow,
@@ -288,12 +272,12 @@ public sealed class TaskExecutionEngineTests : IDisposable
 
         result.IsSuccess.ShouldBeTrue();
 
-        var names = StartedActivities.Select(a => a.OperationName).ToList();
+        var names = spans.Spans.Select(a => a.OperationName).ToList();
         names.ShouldContain("Task.Journal.Create");
         names.ShouldContain("Task.Journal.Complete");
 
-        var execute = StartedActivities.Single(a => a.OperationName == "Task.Execute.mock-api");
-        execute.Parent.ShouldBe(ambient);
+        var execute = spans.Spans.Single(a => a.OperationName == "Task.Execute.mock-api");
+        execute.Parent.ShouldBe(spans.Root);
         execute.GetTagItem("vnext.task.trigger").ShouldBe("OnExecute");
         execute.Status.ShouldBe(ActivityStatusCode.Ok);
     }
@@ -314,13 +298,14 @@ public sealed class TaskExecutionEngineTests : IDisposable
             .Returns(Result<ITaskExecutor>.Fail(new Error("500", "no executor registered")));
         UsePersistenceStrategy(new TrackingPersistenceStrategy(completionDelay: TimeSpan.Zero));
         var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
+        using var spans = new TraceSpanCollector(TaskSourceName);
 
         var result = await CreateEngine().ExecuteAsync(
             onExecute, Guid.NewGuid(), TaskTrigger.OnExecute, TaskExecutionOrigin.Flow,
             CreateScriptContext(), CancellationToken.None);
 
         result.IsSuccess.ShouldBeFalse();
-        var execute = StartedActivities.Single(a => a.OperationName == "Task.Execute.mock-api");
+        var execute = spans.Spans.Single(a => a.OperationName == "Task.Execute.mock-api");
         execute.Status.ShouldBe(ActivityStatusCode.Error);
     }
 

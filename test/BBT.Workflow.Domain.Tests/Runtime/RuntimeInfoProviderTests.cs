@@ -12,6 +12,7 @@ namespace BBT.Workflow.Domain.Tests.Runtime;
 /// Unit tests for <see cref="RuntimeInfoProvider"/>.
 /// Verifies environment variable reading, fallback behavior, and domain matching logic.
 /// </summary>
+[Collection(ProcessEnvironmentCollection.Name)]
 public class RuntimeInfoProviderTests : IDisposable
 {
     private readonly string? originalAppVersion;
