@@ -32,9 +32,13 @@ concurrency:
 
 jobs:
   develop:
+    # Default branch only: the tooling, the warm-up and the base of a NEW / RECOVERY branch all come
+    # from the checked-out ref, so a run dispatched from another branch would build the pipeline PR on
+    # top of that branch's commits.
     if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (
       github.event_name != 'issues' ||
-      (github.event.label.name == 'ai:planned' || github.event.label.name == 'ai:changes-required') && !github.event.issue.pull_request
+      (github.event.label.name == 'ai:planned' || github.event.label.name == 'ai:changes-required') && !github.event.issue.pull_request)
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -215,10 +219,23 @@ jobs:
           GIT_CONFIG_SYSTEM: /dev/null
         run: |
           g() { git -c core.quotepath=false -c core.hooksPath=/dev/null -c core.fsmonitor= "$@"; }
-          g add -A -- . ':!.ai'
+          # `.ai/` (the input copy) is git-ignored, so `add -A` leaves it out; an explicit exclude
+          # pathspec would make git refuse with exit 1. The rm only matters if the agent un-ignored it,
+          # and the diff policy would refuse that `.gitignore` change anyway.
+          g add -A
+          g rm -r -q --cached --ignore-unmatch -- .ai
           g diff --cached --no-renames --binary > "$AI_ART/patch.diff"
           g diff --cached --no-renames --name-status -z > "$AI_ART/files.z"
           g diff --cached --no-renames --stat | tail -1
+          # What the agent says it decided and ran (its own words, informational; the write job decides).
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const { extractResult } = await import(process.argv[1]);
+            let r;
+            try { r = extractResult(readFileSync(process.argv[2], "utf8")); } catch (e) { console.log(`agent result: unreadable (${e.message})`); process.exit(0); }
+            console.log(`agent exit: ${readFileSync(process.argv[3], "utf8").trim()} · decision: ${r?.decision ?? "?"} · confidence: ${r?.confidence ?? "?"}`);
+            for (const v of Array.isArray(r?.verification) ? r.verification.slice(0, 20) : []) console.log(`ran: ${String(v.command).slice(0, 200)} -> ${String(v.result).slice(0, 200)}`);
+          ' "$TOOLS/scripts/triage/lib/triage.mjs" "$AI_ART/result.json" "$AI_ART/agent.exit"
 
       - name: Upload the agent's work
         if: env.HAS_AUTH == 'true' && steps.collect.outputs.mode != 'skip'
@@ -264,7 +281,9 @@ jobs:
 
   write:
     needs: develop
-    if: needs.develop.outputs.mode != '' && needs.develop.outputs.mode != 'skip'
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      needs.develop.outputs.mode != '' && needs.develop.outputs.mode != 'skip'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
