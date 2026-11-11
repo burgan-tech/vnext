@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using BBT.Workflow.Application.Tests.Telemetry;
 using BBT.Workflow.Data;
 using BBT.Workflow.Logging;
 using Shouldly;
@@ -18,29 +19,9 @@ namespace BBT.Workflow.Infrastructure.Tests.Data;
 /// </summary>
 public sealed class InstanceDataWriteServiceActivityTests : IDisposable
 {
-    private readonly List<ActivityListener> _listeners = new();
-
     public void Dispose()
     {
-        foreach (var listener in _listeners)
-        {
-            listener.Dispose();
-        }
-
         Activity.Current = null;
-    }
-
-    private ActivityListener CreateListener(string sourceName, List<Activity> collected)
-    {
-        var listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == sourceName,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
-        };
-        ActivitySource.AddActivityListener(listener);
-        _listeners.Add(listener);
-        return listener;
     }
 
     [Fact]
@@ -50,14 +31,13 @@ public sealed class InstanceDataWriteServiceActivityTests : IDisposable
         // and xUnit runs test classes in parallel, so a listener here can observe spans from
         // other concurrently running tests on the same source.
         var version = $"1.2.3-{Guid.NewGuid():N}";
-        var collected = new List<Activity>();
-        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
 
         using (InstanceDataWriteService.StartAppendActivity(version, 2048))
         {
         }
 
-        var span = Assert.Single(collected, a => a.DisplayName == "Instance.AppendData" &&
+        var span = Assert.Single(spans.Spans, a => a.DisplayName == "Instance.AppendData" &&
             Equals(a.GetTagItem(TelemetryConstants.TagNames.DataVersion), version));
 
         span.GetTagItem(TelemetryConstants.TagNames.DataVersion).ShouldBe(version);

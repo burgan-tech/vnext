@@ -68,7 +68,7 @@ public sealed class CacheActivityHelperTests : IDisposable
             ShouldListenTo = source => source.Name == "BBT.Workflow.Cache",
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
             // Only this test's spans — see the TestSource remark.
-            ActivityStopped = a => { if (a.TraceId == _root.TraceId) collected.Add(a); }
+            ActivityStopped = a => { if (a.TraceId == _root.TraceId) { lock (collected) collected.Add(a); } }
         };
         ActivitySource.AddActivityListener(listener);
         _listeners.Add(listener);

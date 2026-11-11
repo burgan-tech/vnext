@@ -226,7 +226,8 @@ public sealed class DomainDiscoveryResolverSpanTests : IDisposable
             // the field back from inside that callback observes it before assignment completes and throws.
             ShouldListenTo = s => s.Name == "BBT.Workflow.Pipeline",
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = _collected.Add
+            // Process-wide listener: other tests' spans arrive here too, on their threads.
+            ActivityStopped = a => { lock (_collected) _collected.Add(a); }
         };
         ActivitySource.AddActivityListener(_listener);
     }
@@ -235,6 +236,14 @@ public sealed class DomainDiscoveryResolverSpanTests : IDisposable
     {
         _listener.Dispose();
         Activity.Current = null;
+    }
+
+    private Activity[] Snapshot()
+    {
+        lock (_collected)
+        {
+            return _collected.ToArray();
+        }
     }
 
     // Each test uses a domain name unique to itself, never "lending" (the constant used by the
@@ -254,7 +263,7 @@ public sealed class DomainDiscoveryResolverSpanTests : IDisposable
 
         result.IsSuccess.ShouldBeTrue();
 
-        var spans = _collected.Where(a => a.DisplayName == $"Discovery.Resolve/{domain}").ToList();
+        var spans = Snapshot().Where(a => a.DisplayName == $"Discovery.Resolve/{domain}").ToList();
         spans.Count.ShouldBe(1);
     }
 
@@ -267,7 +276,7 @@ public sealed class DomainDiscoveryResolverSpanTests : IDisposable
 
         await resolver.GetEndpointAsync(domain, EndpointKind.Url, CancellationToken.None);
 
-        var span = _collected.Single(a => a.DisplayName == $"Discovery.Resolve/{domain}");
+        var span = Snapshot().Single(a => a.DisplayName == $"Discovery.Resolve/{domain}");
         span.GetTagItem(TelemetryConstants.TagNames.DiscoveryDomain).ShouldBe(domain);
         span.GetTagItem(TelemetryConstants.TagNames.DiscoveryEndpointKind).ShouldBe(EndpointKind.Url.ToString());
         (span.Status is ActivityStatusCode.Unset or ActivityStatusCode.Ok).ShouldBeTrue();
@@ -284,7 +293,7 @@ public sealed class DomainDiscoveryResolverSpanTests : IDisposable
 
         result.IsSuccess.ShouldBeFalse();
 
-        var span = _collected.Single(a => a.DisplayName == $"Discovery.Resolve/{domain}");
+        var span = Snapshot().Single(a => a.DisplayName == $"Discovery.Resolve/{domain}");
         span.Status.ShouldBe(ActivityStatusCode.Error);
     }
 
@@ -309,7 +318,7 @@ public sealed class DomainDiscoveryResolverSpanTests : IDisposable
             Activity.Current = null;
         }
 
-        var span = _collected.Single(a => a.DisplayName == $"Discovery.Resolve/{domain}");
+        var span = Snapshot().Single(a => a.DisplayName == $"Discovery.Resolve/{domain}");
         span.ParentId.ShouldBe(ambient.Id);
     }
 }
