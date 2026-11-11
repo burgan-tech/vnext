@@ -9,6 +9,7 @@ import { compileImpactRules } from '../../governance/lib/ai-record.mjs';
 import {
   PRODUCTS, DEV_MARKER, branchFor, decideMode, validateResult, checkDiff, pickMilestone, prLabels, developerLabels,
   extractCouncilRow, insertLogRow, findSecrets, parsePatch, parseNameStatusZ, renderPrBody, updateRepairs, renderDeveloperComment, isDeveloperComment,
+  checkRestoreSafety, runnerWarning,
 } from '../lib/developer.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -122,7 +123,7 @@ test('the PR body passes the PR contract, AI decision record included', () => {
   const body = renderPrBody({
     issue: 1192, result, plan: { council: true }, labels, councilUrl: 'https://github.com/o/r/issues/1192#issuecomment-2',
     planUrl: 'https://github.com/o/r/issues/1192#issuecomment-1', branch: branchFor(1192),
-    runner: { build: { status: 'run', detail: 'passed' }, tests: { status: 'run', detail: 'Domain 10/0' } }, repairs: 0, maxRepairs: 3,
+    runner: { build: { status: 'run', detail: 'passed' }, tests: { status: 'run', detail: 'Domain passed, Application passed, Infrastructure passed' } }, repairs: 0, maxRepairs: 3,
     e2eReason: 'the e2e job (pr-e2e.yml) is not built yet; run the suites locally',
   });
   const findings = checkPr({
@@ -131,7 +132,31 @@ test('the PR body passes the PR contract, AI decision record included', () => {
   });
   assert.deepEqual(findings.filter((f) => f.severity !== 'warning').map((f) => `${f.id}: ${f.message}`), []);
   assert.match(body, /Closes #1192/);
+  assert.doesNotMatch(body, /Not verified on the runner/);
   assert.match(updateRepairs(body, 2, 3), /- Repair attempts: 2\/3/);
+
+  // A failed runner build opens the body with a warning, and the body still passes the contract.
+  const failed = renderPrBody({
+    issue: 1192, result, plan: { council: true }, labels, councilUrl: 'https://github.com/o/r/issues/1192#issuecomment-2',
+    planUrl: 'https://github.com/o/r/issues/1192#issuecomment-1', branch: branchFor(1192),
+    runner: { build: { status: 'run', detail: 'failed (sandboxed runner, informational)' }, tests: { status: 'not-run', detail: 'build failed' } }, repairs: 0, maxRepairs: 3,
+    e2eReason: 'the e2e job (pr-e2e.yml) is not built yet; run the suites locally',
+  });
+  assert.match(failed.split('\n')[0], /^> \[!WARNING\]/);
+  assert.match(failed, /Not verified on the runner:\*\* the build did not pass \(failed\)/);
+  const f2 = checkPr({
+    title: result.title, body: failed, labels, milestone: { title: 'v0.0.105', state: 'open' },
+    changedFiles: ['src/BBT.Workflow.Application/Caching/CacheSet.cs'], impactRules: rules, readFile: () => null,
+  });
+  assert.deepEqual(f2.filter((f) => f.severity !== 'warning').map((f) => `${f.id}: ${f.message}`), []);
+});
+
+test('runner warning: build, failed test projects, nothing run', () => {
+  const ok = { build: { detail: 'passed (sandboxed runner, informational)' }, tests: { detail: 'Domain passed, Application passed, Infrastructure passed (sandboxed runner, informational)' } };
+  assert.deepEqual(runnerWarning(ok), []);
+  assert.match(runnerWarning({ build: { detail: 'passed' }, tests: { detail: 'Domain passed, Application failed, Infrastructure failed' } }).join(), /unit tests failed in Application, Infrastructure/);
+  assert.match(runnerWarning({}).join(), /the build was not run/);
+  assert.match(runnerWarning({ build: { detail: 'passed' }, tests: { detail: 'build failed' } }).join(), /unit tests were not run/);
 });
 
 test('the status comment is sticky and lists violations', () => {
@@ -172,8 +197,25 @@ test('project files may not add targets, imports or analyzer changes', () => {
   assert.match(csproj('+  <Import Project="../../evil.props" />'), /build target/);
   assert.match(csproj('+    <RunAnalyzers>false</RunAnalyzers>'), /analyzer or warning/);
   assert.match(csproj('+    <WarningsNotAsErrors>CS8600</WarningsNotAsErrors>'), /analyzer or warning/);
+  assert.match(csproj('+<Project Sdk="Evil.Sdk/1.0.0">'), /SDK other than Microsoft\.NET\.Sdk/);
+  assert.match(csproj("+<Project Sdk='Microsoft.NET.Sdk;Evil.Sdk'>"), /SDK other than/);
+  assert.match(csproj('+  <Sdk Name="Evil.Sdk" Version="1.0.0" />'), /<Sdk> element/);
+  for (const ok of ['+<Project Sdk="Microsoft.NET.Sdk">', '+<Project Sdk="Microsoft.NET.Sdk.Web">', '+<Project Sdk="Microsoft.NET.Sdk.Worker">']) assert.deepEqual(csproj(ok), '', ok);
   // The same text in a C# file is just text.
   assert.deepEqual(checkDiff([{ path: 'src/A/B.cs', status: 'M' }], patchOf('src/A/B.cs', ['+// <Target Name="X" />'])), []);
+});
+
+test('FIX restore check: restore configuration, packages and build rules on the whole branch', () => {
+  assert.deepEqual(checkRestoreSafety([{ path: 'src/A/B.cs', status: 'M' }, { path: '.github/workflows/x.yml', status: 'M' }], patchOf('src/A/B.cs', ['+var x = 1;'])), []);
+  for (const path of ['nuget.config', 'src/NuGet.Config', 'global.json', 'Directory.Build.props', 'src/Directory.Build.targets', 'Directory.Packages.props', '.config/dotnet-tools.json', 'src/A/x.rsp']) {
+    assert.match(checkRestoreSafety([{ path, status: 'M' }], '').join(), /changes restore configuration/, path);
+  }
+  const proj = (line) => checkRestoreSafety([{ path: 'src/A/A.csproj', status: 'M' }], patchOf('src/A/A.csproj', [line])).join();
+  assert.match(proj('+  <PackageReference Include="Evil" Version="1.0.0" />'), /package reference/);
+  assert.match(proj('+  <Import Project="x.targets" />'), /build target/);
+  assert.match(proj('+<Project Sdk="Evil.Sdk">'), /SDK other than/);
+  assert.equal(proj('+  <Compile Include="X.cs" />'), 'src/A/A.csproj: changes which files are compiled or packed');
+  assert.equal(proj('+    <Description>x</Description>'), '');
 });
 
 test('a path git has to quote is refused and never skips the scan', () => {

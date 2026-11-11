@@ -46,9 +46,12 @@ The only shell command you may run is `ai-dotnet`, a sandbox with **no network**
 environment: packages are already restored.
 
 ```
-ai-dotnet build                                     # the whole solution, Release
+ai-dotnet build                                     # the whole solution, Release; no arguments
 ai-dotnet test test/BBT.Workflow.Domain.Tests       # one project; add --filter "FullyQualifiedName~X"
 ```
+
+Nothing else is accepted: `build` takes no arguments, `test` takes one `test/BBT.Workflow.*.Tests`
+project and at most one `--filter` (letters, digits, spaces and `_ . = ~ ! & | ( ) , : -`).
 
 Build after each meaningful edit; run the test projects you touched, then all three
 (`Domain`, `Application`, `Infrastructure`). The unit-test suite is always green: a red test you

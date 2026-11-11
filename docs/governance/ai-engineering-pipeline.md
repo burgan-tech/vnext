@@ -468,14 +468,20 @@ change of a contract product raises impact (§3).
 - The Developer may write source folders only (`src`, `test`, `docs`, `vnext-meta`, the hosts,
   `workers`, `modules`); its one shell command is `ai-dotnet build|test`
   ([`ai-dotnet.sh`](../../scripts/ai/developer/ai-dotnet.sh)), staged root-owned outside the tree
-  with its paths fixed. It runs dotnet in its own network namespace (loopback only — packages are
+  with its paths fixed and its arguments an allow-list (`build` takes none; `test` one
+  `test/BBT.Workflow.*.Tests` project and at most one `--filter` of plain filter characters). It runs dotnet in its own network namespace (loopback only — packages are
   restored, and one ordinary build of the default branch fills PostSharp's dependency cache, before the
   target is checked out and long before the agent), PID namespace (the agent's `/proc/<pid>/environ` is invisible) and
   mount namespace (the runner temp dir and CLI config hidden, the home directory and `.git`
   read-only with the workspace writable, a private `/tmp`, the docker socket masked), with `env -i`, as the runner uid with `no_new_privs`, no capabilities and no supplementary
   groups — so code inside cannot `sudo`, reach docker or undo the mounts. Only the collect step holds
   a (read-only) GitHub token; setup scripts run from the default-branch copy, and a FIX target must be
-  a branch of this repository (never a fork's `ai/issue-<n>`). An agent that did not exit cleanly is
+  a branch of this repository (never a fork's `ai/issue-<n>`). Humans may push to that branch, so
+  before it is restored the default-branch copy of
+  [`check-restore.mjs`](../../scripts/ai/developer/check-restore.mjs) checks the whole branch (merge
+  base → head): no restore configuration (`nuget.config`, `global.json`, `Directory.*.props|targets`,
+  `.rsp`, `.config/`), no package reference, MSBuild files under the rules below; a violation fails the
+  run before anything of the branch is evaluated. An agent that did not exit cleanly is
   never pushed.
   The diff is captured with git ignoring user / system config, hooks and fsmonitor. The agent job holds no
   GitHub write credential; the write job never runs agent-written code.
@@ -487,11 +493,13 @@ change of a contract product raises impact (§3).
   submodule, mode change); deletes, skips (`Skip =`, `#if false`) or comments out a test, or removes
   more tests than it adds in any one file; adds `#pragma warning disable`, `[SuppressMessage]`, `<NoWarn>` or
   a package reference, `#nullable disable`, `NOSONAR` or `[ExcludeFromCodeCoverage]`; in an MSBuild file
-  adds a target, task, build event, import or reference, changes which files are compiled, or adds,
+  adds a target, task, build event, import or reference, an `<Sdk>` element or an SDK other than
+  `Microsoft.NET.Sdk[.Web|.Worker|.Razor|.BlazorWebAssembly]`, changes which files are compiled, or adds,
   changes or removes an analyzer / warning setting; is binary or over 80 files / 4000 lines;
   or carries a secret the job holds or a token-shaped string. The policy runs on what `git apply`
   changed in the write job (file list and diff from git, the patch parsed by hunk structure), and a
-  mismatch with the agent job's own file list also stops the push.
+  mismatch with the agent job's own file list also stops the push. When the sandboxed runner build or
+  a runner test project did not pass, the draft PR body opens with a warning saying so.
 - Nothing merges, deploys, changes thresholds or edits branch protection.
 
 ## 14. Day-to-day use
