@@ -501,7 +501,10 @@ change of a contract product raises impact (§3).
   or carries a secret the job holds or a token-shaped string. The policy runs on what `git apply`
   changed in the write job (file list and diff from git, the patch parsed by hunk structure), and a
   mismatch with the agent job's own file list also stops the push. When the sandboxed runner build or
-  a runner test project did not pass, the draft PR body opens with a warning saying so.
+  a runner test project did not pass, the draft PR body opens with a warning saying so. The sandbox
+  has no Docker, so a project whose only failures are Testcontainers fixtures
+  (`DockerUnavailableException`) is reported as passed with those tests named as not run there; the
+  PR's `Unit Tests` check runs them.
 - Nothing merges, deploys, changes thresholds or edits branch protection.
 
 ## 14. Day-to-day use

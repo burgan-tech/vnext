@@ -356,6 +356,26 @@ export function insertLogRow(readme, row) {
 }
 
 const yes = (b) => (b ? 'yes' : 'no');
+
+/**
+ * The sandboxed runner's verdict for one test project, from `dotnet test`'s exit code and console
+ * log. The sandbox has no Docker by design (the socket is masked), so a Testcontainers fixture
+ * throws `DockerUnavailableException`. When EVERY failed test failed for that reason alone, the
+ * project is reported as passed with those tests named as not runnable here — the PR's `Unit Tests`
+ * check runs them with Docker. Any other failure, or a log without a parsable failure list, is
+ * `failed`.
+ */
+export function testVerdict(project, exitCode, log) {
+  if (Number(exitCode) === 0) return `${project} passed`;
+  const blocks = String(log ?? '').split(/^(?=  (?:Failed|Passed|Skipped) )/m).filter((b) => b.startsWith('  Failed '));
+  const docker = blocks.filter((b) => /DockerUnavailableException/.test(b)).length;
+  if (blocks.length && docker === blocks.length && /^Failed!\s+- Failed:\s+(\d+),/m.test(log)
+    && Number(/^Failed!\s+- Failed:\s+(\d+),/m.exec(log)[1]) === blocks.length) {
+    return `${project} passed except ${docker} Docker-dependent tests (no Docker in the sandbox; CI runs them)`;
+  }
+  return `${project} failed`;
+}
+
 const bullets = (items, fallback) => (items.length ? items.map((i) => `- ${i}`) : [`- ${fallback}`]);
 
 /**

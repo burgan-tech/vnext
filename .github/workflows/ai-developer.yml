@@ -261,8 +261,9 @@ jobs:
           tests=""
           if [ "$build" = passed ]; then
             for p in Domain Application Infrastructure; do
-              if "$TOOLS/bin/ai-dotnet" test "test/BBT.Workflow.$p.Tests" > "$RUNNER_TEMP/ai-runner/$p.log" 2>&1; then r=passed; else r=failed; fi
-              tests="$tests $p $r,"
+              code=0; "$TOOLS/bin/ai-dotnet" test "test/BBT.Workflow.$p.Tests" > "$RUNNER_TEMP/ai-runner/$p.log" 2>&1 || code=$?
+              # No Docker in the sandbox: Testcontainers-only failures are named, not counted as red.
+              tests="$tests $(node "$TOOLS/scripts/ai/developer/test-verdict.mjs" "$p" "$code" "$RUNNER_TEMP/ai-runner/$p.log" || echo "$p failed"),"
             done
           fi
           tail -n 30 "$RUNNER_TEMP/ai-runner/build.log"
