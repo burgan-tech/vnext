@@ -187,10 +187,18 @@ public sealed class Transition : IHasKey
     /// a transition authored with only <c>schema</c> exposes it as a single rule-less (fallback) entry.
     /// </summary>
     [JsonIgnore]
-    public SchemaSelection? SchemaSelection =>
-        schemas is { Schemas.Count: > 0 }
-            ? schemas
-            : Schema is null ? null : SchemaSelection.CreateDefault(Schema);
+    public SchemaSelection? SchemaSelection
+    {
+        get
+        {
+            if (HasSchemasList)
+            {
+                return schemas;
+            }
+
+            return Schema is null ? null : SchemaSelection.CreateDefault(Schema);
+        }
+    }
 
     /// <summary>
     /// True when the transition declares a schema, through either <c>schema</c> or <c>schemas</c>.
@@ -203,7 +211,7 @@ public sealed class Transition : IHasKey
     /// declares; used to name the offending JSON member in validation errors.
     /// </summary>
     [JsonIgnore]
-    internal bool HasSchemasList =>schemas is { Schemas.Count: > 0 };
+    internal bool HasSchemasList => schemas is { Schemas.Count: > 0 };
 
     /// <summary>
     /// View definition for the transition. Supports both old "view" and new "views" JSON formats.

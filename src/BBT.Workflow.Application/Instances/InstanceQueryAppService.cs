@@ -2274,7 +2274,7 @@ public sealed class InstanceQueryAppService(
                         transition = currentWorkflow.ResolveTransition(key, currentStateValue);
                         hasView = transition?.View is { Views.Count: > 0 };
                         loadData = false;
-                        hasSchema = transition?.HasSchema ?? false;
+                        hasSchema = transition?.HasSchema == true;
                         annotations = transition?.Annotations;
                     }
 
@@ -2322,7 +2322,7 @@ public sealed class InstanceQueryAppService(
             {
                 var transition = currentWorkflow.ResolveTransition(transitionKey, currentStateValue);
                 var hasView = transition?.View is { Views.Count: > 0 };
-                var hasSchema = transition?.HasSchema ?? false;
+                var hasSchema = transition?.HasSchema == true;
                 return WithDefinitionDescriptors(new TransitionItem
                 {
                     Name = transitionKey,
