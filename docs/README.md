@@ -15,7 +15,8 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 | [AI capabilities](ai-capabilities.md) | Every AI skill, subagent, MCP server, hook and script — when to use it and how to run it. |
 | [Agent Council](agent-council/README.md) | Plan-only decision workflow, roles, session artifacts, evidence gates, and Chair approval. Decision history: [sessions/README.md](agent-council/sessions/README.md). |
 | [Code Review](code-review/README.md) | What a review of this repository checks: the four reviewer checklists, severity and verdict vocabularies, and the noise rules. Single source for the `pr-review` and `workflow-code-review` skills. |
-| [AI engineering pipeline](governance/ai-engineering-pipeline.md) | *Proposed.* Label-driven CI roles (Director, Council, Developer, Quality Gate) on the Cursor CLI: guard matrix, label state machine, triggers, PR evidence, e2e in CI, rollout and day-to-day use. |
+| [AI pipeline at a glance](governance/ai-pipeline-overview.md) | One page: the label flow diagram, which label starts which agent, step by step, modes and status. |
+| [AI engineering pipeline](governance/ai-engineering-pipeline.md) | Label-driven CI roles (Director, Council, Developer, Quality Gate) on the Cursor CLI: guard matrix, label state machine, triggers, PR evidence, e2e in CI, rollout and day-to-day use. |
 | [Release lines](governance/release-lines.md) | Parallel patch lines: upstream-first backports, the emergency exception, `latest` channel policy, vnext-meta sync, release-owner checklist. |
 | [Architecture](architecture/system-overview.md) | Runtime shape, service boundaries, dependency direction, routing. |
 | [Domain](domain/instance-data-merge-concept.md) | Instance lifecycle, data versioning, cache context, function-handler behavior. |
