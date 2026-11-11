@@ -78,6 +78,41 @@ public class InstanceSchemaFunctionCacheTests
     }
 
     [Fact]
+    public void SchemaKeyAndEtag_ChangeWithARuleReadableHeader()
+    {
+        // A rule-based transition schema may be selected on any request header, so two callers that
+        // differ only in `channel` must not share a cached body or a validator.
+        var sut = CreateSut();
+        var a = CreateSchemaInput(headers: new() { ["channel"] = "A" });
+        var b = CreateSchemaInput(headers: new() { ["channel"] = "B" });
+
+        sut.BuildKey(a, "approve").ShouldNotBe(sut.BuildKey(b, "approve"));
+        sut.ComputeEtag(a, CreateFingerprint(), "approve").ShouldNotBe(sut.ComputeEtag(b, CreateFingerprint(), "approve"));
+    }
+
+    [Fact]
+    public void SchemaKeyAndEtag_IgnoreVolatileHeaders()
+    {
+        var sut = CreateSut();
+        var a = CreateSchemaInput(headers: new() { ["channel"] = "A", ["x-request-id"] = "r1", ["traceparent"] = "t1" });
+        var b = CreateSchemaInput(headers: new() { ["channel"] = "A", ["X-Request-Id"] = "r2", ["traceparent"] = "t2" });
+
+        sut.BuildKey(a, "approve").ShouldBe(sut.BuildKey(b, "approve"));
+        sut.ComputeEtag(a, CreateFingerprint(), "approve").ShouldBe(sut.ComputeEtag(b, CreateFingerprint(), "approve"));
+    }
+
+    [Fact]
+    public void MasterKeyAndEtag_IgnoreArbitraryHeaders()
+    {
+        var sut = CreateSut();
+        var a = CreateMasterInput(headers: new() { ["channel"] = "A" });
+        var b = CreateMasterInput(headers: new() { ["channel"] = "B" });
+
+        sut.BuildKey(a).ShouldBe(sut.BuildKey(b));
+        sut.ComputeEtag(a, CreateFingerprint()).ShouldBe(sut.ComputeEtag(b, CreateFingerprint()));
+    }
+
+    [Fact]
     public void SchemaBuildKey_DiffersByTransitionKey()
     {
         var sut = CreateSut();

@@ -3369,9 +3369,12 @@ public sealed class InstanceQueryAppService(
             currentWorkflow, instance, transition, input.Headers, cancellationToken);
         if (!resolved.IsSuccess)
         {
-            return Result<GetSchemaOutput>.Fail(
-                Error.NotFound("notfound",
-                    $"No schema entry matched for transition {transitionKey} in state {instance.CurrentState}"));
+            // Only "no entry matched" is a 404; any other failure keeps its own error.
+            return resolved.Error.Code == WorkflowErrorCodes.TransitionSchemaNotMatched
+                ? Result<GetSchemaOutput>.Fail(
+                    Error.NotFound("notfound",
+                        $"No schema entry matched for transition {transitionKey} in state {instance.CurrentState}"))
+                : Result<GetSchemaOutput>.Fail(resolved.Error);
         }
 
         var schemaReference = resolved.Value;

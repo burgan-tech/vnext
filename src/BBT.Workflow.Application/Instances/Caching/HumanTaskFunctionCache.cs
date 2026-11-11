@@ -27,21 +27,6 @@ public sealed class HumanTaskFunctionCache(
 
     private const string KeyPrefix = $"human-task:{ResponseShapeVersion}:";
 
-    /// <summary>
-    /// Headers excluded from the key because they vary per request while no authorization decision
-    /// can depend on them. Everything else is folded in, deliberately erring towards a lower hit
-    /// rate rather than towards serving one caller scope's list to another — a dynamic role grant
-    /// may read any header name the workflow author picked, so the set that matters cannot be
-    /// enumerated here. This list is the tuning knob if the hit rate proves too low; widening it is
-    /// a security decision, not a performance one.
-    /// </summary>
-    private static readonly HashSet<string> VolatileHeaders = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "traceparent", "tracestate", "baggage",
-        "x-request-id", "x-correlation-id", "request-id",
-        "date", "user-agent", "content-length", "accept-encoding", "connection"
-    };
-
     /// <inheritdoc />
     public bool Enabled => options.Value.Enabled;
 
@@ -57,32 +42,7 @@ public sealed class HumanTaskFunctionCache(
         var callerScope = CallerScopeHash.Compute(
             currentUser, role: null, roles: roles, extensions: null, headers: headers, version: null);
 
-        return $"{KeyPrefix}{domain}:{callerScope}:{HashAuthorizationInputs(headers)}";
-    }
-
-    /// <summary>
-    /// Hashes the headers a dynamic role grant could read. <c>CallerScopeHash</c> covers role,
-    /// identity and culture; it does not cover <c>$.context.Headers.*</c>, and a grant evaluated
-    /// against different headers can reach a different answer for the same roles.
-    /// </summary>
-    private static string HashAuthorizationInputs(IReadOnlyDictionary<string, string?>? headers)
-    {
-        if (headers is null || headers.Count == 0)
-            return "0";
-
-        var builder = new StringBuilder();
-        foreach (var header in headers
-                     .Where(h => !VolatileHeaders.Contains(h.Key))
-                     .OrderBy(h => h.Key, StringComparer.OrdinalIgnoreCase))
-        {
-            builder.Append(header.Key.ToLowerInvariant()).Append('=').Append(header.Value).Append('|');
-        }
-
-        if (builder.Length == 0)
-            return "0";
-
-        return Convert.ToHexStringLower(
-            SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString())))[..16];
+        return $"{KeyPrefix}{domain}:{callerScope}:{RequestHeaderHash.Compute(headers)}";
     }
 
     /// <inheritdoc />

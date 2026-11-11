@@ -314,12 +314,32 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
         _transitionSchemaResolver
             .ResolveAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<Instance>(), Arg.Any<Transition>(),
                 Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<CancellationToken>())
-            .Returns(Result<Reference?>.Fail(Error.Validation("Transition:100025", "no schema entry matched")));
+            .Returns(Result<Reference?>.Fail(Error.Validation(WorkflowErrorCodes.TransitionSchemaNotMatched, "no schema entry matched")));
 
         var result = await _service.GetSchemaAsync(CreateInput(instance.Id.ToString()), TestTransition, CancellationToken.None);
 
         result.Result.IsSuccess.ShouldBeFalse();
         result.Result.Error.Message.ShouldContain("No schema entry matched");
+    }
+
+    [Fact]
+    public async Task GetSchema_ResolverFailureOtherThanNoMatch_PassesThroughUnchanged()
+    {
+        var (instance, workflow) = CreateInstanceWithTransitionSchema(withSchemaRef: false);
+        workflow.GetState(TestState).Value!.Transitions.First().SetSchemas(SchemaSelection.CreateWithSchemas(
+            SchemaEntry.CreateDefault(new Reference("fallback-schema", TestDomain, "sys-schemas", TestVersion))));
+        SetupFullPathMocks(instance, workflow);
+        var failure = Error.Failure("Script:1", "rule script blew up");
+        _transitionSchemaResolver
+            .ResolveAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<Instance>(), Arg.Any<Transition>(),
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Reference?>.Fail(failure));
+
+        var result = await _service.GetSchemaAsync(CreateInput(instance.Id.ToString()), TestTransition, CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeFalse();
+        result.Result.Error.Code.ShouldBe("Script:1");
+        result.Result.Error.Message.ShouldBe("rule script blew up");
     }
 
     [Fact]
