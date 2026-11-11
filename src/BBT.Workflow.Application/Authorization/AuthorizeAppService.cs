@@ -223,6 +223,41 @@ public sealed class AuthorizeAppService(
     /// request parameter — under an external provider that parameter is usually absent, and logging it
     /// would record an empty role for every decision.
     /// </summary>
+    /// <inheritdoc />
+    public async Task<Result<AuthorizeOutput>> GetStartAuthorizeResultAsync(
+        string domain,
+        string workflow,
+        string? role,
+        string? version = null,
+        AuthorizationRequestContext? requestContext = null,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(domain);
+        var workflowResult = await componentCacheStore.GetFlowAsync(domain, workflow, NormalizeVersion(version), cancellationToken);
+        if (!workflowResult.IsSuccess)
+            return Result<AuthorizeOutput>.Fail(workflowResult.Error);
+
+        var wf = workflowResult.Value!;
+
+        var callerRoles = await GetCallerRolesAsync(role, requestContext, cancellationToken);
+        if (!callerRoles.IsSuccess)
+            return Result<AuthorizeOutput>.Fail(callerRoles.Error);
+
+        // No instance exists before a start, so the evaluator takes its no-instance path: static roles
+        // and $Everyone are compared, every instance-bound leaf is "no match". Neither the state gate nor
+        // availableIn applies — the start transition belongs to no state.
+        using var decision = AuthorizationActivityHelper.StartDecide();
+        var allowed = wf.StartTransition is { } start
+                      && await transitionAuthorizationManager.IsTransitionAllowedForRoleAsync(
+                          wf, start, instance: null, callerRoles.Value, requestContext, cancellationToken);
+        AuthorizationActivityHelper.SetDecision(decision, allowed, callerRoles.Value?.Count ?? 0);
+
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.AuthorizeRequest(domain, workflow, string.Empty, $"start:{wf.StartTransition?.Key}", Describe(callerRoles.Value), allowed);
+
+        return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = allowed });
+    }
+
     private static string Describe(IReadOnlyList<string>? roles) =>
         roles is { Count: > 0 } ? string.Join(",", roles) : string.Empty;
 

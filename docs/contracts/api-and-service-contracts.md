@@ -154,6 +154,11 @@ may not read `data` either.
 polled instance's attributes) while its **authorization** does. Authorization follows where the
 instance actually is; content follows what the client holds.
 
+Starting an instance has its own, workflow-scoped route, because there is no instance to address yet:
+`GET .../workflows/{workflow}/functions/authorize?type=instance[&version=x]` evaluates the workflow's
+`startTransition.roles` with no instance (instance-bound grants never match). The gateway gates
+`POST .../instances/start` on it — [details](../domain/authorize-function.md#starting-an-instance--typeinstance).
+
 A refusal is `403` with a body of `{"allowed": false}`. A consumer that reads only the `200` turns
 every refusal into "no answer".
 Built-in system functions (`state`, `view`, `data`, `schema`, `authorize`, `permissions`,
