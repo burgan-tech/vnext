@@ -55,7 +55,9 @@ project and at most one `--filter` (letters, digits, spaces and `_ . = ~ ! & | (
 
 Build after each meaningful edit; run the test projects you touched, then all three
 (`Domain`, `Application`, `Infrastructure`). The unit-test suite is always green: a red test you
-did not cause is still yours to fix ([policy](../../docs/testing/unit-tests.md)). Report exactly
+did not cause is still yours to fix ([policy](../../docs/testing/unit-tests.md)). The sandbox has no
+Docker, so `Infrastructure` tests on a Testcontainers fixture fail with `DockerUnavailableException`:
+that is the sandbox, not your change — report them as not runnable here, never as passed. Report exactly
 what you ran and its result; never claim a run you did not make. The writer runs its own build and
 tests after you, and CI runs them again on the PR.
 

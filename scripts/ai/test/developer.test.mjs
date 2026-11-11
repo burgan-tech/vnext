@@ -9,8 +9,23 @@ import { compileImpactRules } from '../../governance/lib/ai-record.mjs';
 import {
   PRODUCTS, DEV_MARKER, branchFor, decideMode, validateResult, checkDiff, pickMilestone, prLabels, developerLabels,
   extractCouncilRow, insertLogRow, findSecrets, parsePatch, parseNameStatusZ, renderPrBody, updateRepairs, renderDeveloperComment, isDeveloperComment,
-  checkRestoreSafety, runnerWarning,
+  checkRestoreSafety, runnerWarning, testVerdict,
 } from '../lib/developer.mjs';
+
+test('testVerdict: Docker-only failures are named, anything else stays failed', () => {
+  const dockerFail = (name) => `  Failed ${name} [1 ms]\n  Error Message:\n   Class fixture threw\n---- DotNet.Testcontainers.Builders.DockerUnavailableException : Docker is either not running\n  Stack Trace:\n`;
+  const realFail = '  Failed A.B.C [3 ms]\n  Error Message:\n   Shouldly.ShouldAssertException : 1 should be 2\n';
+  const summary = (n, p) => `\nFailed!  - Failed:   ${n}, Passed:   ${p}, Skipped:     0, Total:   ${n + p}, Duration: 2 s - X.dll (net10.0)\n`;
+  assert.equal(testVerdict('Domain', 0, ''), 'Domain passed');
+  const docker = `  Passed A.Ok [1 ms]\n${dockerFail('A.One')}${dockerFail('A.Two(x: 1)')}${summary(2, 5)}`;
+  const v = testVerdict('Infrastructure', 1, docker);
+  assert.match(v, /^Infrastructure passed except 2 Docker-dependent tests/);
+  assert.deepEqual(runnerWarning({ build: { detail: 'passed' }, tests: { detail: `Domain passed, ${v}` } }), []);
+  assert.equal(testVerdict('Infrastructure', 1, `${dockerFail('A.One')}${realFail}${summary(2, 5)}`), 'Infrastructure failed');
+  assert.equal(testVerdict('Infrastructure', 1, `${dockerFail('A.One')}${summary(3, 5)}`), 'Infrastructure failed', 'summary count must match the parsed blocks');
+  assert.equal(testVerdict('Infrastructure', 1, 'error MSB1009: Project file does not exist.'), 'Infrastructure failed');
+  assert.equal(testVerdict('Infrastructure', 134, ''), 'Infrastructure failed');
+});
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const taxonomy = JSON.parse(readFileSync(join(root, '.github/triage/labels.json'), 'utf8'));
