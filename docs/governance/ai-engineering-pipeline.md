@@ -1,11 +1,10 @@
 # AI Engineering Pipeline (CI, Cursor API)
 
-> **Status: proposed design — not implemented yet.** This page is the target contract for moving
-> the four autonomous-engineering routines (Engineering Director, Architecture Council, Autonomous
-> Developer, Quality Gate) from local Claude routines into GitHub Actions, driven by the Cursor CLI
-> and the `CURSOR_API_KEY` that [issue triage](../ai-capabilities.md#6-github-and-git) already uses.
-> Each section says what exists today and what the rollout adds. When something is built, update
-> this page in the same PR and move it out of "proposed".
+> **Status: live.** The four autonomous-engineering routines (Engineering Director, Architecture
+> Council, Autonomous Developer, Quality Gate) run in GitHub Actions on the Cursor CLI and the
+> `CURSOR_API_KEY` that [issue triage](../ai-capabilities.md#6-github-and-git) already uses;
+> `AI_MODE=apply` since 2026-11-11. One-page summary: [AI pipeline at a glance](ai-pipeline-overview.md).
+> When behaviour changes, update this page in the same PR.
 
 ## 1. What it is, in one paragraph
 
@@ -444,7 +443,7 @@ change of a contract product raises impact (§3).
 | 3 | **Read-only roles** in `dry-run`, one PR per role: Director (`ai-director.yml`), Quality Gate (`ai-quality-gate.yml`), Council (`ai-council.yml`) — comments only | a week of runs with no wrong state |
 | 4 | **Developer** (`ai-developer.yml`) in `dry-run` (pushes `ai/issue-<n>`, opens a draft PR, status comment, no issue label transitions), then `apply` | first low-impact issue reaches `ai:human-approval` |
 | 5 | **E2E in CI** (§10) | e2e evidence appears on AI PRs |
-| 6 | `apply` for every role | — |
+| 6 | `apply` for every role | `AI_MODE=apply` (2026-11-11); first issues watched, a role goes back to `dry-run` if it writes a wrong state |
 
 ## 12. Configuration
 
