@@ -269,6 +269,9 @@ public static class WorkflowErrorCodes
     /// <summary>The configured caller-role provider could not resolve the caller's role set.</summary>
     public const string CallerRoleResolutionFailed = "Authorization:110004";
 
+    /// <summary>Workflow-scoped authorize was called without a supported <c>type</c> (supported: <c>instance</c>).</summary>
+    public const string AuthorizeUnsupportedType = "Authorization:110005";
+
     #endregion
     
     #region Discovery Errors (700xxx)

@@ -139,9 +139,9 @@ middle tier refuse a call the runtime accepts.
 
 ---
 
-## Starting an instance — `?start=true`
+## Starting an instance — `?type=instance`
 
-`GET /api/v1/{domain}/workflows/{workflow}/functions/authorize?start=true[&version=x][&role=r]`
+`GET /api/v1/{domain}/workflows/{workflow}/functions/authorize?type=instance[&version=x][&role=r]`
 
 Before a start there is no instance to address, so the instance-scoped route cannot answer "may this
 caller start one?". This workflow-scoped route answers it from the workflow's own
@@ -149,11 +149,16 @@ caller start one?". This workflow-scoped route answers it from the workflow's ow
 transitions:
 
 ```
-Utils.CallApiGet("http://<orchestrator-host>/api/v1/"+path.var1+"/workflows/"+path.var2+"/functions/authorize?start=true", header, allHeader).IsSuccessStatusCode == true
+Utils.CallApiGet("http://<orchestrator-host>/api/v1/"+path.var1+"/workflows/"+path.var2+"/functions/authorize?type=instance", header, allHeader).IsSuccessStatusCode == true
 ```
 
-- `start=true` is the only target. The gateway never has to know the start transition's key — the
-  route resolves it from the definition. Without it the call is `AuthorizeRequiresExactlyOneTarget` (400).
+- `type` says what is authorized; `instance` (start a new instance) is the only supported value today.
+  The parameter exists so other workflow-scoped questions can be added without a new route. It is
+  required and matched ordinally: a missing or unknown value is `AuthorizeUnsupportedType`
+  (`Authorization:110005`, 400) naming the supported values — there is no default, so a caller who
+  forgot it never receives a verdict about some other question. Not to be confused with the instance
+  list filter `instanceType` (`R`/`S`/`P`).
+- The gateway never has to know the start transition's key — the route resolves it from the definition.
 - `version` pins the definition; pass the start request's own `version` so both read the same roles.
 - The caller's role set is resolved exactly as on the instance route (*Role resolution* below).
 - Response contract is the same: `200 {"allowed": true}` / `403 {"allowed": false}`; an unknown

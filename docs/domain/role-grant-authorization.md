@@ -260,7 +260,7 @@ proven nor disproven, so it is **Unknown**. **Identity leaves** — the predefin
 and `$userBehalfOf.` — compare the caller's identity, so they are always **Yes** or **No**. On the
 no-instance path (no instance to read the starter or history from) an identity leaf is **No**; `$Everyone`
 reads nothing from an instance and stays **Yes** there too. `startTransition.roles` are always
-evaluated on this path — see [`authorize?start=true`](authorize-function.md#starting-an-instance--starttrue).
+evaluated on this path — see [`authorize?type=instance`](authorize-function.md#starting-an-instance--typeinstance).
 
 | Leaf | Caller has roles | Caller has no roles |
 |---|---|---|

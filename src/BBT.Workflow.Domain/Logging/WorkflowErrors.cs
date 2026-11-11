@@ -669,6 +669,19 @@ public static class WorkflowErrors
             target: "authorize");
 
     /// <summary>
+    /// Workflow-scoped authorize (<c>GET .../workflows/{workflow}/functions/authorize</c>) was called with a
+    /// missing or unsupported <c>type</c>. There is no default type: a caller who forgot it must not receive
+    /// a verdict about some other question. Values match ordinally.
+    /// </summary>
+    public static Error AuthorizeUnsupportedType(string? type)
+        => Error.Validation(
+            WorkflowErrorCodes.AuthorizeUnsupportedType,
+            string.IsNullOrWhiteSpace(type)
+                ? "Workflow-scoped authorize requires the 'type' query parameter. Supported: instance"
+                : $"Workflow-scoped authorize does not support type '{type}'. Supported: instance",
+            target: "authorize");
+
+    /// <summary>
     /// Query roles check is only valid for instance-level authorize.
     /// </summary>
     public static Error AuthorizeQueryRolesRequiresInstance()

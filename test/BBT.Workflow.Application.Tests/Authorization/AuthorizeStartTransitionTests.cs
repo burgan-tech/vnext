@@ -22,7 +22,7 @@ using WorkflowDefinition = BBT.Workflow.Definitions.Workflow;
 namespace BBT.Workflow.Authorization;
 
 /// <summary>
-/// Workflow-scoped <c>authorize?start=true</c> (vnext#1203): a gateway asks whether the caller may
+/// Workflow-scoped <c>authorize?type=instance</c> (vnext#1203): a gateway asks whether the caller may
 /// START an instance, before any instance exists, from the workflow's own <c>startTransition.roles</c>.
 /// </summary>
 /// <remarks>

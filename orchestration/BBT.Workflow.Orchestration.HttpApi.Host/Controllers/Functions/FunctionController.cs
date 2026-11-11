@@ -31,34 +31,38 @@ public sealed class FunctionController(
     IDomainFunctionHandlerFactory domainHandlerFactory,
     IAuthorizeAppService authorizeAppService) : AetherControllerBase
 {
+    /// <summary>The workflow-scoped <c>authorize</c> type that asks whether the caller may start an instance.</summary>
+    private const string AuthorizeTypeInstance = "instance";
+
     /// <summary>
     /// Workflow-scoped <c>authorize</c>: answers whether the caller may START an instance of the
     /// workflow, from the workflow's own <c>startTransition.roles</c>. There is no instance to address
     /// before a start, so a gateway gates <c>POST .../instances/start</c> with this call.
-    /// <c>start=true</c> is the only target; the caller's roles are resolved exactly as on the
+    /// <c>type=instance</c> ("may this caller start an instance?") is the only supported type today; the
+    /// parameter exists so other workflow-scoped questions can be added. The caller's roles are resolved exactly as on the
     /// instance-scoped <c>authorize</c>.
     /// </summary>
     /// <param name="domain">Domain of the workflow.</param>
     /// <param name="workflow">Workflow key.</param>
-    /// <param name="start">Must be <c>true</c>: asks about the start transition.</param>
+    /// <param name="type">What is authorized. Supported: <c>instance</c> (start a new instance). Ordinal; required.</param>
     /// <param name="role">Optional role parameter, composed as on the instance-scoped endpoint.</param>
     /// <param name="version">Optional workflow version; the same version the start request would use.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <response code="200">The caller may start an instance.</response>
-    /// <response code="400">No target (<c>start=true</c>) was given.</response>
+    /// <response code="400">The <c>type</c> is missing or unsupported (<c>Authorization:110005</c>).</response>
     /// <response code="403">The caller may not start an instance.</response>
     /// <response code="404">Workflow or version not found.</response>
     [HttpGet("{domain}/workflows/{workflow}/functions/authorize")]
     public async Task<IActionResult> AuthorizeStartAsync(
         [FromRoute] string domain,
         [FromRoute] string workflow,
-        [FromQuery] bool start = false,
+        [FromQuery] string? type = null,
         [FromQuery] string? role = null,
         [FromQuery] string? version = null,
         CancellationToken cancellationToken = default)
     {
-        if (!start)
-            return FromResult(Result<AuthorizeOutput>.Fail(WorkflowErrors.AuthorizeRequiresExactlyOneTarget()));
+        if (!string.Equals(type, AuthorizeTypeInstance, StringComparison.Ordinal))
+            return FromResult(Result<AuthorizeOutput>.Fail(WorkflowErrors.AuthorizeUnsupportedType(type)));
 
         var binding = HttpContext.GetRequestBindingContext();
         var routeValues = HttpContext.GetRouteData()?.Values
