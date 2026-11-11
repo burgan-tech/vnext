@@ -55,7 +55,7 @@ const git = (a, opts = {}) => execFileSync(GIT, [...GIT_SAFE, ...a], {
   encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...opts,
   env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', ...(opts.env ?? {}) },
 });
-const E2E_REASON = 'the e2e job (pr-e2e.yml, rollout step 5) is not built yet; run the listed suites locally';
+const E2E_REASON = 'pending — PR E2E (pr-e2e.yml) runs the listed suites (Smoke alone when none; the full set for an unknown name) against this PR’s runtime and replaces this section with the result';
 const summary = ['| Issue | Mode | Outcome | PR | Notes |', '|---|---|---|---|---|'];
 
 const files = readdirSync(inDir).filter((f) => f.endsWith('.json'));

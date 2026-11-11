@@ -140,10 +140,11 @@ with `node scripts/triage/sync-labels.mjs --apply` (it never deletes a label).
 | Impact (one) | `ai:impact-low` · `ai:impact-high` | Director; raised by the Quality Gate |
 | Risk (one, derived) | `ai:risk-low` · `ai:risk-medium` · `ai:risk-high` · `ai:risk-critical` | Director |
 | Council | `ai:council-required` · `ai:council-approved` | Director, human; council writer |
+| PR E2E (PRs only) | `e2e` · `e2e:full` | human, to run `pr-e2e.yml` on a non-AI PR (§10.2) |
 | Deprecated | `ai:in-progress` → `ai:developing` · `ai:pr-opened` → `ai:pr-ready` · `ai:needs-human` → `ai:blocked` | nobody; kept for old issues |
 
 In `labels.json` each row of this table is its own group: `status`, `changeLevel`, `impact`, `risk`,
-`council`, `deprecated` (beside the triage groups `kinds`, `areas`, `priorities`). A deprecated entry
+`council`, `e2e`, `deprecated` (beside the triage groups `kinds`, `areas`, `priorities`). A deprecated entry
 carries `replacedBy`; the pipeline never sets it, and the issue keeps it until a human removes it.
 `scripts/triage/test/labels.test.mjs` pins the groups to this table — change both together.
 
@@ -373,8 +374,8 @@ folders, one folder = one `--filter "FullyQualifiedName~<Suite>"`) against the r
 the working tree, renders the TRX with
 [`e2e-evidence.mjs`](../../scripts/governance/e2e-evidence.mjs) and pastes the block into the PR's
 `## E2E evidence`; [PR Contract](../../.github/workflows/pr-contract.yml) checks it (`PR-E2E-STATUS`,
-and `PR-E2E-RUN`: the runtime SHA must be a commit of the PR). No CI job runs these tests: the
-vnext-example workflows only run `npm` validation.
+and `PR-E2E-RUN`: the runtime SHA must be a commit of the PR). The vnext-example workflows only run
+`npm` validation; the CI run is vnext's `pr-e2e.yml` (§10.2).
 
 ### 10.2 The CI job (`pr-e2e.yml`)
 
@@ -397,12 +398,12 @@ flowchart LR
 
 | Topic | Decision |
 |---|---|
-| Event | `pull_request` (`synchronize`, `ready_for_review`, `labeled`). The job needs **no secret**, so it is safe for fork PRs too; only the step that writes the result uses a token, in a separate `workflow_run` job |
-| When | AI PRs always; human PRs when `vNext scope` names a core process or the `e2e` label is set; the full set nightly on master and with label `e2e:full` |
-| Which suites | the Developer lists them in the plan / PR (`e2eSuites`), derived from the areas it touched and the TEST-SCENARIOS §2 table; the gate checks that a core-process change ran at least the suites of its areas |
-| Runtime URL | `VNEXT_BASE_URL=http://localhost:4201` — the committed `test.runsettings` already points there, so external mode works unchanged |
-| Duration | last measured full core run 5 min 30 s (411 tests: 377 passed, 34 skipped) plus a cold build and start; target job timeout 45 min |
-| Known reds | a cold MockLab fails the FanOut tests on the first run → a warm-up step; the known-red list from TEST-SCENARIOS "Koşum Öncesi Kontrol" is passed to `e2e-evidence.mjs --reds` and not counted as a regression |
+| Event | `pull_request` (`opened`, `synchronize`, `reopened`, `ready_for_review`, `labeled` — only for `e2e` / `e2e:full`, so the pipeline's own `ai:*` labels never restart it), nightly `schedule`, `workflow_dispatch`. The job needs **no secret**, so it is safe for fork PRs too; [`pr-e2e-report.yml`](../../.github/workflows/pr-e2e-report.yml) (`workflow_run`, default branch) writes the result: a sticky comment on every PR, and on an AI PR the `## E2E evidence` section plus the Done / skipped row, with the App token so PR Contract re-checks the body. A result for a commit that is no longer the PR head is dropped |
+| When | AI PRs always; human PRs with the `e2e` label (suites from an `E2E suites: A, B` line, else the full set) or `e2e:full`; the full set nightly. Selection: `scripts/ci/lib/e2e.mjs` `selectRun`. A human PR whose `vNext scope` names a core process is not detected yet — the author adds the label |
+| Which suites | the Developer lists them in the PR (`e2eSuites`, suite folder names), derived from the areas it touched; none listed → `Smoke` alone; a name that is not a suite folder → the full set, and the evidence says so. The vnext-example checkout is the PR's same-named branch when it exists (§10.3), else master. Planned: the gate checks that a core-process change ran at least the suites of its areas |
+| Runtime | `run-docker.sh up core` with `VNEXT_HOST_BIND=0.0.0.0` (on Linux the sidecar containers reach the hosts through host-gateway, not loopback); the init container then publishes the system package. URL `VNEXT_BASE_URL=http://localhost:4201` — the committed `test.runsettings` already points there, so external mode works unchanged |
+| Duration | last measured full core run 5 min 30 s (411 tests: 377 passed, 34 skipped) plus a cold build and start (TEST-SCENARIOS puts the full core set at ~25 min); job timeout 75 min |
+| Known reds | a cold MockLab fails the FanOut tests on the first run → a warm-up wait. Every failed test is named in the `Reds` line as *not triaged*, and the job fails; nothing is pre-excused — a known red is read against TEST-SCENARIOS "Koşum Öncesi Kontrol" by the reviewer |
 | Not covered | cross-domain lab (core + partner + credit + discovery), MorphIdm and ScriptPluginLab (SQL Server) suites — they skip and the evidence says so; a later phase runs the cross-domain lab nightly |
 | Observability | no MCP servers in CI → the evidence is labelled "not confirmed against traces"; timing / trace claims stay a local check (§9) |
 

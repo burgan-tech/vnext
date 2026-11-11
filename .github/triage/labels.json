@@ -68,6 +68,10 @@
     { "name": "ai:council-required", "color": "5319e7", "description": "Run the Architecture Council before development" },
     { "name": "ai:council-approved", "color": "0e8a16", "description": "Council verdict APPROVED; development authorized, not merge" }
   ],
+  "e2e": [
+    { "name": "e2e", "color": "0e8a16", "description": "Run PR E2E: the suites on an `E2E suites:` line, else the full set" },
+    { "name": "e2e:full", "color": "0e8a16", "description": "Run PR E2E with the full vnext-example core set" }
+  ],
   "deprecated": [
     { "name": "ai:in-progress", "color": "ededed", "description": "Deprecated: use ai:developing", "replacedBy": "ai:developing" },
     { "name": "ai:pr-opened", "color": "ededed", "description": "Deprecated: use ai:pr-ready", "replacedBy": "ai:pr-ready" },

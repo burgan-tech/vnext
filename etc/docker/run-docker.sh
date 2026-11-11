@@ -208,6 +208,10 @@ load_env() {
       while IFS= read -r line; do [ -n "$line" ] && ENVS+=("$line"); done < <(printf '%s\n' "$extra" | tr ';' '\n')
     fi
   fi
+  # VNEXT_HOST_BIND (e.g. 0.0.0.0): the sidecar containers reach the hosts through host-gateway, which
+  # on Linux is not the host's loopback — a localhost-bound host is unreachable there (CI: pr-e2e.yml).
+  # Unset on a workstation (OrbStack/Docker Desktop forward to loopback), so nothing listens on the LAN.
+  [ -n "${VNEXT_HOST_BIND:-}" ] && [ "$(f "$row" 10)" = 1 ] && ENVS+=("ASPNETCORE_URLS=http://$VNEXT_HOST_BIND:$(app_port "$(f "$row" 4)" "$offset")")
   # keep the last value per key so the list reads the way env(1) applies it
   local deduped=()
   while IFS= read -r line; do deduped+=("$line"); done < <(printf '%s\n' "${ENVS[@]}" | awk -F= '{k=$1; v[k]=$0; if (!(k in seen)) {seen[k]=1; order[++n]=k}} END {for (i=1;i<=n;i++) print v[order[i]]}')

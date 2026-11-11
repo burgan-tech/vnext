@@ -1,0 +1,122 @@
+name: PR E2E Report
+
+# Writes a PR E2E run's result to its PR. Runs from the default branch on workflow_run, so the
+# token never meets PR code; the artifact is read as data only.
+#   - every PR: a sticky comment (<!-- pr-e2e:v1 -->) with the evidence block or why there is none;
+#   - an AI PR (same-repo `ai/issue-<n>`): the body's `## E2E evidence` section and Done / skipped row,
+#     edited with the App token so PR Contract re-checks the body (a GITHUB_TOKEN edit triggers nothing).
+# A result for a commit that is no longer the PR head is dropped.
+# Policy: docs/governance/ai-engineering-pipeline.md §10.2.
+
+on:
+  workflow_run:
+    workflows: ['PR E2E']
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  report:
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Download the result
+        id: dl
+        run: |
+          mkdir -p "$RUNNER_TEMP/r"
+          if gh run download "$RUN_ID" -R "$REPO" -n pr-e2e -D "$RUNNER_TEMP/r" 2>/dev/null && [ -f "$RUNNER_TEMP/r/meta.json" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"; echo "no pr-e2e artifact (job skipped or cancelled) — nothing to report"
+          fi
+
+      - name: Check the result belongs to the PR head
+        id: pr
+        if: steps.dl.outputs.found == 'true'
+        run: |
+          pr=$(jq -r '.pr // empty' "$RUNNER_TEMP/r/meta.json"); sha=$(jq -r '.sha // empty' "$RUNNER_TEMP/r/meta.json")
+          [[ "$pr" =~ ^[0-9]+$ && "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::malformed meta.json"; exit 1; }
+          gh api "repos/$REPO/pulls/$pr" > "$RUNNER_TEMP/pr.json"
+          head=$(jq -r .head.sha "$RUNNER_TEMP/pr.json")
+          [ "$head" = "$sha" ] || { echo "result is for $sha, PR head is now $head — dropped"; echo "current=false" >> "$GITHUB_OUTPUT"; exit 0; }
+          ai=false
+          if jq -e --arg r "$REPO" '.head.repo.full_name == $r and (.head.ref | test("^ai/issue-[0-9]+$"))' "$RUNNER_TEMP/pr.json" >/dev/null; then ai=true; fi
+          printf 'current=true\nnumber=%s\nai=%s\n' "$pr" "$ai" >> "$GITHUB_OUTPUT"
+
+      - name: Compose the report
+        if: steps.pr.outputs.current == 'true'
+        run: |
+          d="$RUNNER_TEMP/r"; run_url=$(jq -r .runUrl "$d/meta.json"); stage=$(jq -r .stage "$d/meta.json")
+          if [ -f "$d/evidence.md" ]; then
+            cp "$d/evidence.md" "$RUNNER_TEMP/evidence.md"
+            result=$(grep -m1 '^- Result:' "$d/evidence.md" | sed 's/^- Result: //')
+            echo "$result — CI run $run_url" > "$RUNNER_TEMP/detail.txt"
+          else
+            reason="the CI e2e job stopped at stage '$stage' ($CONCLUSION) before any test result — see $run_url"
+            printf -- '- Status: not-run\n- Reason: %s\n' "$reason" > "$RUNNER_TEMP/evidence.md"
+            echo "not-run at stage $stage — $run_url" > "$RUNNER_TEMP/detail.txt"
+          fi
+          {
+            echo '<!-- pr-e2e:v1 -->'
+            echo "### E2E (vnext-example) — $CONCLUSION"
+            echo
+            echo "Suites: \`$(jq -r '.suites | if . == "" then "full set" else . end' "$d/meta.json")\` ($(jq -r .why "$d/meta.json")) · runtime built from \`$(jq -r .sha "$d/meta.json" | cut -c1-12)\` · [run]($run_url)"
+            echo
+            cat "$RUNNER_TEMP/evidence.md"
+            echo
+            echo '<sub>Not confirmed against traces: CI has no observability servers (§10.2).</sub>'
+          } > "$RUNNER_TEMP/comment.md"
+          cat "$RUNNER_TEMP/comment.md"
+
+      - name: Upsert the sticky comment
+        if: steps.pr.outputs.current == 'true'
+        env:
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          id=$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- pr-e2e:v1 -->"))) | .id' | head -1)
+          if [ -n "$id" ]; then gh api -X PATCH "repos/$REPO/issues/comments/$id" -F body=@"$RUNNER_TEMP/comment.md" >/dev/null
+          else gh api -X POST "repos/$REPO/issues/$PR/comments" -F body=@"$RUNNER_TEMP/comment.md" >/dev/null; fi
+
+      - name: Generate GitHub App token
+        if: steps.pr.outputs.current == 'true' && steps.pr.outputs.ai == 'true'
+        id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-pull-requests: write
+
+      - name: Write the evidence into the AI PR body
+        if: steps.pr.outputs.current == 'true' && steps.pr.outputs.ai == 'true'
+        env:
+          PR: ${{ steps.pr.outputs.number }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          jq -r '.body // ""' "$RUNNER_TEMP/pr.json" > "$RUNNER_TEMP/body.md"
+          rc=0; node scripts/ci/e2e.mjs apply-body "$RUNNER_TEMP/body.md" "$RUNNER_TEMP/evidence.md" "$(cat "$RUNNER_TEMP/detail.txt")" > "$RUNNER_TEMP/new.md" || rc=$?
+          [ "$rc" = 3 ] && { echo "::warning::PR #$PR has no '## E2E evidence' section — body left unchanged"; exit 0; }
+          [ "$rc" = 0 ] || exit "$rc"
+          cmp -s "$RUNNER_TEMP/body.md" "$RUNNER_TEMP/new.md" && { echo "body already current"; exit 0; }
+          gh api -X PATCH "repos/$REPO/pulls/$PR" -F body=@"$RUNNER_TEMP/new.md" >/dev/null
+          echo "PR #$PR body updated"
