@@ -876,6 +876,7 @@ public class WorkflowValidator
 
         ValidateRoleGrants(transition.Roles, $"{basePath}.{nameof(Transition.Roles)}", result);
         ValidateTransitionScriptCodes(transition, basePath, result);
+        ValidateTransitionSchemas(transition, basePath, result);
 
         switch (transition.TriggerType)
         {
@@ -891,6 +892,38 @@ public class WorkflowValidator
             case TriggerType.Event:
                 ValidateManualOrEventTransition(transition, basePath, result);
                 break;
+        }
+    }
+
+    /// <summary>
+    /// Validates a transition's rule-based <c>schemas</c>: entries are evaluated in declaration order and the
+    /// first match wins, so a rule-less entry must come last, and every rule must be a compilable script slot.
+    /// </summary>
+    private static void ValidateTransitionSchemas(
+        Transition transition,
+        string basePath,
+        WorkflowValidationResult result)
+    {
+        var entries = transition.SchemaSelection?.Schemas;
+        if (entries is null || entries.Count == 0)
+            return;
+
+        for (var index = 0; index < entries.Count; index++)
+        {
+            var entry = entries[index];
+            var member = $"{basePath}.schemas[{index}]";
+
+            // A rule-less entry always matches, so nothing declared after it can ever be reached.
+            if (entry.Rule is null && index < entries.Count - 1)
+            {
+                result.AddError(new ValidationResult(
+                    $"Transition '{transition.Key}' schemas entry {index} declares no rule, so it always matches " +
+                    $"and the {entries.Count - index - 1} entry(s) after it are unreachable. Move the rule-less " +
+                    "fallback entry to the end.",
+                    [member]));
+            }
+
+            ScriptCodeValidator.Validate(entry.Rule, $"{member}.rule", result.ValidationErrors);
         }
     }
 
@@ -918,7 +951,7 @@ public class WorkflowValidator
         }
 
         // Schema is not allowed
-        if (transition.Schema != null)
+        if (transition.HasSchema)
         {
             result.AddError(new ValidationResult(
                 $"Auto transition '{transition.Key}' cannot have a schema definition.",
@@ -1011,7 +1044,7 @@ public class WorkflowValidator
         }
 
         // Schema is not allowed
-        if (transition.Schema != null)
+        if (transition.HasSchema)
         {
             result.AddError(new ValidationResult(
                 $"Scheduled transition '{transition.Key}' cannot have a schema definition.",
