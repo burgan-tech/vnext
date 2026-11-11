@@ -129,6 +129,8 @@ try {
   const base = (read('base.txt') ?? '').trim();
   if (!/^[0-9a-f]{40}$/.test(base)) throw new Error('the agent job left no base commit');
   if (input.mode === 'FIX' && input.pr.headSha !== base) throw new Error(`the PR moved while the agent worked (${base.slice(0, 7)} → ${input.pr.headSha.slice(0, 7)}); the next run retries`);
+  const exit = (read('agent.exit') ?? '').trim();
+  if (exit !== '0') throw new Error(`the agent did not finish (exit ${exit || 'unknown'}); a partial tree is never pushed`);
   const raw = read('result.json');
   if (!raw) throw new Error('the agent wrote no result');
   ({ result } = validateResult(extractResult(raw), { secrets, mode: input.mode }));

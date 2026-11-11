@@ -470,7 +470,12 @@ change of a contract product raises impact (§3).
   ([`ai-dotnet.sh`](../../scripts/ai/developer/ai-dotnet.sh)), staged root-owned outside the tree
   with its paths fixed. It runs dotnet in its own network namespace (loopback only — packages are
   restored before the agent), PID namespace (the agent's `/proc/<pid>/environ` is invisible) and
-  mount namespace (the runner temp dir and CLI config hidden, `.git` read-only), with `env -i`.
+  mount namespace (the runner temp dir and CLI config hidden, `.git` read-only, the docker socket
+  masked), with `env -i`, as the runner uid with `no_new_privs`, no capabilities and no supplementary
+  groups — so code inside cannot `sudo`, reach docker or undo the mounts. Only the collect step holds
+  a (read-only) GitHub token; setup scripts run from the default-branch copy, and a FIX target must be
+  a branch of this repository (never a fork's `ai/issue-<n>`). An agent that did not exit cleanly is
+  never pushed.
   The diff is captured with git ignoring user / system config, hooks and fsmonitor. The agent job holds no
   GitHub write credential; the write job never runs agent-written code.
 - The writer refuses to push a diff that touches anything outside the agent's write folders (an

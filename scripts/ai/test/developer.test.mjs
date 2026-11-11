@@ -34,6 +34,8 @@ test('mode: NEW, RECOVERY, FIX and every reason to stay out', () => {
   assert.match(skip({ openPrs: [{ number: 1209, head: 'claude/x' }] }), /open PR #1209 already works on it/);
   assert.match(skip({ openPrs: [ours] }), /PR #9 already implements it/);
   assert.match(skip({ labels: ['ai:changes-required'] }), /no open ai\/issue-7 PR/);
+  // collect.mjs prefixes a fork's branch with its repository, so a fork's ai/issue-7 is never the FIX target.
+  assert.match(skip({ labels: ['ai:changes-required'], openPrs: [{ number: 9, head: 'someone/vnext:ai/issue-7' }] }), /no open ai\/issue-7 PR/);
   assert.match(skip({ labels: ['ai:changes-required'], openPrs: [ours], repairs: 3 }), /repair limit/);
 });
 

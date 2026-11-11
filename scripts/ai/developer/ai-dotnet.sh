@@ -6,7 +6,8 @@
 #   - its own PID namespace (the agent's /proc/<pid>/environ is not visible) and private mounts
 #     that hide the runner temp dir (staged tooling, agent input) and the CLI config and make .git
 #     read-only
-#   - the runner's uid, so build output lands in the tree as usual
+#   - the runner's uid with no_new_privs, no capabilities and no supplementary groups (no sudo, no
+#     docker), so build output lands in the tree as usual and nothing inside can undo the above
 # The workflow stages this file outside the working tree and fills in the @…@ values, so nothing the
 # caller sets (HOME, PATH, the working directory) changes what it runs; the agent cannot edit it (its
 # Write allow-list covers source folders only).
@@ -53,7 +54,11 @@ exec sudo -n /usr/bin/unshare --net --pid --fork --kill-child --mount --propagat
     # .git read-only: agent-written code cannot plant hooks, fsmonitor or config for later git calls.
     mount --bind "$ws/.git" "$ws/.git" && mount -o remount,bind,ro "$ws/.git"
     for d in "$home/.cursor" "$home/.config"; do if [ -d "$d" ]; then mount -t tmpfs tmpfs "$d"; fi; done
-    exec /usr/bin/setpriv --reuid="$uid" --regid="$gid" --init-groups -- \
+    if [ -S /run/docker.sock ]; then mount --bind /dev/null /run/docker.sock; fi
+    # no_new_privs + no capabilities + no supplementary groups: setuid sudo cannot elevate, so nothing
+    # inside can undo these mounts; without the docker group the socket is out of reach as well.
+    exec /usr/bin/setpriv --no-new-privs --inh-caps=-all --bounding-set=-all --clear-groups \
+      --reuid="$uid" --regid="$gid" -- \
       /usr/bin/timeout "$limit" /usr/bin/env -i \
         HOME="$home" PATH="$droot:/usr/bin:/bin" DOTNET_ROOT="$droot" NUGET_PACKAGES="$home/.nuget/packages" \
         DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 MSBUILDDISABLENODEREUSE=1 \

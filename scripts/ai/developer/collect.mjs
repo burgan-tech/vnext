@@ -57,7 +57,8 @@ for (const e of gh(`repos/${repo}/issues/${n}/timeline?per_page=100`)) {
 const [owner] = repo.split('/');
 for (const p of gh(`repos/${repo}/pulls?state=all&head=${owner}:${branchFor(n)}&per_page=100`)) prs.set(p.number, p.number);
 const details = [...prs.keys()].map((num) => ghOne(`repos/${repo}/pulls/${num}`));
-const openPrs = details.filter((p) => p.state === 'open').map((p) => ({ number: p.number, head: p.head.ref, headSha: p.head.sha, title: p.title, author: p.user?.login }));
+// `head` counts as the pipeline's branch only when it lives in this repository (never a fork's branch of the same name).
+const openPrs = details.filter((p) => p.state === 'open').map((p) => ({ number: p.number, head: p.head.repo?.full_name === repo ? p.head.ref : `${p.head.repo?.full_name ?? 'unknown'}:${p.head.ref}`, headSha: p.head.sha, title: p.title, author: p.user?.login }));
 const closedPrs = details.filter((p) => p.state === 'closed' && !p.merged_at).map((p) => ({ number: p.number, head: p.head.ref, title: p.title }));
 const ours = openPrs.find((p) => p.head === branchFor(n));
 const prComments = ours ? gh(`repos/${repo}/issues/${ours.number}/comments?per_page=100`) : [];
