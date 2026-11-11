@@ -77,12 +77,20 @@ exec sudo -n /usr/bin/unshare --net --pid --fork --kill-child --mount --propagat
     mount -t tmpfs tmpfs "$rtemp"
     for d in "$home/.cursor" "$home/.config"; do if [ -d "$d" ]; then mount -t tmpfs tmpfs "$d"; fi; done
     if [ -S /run/docker.sock ]; then mount --bind /dev/null /run/docker.sock; fi
+    # The dotnet CLI runs its first-use setup against the fresh /tmp homes below. the NuGet migration
+    # step takes a named mutex unless its marker file exists, and that mutex cannot be created in
+    # this sandbox on the hosted runner ("cannot open the device or file: NuGet-Migrations"). The
+    # marker (the same file NuGet writes once migrated) skips the step; the other first-use steps
+    # are switched off through the environment.
+    mkdir -p /tmp/xdg-data/NuGet/Migrations /tmp/dotnet-home
+    : > /tmp/xdg-data/NuGet/Migrations/1
+    chown -R "$uid:$gid" /tmp/xdg-data /tmp/dotnet-home
     # no_new_privs + no capabilities + no supplementary groups: setuid sudo cannot elevate, so nothing
     # inside can undo these mounts; without the docker group the socket is out of reach as well.
     exec /usr/bin/setpriv --no-new-privs --inh-caps=-all --bounding-set=-all --clear-groups \
       --reuid="$uid" --regid="$gid" -- \
       /usr/bin/timeout "$limit" /usr/bin/env -i \
         HOME="$home" PATH="$droot:/usr/bin:/bin" DOTNET_ROOT="$droot" NUGET_PACKAGES="$home/.nuget/packages" \
-        DOTNET_CLI_HOME=/tmp/dotnet-home TMPDIR=/tmp XDG_DATA_HOME=/tmp/xdg-data XDG_CACHE_HOME=/tmp/xdg-cache XDG_CONFIG_HOME=/tmp/xdg-config DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 MSBUILDDISABLENODEREUSE=1 \
+        DOTNET_CLI_HOME=/tmp/dotnet-home TMPDIR=/tmp XDG_DATA_HOME=/tmp/xdg-data XDG_CACHE_HOME=/tmp/xdg-cache XDG_CONFIG_HOME=/tmp/xdg-config DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 DOTNET_GENERATE_ASPNET_CERTIFICATE=false DOTNET_ADD_GLOBAL_TOOLS_TO_PATH=false MSBUILDDISABLENODEREUSE=1 \
         "$droot/dotnet" "$@"
   ' ai-dotnet "$uid" "$gid" "$HOME_DIR" "$DOTNET_ROOT_DIR" "$RUNNER_TEMP_DIR" "$TIMEOUT_SECONDS" "$WORKSPACE" "$@"

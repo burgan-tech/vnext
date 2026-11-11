@@ -483,6 +483,8 @@ change of a contract product raises impact (§3).
   `.rsp`, `.config/`), no package reference, MSBuild files under the rules below; a violation fails the
   run before anything of the branch is evaluated. An agent that did not exit cleanly is
   never pushed.
+  The Developer runs from the default branch only (a dispatch from another branch is skipped), so
+  its tooling and the base of a pipeline branch are always the default branch.
   The diff is captured with git ignoring user / system config, hooks and fsmonitor. The agent job holds no
   GitHub write credential; the write job never runs agent-written code.
 - The writer refuses to push a diff that touches anything outside the agent's write folders (an

@@ -32,9 +32,13 @@ concurrency:
 
 jobs:
   develop:
+    # Default branch only: the tooling, the warm-up and the base of a NEW / RECOVERY branch all come
+    # from the checked-out ref, so a run dispatched from another branch would build the pipeline PR on
+    # top of that branch's commits.
     if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (
       github.event_name != 'issues' ||
-      (github.event.label.name == 'ai:planned' || github.event.label.name == 'ai:changes-required') && !github.event.issue.pull_request
+      (github.event.label.name == 'ai:planned' || github.event.label.name == 'ai:changes-required') && !github.event.issue.pull_request)
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -277,7 +281,9 @@ jobs:
 
   write:
     needs: develop
-    if: needs.develop.outputs.mode != '' && needs.develop.outputs.mode != 'skip'
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      needs.develop.outputs.mode != '' && needs.develop.outputs.mode != 'skip'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
