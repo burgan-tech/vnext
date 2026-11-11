@@ -12,7 +12,7 @@
 # caller sets (HOME, PATH, the working directory) changes what it runs; the agent cannot edit it (its
 # Write allow-list covers source folders only).
 #   ai-dotnet build                      the whole solution, Release
-#   ai-dotnet test <test project> [--filter <expr>]
+#   ai-dotnet test test/<Project>.Tests [--filter <expr>]   nothing else is accepted
 set -euo pipefail
 
 DOTNET_ROOT_DIR='@DOTNET_ROOT@'
@@ -27,19 +27,35 @@ case "$cmd" in
   build | test) ;;
   *) echo "ai-dotnet: only 'build' and 'test' are allowed" >&2; exit 2 ;;
 esac
-for a in "$@"; do
-  case "$a" in
-    /* | *..*) echo "ai-dotnet: arguments must be relative to the repository (got: $a)" >&2; exit 2 ;;
-  esac
-done
-[ "$PWD" = "$WORKSPACE" ] || cd "$WORKSPACE"
-
+# Arguments are an allow-list, not a filter: `build` takes none; `test` takes one test project under
+# test/ and at most one `--filter <expression>`. Nothing else reaches dotnet (-p:, --settings, -r, …).
+usage='usage: ai-dotnet build | ai-dotnet test test/<Project>.Tests [--filter <expression>]'
 if [ "$cmd" = build ]; then
-  set -- build ./BBT.Workflow.slnx --configuration Release --no-restore -nodeReuse:false "$@"
+  [ $# -eq 0 ] || { echo "ai-dotnet: build takes no arguments. $usage" >&2; exit 2; }
+  set -- build ./BBT.Workflow.slnx --configuration Release --no-restore -nodeReuse:false
 else
-  [ $# -ge 1 ] || { echo "ai-dotnet: test needs a test project, e.g. test/BBT.Workflow.Domain.Tests" >&2; exit 2; }
-  set -- test "$@" --configuration Release --no-restore -nodeReuse:false
+  project="${1:-}"
+  shift || true
+  case "$project" in
+    test/BBT.Workflow.*.Tests | test/BBT.Workflow.*.Tests/) project="${project%/}" ;;
+    *) echo "ai-dotnet: test needs a test project, e.g. test/BBT.Workflow.Domain.Tests. $usage" >&2; exit 2 ;;
+  esac
+  case "${project#test/BBT.Workflow.}" in
+    *[!A-Za-z0-9.]* | *..*) echo "ai-dotnet: not a test project: $project" >&2; exit 2 ;;
+  esac
+  [ -d "$WORKSPACE/$project" ] || { echo "ai-dotnet: no such test project: $project" >&2; exit 2; }
+  if [ $# -gt 0 ]; then
+    [ "$1" = --filter ] && [ $# -eq 2 ] || { echo "ai-dotnet: only --filter <expression> may follow the project. $usage" >&2; exit 2; }
+    case "$2" in
+      '' | -*) echo "ai-dotnet: empty filter or one that starts with '-'" >&2; exit 2 ;;
+      *[!A-Za-z0-9_.=~!\&\|\(\)\ ,:-]*) echo "ai-dotnet: the filter may use letters, digits and _ . = ~ ! & | ( ) , : - and spaces only" >&2; exit 2 ;;
+    esac
+    set -- test "$project" --filter "$2" --configuration Release --no-restore -nodeReuse:false
+  else
+    set -- test "$project" --configuration Release --no-restore -nodeReuse:false
+  fi
 fi
+[ "$PWD" = "$WORKSPACE" ] || cd "$WORKSPACE"
 
 uid="$(id -u)"
 gid="$(id -g)"

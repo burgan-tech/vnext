@@ -94,6 +94,9 @@ jobs:
           cp scripts/ai/developer/ai-dotnet.sh "$TOOLS/bin/ai-dotnet"
           # Setup scripts run from this copy, not from the target (in FIX the target is a PR branch).
           cp scripts/setup-netstandard-ref.sh "$TOOLS/setup-netstandard-ref.sh"
+          # The FIX restore check, likewise from the default branch.
+          mkdir -p "$TOOLS/scripts"
+          cp -R scripts/ai scripts/triage "$TOOLS/scripts/"
 
       - name: Setup .NET
         if: env.HAS_AUTH == 'true' && steps.collect.outputs.mode != 'skip'
@@ -124,15 +127,19 @@ jobs:
 
       - name: Check out the target and restore it
         # NEW / RECOVERY: the default branch as already restored. FIX: the PR head the collector read,
-        # restored only (no build: restore evaluates project files, which the diff policy keeps free of
-        # targets, tasks and imports). Packages cannot change: the policy refuses package references.
+        # restored only (no build). Humans may have pushed to that branch, so before restore the whole
+        # branch (merge base → head) is checked by the staged default-branch copy of check-restore.mjs:
+        # no restore configuration, no package reference, MSBuild files under the diff-policy rules.
+        # A violation fails the job before anything of the branch is evaluated.
         if: env.HAS_AUTH == 'true' && steps.collect.outputs.mode != 'skip'
         env:
           MODE: ${{ steps.collect.outputs.mode }}
           REF: ${{ steps.collect.outputs.ref }}
         run: |
           if [ "$MODE" = FIX ]; then
-            git fetch --no-tags --depth 50 origin "$REF"
+            base="$(git rev-parse HEAD)"
+            git fetch --no-tags --depth 200 origin "$REF" "$base"
+            node "$TOOLS/scripts/ai/developer/check-restore.mjs" "$base" "$REF"
             git checkout --quiet --detach "$REF"
             dotnet restore ./BBT.Workflow.slnx
           fi

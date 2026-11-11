@@ -126,6 +126,21 @@ const BUILD_FORBIDDEN = Object.freeze([
   [/<\s*(Compile|None|Content|EmbeddedResource)\b[^>]*\b(Remove|Include|Update)\s*=/i, 'changes which files are compiled or packed'],
   [/<\s*DefineConstants\b/i, 'changes compile constants'],
 ]);
+/** The only SDKs a project may name (`<Project Sdk=…>`, `<Sdk Name=…>`, `<Import Sdk=…>`): the .NET ones. */
+const SDK_ALLOWED = /^Microsoft\.NET\.Sdk(\.(Web|Worker|Razor|BlazorWebAssembly))?(\/[0-9][0-9A-Za-z.+-]*)?$/;
+const SDK_ATTR = /\bSdk\s*=\s*(["'])(.*?)\1/gi;
+/** Violations for one added line of an MSBuild file. */
+function buildLineViolations(path, line) {
+  const v = [];
+  for (const [re, what] of BUILD_FORBIDDEN) if (re.test(line)) v.push(`${path}: ${what}`);
+  if (BUILD_SETTING.test(line)) v.push(`${path}: changes analyzer or warning settings`);
+  if (/<\s*Sdk\b/i.test(line)) v.push(`${path}: adds an <Sdk> element`);
+  for (const m of line.matchAll(SDK_ATTR)) {
+    const sdks = m[2].split(';').map((x) => x.trim()).filter(Boolean);
+    if (!sdks.length || sdks.some((x) => !SDK_ALLOWED.test(x))) v.push(`${path}: uses an SDK other than Microsoft.NET.Sdk (${m[2]})`);
+  }
+  return v;
+}
 /** Analyzer / warning settings: neither added, changed nor removed in an MSBuild file. */
 const BUILD_SETTING = /<\s*(RunAnalyzers|RunAnalyzersDuringBuild|EnforceCodeStyleInBuild|AnalysisMode|AnalysisLevel|CodeAnalysisRuleSet|WarningsNotAsErrors|WarningLevel|TreatWarningsAsErrors|Nullable|GenerateDocumentationFile)\b/i;
 /** A live test or test case: the trimmed line starts with it (a commented-out one does not count). */
@@ -235,8 +250,7 @@ export function checkDiff(files, patch) {
     let testsRemoved = 0;
     for (const line of f.added) {
       for (const [re, what] of ADDED_FORBIDDEN) if (re.test(line)) v.push(`${f.path}: ${what}`);
-      if (BUILD_FILE.test(f.path)) for (const [re, what] of BUILD_FORBIDDEN) if (re.test(line)) v.push(`${f.path}: ${what}`);
-      if (BUILD_FILE.test(f.path) && BUILD_SETTING.test(line)) v.push(`${f.path}: changes analyzer or warning settings`);
+      if (BUILD_FILE.test(f.path)) v.push(...buildLineViolations(f.path, line));
       if (/^test\//.test(f.path) && (/\bSkip\s*=/.test(line) || /^\s*#if\s+(false|0)\b/.test(line))) v.push(`${f.path}: skips or disables a test`);
       if (TEST_ATTR.test(line.trim())) testsAdded++;
     }
@@ -248,6 +262,32 @@ export function checkDiff(files, patch) {
     if (testsRemoved > testsAdded) v.push(`${f.path}: removes or comments out ${testsRemoved - testsAdded} test(s)`);
   }
   if (changed > MAX_LINES) v.push(`changes ${changed} lines (limit ${MAX_LINES})`);
+  return [...new Set(v)];
+}
+
+/** Files that steer `dotnet restore` beyond a project's own lines: never changed on a branch the Developer restores. */
+const RESTORE_CONFIG = /(^|\/)(nuget\.config|global\.json|Directory\.(Build|Packages)\.(props|targets)|[^/]*\.rsp)$|^\.config\//i;
+
+/**
+ * FIX mode restores the PR branch with network before the agent runs, and humans may have pushed to
+ * it. This checks the branch against the default branch (`files` / `patch` as for checkDiff) for what
+ * restore would evaluate: no restore configuration, no package reference, and MSBuild files under the
+ * same rules as the agent's own diff. Returns the violations; any one stops the run before restore.
+ */
+export function checkRestoreSafety(files, patch) {
+  const v = [];
+  for (const f of files) if (RESTORE_CONFIG.test(f.path)) v.push(`${f.path}: changes restore configuration`);
+  for (const f of parsePatch(patch)) {
+    if (f.path === null) {
+      v.push(`unparseable file header: ${f.header.slice(0, 120)}`);
+      continue;
+    }
+    if (!BUILD_FILE.test(f.path)) continue;
+    for (const line of f.added) {
+      if (/<PackageReference\b/i.test(line)) v.push(`${f.path}: adds a package reference`);
+      v.push(...buildLineViolations(f.path, line));
+    }
+  }
   return [...new Set(v)];
 }
 
@@ -318,6 +358,24 @@ export function insertLogRow(readme, row) {
 const yes = (b) => (b ? 'yes' : 'no');
 const bullets = (items, fallback) => (items.length ? items.map((i) => `- ${i}`) : [`- ${fallback}`]);
 
+/**
+ * A visible warning when the sandboxed runner verification did not pass (`build.detail` other than
+ * `passed`, or a test project `failed`), so a reviewer never reads the draft as built and tested.
+ */
+export function runnerWarning(runner) {
+  const build = String(runner?.build?.detail ?? '');
+  const tests = String(runner?.tests?.detail ?? '');
+  const problems = [];
+  if (!/^passed\b/.test(build)) problems.push(`the build ${build ? `did not pass (${build.replace(/\s*\(sandboxed runner, informational\)$/, '')})` : 'was not run'}`);
+  else {
+    const failed = [...tests.matchAll(/\b([A-Z]\w*) failed/g)].map((m) => m[1]);
+    if (failed.length) problems.push(`unit tests failed in ${failed.join(', ')}`);
+    else if (!/passed/.test(tests)) problems.push('the unit tests were not run');
+  }
+  if (!problems.length) return [];
+  return ['> [!WARNING]', `> **Not verified on the runner:** ${problems.join('; ')}. The AI Developer's own sandboxed check did not pass — rely on the CI checks and the Done / skipped table, and do not mark this ready while they are red.`, ''];
+}
+
 /** The PR body: the template's sections plus the AI decision record (§9). */
 export function renderPrBody(ctx) {
   const { issue, result, plan, labels, councilUrl, planUrl, branch, runner, repairs, maxRepairs, e2eReason } = ctx;
@@ -328,6 +386,7 @@ export function renderPrBody(ctx) {
   const row = (name, r) => `| ${name} | ${r?.status ?? 'not-run'} | ${r?.detail ?? ''} |`;
   const handoffs = PRODUCTS.map((p) => `| ${p} | ${yes(result.productImpact[p].needed)} | ${result.productImpact[p].needed ? result.productImpact[p].handoff : ''} |`);
   const out = [
+    ...runnerWarning(runner),
     '## Summary',
     ...bullets(result.summary, result.title),
     `- Implements #${issue}${result.mode === 'RECOVERY' ? ' (recovery: earlier attempts were closed unmerged)' : ''}.`,
