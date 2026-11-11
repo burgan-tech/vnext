@@ -201,7 +201,12 @@ then `apply.mjs --in <dir> --print`. The **Council** (`.github/workflows/ai-coun
 `.github/ai/council.md`, scripts `scripts/ai/council/`) judges an issue labelled `ai:council-required`
 that has a Director plan; one comment per issue with the verdict and the decision-log row; model
 `AI_COUNCIL_MODEL`. Locally: `node scripts/ai/council/collect.mjs --issue <n> --force --out <dir>` then
-`apply.mjs --in <dir> --print`. Locally:
+`apply.mjs --in <dir> --print`. The **Developer** (`.github/workflows/ai-developer.yml`, prompt
+`.github/ai/developer.md`, scripts `scripts/ai/developer/`) implements an issue labelled `ai:planned`
+or repairs its PR on `ai:changes-required`: the agent job edits source folders and builds/tests only
+through the `ai-dotnet` sandbox; a separate write job checks the diff policy, pushes `ai/issue-<n>`
+and opens the draft PR; model `AI_DEVELOPER_MODEL`. Locally: `node scripts/ai/developer/collect.mjs
+--issue <n> --out <dir>` shows the mode it would run. Locally:
 `node scripts/ai/director/collect.mjs --issue <n>` then `apply.mjs --print`. Tests:
 `node --test "scripts/ai/test/*.test.mjs"` (also in the `Unit Tests` workflow).
 
