@@ -177,6 +177,9 @@ public static class WorkflowErrorCodes
     public const string SharedTransitionTargetMustBeSelfWhenInSubFlow = "Transition:100023";
     public const string WellKnownTransitionNotAvailableInState = "Transition:100024";
 
+    /// <summary>A rule-based transition schema was declared but no entry matched the instance.</summary>
+    public const string TransitionSchemaNotMatched = "Transition:100025";
+
     #endregion
     
     #region Execution Errors (200xxx)

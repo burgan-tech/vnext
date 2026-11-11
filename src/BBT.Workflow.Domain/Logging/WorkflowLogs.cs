@@ -1269,6 +1269,26 @@ public static partial class WorkflowLogs
         this ILogger logger, Guid instanceId, string targetState);
 
     /// <summary>
+    /// Logs when a rule on a transition schema entry could not be evaluated. The entry is skipped.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10261,
+        Level = LogLevel.Warning,
+        Message = "Transition {TransitionKey} schema rule evaluation failed for entry {SchemaKey}: {ErrorMessage}. Skipping entry.")]
+    public static partial void TransitionSchemaRuleEvaluationFailed(
+        this ILogger logger, string transitionKey, string schemaKey, string errorMessage);
+
+    /// <summary>
+    /// Logs when a transition declares rule-based schemas and no entry matched.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10262,
+        Level = LogLevel.Warning,
+        Message = "Transition {TransitionKey} has no schema entry matching the instance")]
+    public static partial void TransitionSchemaNotMatched(
+        this ILogger logger, string transitionKey);
+
+    /// <summary>
     /// Logs when task instance resolution fails (for DirectTrigger, GetInstanceData).
     /// </summary>
     [LoggerMessage(
