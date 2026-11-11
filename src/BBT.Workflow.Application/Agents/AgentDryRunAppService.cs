@@ -41,7 +41,11 @@ public sealed class AgentDryRunInput
     public IReadOnlyDictionary<string, string?>? Headers { get; set; }
 }
 
-/// <summary>Dry-run result.</summary>
+/// <summary>
+/// Dry-run result. <see cref="Status"/> <c>ApprovalRequested</c> is not a failure: the agent asked for a tool
+/// that needs approval and the run stopped there (a dry run has no session to resume). The held calls are in
+/// <see cref="PendingApprovals"/> and <see cref="FailureReason"/> is empty.
+/// </summary>
 public sealed record AgentDryRunOutput(
     string Status,
     JsonElement? Output,
@@ -51,7 +55,24 @@ public sealed record AgentDryRunOutput(
     IReadOnlyList<AgentToolCallItem> ToolCalls,
     int PromptTokens,
     int CompletionTokens,
-    long DurationMs);
+    long DurationMs)
+{
+    /// <summary>Tool calls held for approval; empty unless <see cref="Status"/> is <c>ApprovalRequested</c>.</summary>
+    public IReadOnlyList<AgentDryRunPendingApproval> PendingApprovals { get; init; } = [];
+}
+
+/// <summary>A tool call the dry run held for approval (same names as <c>$agent.pendingApprovals</c>).</summary>
+/// <param name="RequestId">Approval request id.</param>
+/// <param name="CallId">Model tool-call id.</param>
+/// <param name="Tool">Tool name.</param>
+/// <param name="Arguments">Arguments the model chose.</param>
+/// <param name="RequiresConfirmation">True when the tool is marked <c>requiresApproval</c>.</param>
+public sealed record AgentDryRunPendingApproval(
+    string RequestId,
+    string CallId,
+    string Tool,
+    JsonElement Arguments,
+    bool RequiresConfirmation);
 
 /// <summary>Dry-runs an agent component (issue #1105).</summary>
 public interface IAgentDryRunAppService
@@ -127,11 +148,26 @@ public sealed class AgentDryRunAppService(
             result.Output,
             candidates.Any(c => c.Key == chosen) ? chosen : null,
             AgentDecisionSupport.ReadString(result.Output, AgentDecisionSupport.ReasonProperty),
-            result.FailureReason,
+            FailureReasonOf(result),
             recorder.Calls.Select(c => new AgentToolCallItem(c.Id, c.Sequence, c.Iteration, c.CallId, c.Name, (short)c.Kind,
                 c.BindingRef, c.Status, c.Error, null, c.StartedAt, c.DurationMs)).ToList(),
             result.PromptTokens,
             result.CompletionTokens,
-            clock.ElapsedMilliseconds));
+            clock.ElapsedMilliseconds)
+        {
+            PendingApprovals = PendingApprovalsOf(result)
+        });
     }
+
+    /// <summary>The failure text; empty for an approval stop, which is an outcome rather than a failure.</summary>
+    internal static string? FailureReasonOf(AgentRunResult result) =>
+        result.Status == AgentRunStatus.ApprovalRequested ? null : result.FailureReason;
+
+    /// <summary>The held tool calls of an approval stop.</summary>
+    internal static IReadOnlyList<AgentDryRunPendingApproval> PendingApprovalsOf(AgentRunResult result) =>
+        result.Status != AgentRunStatus.ApprovalRequested
+            ? []
+            : result.PendingApprovals
+                .Select(a => new AgentDryRunPendingApproval(a.RequestId, a.CallId, a.ToolName, a.Arguments, a.RequiresConfirmation))
+                .ToList();
 }
