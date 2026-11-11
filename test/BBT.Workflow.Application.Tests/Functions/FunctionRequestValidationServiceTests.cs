@@ -41,7 +41,7 @@ public sealed class FunctionRequestValidationServiceTests
         _service = new FunctionRequestValidationService(
             _schemaValidator,
             _componentCacheStore,
-            new FunctionContractResolver(_conditionService, NullLogger<FunctionContractResolver>.Instance),
+            new FunctionContractResolver(new BBT.Workflow.Contracts.ContractEntrySelector(_conditionService), NullLogger<FunctionContractResolver>.Instance),
             NullLogger<FunctionRequestValidationService>.Instance);
     }
 
