@@ -49,11 +49,11 @@ Conversion is handled by `ViewDefinitionJsonConverter` and `SchemaSelectionJsonC
 | Entry's rule evaluates true | Wins |
 | Entry's rule evaluates false | Skip to the next entry |
 | Entry's rule fails to evaluate | Logged at Warning, entry skipped — never fatal |
-| Every entry carried a rule and none matched | No contract (`Ok(null)`) — **not** an error |
+| Every entry carried a rule and none matched | No contract (`Ok(null)`); `inputSchema` validation then rejects the request (`Function:800006`) |
 | Script context could not be built | Failure |
 
 **No contract is not an error.** A function may legitimately have no applicable view for a given
-request. Callers decide what that means: request validation treats it as "nothing to validate", the
+request. Callers decide what that means: request validation rejects an `inputSchema` that matches no entry (`400`, `Function:800006`), the
 info endpoint reports `hasView: false`, and the content routes return `404`
 (`Function:800004`).
 
@@ -92,12 +92,12 @@ unchanged.
 
 | Surface | Slot | Behaviour on no match |
 | --- | --- | --- |
-| `FunctionRequestValidationService` (execute) | `inputSchema` | Body is not validated |
+| `FunctionRequestValidationService` (execute) | `inputSchema` | `400` `Function:800006` for a request with a body; a bodyless request is accepted. End the list with a rule-less entry to keep accepting unmatched callers |
 | `/info` | all four | `hasView` / `hasSchema` false, href still emitted |
 | `/view?target=input\|output` | `inputView` / `outputView` | `404` |
 | `/schema?target=input\|output` | `inputSchema` / `outputSchema` | `404` |
 
-`outputSchema` is never enforced at runtime — it is declarative, surfaced for clients and tooling.
+Views and `outputSchema` behave as before on no match. `outputSchema` is never enforced at runtime — it is declarative, surfaced for clients and tooling.
 
 ## Access control
 

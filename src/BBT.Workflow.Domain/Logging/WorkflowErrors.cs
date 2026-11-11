@@ -655,6 +655,11 @@ public static class WorkflowErrors
             WorkflowErrorCodes.FunctionContractTargetInvalid,
             $"Unknown target '{target}'. Expected 'input' or 'output'.");
 
+    public static Error FunctionInputSchemaNotMatched(string functionKey)
+        => Error.Validation(
+            WorkflowErrorCodes.FunctionInputSchemaNotMatched,
+            $"Function '{functionKey}' declares a rule-based input schema and the request matches none of its entries.");
+
     #endregion
 
     #region Authorization Errors

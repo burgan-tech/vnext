@@ -253,6 +253,9 @@ public static class WorkflowErrorCodes
     /// <summary>The <c>target</c> query value is neither <c>input</c> nor <c>output</c>. Maps to HTTP 400.</summary>
     public const string FunctionContractTargetInvalid = "Function:800005";
 
+    /// <summary>A rule-based input schema was declared but no entry matched the request.</summary>
+    public const string FunctionInputSchemaNotMatched = "Function:800006";
+
     #endregion
 
     #region Authorization Errors (110xxx)

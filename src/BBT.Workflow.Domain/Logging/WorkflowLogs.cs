@@ -5530,6 +5530,18 @@ public static partial class WorkflowLogs
         string schemaKey);
 
     /// <summary>
+    /// Logs when a function declares a rule-based input schema and no entry matched the request, so the
+    /// request is rejected.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 80009,
+        Level = LogLevel.Warning,
+        Message = "Function {FunctionKey} input schema has no entry matching the request; request rejected")]
+    public static partial void FunctionInputSchemaNotMatched(
+        this ILogger logger,
+        string functionKey);
+
+    /// <summary>
     /// Logs when a rule on a function contract entry could not be evaluated. The entry is skipped and
     /// evaluation continues with the next one, mirroring state/transition view rule handling.
     /// </summary>
