@@ -778,6 +778,42 @@ public class TransitionTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
+    public void SetSchemas_NonEmpty_IsExposedAndWinsOverSchema()
+    {
+        var transition = DeserializeTransition($$""", "schema": {{SchemaRef1}}""");
+        var other = new Reference("s2", "d", "sys-schemas", "1.0.0");
+
+        transition.SetSchemas(SchemaSelection.CreateDefault(other));
+
+        var entry = Assert.Single(transition.SchemaSelection!.Schemas);
+        Assert.Equal("s2", entry.Schema.Key);
+        Assert.True(transition.HasSchema);
+    }
+
+    [Fact]
+    public void SetSchemas_Empty_DoesNotHideSchema()
+    {
+        var transition = DeserializeTransition($$""", "schema": {{SchemaRef1}}""");
+
+        transition.SetSchemas(new SchemaSelection());
+
+        Assert.True(transition.HasSchema);
+        var entry = Assert.Single(transition.SchemaSelection!.Schemas);
+        Assert.Equal("s1", entry.Schema.Key);
+    }
+
+    [Fact]
+    public void SetSchemas_EmptyWithoutSchema_HasNoSchema()
+    {
+        var transition = DeserializeTransition("");
+
+        transition.SetSchemas(new SchemaSelection());
+
+        Assert.False(transition.HasSchema);
+        Assert.Null(transition.SchemaSelection);
+    }
+
+    [Fact]
     public void NoSchema_HasSchemaFalse()
     {
         var transition = DeserializeTransition("");

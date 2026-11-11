@@ -2,7 +2,7 @@
   "releaseNote": {
     "summary": "A function whose rule-based inputSchema has no matching entry now rejects a request that carries a body with 400 Function:800006; it used to skip validation.",
     "breaking": true,
-    "docs": []
+    "docs": ["https://github.com/burgan-tech/vnext/blob/master/docs/runtime/function-contract-resolution.md"]
   },
   "deprecations": [
     {

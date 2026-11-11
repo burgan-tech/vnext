@@ -2165,7 +2165,23 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
 
         var result = _validator.Validate(workflow);
 
-        result.ValidationErrors.ShouldContain(e => e.ErrorMessage!.Contains("cannot have a schema definition"));
+        result.ValidationErrors.ShouldContain(e => e.ErrorMessage!.Contains("cannot have a schema definition")
+            && e.MemberNames.Any(m => m.EndsWith(".schemas")));
+    }
+
+    [Fact]
+    public void AutoTransition_WithSchema_ReportsTheSchemaMember()
+    {
+        var workflow = WorkflowWithTransition($$"""
+            "triggerType": "automatic",
+            "rule": {{TsRule}},
+            "schema": {{TsRef1}}
+            """);
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldContain(e => e.ErrorMessage!.Contains("cannot have a schema definition")
+            && e.MemberNames.Any(m => m.EndsWith(".Schema")));
     }
 
     [Fact]
@@ -2179,7 +2195,8 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
 
         var result = _validator.Validate(workflow);
 
-        result.ValidationErrors.ShouldContain(e => e.ErrorMessage!.Contains("cannot have a schema definition"));
+        result.ValidationErrors.ShouldContain(e => e.ErrorMessage!.Contains("cannot have a schema definition")
+            && e.MemberNames.Any(m => m.EndsWith(".schemas")));
     }
 
     [Fact]

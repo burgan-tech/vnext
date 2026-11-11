@@ -2,7 +2,7 @@
   "releaseNote": {
     "summary": "Transitions accept a rule-based schemas list next to schema; the first matching entry validates the request and a declared list with no match is rejected with 400 Transition:100025.",
     "breaking": false,
-    "docs": []
+    "docs": ["https://github.com/burgan-tech/vnext/blob/master/docs/runtime/function-contract-resolution.md"]
   },
   "features": {
     "engine": {

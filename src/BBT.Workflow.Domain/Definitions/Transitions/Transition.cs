@@ -188,13 +188,22 @@ public sealed class Transition : IHasKey
     /// </summary>
     [JsonIgnore]
     public SchemaSelection? SchemaSelection =>
-        schemas ?? (Schema is null ? null : SchemaSelection.CreateDefault(Schema));
+        schemas is { Schemas.Count: > 0 }
+            ? schemas
+            : Schema is null ? null : SchemaSelection.CreateDefault(Schema);
 
     /// <summary>
     /// True when the transition declares a schema, through either <c>schema</c> or <c>schemas</c>.
     /// </summary>
     [JsonIgnore]
-    public bool HasSchema => SchemaSelection is { Schemas.Count: > 0 };
+    public bool HasSchema => HasSchemasList || Schema is not null;
+
+    /// <summary>
+    /// True when the authored <c>schemas</c> list (not the single <c>schema</c>) is what the transition
+    /// declares; used to name the offending JSON member in validation errors.
+    /// </summary>
+    [JsonIgnore]
+    public bool HasSchemasList => schemas is { Schemas.Count: > 0 };
 
     /// <summary>
     /// View definition for the transition. Supports both old "view" and new "views" JSON formats.

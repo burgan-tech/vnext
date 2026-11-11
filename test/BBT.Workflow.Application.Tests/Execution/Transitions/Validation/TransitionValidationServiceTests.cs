@@ -119,6 +119,36 @@ public class TransitionValidationServiceTests
             Times.Never);
     }
 
+    [Fact]
+    public async Task MissingWorkflow_WithSchemaDeclared_FailsClosedWithoutCallingTheResolver()
+    {
+        var context = CreateTransitionContextWithSchema(
+            new Reference("schema-a", "test-domain", "sys-schemas", "1.0.0"));
+        typeof(TransitionExecutionContext).GetProperty(nameof(TransitionExecutionContext.Workflow))!
+            .SetValue(context, null);
+
+        var result = await _service.ValidateAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.TransitionSchemaNotMatched);
+        await _schemaResolver.DidNotReceiveWithAnyArgs()
+            .ResolveAsync(default!, default!, default!, default, default);
+    }
+
+    [Fact]
+    public async Task MissingWorkflow_WithoutSchema_Accepts()
+    {
+        var context = CreateValidTransitionContext();
+        typeof(TransitionExecutionContext).GetProperty(nameof(TransitionExecutionContext.Workflow))!
+            .SetValue(context, null);
+
+        var result = await _service.ValidateAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _schemaResolver.DidNotReceiveWithAnyArgs()
+            .ResolveAsync(default!, default!, default!, default, default);
+    }
+
     #region ValidateAsync Tests
 
     [Fact]

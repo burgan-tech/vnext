@@ -115,7 +115,15 @@ be last; `schemas` wins over `schema`; automatic and scheduled transitions may n
   declared-only (`schema` or a non-empty `schemas`), like `hasView`.
 - **Cache:** the schema-function cache key and ETag also hash the non-volatile request headers
   (`RequestHeaderHash`, shared with the HumanTask function cache), so a header-driven rule never gets
-  another header value's entry or a false `304`.
+  another header value's entry or a false `304`. Tracing ids, transport noise and the conditional /
+  cache-directive headers (`If-None-Match`, `Cache-Control`, ...) are excluded, otherwise a revalidating
+  client would never match its own ETag; `x-forwarded-for` / `x-real-ip` stay in because a rule may read them.
+- **Order:** `TransitionValidationService.ValidateAsync` resolves the schema (including any rule script)
+  before the transition policy check, so a caller the policy would refuse can receive `400`
+  `Transition:100025` instead of `403` when no entry matches for them.
+- **Bodyless requests:** a function request without a body is accepted even when no `inputSchema` entry
+  matches (`FunctionRequestValidationService` returns before rule evaluation), whereas a transition with
+  `schemas` and no matching entry is rejected regardless of the body.
 - **Functions differ in one respect:** a rule-based function `inputSchema` with no match rejects with
   `400` `Function:800006` (above), where a transition reports `Transition:100025`.
 

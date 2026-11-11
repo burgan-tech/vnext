@@ -955,7 +955,7 @@ public class WorkflowValidator
         {
             result.AddError(new ValidationResult(
                 $"Auto transition '{transition.Key}' cannot have a schema definition.",
-                [$"{basePath}.{nameof(Transition.Schema)}"]));
+                [$"{basePath}.{(transition.HasSchemasList ? "schemas" : nameof(Transition.Schema))}"]));
         }
 
         // View is not allowed
@@ -1048,7 +1048,7 @@ public class WorkflowValidator
         {
             result.AddError(new ValidationResult(
                 $"Scheduled transition '{transition.Key}' cannot have a schema definition.",
-                [$"{basePath}.{nameof(Transition.Schema)}"]));
+                [$"{basePath}.{(transition.HasSchemasList ? "schemas" : nameof(Transition.Schema))}"]));
         }
 
         // View is not allowed
