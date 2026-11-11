@@ -35,6 +35,27 @@ status: pending
 - Project skeleton: `Agents/` folder and `vnext.config.json` `paths.agents`.
 - Example `triage-agent.json` (provider `local`), an Mcp task example (type 24) and an `.http` dry-run request.
 
+- A **migration document** for domain repos generated from an older template (see below). Those repos
+  keep their own copies of `build.js`, `validate.js`, `index.js`, `setup.js` and `test.js`, so a template
+  release does not reach them.
+
+## Migration for repos created from an older template
+
+An existing domain repo still validates and builds after it adds `Agents/`, so the gap is silent. The
+template must ship a migration document that lists these steps, and its release note must point to it:
+
+| File | Older template | Change |
+|---|---|---|
+| `validate.js` | No `agents → 'agent'` entry in the folder-to-schema map, so files in `Agents/` are never schema-validated, without a warning | Take the new file: the map entry, the warning for a folder whose schema the installed package lacks, and the `addVocabularies` registration |
+| `build.js` | The runtime build copies `Agents/` with the domain tree. The reference build's component-folder list has no `Agents`, and `exports.agents` resolves only when `paths.agents` is set | Take the new file |
+| `index.js` | No `getAgents()`, and the component list in `getPathsConfig` defaults has no `agents` | Take the new file |
+| `setup.js`, `test.js` | Folder lists without `Agents` | Take the new files |
+| `vnext.config.json` | No `paths.agents` and no `exports.agents` | Add `"agents": "Agents"` under `paths` and `"agents": []` under `exports` |
+| `package.json` | `@burgan-tech/vnext-schema` older than the AI Agent release | Raise it to the release that adds `stateType` 6, task type 24 and the `agent` schema. An older package rejects a workflow with an AiAgent state |
+
+Observed on 2026-11-11 in vnext-example, which was generated from an older template: with `Agents/`
+present and the scripts unchanged, `npm run validate` reported no agent files at all.
+
 ## Contract and examples
 
 Copy from vnext-example `core/Agents/ai-agent-lab/ai-triage-agent.json`.
@@ -42,6 +63,8 @@ Copy from vnext-example `core/Agents/ai-agent-lab/ai-triage-agent.json`.
 ## Acceptance
 
 - `npm run validate` passes on a fresh project (after the vnext-schema release).
+- The migration document is published and linked from the template release note; following it on a repo
+  generated from an older template makes `npm run validate` schema-validate `Agents/`.
 
 ## Out of scope
 
