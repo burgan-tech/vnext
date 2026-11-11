@@ -4,7 +4,8 @@
 #   - no network (own network namespace, loopback only; packages were restored before the agent ran)
 #   - no environment (env -i: CURSOR_API_KEY and every runner variable are gone)
 #   - its own PID namespace (the agent's /proc/<pid>/environ is not visible) and private mounts
-#     that hide the runner temp dir (staged tooling, agent input) and the CLI config
+#     that hide the runner temp dir (staged tooling, agent input) and the CLI config and make .git
+#     read-only
 #   - the runner's uid, so build output lands in the tree as usual
 # The workflow stages this file outside the working tree and fills in the @…@ values, so nothing the
 # caller sets (HOME, PATH, the working directory) changes what it runs; the agent cannot edit it (its
@@ -44,15 +45,17 @@ gid="$(id -g)"
 exec sudo -n /usr/bin/unshare --net --pid --fork --kill-child --mount --propagation private -- \
   /bin/sh -c '
     set -e
-    uid=$1 gid=$2 home=$3 droot=$4 rtemp=$5 limit=$6
-    shift 6
+    uid=$1 gid=$2 home=$3 droot=$4 rtemp=$5 limit=$6 ws=$7
+    shift 7
     /usr/sbin/ip link set lo up
     mount -t proc proc /proc
     mount -t tmpfs tmpfs "$rtemp"
+    # .git read-only: agent-written code cannot plant hooks, fsmonitor or config for later git calls.
+    mount --bind "$ws/.git" "$ws/.git" && mount -o remount,bind,ro "$ws/.git"
     for d in "$home/.cursor" "$home/.config"; do if [ -d "$d" ]; then mount -t tmpfs tmpfs "$d"; fi; done
     exec /usr/bin/setpriv --reuid="$uid" --regid="$gid" --init-groups -- \
       /usr/bin/timeout "$limit" /usr/bin/env -i \
         HOME="$home" PATH="$droot:/usr/bin:/bin" DOTNET_ROOT="$droot" NUGET_PACKAGES="$home/.nuget/packages" \
         DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 MSBUILDDISABLENODEREUSE=1 \
         "$droot/dotnet" "$@"
-  ' ai-dotnet "$uid" "$gid" "$HOME_DIR" "$DOTNET_ROOT_DIR" "$RUNNER_TEMP_DIR" "$TIMEOUT_SECONDS" "$@"
+  ' ai-dotnet "$uid" "$gid" "$HOME_DIR" "$DOTNET_ROOT_DIR" "$RUNNER_TEMP_DIR" "$TIMEOUT_SECONDS" "$WORKSPACE" "$@"

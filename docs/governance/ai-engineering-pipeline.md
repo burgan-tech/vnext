@@ -470,12 +470,15 @@ change of a contract product raises impact (§3).
   ([`ai-dotnet.sh`](../../scripts/ai/developer/ai-dotnet.sh)), staged root-owned outside the tree
   with its paths fixed. It runs dotnet in its own network namespace (loopback only — packages are
   restored before the agent), PID namespace (the agent's `/proc/<pid>/environ` is invisible) and
-  mount namespace (the runner temp dir and CLI config hidden), with `env -i`. The agent job holds no
+  mount namespace (the runner temp dir and CLI config hidden, `.git` read-only), with `env -i`.
+  The diff is captured with git ignoring user / system config, hooks and fsmonitor. The agent job holds no
   GitHub write credential; the write job never runs agent-written code.
-- The writer refuses to push a diff that touches `.github/**`, `scripts/**`, `.claude/**`, agent
-  guidance, `Directory.Build.props` / `Directory.Packages.props`, `global.json`, `nuget.config`,
-  `.editorconfig`, analyzer / Sonar / coverage settings or `etc/`; deletes, moves or skips a test or
-  removes more tests than it adds; adds `#pragma warning disable`, `[SuppressMessage]`, `<NoWarn>` or
+- The writer refuses to push a diff that touches anything outside the agent's write folders (an
+  allow-list: `src`, `test`, `docs`, `vnext-meta`, the hosts, `workers`, `modules`) or, inside them,
+  `docs/governance/`, `docs/agent-council/`, `Directory.Build.props` / `Directory.Packages.props`,
+  `.editorconfig`, `.config/`, Dockerfiles, analyzer / Sonar / coverage settings; has a path with a
+  character outside `[A-Za-z0-9._/@+-]` (git would quote it); deletes, skips (`Skip =`, `#if false`)
+  or comments out a test, or removes more tests than it adds in any one file; adds `#pragma warning disable`, `[SuppressMessage]`, `<NoWarn>` or
   a package reference; adds a `<Target>`, `<Exec>`, `<Import>`, `<UsingTask>` or `<ProjectReference>`
   or changes analyzer / warning settings in an MSBuild file; is binary or over 80 files / 4000 lines;
   or carries a secret the job holds or a token-shaped string. The policy runs on what `git apply`

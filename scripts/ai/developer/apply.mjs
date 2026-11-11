@@ -3,7 +3,7 @@
 // checkout, after the agent job finished. It is the only step that commits, pushes, opens a PR or
 // writes labels. For the issue in --in (re-collected in this job, so a label that changed meanwhile
 // still stops it):
-//   1. reads the agent job's artifact: patch.diff, files.tsv (git diff --name-status), result.json,
+//   1. reads the agent job's artifact: patch.diff, files.z (git diff --name-status -z), result.json,
 //      base.txt (the commit the agent worked on), runner.json (its sandboxed build/test, informational);
 //   2. validates the result, applies the patch on base and runs the diff policy and the secret scan on
 //      what git applied (not on the agent job's own listing) — any violation: nothing is pushed;
@@ -22,7 +22,7 @@ import { toolPath } from '../lib/tools.mjs';
 import { readPlanData } from '../lib/director.mjs';
 import {
   branchFor, validateResult, checkDiff, findSecrets, prLabels, developerLabels, extractCouncilRow, insertLogRow,
-  renderPrBody, updateRepairs, renderDeveloperComment, isDeveloperComment,
+  renderPrBody, updateRepairs, renderDeveloperComment, isDeveloperComment, parseNameStatusZ,
 } from '../lib/developer.mjs';
 
 const args = Object.fromEntries(
@@ -49,7 +49,12 @@ const ghApp = (a, input) => {
   if (!appToken) throw new Error('AI_APP_TOKEN not set');
   return execFileSync(GH, a, { encoding: 'utf8', input, env: { ...process.env, GH_TOKEN: appToken } });
 };
-const git = (a, opts = {}) => execFileSync(GIT, a, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...opts });
+// Paths unquoted (core.quotepath=false) and no hooks or fsmonitor, whatever the checkout's config says.
+const GIT_SAFE = ['-c', 'core.quotepath=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor='];
+const git = (a, opts = {}) => execFileSync(GIT, [...GIT_SAFE, ...a], {
+  encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...opts,
+  env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', ...(opts.env ?? {}) },
+});
 const E2E_REASON = 'the e2e job (pr-e2e.yml, rollout step 5) is not built yet; run the listed suites locally';
 const summary = ['| Issue | Mode | Outcome | PR | Notes |', '|---|---|---|---|---|'];
 
@@ -81,10 +86,6 @@ function editLabels(number, add, remove) {
 
 const auth = () => `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${appToken}`).toString('base64')}`;
 const remote = `https://github.com/${repo}.git`;
-const parseStatus = (text) => text.split('\n').filter(Boolean).map((l) => {
-  const [status, path] = l.split('\t');
-  return { status, path };
-});
 
 /**
  * Applies the patch on `base` in the index and returns what git itself says changed: the file
@@ -96,7 +97,7 @@ function stage(base, patch) {
   writeFileSync(join(art, '.apply.diff'), patch);
   git(['apply', '--index', '--whitespace=nowarn', join(art, '.apply.diff')]);
   return {
-    files: parseStatus(git(['diff', '--cached', '--no-renames', '--name-status', base])),
+    files: parseNameStatusZ(git(['diff', '--cached', '--no-renames', '--name-status', '-z', base])),
     diff: git(['diff', '--cached', '--no-renames', '--binary', base]),
   };
 }
@@ -140,7 +141,7 @@ try {
     reason = `the agent found nothing to change${result.notes ? `: ${result.notes}` : ''}`;
   } else {
     const patch = read('patch.diff') ?? '';
-    const listed = parseStatus(read('files.tsv') ?? '');
+    const listed = parseNameStatusZ(read('files.z') ?? '');
     // --print checks the artifact as it is; a real run checks what git applied, and refuses when
     // the two disagree.
     const applied = args.print ? { files: listed, diff: patch } : stage(base, patch);
@@ -162,8 +163,10 @@ try {
       const labels = prLabels(input.labels);
       if (input.mode === 'FIX') {
         const pr = JSON.parse(gh(['api', `repos/${repo}/pulls/${input.pr.number}`]));
-        ghApp(['api', '-X', 'PATCH', `repos/${repo}/pulls/${input.pr.number}`, '--input', '-'], JSON.stringify({ body: updateRepairs(pr.body, input.repairs, input.maxRepairs) }));
-        ghApp(['api', '-X', 'POST', `repos/${repo}/issues/${input.pr.number}/comments`, '--input', '-'], JSON.stringify({ body: `🛠️ **AI Developer — repair ${input.repairs}/${input.maxRepairs}** at \`${sha.slice(0, 12)}\`\n\n${result.summary.map((s) => `- ${s}`).join('\n')}` }));
+        // input.repairs counts the gate's CHANGES_REQUIRED verdicts so far; this push is the next attempt.
+        const attempt = input.repairs + 1;
+        ghApp(['api', '-X', 'PATCH', `repos/${repo}/pulls/${input.pr.number}`, '--input', '-'], JSON.stringify({ body: updateRepairs(pr.body, attempt, input.maxRepairs) }));
+        ghApp(['api', '-X', 'POST', `repos/${repo}/issues/${input.pr.number}/comments`, '--input', '-'], JSON.stringify({ body: `🛠️ **AI Developer — repair ${attempt}/${input.maxRepairs}** at \`${sha.slice(0, 12)}\`\n\n${result.summary.map((s) => `- ${s}`).join('\n')}` }));
         prUrl = pr.html_url;
       } else {
         const body = renderPrBody({

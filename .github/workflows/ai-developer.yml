@@ -182,13 +182,19 @@ jobs:
             || echo "::warning::Cursor agent exited non-zero on #$ISSUE"
 
       - name: Capture the diff
-        # Right after the agent, before any agent-written code runs again.
+        # Right after the agent, before the informational build below. Git ignores the user and system
+        # config and the checkout's hooks / fsmonitor (the sandbox mounts .git read-only, but ~ is
+        # writable to agent-written tests), and prints paths unquoted.
         if: env.HAS_AUTH == 'true' && steps.collect.outputs.mode != 'skip'
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_SYSTEM: /dev/null
         run: |
-          git add -A -- . ':!.ai'
-          git diff --cached --no-renames --binary > "$AI_ART/patch.diff"
-          git diff --cached --no-renames --name-status > "$AI_ART/files.tsv"
-          echo "Changed files: $(wc -l < "$AI_ART/files.tsv")"
+          g() { git -c core.quotepath=false -c core.hooksPath=/dev/null -c core.fsmonitor= "$@"; }
+          g add -A -- . ':!.ai'
+          g diff --cached --no-renames --binary > "$AI_ART/patch.diff"
+          g diff --cached --no-renames --name-status -z > "$AI_ART/files.z"
+          g diff --cached --no-renames --stat | tail -1
 
       - name: Upload the agent's work
         if: env.HAS_AUTH == 'true' && steps.collect.outputs.mode != 'skip'
@@ -197,7 +203,7 @@ jobs:
           name: ai-developer-work
           path: |
             ${{ runner.temp }}/ai-art/patch.diff
-            ${{ runner.temp }}/ai-art/files.tsv
+            ${{ runner.temp }}/ai-art/files.z
             ${{ runner.temp }}/ai-art/result.json
             ${{ runner.temp }}/ai-art/base.txt
           if-no-files-found: error

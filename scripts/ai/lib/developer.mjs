@@ -96,12 +96,18 @@ export function validateResult(raw, { secrets = [], mode = 'NEW' } = {}) {
   };
 }
 
-/** Paths the pipeline never changes (§13). */
+/** The only folders the pipeline writes; mirrors the agent's `Write(...)` allow-list in ai-developer.yml. */
+export const ALLOWED_ROOTS = Object.freeze(['src/', 'test/', 'docs/', 'vnext-meta/', 'orchestration/', 'execution/', 'workers/', 'modules/']);
+/** Path characters the pipeline accepts; anything else (quotes, tabs, non-ASCII) git would quote. */
+const SAFE_PATH = /^[A-Za-z0-9._\/@+-]+$/;
+
+/** Paths the pipeline never changes even inside the allowed folders (§13). */
 export const FORBIDDEN_PATHS = Object.freeze([
   /^\.github\//, /^scripts\//, /^\.claude\//, /^\.cursor\//, /^(AGENTS|CLAUDE)\.md$/, /(^|\/)CLAUDE\.local\.md$/,
   /(^|\/)Directory\.(Build|Packages)\.(props|targets)$/, /^global\.json$/, /(^|\/)nuget\.config$/i, /^common\.props$/,
   /(^|\/)\.editorconfig$/, /\.globalconfig$/, /\.ruleset$/, /(^|\/)sonar-project\.properties$/, /\.runsettings$/,
   /(^|\/)coverlet\.json$/, /^etc\//, /^tools\//, /^init\//, /^ai-docs\//,
+  /^docs\/governance\//, /^docs\/agent-council\//, /(^|\/)\.config\//, /(^|\/)dotnet-tools\.json$/, /(^|\/)Dockerfile[^/]*$/i, /\.rsp$/,
 ]);
 const ADDED_FORBIDDEN = Object.freeze([
   [/#pragma\s+warning\s+disable/, 'adds `#pragma warning disable`'],
@@ -116,7 +122,8 @@ const BUILD_FORBIDDEN = Object.freeze([
   [/<\s*(Target|Exec|Import|UsingTask|ProjectReference)\b/i, 'adds a build target, task, import or project reference'],
   [/<\s*(RunAnalyzers|RunAnalyzersDuringBuild|EnforceCodeStyleInBuild|AnalysisMode|AnalysisLevel|CodeAnalysisRuleSet|WarningsNotAsErrors|WarningLevel|Nullable|GenerateDocumentationFile)\b/i, 'changes analyzer or warning settings'],
 ]);
-const TEST_ATTR = /\[\s*(Fact|Theory)\b/;
+/** A live test attribute: the trimmed line starts with it (a commented-out one does not count). */
+const TEST_ATTR = /^\[\s*(Fact|Theory)\b/;
 const MAX_FILES = 80;
 const MAX_LINES = 4000;
 
@@ -132,6 +139,11 @@ export function parsePatch(patch) {
   let oldLeft = 0;
   let newLeft = 0;
   for (const line of String(patch ?? '').split('\n')) {
+    // Inside a hunk a line starts with '+', '-', ' ' or '\\'; anything else ends the hunk early.
+    if ((oldLeft > 0 || newLeft > 0) && !/^[+\- \\]/.test(line)) {
+      oldLeft = 0;
+      newLeft = 0;
+    }
     if (oldLeft > 0 || newLeft > 0) {
       if (line.startsWith('+')) {
         cur.added.push(line.slice(1));
@@ -147,9 +159,12 @@ export function parsePatch(patch) {
       }
       continue;
     }
-    const header = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
-    if (header) {
-      cur = { path: header[2], from: header[1], binary: false, added: [], removed: [] };
+    if (line.startsWith('diff --git ')) {
+      // A quoted header (`diff --git "a/…" "b/…"`) is a path git had to escape: kept, but unmapped.
+      const header = /^diff --git a\/(\S+) b\/(\S+)$/.exec(line);
+      cur = header
+        ? { path: header[2], from: header[1], binary: false, added: [], removed: [] }
+        : { path: null, header: line, binary: false, added: [], removed: [] };
       out.push(cur);
       continue;
     }
@@ -165,39 +180,58 @@ export function parsePatch(patch) {
   return out;
 }
 
+/** Parses `git diff --name-status -z` output: `S\0path\0S\0path\0…`. */
+export function parseNameStatusZ(text) {
+  const parts = String(text ?? '').split('\0');
+  const out = [];
+  for (let i = 0; i + 1 < parts.length; i += 2) if (parts[i]) out.push({ status: parts[i], path: parts[i + 1] });
+  return out;
+}
+
 /**
- * The diff policy. `files` = [{ path, status }] (`git diff --name-status`, status A/M/D/…, taken
+ * The diff policy. `files` = [{ path, status }] (`git diff --name-status -z`, status A/M/D/…, taken
  * from git in the write job), `patch` = the unified diff. Returns the violations; any one stops the push.
+ * An allow-list of folders first (the agent's own Write allow-list), then the deny-list inside it.
  */
 export function checkDiff(files, patch) {
   const v = [];
   if (!files.length) return ['the diff is empty'];
   if (files.length > MAX_FILES) v.push(`touches ${files.length} files (limit ${MAX_FILES})`);
   for (const f of files) {
+    if (!SAFE_PATH.test(f.path)) {
+      v.push(`${JSON.stringify(f.path)}: path has characters outside [A-Za-z0-9._/@+-]`);
+      continue;
+    }
     if (f.path.includes('..') || f.path.startsWith('/')) v.push(`${f.path}: path escapes the repository`);
-    const rule = FORBIDDEN_PATHS.find((re) => re.test(f.path));
-    if (rule) v.push(`${f.path}: the pipeline may not change this path`);
+    if (!ALLOWED_ROOTS.some((r) => f.path.startsWith(r))) v.push(`${f.path}: outside the folders the pipeline writes (${ALLOWED_ROOTS.join(', ')})`);
+    else if (FORBIDDEN_PATHS.some((re) => re.test(f.path))) v.push(`${f.path}: the pipeline may not change this path`);
     if (/^D/.test(f.status) && /^test\//.test(f.path)) v.push(`${f.path}: deletes a test file`);
   }
   const parsed = parsePatch(patch);
   const listed = new Set(files.map((f) => f.path));
+  if (parsed.length !== files.length) v.push(`the patch has ${parsed.length} file(s), the file list ${files.length}`);
   let changed = 0;
-  let testsAdded = 0;
-  let testsRemoved = 0;
   for (const f of parsed) {
+    if (f.path === null) {
+      v.push(`unparseable file header: ${f.header.slice(0, 120)}`);
+      continue;
+    }
     if (!listed.has(f.path)) v.push(`${f.path}: in the patch but not in the file list`);
     if (f.binary) v.push(`${f.path}: binary change`);
     changed += f.added.length + f.removed.length;
+    let testsAdded = 0;
+    let testsRemoved = 0;
     for (const line of f.added) {
       for (const [re, what] of ADDED_FORBIDDEN) if (re.test(line)) v.push(`${f.path}: ${what}`);
       if (BUILD_FILE.test(f.path)) for (const [re, what] of BUILD_FORBIDDEN) if (re.test(line)) v.push(`${f.path}: ${what}`);
-      if (/^test\//.test(f.path) && /\bSkip\s*=/.test(line)) v.push(`${f.path}: skips a test`);
-      if (TEST_ATTR.test(line)) testsAdded++;
+      if (/^test\//.test(f.path) && (/\bSkip\s*=/.test(line) || /^\s*#if\s+(false|0)\b/.test(line))) v.push(`${f.path}: skips or disables a test`);
+      if (TEST_ATTR.test(line.trim())) testsAdded++;
     }
-    for (const line of f.removed) if (TEST_ATTR.test(line)) testsRemoved++;
+    for (const line of f.removed) if (TEST_ATTR.test(line.trim())) testsRemoved++;
+    // Per file: a test removed here is not paid for by a new test elsewhere.
+    if (testsRemoved > testsAdded) v.push(`${f.path}: removes or comments out ${testsRemoved - testsAdded} test(s)`);
   }
   if (changed > MAX_LINES) v.push(`changes ${changed} lines (limit ${MAX_LINES})`);
-  if (testsRemoved > testsAdded) v.push(`removes ${testsRemoved - testsAdded} more test(s) than it adds`);
   return [...new Set(v)];
 }
 
@@ -214,6 +248,10 @@ const SECRET_SHAPES = Object.freeze([
 export function findSecrets(patch, secrets = []) {
   const hits = new Set();
   for (const f of parsePatch(patch)) {
+    if (f.path === null) {
+      hits.add(`unparseable file header — not scanned: ${f.header.slice(0, 120)}`);
+      continue;
+    }
     for (const line of f.added) {
       if (secrets.some((x) => x && x.length >= 8 && line.includes(x))) hits.add(`${f.path}: contains a secret this job holds`);
       if (SECRET_SHAPES.some((re) => re.test(line))) hits.add(`${f.path}: contains a token-shaped string`);

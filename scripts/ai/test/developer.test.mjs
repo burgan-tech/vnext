@@ -8,7 +8,7 @@ import { PRODUCTS as TEMPLATE_PRODUCTS } from '../../governance/lib/pr-body.mjs'
 import { compileImpactRules } from '../../governance/lib/ai-record.mjs';
 import {
   PRODUCTS, DEV_MARKER, branchFor, decideMode, validateResult, checkDiff, pickMilestone, prLabels, developerLabels,
-  extractCouncilRow, insertLogRow, findSecrets, parsePatch, renderPrBody, updateRepairs, renderDeveloperComment, isDeveloperComment,
+  extractCouncilRow, insertLogRow, findSecrets, parsePatch, parseNameStatusZ, renderPrBody, updateRepairs, renderDeveloperComment, isDeveloperComment,
 } from '../lib/developer.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -62,9 +62,13 @@ const patchOf = (path, lines) => [`diff --git a/${path} b/${path}`, `--- a/${pat
 
 test('diff policy: forbidden paths, deleted or skipped tests, suppressions, packages, size', () => {
   const ok = [{ path: 'src/BBT.Workflow.Application/Caching/CacheSet.cs', status: 'M' }, { path: 'test/BBT.Workflow.Application.Tests/X.cs', status: 'A' }];
-  assert.deepEqual(checkDiff(ok, patchOf('test/BBT.Workflow.Application.Tests/X.cs', ['+    [Fact]', '+    public void Y() {}'])), []);
+  const okPatch = `${patchOf('src/BBT.Workflow.Application/Caching/CacheSet.cs', ['+// x'])}\n${patchOf('test/BBT.Workflow.Application.Tests/X.cs', ['+    [Fact]', '+    public void Y() {}'])}`;
+  assert.deepEqual(checkDiff(ok, okPatch), []);
   assert.deepEqual(checkDiff([], ''), ['the diff is empty']);
-  for (const path of ['.github/workflows/x.yml', 'scripts/ai/lib/developer.mjs', '.claude/rules/x.md', 'AGENTS.md', 'Directory.Build.props', 'src/Directory.Packages.props', 'global.json', 'nuget.config', '.editorconfig', 'common.props', 'etc/docker/x.yml']) {
+  for (const path of ['.github/workflows/x.yml', 'scripts/ai/lib/developer.mjs', '.claude/rules/x.md', 'AGENTS.md', 'Directory.Build.props', 'global.json', 'nuget.config', '.editorconfig', 'common.props', 'etc/docker/x.yml', '.gitattributes', '.mcp.json', 'BBT.Workflow.slnx', '.config/dotnet-tools.json']) {
+    assert.match(checkDiff([{ path, status: 'M' }], '').join(), /outside the folders the pipeline writes/, path);
+  }
+  for (const path of ['src/Directory.Packages.props', 'src/A/Directory.Build.props', 'docs/governance/ai-engineering-pipeline.md', 'docs/agent-council/sessions/README.md', 'src/A/.config/dotnet-tools.json', 'src/A/Dockerfile', 'test/A/.editorconfig']) {
     assert.match(checkDiff([{ path, status: 'M' }], '').join(), /may not change this path/, path);
   }
   assert.match(checkDiff([{ path: 'test/A/B.cs', status: 'D' }], '').join(), /deletes a test file/);
@@ -73,8 +77,9 @@ test('diff policy: forbidden paths, deleted or skipped tests, suppressions, pack
   assert.match(bad('+[SuppressMessage("x", "y")]'), /SuppressMessage/);
   assert.match(bad('+    <NoWarn>CS1591</NoWarn>', 'src/A.csproj'), /NoWarn/);
   assert.match(bad('+    <PackageReference Include="Evil" Version="1.0" />', 'src/A.csproj'), /package reference/);
-  assert.match(bad('+    [Fact(Skip = "flaky")]', 'test/A.cs'), /skips a test/);
-  assert.match(bad('-    [Fact]', 'test/A.cs'), /removes 1 more test/);
+  assert.match(bad('+    [Fact(Skip = "flaky")]', 'test/A.cs'), /skips or disables a test/);
+  assert.match(bad('+#if false', 'test/A.cs'), /skips or disables a test/);
+  assert.match(bad('-    [Fact]', 'test/A.cs'), /removes or comments out 1 test/);
   assert.match(checkDiff([{ path: 'src/a.png', status: 'A' }], 'diff --git a/src/a.png b/src/a.png\nnew file mode 100644\nGIT binary patch\nliteral 4').join(), /binary/);
   const many = Array.from({ length: 81 }, (_, i) => ({ path: `src/F${i}.cs`, status: 'M' }));
   assert.match(checkDiff(many, '').join(), /81 files/);
@@ -154,8 +159,9 @@ test('a content line that starts with +++ or --- is content, never a file header
   assert.deepEqual(parsePatch(patch).map((f) => [f.path, f.added.length]), [['docs/a.md', 2], ['test/A.cs', 2]]);
   assert.match(findSecrets(patch).join(), /docs\/a\.md: contains a token-shaped string/);
   const files = [{ path: 'docs/a.md', status: 'M' }, { path: 'test/A.cs', status: 'M' }];
-  assert.match(checkDiff(files, patch).join(), /test\/A\.cs: skips a test/);
+  assert.match(checkDiff(files, patch).join(), /test\/A\.cs: skips or disables a test/);
   assert.match(checkDiff([files[0]], patch).join(), /test\/A\.cs: in the patch but not in the file list/);
+  assert.match(checkDiff([files[0]], patch).join(), /the patch has 2 file\(s\), the file list 1/);
 });
 
 test('project files may not add targets, imports or analyzer changes', () => {
@@ -166,4 +172,25 @@ test('project files may not add targets, imports or analyzer changes', () => {
   assert.match(csproj('+    <WarningsNotAsErrors>CS8600</WarningsNotAsErrors>'), /analyzer or warning/);
   // The same text in a C# file is just text.
   assert.deepEqual(checkDiff([{ path: 'src/A/B.cs', status: 'M' }], patchOf('src/A/B.cs', ['+// <Target Name="X" />'])), []);
+});
+
+test('a path git has to quote is refused and never skips the scan', () => {
+  // Second review finding on #1214: `.github/é.yml` is printed as `".github/\\303\\251.yml"`.
+  const quoted = ['diff --git "a/src/\\303\\251.cs" "b/src/\\303\\251.cs"', '--- "a/src/\\303\\251.cs"', '+++ "b/src/\\303\\251.cs"', '@@ -1,0 +1 @@', '+#pragma warning disable CS1'].join('\n');
+  const v = checkDiff([{ path: 'src/é.cs', status: 'M' }], quoted).join();
+  assert.match(v, /characters outside/);
+  assert.match(v, /unparseable file header/);
+  assert.match(findSecrets(quoted).join(), /not scanned/);
+  assert.match(checkDiff([{ path: '.github/é.yml', status: 'A' }], '').join(), /characters outside/);
+  assert.deepEqual(parseNameStatusZ('M\0src/a.cs\0A\0src/é.cs\0'), [{ status: 'M', path: 'src/a.cs' }, { status: 'A', path: 'src/é.cs' }]);
+});
+
+test('commenting out a test, or paying for it with a test in another file, is refused', () => {
+  const swap = (lines) => checkDiff([{ path: 'test/A.cs', status: 'M' }], patchOf('test/A.cs', lines)).join();
+  assert.match(swap(['-    [Fact]', '+    // [Fact]']), /removes or comments out 1 test/);
+  const two = [
+    'diff --git a/test/A.cs b/test/A.cs', '--- a/test/A.cs', '+++ b/test/A.cs', '@@ -1 +0,0 @@', '-    [Fact]',
+    'diff --git a/test/B.cs b/test/B.cs', '--- a/test/B.cs', '+++ b/test/B.cs', '@@ -0,0 +1 @@', '+    [Fact]',
+  ].join('\n');
+  assert.match(checkDiff([{ path: 'test/A.cs', status: 'M' }, { path: 'test/B.cs', status: 'M' }], two).join(), /test\/A\.cs: removes or comments out 1 test/);
 });
