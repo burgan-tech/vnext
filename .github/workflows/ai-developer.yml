@@ -1,0 +1,328 @@
+name: AI Developer
+
+# Autonomous Developer of the AI pipeline (docs/governance/ai-engineering-pipeline.md §2, §9, §13).
+# Implements a planned issue (`ai:planned`: NEW / RECOVERY) or repairs its PR (`ai:changes-required`:
+# FIX) and opens or updates the draft PR on `ai/issue-<n>`. Two jobs, so the agent never shares a
+# runner with a write credential:
+#   develop  read-only token, no App token. The Cursor agent edits the working tree; its only shell
+#            command is `ai-dotnet` (dotnet build/test with no network, no environment, own PID and
+#            mount namespaces). The diff is captured right after the agent and uploaded as an artifact.
+#   write    fresh runner, default-branch tooling. Re-reads the issue (a label set meanwhile still
+#            stops it), checks the diff policy and the secret scan, commits, pushes with the App
+#            token, opens the draft PR and, in apply mode, moves the issue to `ai:pr-ready`.
+# Mode: AI_MODE = dry-run (default: branch + draft PR + status comment, no issue label change) |
+# apply. Model: AI_DEVELOPER_MODEL. Auth: CURSOR_API_KEY; without it the workflow is a no-op.
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: 'Issue number'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  # One run per issue at a time; never cancelled mid-push.
+  group: ai-developer-${{ github.event.issue.number || inputs.issue }}
+  cancel-in-progress: false
+
+jobs:
+  develop:
+    if: >-
+      github.event_name != 'issues' ||
+      (github.event.label.name == 'ai:planned' || github.event.label.name == 'ai:changes-required') && !github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      mode: ${{ steps.collect.outputs.mode }}
+    env:
+      # No GH_TOKEN here: only the collect step gets one, so nothing that later runs the target's code
+      # (restore, the agent, the sandboxed build) holds a GitHub token.
+      ISSUE: ${{ github.event.issue.number || inputs.issue }}
+      AI_DEVELOPER_MODEL: ${{ vars.AI_DEVELOPER_MODEL || 'claude-sonnet-5-5-medium' }}
+      AI_MAX_REPAIRS: ${{ vars.AI_MAX_REPAIRS || '3' }}
+      HAS_AUTH: ${{ secrets.CURSOR_API_KEY != '' }}
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+    steps:
+      - name: Check credentials
+        if: env.HAS_AUTH != 'true'
+        run: echo "::notice::CURSOR_API_KEY not set; AI Developer skipped."
+
+      - uses: actions/checkout@v4
+        if: env.HAS_AUTH == 'true'
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        if: env.HAS_AUTH == 'true'
+        with:
+          node-version: '24'
+
+      - name: Run AI script tests
+        if: env.HAS_AUTH == 'true'
+        run: node --test "scripts/ai/test/*.test.mjs"
+
+      - name: Collect the issue
+        id: collect
+        if: env.HAS_AUTH == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          AI_IN="$RUNNER_TEMP/ai-in" AI_ART="$RUNNER_TEMP/ai-art"
+          printf 'AI_IN=%s\nAI_ART=%s\n' "$AI_IN" "$AI_ART" >> "$GITHUB_ENV"
+          mkdir -p "$AI_IN" "$AI_ART"
+          node scripts/ai/developer/collect.mjs --issue "$ISSUE" --out "$AI_IN" --max-repairs "$AI_MAX_REPAIRS"
+
+      - name: Stage the prompt and the sandbox
+        # Taken from the default branch before the target is checked out; outside the working tree and
+        # root-owned, so the agent can neither read the input folder nor change what ai-dotnet runs.
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.mode != 'skip'
+        run: |
+          TOOLS="$RUNNER_TEMP/ai-tools"
+          echo "TOOLS=$TOOLS" >> "$GITHUB_ENV"
+          mkdir -p "$TOOLS/bin"
+          cp .github/ai/developer.md "$TOOLS/developer.md"
+          cp scripts/ai/developer/ai-dotnet.sh "$TOOLS/bin/ai-dotnet"
+          # Setup scripts run from this copy, not from the target (in FIX the target is a PR branch).
+          cp scripts/setup-netstandard-ref.sh "$TOOLS/setup-netstandard-ref.sh"
+
+      - name: Setup .NET
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.mode != 'skip'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.2xx
+            10.0.x
+
+      - name: Seal the tooling, then warm up on the default branch
+        # The staged tooling becomes root-owned before any build runs. The warm-up build (network, no
+        # token) runs on the default branch only, never on the target: PostSharp restores its compiler
+        # dependencies during a build, and this fills that cache for the offline sandbox builds.
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.mode != 'skip'
+        run: |
+          droot="$(dirname "$(readlink -f "$(command -v dotnet)")")"
+          sed -i -e "s|@DOTNET_ROOT@|$droot|" -e "s|@RUNNER_TEMP@|$RUNNER_TEMP|" \
+                 -e "s|@WORKSPACE@|$GITHUB_WORKSPACE|" -e "s|@HOME@|$HOME|" "$TOOLS/bin/ai-dotnet"
+          sudo chown -R root:root "$TOOLS"
+          sudo chmod -R a+rX,go-w "$TOOLS"
+          sudo chmod 755 "$TOOLS/bin/ai-dotnet"
+          sudo sysctl -w fs.inotify.max_user_instances=8192
+          sudo sysctl -w fs.inotify.max_user_watches=524288
+          bash "$TOOLS/setup-netstandard-ref.sh"
+          dotnet restore ./BBT.Workflow.slnx
+          dotnet build ./BBT.Workflow.slnx --configuration Release --no-restore -v q
+
+      - name: Check out the target and restore it
+        # NEW / RECOVERY: the default branch as already restored. FIX: the PR head the collector read,
+        # restored only (no build: restore evaluates project files, which the diff policy keeps free of
+        # targets, tasks and imports). Packages cannot change: the policy refuses package references.
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.mode != 'skip'
+        env:
+          MODE: ${{ steps.collect.outputs.mode }}
+          REF: ${{ steps.collect.outputs.ref }}
+        run: |
+          if [ "$MODE" = FIX ]; then
+            git fetch --no-tags --depth 50 origin "$REF"
+            git checkout --quiet --detach "$REF"
+            dotnet restore ./BBT.Workflow.slnx
+          fi
+          git rev-parse HEAD > "$AI_ART/base.txt"
+
+      - name: Install Cursor CLI
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.mode != 'skip'
+        # Same pinned, verified package as issue-triage.yml; upgrade all together.
+        env:
+          CURSOR_CLI_VERSION: 2026.10.22-27dcf5f
+          CURSOR_CLI_SHA256: 85296944e4600a83c4b764f578d1502bf9c416db200d33a593e8f3ecabfdc294
+        run: |
+          pkg="$RUNNER_TEMP/cursor-cli.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSL -o "$pkg" "https://downloads.cursor.com/lab/$CURSOR_CLI_VERSION/linux/x64/agent-cli-package.tar.gz"
+          echo "$CURSOR_CLI_SHA256  $pkg" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/cursor-cli"
+          tar --strip-components=1 -xzf "$pkg" -C "$RUNNER_TEMP/cursor-cli"
+
+      - name: Implement with Cursor (write source, sandboxed build/test)
+        id: agent
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.mode != 'skip'
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          export CURSOR_CONFIG_DIR="$RUNNER_TEMP/cursor-config"
+          mkdir -p "$CURSOR_CONFIG_DIR"
+          # Print mode refuses every tool call not on the allow list; the deny list refuses the
+          # sensitive ones again. Write covers source folders only; the only shell command is ai-dotnet.
+          cat > "$CURSOR_CONFIG_DIR/cli-config.json" <<'JSON'
+          {
+            "version": 1,
+            "editor": { "vimMode": false },
+            "permissions": {
+              "allow": [
+                "Read(**)",
+                "Write(src/**)", "Write(test/**)", "Write(docs/**)", "Write(vnext-meta/**)",
+                "Write(orchestration/**)", "Write(execution/**)", "Write(workers/**)", "Write(modules/**)",
+                "Shell(ai-dotnet)"
+              ],
+              "deny": [
+                "Write(.github/**)", "Write(scripts/**)", "Write(.claude/**)", "Write(.cursor/**)", "Write(.git/**)",
+                "WebFetch(*)", "Mcp(*:*)",
+                "Read(.git/**)",
+                "Read(/proc/**)", "Read(/sys/**)", "Read(/etc/**)", "Read(/root/**)",
+                "Read(/tmp/**)", "Read(/opt/**)", "Read(/usr/**)", "Read(/var/**)",
+                "Read(/home/runner/.cursor/**)", "Read(/home/runner/.config/**)", "Read(/home/runner/.ssh/**)",
+                "Read(/home/runner/.docker/**)", "Read(/home/runner/.npm/**)", "Read(/home/runner/.npmrc)",
+                "Read(/home/runner/.gitconfig)",
+                "Read(/home/runner/work/_temp/**)", "Read(/home/runner/work/_actions/**)"
+              ]
+            }
+          }
+          JSON
+          mkdir -p .ai/in && cp "$AI_IN/$ISSUE.json" .ai/in/
+          prompt="$(cat "$TOOLS/developer.md")"
+          PATH="$TOOLS/bin:$PATH" timeout 3000 "$RUNNER_TEMP/cursor-cli/cursor-agent" -p --trust --output-format json --model "$AI_DEVELOPER_MODEL" \
+            "$prompt
+
+          ---
+          Implement issue #$ISSUE now. Input: .ai/in/$ISSUE.json. End with the result JSON object only." \
+            > "$AI_ART/result.json" && code=0 || code=$?
+          # The write job refuses a run that did not finish: a partial tree is never pushed.
+          echo "$code" > "$AI_ART/agent.exit"
+          [ "$code" = 0 ] || echo "::warning::Cursor agent exited $code on #$ISSUE"
+
+      - name: Capture the diff
+        # Right after the agent, before the informational build below. Git ignores the user and system
+        # config and the checkout's hooks / fsmonitor (the sandbox mounts .git read-only, but ~ is
+        # writable to agent-written tests), and prints paths unquoted.
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.mode != 'skip'
+        env:
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_CONFIG_SYSTEM: /dev/null
+        run: |
+          g() { git -c core.quotepath=false -c core.hooksPath=/dev/null -c core.fsmonitor= "$@"; }
+          g add -A -- . ':!.ai'
+          g diff --cached --no-renames --binary > "$AI_ART/patch.diff"
+          g diff --cached --no-renames --name-status -z > "$AI_ART/files.z"
+          g diff --cached --no-renames --stat | tail -1
+
+      - name: Upload the agent's work
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.mode != 'skip'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-developer-work
+          path: |
+            ${{ runner.temp }}/ai-art/patch.diff
+            ${{ runner.temp }}/ai-art/files.z
+            ${{ runner.temp }}/ai-art/result.json
+            ${{ runner.temp }}/ai-art/base.txt
+            ${{ runner.temp }}/ai-art/agent.exit
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Build and test the result (sandboxed, informational)
+        # The PR's `Unit Tests` check is authoritative; this only fills the PR's Done / skipped table.
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.mode != 'skip'
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/ai-runner"
+          if "$TOOLS/bin/ai-dotnet" build > "$RUNNER_TEMP/ai-runner/build.log" 2>&1; then build=passed; else build=failed; fi
+          tests=""
+          if [ "$build" = passed ]; then
+            for p in Domain Application Infrastructure; do
+              if "$TOOLS/bin/ai-dotnet" test "test/BBT.Workflow.$p.Tests" > "$RUNNER_TEMP/ai-runner/$p.log" 2>&1; then r=passed; else r=failed; fi
+              tests="$tests $p $r,"
+            done
+          fi
+          tail -n 30 "$RUNNER_TEMP/ai-runner/build.log"
+          node -e 'const [b,t]=process.argv.slice(1);console.log(JSON.stringify({build:{status:"run",detail:b},tests:t?{status:"run",detail:t.trim().replace(/,$/,"")}:{status:"not-run",detail:"build failed"}}))' \
+            "$build" "$tests" > "$RUNNER_TEMP/ai-runner/runner.json"
+          cat "$RUNNER_TEMP/ai-runner/runner.json"
+
+      - name: Upload the runner verification
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.mode != 'skip'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-developer-runner
+          path: ${{ runner.temp }}/ai-runner/
+          if-no-files-found: warn
+          retention-days: 14
+
+  write:
+    needs: develop
+    if: needs.develop.outputs.mode != '' && needs.develop.outputs.mode != 'skip'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE: ${{ github.event.issue.number || inputs.issue }}
+      AI_MODE: ${{ vars.AI_MODE || 'dry-run' }}
+      AI_MAX_REPAIRS: ${{ vars.AI_MAX_REPAIRS || '3' }}
+    steps:
+      - uses: actions/checkout@v4
+        # The default branch: the only code this job executes. The patch is applied as data.
+        with:
+          persist-credentials: false
+          fetch-depth: 50
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Stage trusted tooling and re-read the issue
+        run: |
+          TOOLS="$RUNNER_TEMP/ai-tools" AI_IN="$RUNNER_TEMP/ai-in" AI_ART="$RUNNER_TEMP/ai-art"
+          printf 'TOOLS=%s\nAI_IN=%s\nAI_ART=%s\n' "$TOOLS" "$AI_IN" "$AI_ART" >> "$GITHUB_ENV"
+          mkdir -p "$TOOLS/scripts/triage" "$TOOLS/scripts/governance" "$AI_IN" "$AI_ART"
+          cp -R scripts/ai "$TOOLS/scripts/"
+          cp -R scripts/triage/lib "$TOOLS/scripts/triage/"
+          cp -R scripts/governance/lib "$TOOLS/scripts/governance/"
+          node "$TOOLS/scripts/ai/developer/collect.mjs" --issue "$ISSUE" --out "$AI_IN" --max-repairs "$AI_MAX_REPAIRS"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ai-developer-work
+          path: ${{ runner.temp }}/ai-art
+
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: ai-developer-runner
+          path: ${{ runner.temp }}/ai-art
+
+      - name: Generate GitHub App token
+        # Push, PR and label writes must start CI and the next role; GITHUB_TOKEN events do not.
+        # Generated only in this job — the agent's runner never sees it. Never `workflows` (§7.1):
+        # GitHub then also refuses any push that edits .github/workflows/.
+        id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+
+      - name: Check the diff, push and open the draft PR
+        env:
+          AI_APP_TOKEN: ${{ steps.app.outputs.token }}
+          # Redacted from every comment and refused in the patch: agent-written code ran with the
+          # Cursor key's process on the same runner, so a test could try to smuggle it into the tree.
+          AI_REDACT: |
+            ${{ secrets.CURSOR_API_KEY }}
+            ${{ github.token }}
+            ${{ steps.app.outputs.token }}
+        run: node "$TOOLS/scripts/ai/developer/apply.mjs" --mode "$AI_MODE" --in "$AI_IN" --artifact "$AI_ART"

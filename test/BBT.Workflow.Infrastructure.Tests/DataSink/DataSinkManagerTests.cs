@@ -116,30 +116,34 @@ public sealed class DataSinkManagerTests
     [Fact]
     public async Task HandleInsertAsync_Should_Process_All_DataSinks_In_Parallel()
     {
-        // Arrange
+        // Arrange — every sink blocks until released, so a sequential manager would only ever have
+        // called the first one. Deterministic: no wall-clock assertion.
         var entity = new TestEntity { };
-        var mockDataSink1 = Substitute.For<IDataSink<TestEntity>>();
-        var mockDataSink2 = Substitute.For<IDataSink<TestEntity>>();
-        var mockDataSink3 = Substitute.For<IDataSink<TestEntity>>();
-        
-        var delay = TimeSpan.FromMilliseconds(100);
-        mockDataSink1.HandleInsertAsync(entity, Arg.Any<CancellationToken>())
-            .Returns(Task.Delay(delay));
-        mockDataSink2.HandleInsertAsync(entity, Arg.Any<CancellationToken>())
-            .Returns(Task.Delay(delay));
-        mockDataSink3.HandleInsertAsync(entity, Arg.Any<CancellationToken>())
-            .Returns(Task.Delay(delay));
-        
-        _mockRegistry.GetDataSinks<TestEntity>()
-            .Returns(new[] { mockDataSink1, mockDataSink2, mockDataSink3 });
+        var gates = new[] { new TaskCompletionSource(), new TaskCompletionSource(), new TaskCompletionSource() };
+        var sinks = gates.Select(gate =>
+        {
+            var sink = Substitute.For<IDataSink<TestEntity>>();
+            sink.HandleInsertAsync(entity, Arg.Any<CancellationToken>()).Returns(gate.Task);
+            return sink;
+        }).ToArray();
+        _mockRegistry.GetDataSinks<TestEntity>().Returns(sinks);
 
         // Act
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        await _manager.HandleInsertAsync(entity);
-        sw.Stop();
+        var run = _manager.HandleInsertAsync(entity);
 
-        // Assert - Should complete in roughly the delay time (parallel), not 3x the delay (sequential)
-        ((double)sw.ElapsedMilliseconds).ShouldBeLessThan(delay.TotalMilliseconds * 2);
+        // Assert — all three started while none has finished
+        run.IsCompleted.ShouldBeFalse();
+        foreach (var sink in sinks)
+        {
+            _ = sink.Received(1).HandleInsertAsync(entity, Arg.Any<CancellationToken>());
+        }
+
+        foreach (var gate in gates)
+        {
+            gate.SetResult();
+        }
+
+        await run;
     }
 
     #endregion

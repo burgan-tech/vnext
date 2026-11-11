@@ -25,7 +25,7 @@ was skipped, how to test it locally) is in the PR body.
 | Issue Triage *(exists)* | [`.github/triage/TRIAGE.md`](../../.github/triage/TRIAGE.md) | issue opened / edited / reopened | read the code | shell, write, network, GitHub | sticky triage comment, kind / area / priority labels, `ai:triaged` |
 | Engineering Director | `.github/ai/director.md` | `ai:ready` or `ai:replan` added | read the code | shell, write, network, GitHub | one plan comment (`<!-- ai-director-plan:v1 -->`), classification labels, next state |
 | Architecture Council | `.github/ai/council.md` | `ai:council-required` added; hourly sweep | read the code and the plan | shell, write, network, GitHub | one council comment (`<!-- ai-council:v1 -->`) carrying the log row, next state |
-| Autonomous Developer | `.github/ai/developer.md` | `ai:planned` (NEW / RECOVERY) or `ai:changes-required` (FIX) added | read and edit the working tree, run `dotnet build` / `dotnet test` | network, GitHub, `.github/**`, analyzer / Sonar / threshold settings, deleting tests | diff policy check, commit, push with the App token, open or update the **draft** PR, PR body evidence, next state |
+| Autonomous Developer | `.github/ai/developer.md` | `ai:planned` (NEW / RECOVERY) or `ai:changes-required` (FIX) added | read and edit source folders, run `ai-dotnet build` / `ai-dotnet test` (sandboxed) | network, GitHub, `.github/**`, analyzer / Sonar / threshold settings, deleting tests | diff policy check, commit, push with the App token, open or update the **draft** PR, PR body evidence, next state |
 | Quality Gate | `.github/ai/quality-gate.md` | CI for the PR head finished (`workflow_run`), PR marked ready, manual run | read the PR diff, the code, CI and Sonar evidence handed to it | shell, write, network, GitHub | one gate comment (`<!-- ai-quality-gate:v1 -->`), verdict labels on the linked issue |
 
 The prompts are the four routine files (Director, Council, Developer, Quality Gate) adapted to CI:
@@ -58,6 +58,23 @@ human-owned condition or decision becomes `APPROVE_WITH_CONDITIONS`, a low-confi
 one missing a core role becomes `CLARIFICATION_REQUIRED`, a major change is `BLOCKED`; a missing
 answer is `INCONCLUSIVE` (no label change, retried by the sweep). The hourly sweep exists because
 the Director cannot re-trigger the council when `ai:council-required` is already on the issue.
+
+**Developer in CI** ([`ai-developer.yml`](../../.github/workflows/ai-developer.yml),
+[`scripts/ai/developer/`](../../scripts/ai/developer/), core in
+[`scripts/ai/lib/developer.mjs`](../../scripts/ai/lib/developer.mjs)). Two jobs, so the agent never
+shares a runner with a write credential. **develop** (read-only token, no App token) decides the mode
+before the agent: `NEW`, `RECOVERY` (earlier attempts closed unmerged), `FIX` (the pipeline's own
+`ai/issue-<n>` PR with `ai:changes-required`), or skip — a stop label, no Director plan, a major
+change, a council not approved, the repair limit, or **another open PR for the issue** (a human's
+or an older routine's is never competed with). Packages are restored, then the agent edits source
+folders; its only shell command is `ai-dotnet` (§13). The diff is captured right after the agent and
+uploaded; a sandboxed build and test of the result fill the PR's *Done / skipped* rows as
+informational evidence. **write** (fresh runner, default-branch tooling) re-reads the issue, so a
+label set while the agent worked still stops it; checks the diff policy and the secret scan; applies
+the patch on the recorded base, adds the council's decision-log row, commits, pushes `ai/issue-<n>`
+with the App token and opens the draft PR with the template sections and the AI decision record
+(§9; a unit test runs the body through the PR contract) — or, in `FIX`, pushes to the same branch
+and records the repair. One status comment per issue (`<!-- ai-developer:v1 -->`).
 
 **No branch-prefix filter.** The Quality Gate reviews **every open PR** that targets `master` or a
 `release-v*` line, not only `claude/*` branches. What changes with the PR's origin is what the
@@ -218,7 +235,7 @@ sequenceDiagram
 | `issue-triage.yml` *(exists)* | `issues: opened, edited, reopened`, manual | author not a bot | per issue |
 | `ai-director.yml` *(dry-run)* | `issues: labeled`, hourly sweep (at most 3 issues, `ai:replan` first), manual | label is `ai:ready` / `ai:replan`; issue open | per issue |
 | `ai-council.yml` *(dry-run)* | `issues: labeled`, hourly sweep (at most 2 issues whose input changed), manual (`issue`, `force`) | label is `ai:council-required`; issue open | per issue |
-| `ai-developer.yml` | `issues: labeled`, manual | label is `ai:planned` / `ai:changes-required`; not `ai:blocked`, `ai:done`, `ai:human-approval`, `ai:semver-major`; with `ai:council-required` also `ai:council-approved` | per issue, never cancelled mid-push |
+| `ai-developer.yml` *(dry-run)* | `issues: labeled`, manual (`issue`) | label is `ai:planned` / `ai:changes-required`; not `ai:blocked`, `ai:done`, `ai:human-approval`, `ai:semver-major`; with `ai:council-required` also `ai:council-approved` | per issue, never cancelled mid-push |
 | `ai-quality-gate.yml` *(dry-run)* | `workflow_run: completed` of `Unit Tests`, `SonarQube`, `PR Contract`; hourly sweep (2 PRs whose evidence changed); manual (`pr`, `force`) | PR open; base `master` / `release-v*` (`.github/ai/gate.json`) | per HEAD SHA, latest wins |
 | `ai-done.yml` | `pull_request: closed` | merged; linked issue carries an `ai:*` state | per issue |
 
@@ -424,7 +441,7 @@ change of a contract product raises impact (§3).
 | 1 | **Taxonomy.** Labels of §4 in `labels.json` (one group per row, pinned by `labels.test.mjs`), `sync-labels --apply`, deprecated labels documented | every label exists with a description |
 | 2 | **Guards.** `PR-AI-*` rules in the PR contract (§9), the path rules in `.github/ai/impact-paths.json` (§7.3), down-scoped App tokens checked by `ai-workflows.test.mjs` (§7.1) | governance script tests pass |
 | 3 | **Read-only roles** in `dry-run`, one PR per role: Director (`ai-director.yml`), Quality Gate (`ai-quality-gate.yml`), Council (`ai-council.yml`) — comments only | a week of runs with no wrong state |
-| 4 | **Developer** in `dry-run` (pushes to a branch, opens a draft PR, no label transitions), then `apply` | first low-impact issue reaches `ai:human-approval` |
+| 4 | **Developer** (`ai-developer.yml`) in `dry-run` (pushes `ai/issue-<n>`, opens a draft PR, status comment, no issue label transitions), then `apply` | first low-impact issue reaches `ai:human-approval` |
 | 5 | **E2E in CI** (§10) | e2e evidence appears on AI PRs |
 | 6 | `apply` for every role | — |
 
@@ -448,10 +465,33 @@ change of a contract product raises impact (§3).
   generated after the agent step, and secrets are redacted from every comment the writer posts.
 - Read-only roles run like triage: `--mode ask`, a deny list for shell / write / network / MCP, and
   a dirty working tree aborts the write step.
-- The Developer runs with write and a shell allow-list (`dotnet build`, `dotnet test`); packages are
-  restored **before** the agent step and the agent has no network. The writer rejects a diff that
-  touches `.github/**`, Sonar / analyzer / coverage settings, `Directory.Build.props` warning
-  levels, or deletes a test, and refuses to push otherwise.
+- The Developer may write source folders only (`src`, `test`, `docs`, `vnext-meta`, the hosts,
+  `workers`, `modules`); its one shell command is `ai-dotnet build|test`
+  ([`ai-dotnet.sh`](../../scripts/ai/developer/ai-dotnet.sh)), staged root-owned outside the tree
+  with its paths fixed. It runs dotnet in its own network namespace (loopback only — packages are
+  restored, and one ordinary build of the default branch fills PostSharp's dependency cache, before the
+  target is checked out and long before the agent), PID namespace (the agent's `/proc/<pid>/environ` is invisible) and
+  mount namespace (the runner temp dir and CLI config hidden, the home directory and `.git`
+  read-only with the workspace writable, a private `/tmp`, the docker socket masked), with `env -i`, as the runner uid with `no_new_privs`, no capabilities and no supplementary
+  groups — so code inside cannot `sudo`, reach docker or undo the mounts. Only the collect step holds
+  a (read-only) GitHub token; setup scripts run from the default-branch copy, and a FIX target must be
+  a branch of this repository (never a fork's `ai/issue-<n>`). An agent that did not exit cleanly is
+  never pushed.
+  The diff is captured with git ignoring user / system config, hooks and fsmonitor. The agent job holds no
+  GitHub write credential; the write job never runs agent-written code.
+- The writer refuses to push a diff that touches anything outside the agent's write folders (an
+  allow-list: `src`, `test`, `docs`, `vnext-meta`, the hosts, `workers`, `modules`) or, inside them,
+  `docs/governance/`, `docs/agent-council/`, `Directory.Build.props` / `Directory.Packages.props`,
+  `.editorconfig`, `.config/`, Dockerfiles, analyzer / Sonar / coverage settings; has a path with a
+  character outside `[A-Za-z0-9._/@+-]` (git would quote it) or is not a regular file (symlink,
+  submodule, mode change); deletes, skips (`Skip =`, `#if false`) or comments out a test, or removes
+  more tests than it adds in any one file; adds `#pragma warning disable`, `[SuppressMessage]`, `<NoWarn>` or
+  a package reference, `#nullable disable`, `NOSONAR` or `[ExcludeFromCodeCoverage]`; in an MSBuild file
+  adds a target, task, build event, import or reference, changes which files are compiled, or adds,
+  changes or removes an analyzer / warning setting; is binary or over 80 files / 4000 lines;
+  or carries a secret the job holds or a token-shaped string. The policy runs on what `git apply`
+  changed in the write job (file list and diff from git, the patch parsed by hunk structure), and a
+  mismatch with the agent job's own file list also stops the push.
 - Nothing merges, deploys, changes thresholds or edits branch protection.
 
 ## 14. Day-to-day use
