@@ -32,6 +32,10 @@ test('a running or missing required check is INCONCLUSIVE, and the agent cannot 
   assert.equal(decideVerdict(running, cleanReview).verdict, 'INCONCLUSIVE');
   const missing = evaluateEvidence(evidence({ checks: green().filter((c) => c.name !== 'Build and analyze') }), config);
   assert.match(missing.pending.join(), /Build and analyze: not reported for this SHA/);
+  // While other CI for the SHA is still queued, a missing check is not yet a reason to push again.
+  const queued = evaluateEvidence(evidence({ checks: [...green().filter((c) => !['Build and analyze', 'Unit Tests'].includes(c.name)), { name: 'Unit Tests', status: 'queued' }] }), config);
+  assert.match(queued.pending.join(), /Build and analyze: not reported yet — other CI for this SHA is still running/);
+  assert.doesNotMatch(queued.pending.join(), /push a commit/);
 });
 
 test('failed unit tests block whatever the review says', () => {
