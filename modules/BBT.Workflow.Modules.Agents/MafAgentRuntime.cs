@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances.Agents;
+using BBT.Workflow.Validation;
 using AgentSession = Microsoft.Agents.AI.AgentSession;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -18,8 +19,14 @@ namespace BBT.Workflow.Agents;
 /// profile says <c>structuredOutput: json</c>. Local sessions are MAF-serialized and trimmed to
 /// <c>maxMessages</c>; provider sessions keep only the conversation id. No streaming, no harness.
 /// </summary>
-internal sealed class MafAgentRuntime(IChatClientProvider provider, ILoggerFactory loggerFactory) : IAgentRuntime
+internal sealed class MafAgentRuntime(IChatClientProvider provider, IJsonSchemaValidator schemaValidator, ILoggerFactory loggerFactory) : IAgentRuntime
 {
+    /// <summary>Turns that deny held calls with invalid arguments before the run gives up.</summary>
+    internal const int MaxArgumentCorrections = 2;
+
+    /// <summary>Turns that send an output that does not match the schema back to the model.</summary>
+    internal const int MaxOutputRepairs = 1;
+
     internal static readonly ActivitySource ActivitySource = new(BBT.Workflow.Logging.TelemetryConstants.ActivitySources.Agents);
 
     /// <inheritdoc />
@@ -85,11 +92,70 @@ internal sealed class MafAgentRuntime(IChatClientProvider provider, ILoggerFacto
                     .Select(m => new ChatMessage(new ChatRole(m.Role), m.Content))
                     .Append(new ChatMessage(ChatRole.User, request.UserPrompt))
                     .ToList();
-            var response = await agent.RunAsync(input, session, null, deadline.Token);
 
-            var promptTokens = (int)(response.Usage?.InputTokenCount ?? 0);
-            var completionTokens = (int)(response.Usage?.OutputTokenCount ?? 0);
-            var iterations = Math.Max(1, response.Messages.Count(m => m.Role == ChatRole.Assistant));
+            var sent = new List<ChatMessage>(input);
+            var received = new List<ChatMessage>();
+            int promptTokens = 0, completionTokens = 0, iterations = 0;
+            int argumentCorrections = 0, outputRepairs = 0;
+            AgentResponse response;
+            List<ToolApprovalRequestContent> held;
+            JsonElement output = default;
+            string? outputErrors = null;
+            string? argumentErrors = null;
+
+            // One agent turn, plus correction turns on the same session: a call held for approval whose
+            // arguments do not match the tool schema is denied with the errors (nobody approves a call that
+            // would be rejected), and an output that does not match the output schema is sent back once.
+            while (true)
+            {
+                response = await agent.RunAsync(input, session, null, deadline.Token);
+                received.AddRange(response.Messages);
+                promptTokens += (int)(response.Usage?.InputTokenCount ?? 0);
+                completionTokens += (int)(response.Usage?.OutputTokenCount ?? 0);
+                iterations += Math.Max(1, response.Messages.Count(m => m.Role == ChatRole.Assistant));
+
+                held = response.Messages.SelectMany(m => m.Contents).OfType<ToolApprovalRequestContent>().ToList();
+                if (held.Count > 0)
+                {
+                    var invalid = held
+                        .Where(r => r.RequiresConfirmation)
+                        .Select(r => (Request: r, Errors: ArgumentErrors(request.Tools, r)))
+                        .Where(x => x.Errors is not null)
+                        .ToDictionary(x => x.Request.RequestId, x => x.Errors!, StringComparer.Ordinal);
+                    if (invalid.Count == 0)
+                    {
+                        argumentErrors = null;
+                        break;
+                    }
+
+                    argumentErrors = string.Join("; ", invalid.Select(kv => $"{NameOf(held.First(r => r.RequestId == kv.Key))}: {kv.Value}"));
+                    if (argumentCorrections >= MaxArgumentCorrections)
+                        break;
+                    argumentCorrections++;
+                    input = [new ChatMessage(ChatRole.User, held.Select(r => (AIContent)(invalid.TryGetValue(r.RequestId, out var errors)
+                        ? r.CreateResponse(false, $"invalid arguments, the call did not run: {errors}. Call the tool again with arguments that match its schema.")
+                        : r.RequiresConfirmation
+                            ? r.CreateResponse(false, "not run: another call in this turn had invalid arguments. Call the tool again if you still need it.")
+                            : r.CreateResponse(true))).ToList())];
+                    sent.AddRange(input);
+                    continue;
+                }
+
+                argumentErrors = null;
+                if (!TryParseObject(response.Text, out output))
+                    outputErrors = "the answer is not a JSON object";
+                else
+                    outputErrors = AgentSchemaCheck.Describe(schemaValidator, request.OutputSchema, output);
+                if (outputErrors is null || outputRepairs >= MaxOutputRepairs)
+                    break;
+
+                outputRepairs++;
+                input = [new ChatMessage(ChatRole.User,
+                    $"Your answer does not match the required output schema: {outputErrors}. " +
+                    "Answer again with only a JSON object that matches the schema. Use null for a value you do not know " +
+                    "when the schema allows it; do not invent values.")];
+                sent.AddRange(input);
+            }
 
             var (sessionBytes, messageCount, trimmed, conversationId) =
                 await SaveSessionAsync(agent, session, request, retrying, deadline.Token);
@@ -109,22 +175,29 @@ internal sealed class MafAgentRuntime(IChatClientProvider provider, ILoggerFacto
                 SessionMessagesTrimmed = trimmed,
                 ProviderConversationId = conversationId,
                 Transcript = request.CaptureTranscript
-                    ? JsonSerializer.Serialize(request.FullTranscript ? input.Concat(response.Messages).ToList() : response.Messages.ToList(), AIJsonUtilities.DefaultOptions)
+                    ? JsonSerializer.Serialize(request.FullTranscript ? sent.Concat(received).ToList() : received, AIJsonUtilities.DefaultOptions)
                     : null
             };
 
-            var pending = response.Messages
-                .SelectMany(m => m.Contents)
-                .OfType<ToolApprovalRequestContent>()
-                .Select(r => new AgentPendingApproval(
-                    r.RequestId,
-                    r.ToolCall.CallId,
-                    (r.ToolCall as FunctionCallContent)?.Name ?? string.Empty,
-                    JsonSerializer.SerializeToElement((r.ToolCall as FunctionCallContent)?.Arguments ?? new Dictionary<string, object?>(), AIJsonUtilities.DefaultOptions),
-                    r.RequiresConfirmation))
-                .ToList();
-            if (pending.Count > 0)
+            if (argumentErrors is not null)
             {
+                return result with
+                {
+                    Status = AgentRunStatus.Failed,
+                    FailureReason = Truncate($"tool arguments do not match the tool schema after {argumentCorrections} correction(s): {argumentErrors}", 1000)
+                };
+            }
+
+            if (held.Count > 0)
+            {
+                var pending = held
+                    .Select(r => new AgentPendingApproval(
+                        r.RequestId,
+                        r.ToolCall.CallId,
+                        NameOf(r),
+                        JsonSerializer.SerializeToElement((r.ToolCall as FunctionCallContent)?.Arguments ?? new Dictionary<string, object?>(), AIJsonUtilities.DefaultOptions),
+                        r.RequiresConfirmation))
+                    .ToList();
                 // The conversation stops before any held call runs; the session (saved above) resumes it.
                 return result with
                 {
@@ -143,12 +216,12 @@ internal sealed class MafAgentRuntime(IChatClientProvider provider, ILoggerFacto
                 };
             }
 
-            if (!TryParseObject(response.Text, out var output))
+            if (outputErrors is not null)
             {
                 return result with
                 {
                     Status = AgentRunStatus.Failed,
-                    FailureReason = "the model did not return a JSON object matching the output schema"
+                    FailureReason = Truncate($"the output does not match the output schema after {outputRepairs} repair(s): {outputErrors}", 1000)
                 };
             }
 
@@ -226,6 +299,20 @@ internal sealed class MafAgentRuntime(IChatClientProvider provider, ILoggerFacto
 
         var element = await agent.SerializeSessionAsync(session, null, cancellationToken);
         return (Encoding.UTF8.GetBytes(element.GetRawText()), count, trimmed, null);
+    }
+
+    private static string NameOf(ToolApprovalRequestContent request) =>
+        (request.ToolCall as FunctionCallContent)?.Name ?? string.Empty;
+
+    /// <summary>The argument errors of a held call, or null when they match (or the tool has no check).</summary>
+    private static string? ArgumentErrors(IReadOnlyList<AgentToolDefinition> tools, ToolApprovalRequestContent request)
+    {
+        var tool = tools.FirstOrDefault(t => t.Name == NameOf(request));
+        if (tool?.ValidateArguments is not { } validate)
+            return null;
+        var arguments = JsonSerializer.SerializeToElement(
+            (request.ToolCall as FunctionCallContent)?.Arguments ?? new Dictionary<string, object?>(), AIJsonUtilities.DefaultOptions);
+        return validate(arguments);
     }
 
     private static IDictionary<string, object?> ToArguments(JsonElement arguments) =>

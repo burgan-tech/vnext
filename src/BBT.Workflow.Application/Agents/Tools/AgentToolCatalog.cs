@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Dynamic;
 using System.Text.Json;
+using BBT.Workflow.Validation;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances.Agents;
 using BBT.Workflow.Logging;
@@ -44,6 +45,7 @@ public sealed class AgentToolCatalog(
     IServiceScopeFactory scopeFactory,
     ITaskFactory taskFactory,
     IScriptEngine scriptEngine,
+    IJsonSchemaValidator schemaValidator,
     ILogger<AgentToolCatalog> logger)
 {
     private static readonly ConcurrentDictionary<string, (DateTime ExpiresAt, IReadOnlyList<McpToolInfo> Tools)> McpToolMemo = new();
@@ -96,16 +98,24 @@ public sealed class AgentToolCatalog(
                     _ => ScriptBody(ctx, tool)
                 };
 
+            var validate = ArgumentCheck(parameters);
             tools.Add(new AgentToolDefinition(
                 tool.Name,
                 tool.Description ?? tool.Name,
                 parameters,
-                ctx.Recorder.Wrap(tool.Name, tool.Kind, BindingRef(tool), parameters, tool.TimeoutSeconds, tool.ResultMaxChars, body),
-                tool.RequiresApproval));
+                ctx.Recorder.Wrap(tool.Name, tool.Kind, BindingRef(tool), parameters, tool.TimeoutSeconds, tool.ResultMaxChars, body, validate),
+                tool.RequiresApproval)
+            {
+                ValidateArguments = validate
+            });
         }
 
         return tools;
     }
+
+    /// <summary>The argument check of one tool: null when the arguments match its parameter schema.</summary>
+    private Func<JsonElement, string?> ArgumentCheck(JsonElement parameters) =>
+        arguments => AgentSchemaCheck.Describe(schemaValidator, parameters, arguments);
 
     private static string? BindingRef(AgentTool tool) =>
         tool.Binding.Task is { } t ? $"sys-tasks/{t.Domain}/{t.Key}@{t.Version}"
@@ -254,13 +264,17 @@ public sealed class AgentToolCatalog(
                     return await RunTaskAsync(ctx, reference, prepared, null, invocation, ct);
                 };
 
+            var validate = ArgumentCheck(parameters);
             definitions.Add(new AgentToolDefinition(
                 exposed,
                 serverTool.Description ?? exposed,
                 parameters,
                 ctx.Recorder.Wrap(exposed, AgentToolKind.Mcp, $"sys-tasks/{reference.Domain}/{reference.Key}@{reference.Version}",
-                    parameters, tool.TimeoutSeconds, tool.ResultMaxChars, body),
-                tool.RequiresApproval));
+                    parameters, tool.TimeoutSeconds, tool.ResultMaxChars, body, validate),
+                tool.RequiresApproval)
+            {
+                ValidateArguments = validate
+            });
         }
 
         return definitions;

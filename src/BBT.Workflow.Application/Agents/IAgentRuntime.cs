@@ -84,7 +84,14 @@ public sealed record AgentToolDefinition(
     string Description,
     JsonElement ParametersSchema,
     Func<AgentToolInvocation, CancellationToken, Task<AgentToolResult>> InvokeAsync,
-    bool RequiresApproval = false);
+    bool RequiresApproval = false)
+{
+    /// <summary>
+    /// Null when the arguments match <see cref="ParametersSchema"/>, else the errors. The runtime asks it
+    /// before holding a call for approval, so nobody is asked to approve a call that would be rejected.
+    /// </summary>
+    public Func<JsonElement, string?>? ValidateArguments { get; init; }
+}
 
 /// <summary>A tool call that waits for an approval.</summary>
 /// <param name="RequestId">Approval request id (correlates the answer).</param>

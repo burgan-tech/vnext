@@ -55,6 +55,7 @@ public class AgentComponentValidationTests
     [InlineData("\"name\": \"days_since\"", "\"name\": \"get_customer\"", "used more than once")]
     [InlineData("\"type\": \"object\", \"properties\": { \"category\"", "\"type\": \"array\", \"properties\": { \"category\"", "output.schema")]
     [InlineData("\"allow\": [\"search\"]", "\"allow\": []", "binding.allow")]
+    [InlineData("\"required\": [\"date\"]", "\"required\": [\"day\"]", "Required name 'day' is not in 'properties'")]
     public void Invalid_agent_is_rejected(string from, string to, string expected)
     {
         var result = ValidateAgent(ValidAgent.Replace(from, to));

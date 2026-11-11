@@ -9,7 +9,7 @@ namespace BBT.Workflow.Agents.Tools;
 
 /// <summary>
 /// Collects the tool calls of one run and enforces the tool budgets: the call ceiling, the per-tool
-/// timeout, the required arguments and the result size the model receives. Rows stay in memory and
+/// timeout, the argument schema and the result size the model receives. Rows stay in memory and
 /// are written with the run.
 /// </summary>
 public sealed class AgentRunRecorder(Guid runId, Guid instanceId, EffectiveAgentPolicy policy, bool persistResults, DateTime startedAtUtc, ILogger logger)
@@ -43,7 +43,10 @@ public sealed class AgentRunRecorder(Guid runId, Guid instanceId, EffectiveAgent
     }
 
     /// <summary>
-    /// Wraps a tool body with budgets, timing, truncation and journaling.
+    /// Wraps a tool body with budgets, timing, truncation and journaling. <paramref name="validateArguments"/>
+    /// answers null for arguments that match the tool's parameter schema, else the errors; a call that does
+    /// not match is rejected without running and the model gets the errors. Without it only the
+    /// <c>required</c> names are checked.
     /// </summary>
     public Func<AgentToolInvocation, CancellationToken, Task<AgentToolResult>> Wrap(
         string name,
@@ -52,7 +55,8 @@ public sealed class AgentRunRecorder(Guid runId, Guid instanceId, EffectiveAgent
         JsonElement parameters,
         int? timeoutSeconds,
         int? resultMaxChars,
-        Func<AgentToolInvocation, CancellationToken, Task<AgentToolResult>> body)
+        Func<AgentToolInvocation, CancellationToken, Task<AgentToolResult>> body,
+        Func<JsonElement, string?>? validateArguments = null)
     {
         lock (_gate)
             _tools[name] = (kind, bindingRef);
@@ -75,7 +79,11 @@ public sealed class AgentRunRecorder(Guid runId, Guid instanceId, EffectiveAgent
                 result = new AgentToolResult(AgentToolCallStatus.Rejected, string.Empty,
                     $"tool call budget exhausted ({policy.MaxToolCalls}); answer with what you have");
             }
-            else if (MissingRequired(parameters, invocation.Arguments) is { } missing)
+            else if (validateArguments is not null && validateArguments(invocation.Arguments) is { } invalid)
+            {
+                result = new AgentToolResult(AgentToolCallStatus.Rejected, string.Empty, $"invalid arguments: {invalid}");
+            }
+            else if (validateArguments is null && MissingRequired(parameters, invocation.Arguments) is { } missing)
             {
                 result = new AgentToolResult(AgentToolCallStatus.Rejected, string.Empty, $"missing required argument '{missing}'");
             }

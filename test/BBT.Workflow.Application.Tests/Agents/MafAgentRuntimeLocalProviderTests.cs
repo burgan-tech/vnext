@@ -40,7 +40,7 @@ public class MafAgentRuntimeLocalProviderTests
         session, null, false, 40, CaptureTranscript: true);
 
     private static MafAgentRuntime Runtime() =>
-        new(new ChatClientProvider(Substitute.For<ISecretResolver>()), NullLoggerFactory.Instance);
+        new(new ChatClientProvider(Substitute.For<ISecretResolver>()), new BBT.Workflow.Validation.CachedJsonSchemaValidator(), NullLoggerFactory.Instance);
 
     [Fact]
     public async Task Run_calls_tools_and_returns_the_first_candidate()
