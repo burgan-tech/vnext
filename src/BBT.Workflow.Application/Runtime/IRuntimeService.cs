@@ -49,6 +49,22 @@ public interface IRuntimeService
         where T : class, IDomainEntity, IReferenceSetter;
 
     /// <summary>
+    /// Retrieves all active versions of an entity by key, together with the versions of rows that were
+    /// found but could not be read (deserialization failure or an empty body).
+    /// </summary>
+    /// <remarks>
+    /// Version resolution picks the best of what it is given; a row left out silently can make it pick
+    /// an older build. Callers that cache a resolution use <see cref="RuntimeKeyLoad{T}.DroppedVersions"/>
+    /// to avoid caching such an answer for the full resolution TTL.
+    /// </remarks>
+    /// <typeparam name="T">The type of entity to retrieve</typeparam>
+    /// <param name="key">The entity key to filter by</param>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests</param>
+    /// <returns>The readable entities and the versions of the rows that were dropped</returns>
+    Task<RuntimeKeyLoad<T>> GetCandidatesAsync<T>(string key, CancellationToken cancellationToken = default)
+        where T : class, IDomainEntity, IReferenceSetter;
+
+    /// <summary>
     /// Returns the distributed cache keys for all active entities of the specified type without
     /// loading the entity data. Used by broadcast-receiving pods to warm their in-memory cache
     /// from the distributed cache without a full DB scan.

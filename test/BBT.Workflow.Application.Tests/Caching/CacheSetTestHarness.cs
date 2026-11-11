@@ -129,11 +129,17 @@ public sealed class CacheSetTestHarness
     /// <see cref="ICacheBackend{T}"/> double reporting a settable version list and counting loads, so
     /// "this served zero database queries" can be asserted rather than assumed.
     /// </summary>
-    public sealed class FakeCacheBackend : ICacheBackend<View>
+    public sealed class FakeCacheBackend : IComponentCandidateBackend<View>
     {
         private int _loadAllCallCount;
 
         public List<View> Versions { get; set; } = [];
+
+        /// <summary>
+        /// Stored versions the backend reports as found but unreadable, as a row that fails to
+        /// deserialize would be. They are never part of <see cref="Versions"/>.
+        /// </summary>
+        public List<string> DroppedVersions { get; set; } = [];
 
         public int LoadAllCallCount => Volatile.Read(ref _loadAllCallCount);
 
@@ -162,6 +168,17 @@ public sealed class CacheSetTestHarness
                 .Where(v => string.Equals(v.Domain, domain, StringComparison.OrdinalIgnoreCase) &&
                             string.Equals(v.Key, key, StringComparison.OrdinalIgnoreCase))
                 .ToList());
+        }
+
+        public async Task<Result<ComponentCandidates<View>>> LoadCandidatesAsync(
+            string domain,
+            string key,
+            CancellationToken cancellationToken = default)
+        {
+            var all = await LoadAllByKeyAsync(domain, key, cancellationToken);
+            return all.IsSuccess
+                ? Result<ComponentCandidates<View>>.Ok(new ComponentCandidates<View>(all.Value!, [.. DroppedVersions]))
+                : Result<ComponentCandidates<View>>.Fail(all.Error);
         }
 
         public Task<Result<View>> LoadAsync(

@@ -77,6 +77,10 @@ public sealed class RuntimeService(
 
     public async Task<IEnumerable<T?>> GetAsync<T>(string key, CancellationToken cancellationToken = default)
         where T : class, IDomainEntity, IReferenceSetter
+        => (await GetCandidatesAsync<T>(key, cancellationToken)).Entities;
+
+    public async Task<RuntimeKeyLoad<T>> GetCandidatesAsync<T>(string key, CancellationToken cancellationToken = default)
+        where T : class, IDomainEntity, IReferenceSetter
     {
         var schemaName = runtimeOptions.Value.GetSchemaNameByType(typeof(T));
         var schemaInfo = runtimeOptions.Value.Schemas[schemaName];
@@ -84,7 +88,8 @@ public sealed class RuntimeService(
         using (currentSchema.Change(schemaInfo.Schema))
         {
             var items = await instanceRepository.GetActiveDataListByKeyAsync(key, cancellationToken);
-            var result = new List<T?>();
+            var entities = new List<T>();
+            var dropped = new List<string>();
 
             foreach (var item in items)
             {
@@ -93,29 +98,31 @@ public sealed class RuntimeService(
                     var flow = item.InstanceData.Data.JsonElement
                         .Deserialize<T>(JsonSerializerConstants.JsonOptions);
 
-                    if (flow != null)
+                    if (flow is null)
                     {
-                        flow.SetReference(new Reference(
-                            item.Instance.Key ?? string.Empty,
-                            runtimeInfoProvider.Domain,
-                            schemaInfo.Name,
-                            item.InstanceData.Version
-                        ));
+                        dropped.Add(item.InstanceData.Version);
+                        continue;
                     }
 
-                    result.Add(flow);
-                }
-                catch (JsonException ex)
-                {
-                    logger.InstanceDeserializationFailed(ex, schemaName, item.Instance.Key, item.InstanceData.Version);
+                    flow.SetReference(new Reference(
+                        item.Instance.Key ?? string.Empty,
+                        runtimeInfoProvider.Domain,
+                        schemaInfo.Name,
+                        item.InstanceData.Version
+                    ));
+
+                    entities.Add(flow);
                 }
                 catch (Exception ex)
                 {
+                    // A row that cannot be read is left out of the candidates, so the caller has to know
+                    // which versions were lost: a version resolved without them may be an older build.
                     logger.InstanceDeserializationFailed(ex, schemaName, item.Instance.Key, item.InstanceData.Version);
+                    dropped.Add(item.InstanceData.Version);
                 }
             }
 
-            return result.Where(f => f != null);
+            return new RuntimeKeyLoad<T>(entities, dropped);
         }
     }
 
