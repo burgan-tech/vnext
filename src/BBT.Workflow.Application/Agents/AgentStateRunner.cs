@@ -43,7 +43,7 @@ public sealed class AgentStateRunner(
     private const string AgentSummaryProperty = "$agent";
 
     /// <summary>Runs the agent and returns the in-hop decision, or a failure for the error boundary.</summary>
-    public async Task<Result<AgentHopDecision>> RunAsync(
+    public async Task<Result<AgentHopDecision>> RunAsync( // skipcq: CS-R1140 — one hop of an agent state, its numbered steps in order
         TransitionExecutionContext context,
         ScriptContext scriptContext,
         Guid? transitionId,

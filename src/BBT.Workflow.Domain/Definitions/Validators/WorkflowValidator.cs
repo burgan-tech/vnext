@@ -717,7 +717,7 @@ public partial class WorkflowValidator
     /// - a DefaultAutoTransition on the state may only be its fallback
     /// - an <c>agent</c> block on any other state type is an error
     /// </summary>
-    private static void ValidateAiAgentStates(Workflow workflow, WorkflowValidationResult result)
+    private static void ValidateAiAgentStates(Workflow workflow, WorkflowValidationResult result) // skipcq: CS-R1140 — a flat list of independent state checks
     {
         foreach (var state in workflow.States)
         {

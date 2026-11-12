@@ -76,7 +76,7 @@ public sealed partial class AgentComponentValidator(IOptions<AiAgentOptions>? op
         }
     }
 
-    private static void ValidateTool(AgentTool tool, string path, HashSet<string> names, IList<ValidationResult> errors)
+    private static void ValidateTool(AgentTool tool, string path, HashSet<string> names, IList<ValidationResult> errors) // skipcq: CS-R1140 — a flat list of independent field checks
     {
         if (!Enum.IsDefined(tool.Kind))
         {
