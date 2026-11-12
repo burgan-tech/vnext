@@ -8,7 +8,6 @@ using System.IO;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using BBT.Aether.Guids;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -38,7 +37,6 @@ public sealed class SubflowOutputMappingServiceTests
     private readonly Mock<IScriptEngine> _scriptEngine = new();
     private readonly Mock<IScriptContextFactory> _scriptContextFactory = new();
     private readonly Mock<IRuntimeInfoProvider> _runtimeInfoProvider = new();
-    private readonly Mock<IGuidGenerator> _guidGenerator = new();
     private readonly Mock<ILogger<SubflowOutputMappingService>> _logger = new();
 
     public SubflowOutputMappingServiceTests()
@@ -351,7 +349,6 @@ public sealed class SubflowOutputMappingServiceTests
             _scriptEngine.Object,
             _scriptContextFactory.Object,
             _runtimeInfoProvider.Object,
-            _guidGenerator.Object,
             _logger.Object,
             new CarriedHeaderPolicy(
                 Options.Create(new SubFlowCarriedHeadersOptions { ExposeToOutputMapping = true }),
@@ -383,7 +380,6 @@ public sealed class SubflowOutputMappingServiceTests
             _scriptEngine.Object,
             _scriptContextFactory.Object,
             _runtimeInfoProvider.Object,
-            _guidGenerator.Object,
             _logger.Object,
             policy);
 

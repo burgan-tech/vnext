@@ -1,3 +1,4 @@
+using BBT.Workflow.Execution.Evaluation;
 using BBT.Workflow.Definitions.Timer;
 using System.Collections.Generic;
 using BBT.Aether.Results;
@@ -43,7 +44,7 @@ public class ScheduleTransitionsStepTests
 
     private ScheduleTransitionsStep CreateStep() => new(
         _backgroundJobService,
-        _taskTimerService,
+        new CallerScopedTimerEvaluator(_taskTimerService),
         _scriptContextFactory,
         _jobRepository,
         _instanceRepository,
@@ -163,13 +164,13 @@ public class ScheduleTransitionsStepTests
 
     private ScheduleTransitionsStep CreateCallerStep(ICallerRoleResolver resolver) => new(
         _backgroundJobService,
-        _taskTimerService,
+        new CallerScopedTimerEvaluator(
+            _taskTimerService, new CallerAccessorFactory(resolver, NullLogger<CallerAccessorFactory>.Instance)),
         _scriptContextFactory,
         _jobRepository,
         _instanceRepository,
         NullLogger<ScheduleTransitionsStep>.Instance,
-        _runtimeInfoProvider,
-        new CallerAccessorFactory(resolver, NullLogger<CallerAccessorFactory>.Instance));
+        _runtimeInfoProvider);
 
     private void SetupRealScriptContext()
     {

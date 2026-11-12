@@ -2,7 +2,6 @@ using BBT.Workflow.Scripting.Caller;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Authorization;
 using System.Text.Json;
-using BBT.Aether.Guids;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
@@ -22,7 +21,6 @@ public sealed class SubflowOutputMappingService(
     IScriptEngine scriptEngine,
     IScriptContextFactory scriptContextFactory,
     IRuntimeInfoProvider runtimeInfoProvider,
-    IGuidGenerator guidGenerator,
     ILogger<SubflowOutputMappingService> logger,
     ICarriedHeaderPolicy? carriedHeaderPolicy = null,
     ICallerAccessorFactory? callerAccessorFactory = null)
@@ -93,7 +91,6 @@ public sealed class SubflowOutputMappingService(
         }
     }
 
-    /// <inheritdoc />
     // Caller roles (context.Caller) in SubFlow output mappings — council 2026-11-12-script-caller-roles-background
     // (Chair override; the council itself proposed leaving this surface unavailable). The identity is the CHILD
     // SETTLER's: the headers of the request that completed the child, carried on the untrusted instance.sub.*
@@ -143,6 +140,7 @@ public sealed class SubflowOutputMappingService(
             : NullCallerAccessor.Instance;
     }
 
+    /// <inheritdoc />
     public async Task<Result> ApplyPreparedAsync(
         Instance parentInstance,
         Definitions.Workflow parentWorkflow,

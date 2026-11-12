@@ -97,6 +97,7 @@ public static class PipelineServiceCollectionExtensions
         services.AddScoped<ITransitionStep, HandleSubFlowStep>();
         services.AddScoped<ITransitionStep, HandleLongPollTerminationStep>();
         services.AddScoped<ITransitionStep, ClearBusyOnResumeStep>();
+        services.AddScoped<BBT.Workflow.Execution.Evaluation.ICallerScopedTimerEvaluator, BBT.Workflow.Execution.Evaluation.CallerScopedTimerEvaluator>();
         services.AddScoped<ITransitionStep, ScheduleTransitionsStep>();
         services.AddScoped<ITransitionStep, RunAutomaticTransitionsStep>();
         services.AddScoped<ITransitionStep, HandleFinishStep>();

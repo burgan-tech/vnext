@@ -328,7 +328,7 @@ public sealed class FunctionInfoAppService(
         if (!access.IsSuccess)
             return Result<FunctionInfoOutput>.Fail(access.Error);
 
-        var scriptContext = CreateLazyScriptContext(function, instance, workflow, headers, queryParameters);
+        var scriptContext = CreateLazyScriptContext(instance, workflow, headers, queryParameters);
 
         var slots = new Dictionary<FunctionContractSlot, FunctionContractResolution?>();
         foreach (var slot in Enum.GetValues<FunctionContractSlot>())
@@ -387,7 +387,7 @@ public sealed class FunctionInfoAppService(
         if (!access.IsSuccess)
             return Result<Reference>.Fail(access.Error);
 
-        var scriptContext = CreateLazyScriptContext(function, instance, workflow, headers, queryParameters);
+        var scriptContext = CreateLazyScriptContext(instance, workflow, headers, queryParameters);
 
         var resolution = await contractResolver.ResolveAsync(function, slot, scriptContext, cancellationToken);
         if (!resolution.IsSuccess)
@@ -406,7 +406,6 @@ public sealed class FunctionInfoAppService(
     /// transition view rules read.
     /// </summary>
     private LazyScriptContext CreateLazyScriptContext(
-        Function function,
         Instance? instance,
         Definitions.Workflow? workflow,
         Dictionary<string, string?>? headers,

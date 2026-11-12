@@ -1,5 +1,4 @@
-using BBT.Workflow.Scripting.Caller;
-using BBT.Workflow.Authorization;
+using BBT.Workflow.Execution.Evaluation;
 using System.Diagnostics;
 using BBT.Aether.BackgroundJob;
 using BBT.Aether.Results;
@@ -26,13 +25,12 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// </summary>
 public sealed class ScheduleTransitionsStep(
     IBackgroundJobService backgroundJobService,
-    ITaskTimerService taskTimerService,
+    ICallerScopedTimerEvaluator timerEvaluator,
     IScriptContextFactory scriptContextFactory,
     IInstanceJobRepository jobRepository,
     IInstanceRepository instanceRepository,
     ILogger<ScheduleTransitionsStep> logger,
-    IRuntimeInfoProvider runtimeInfoProvider,
-    ICallerAccessorFactory? callerAccessorFactory = null) : ITransitionStep
+    IRuntimeInfoProvider runtimeInfoProvider) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.Schedule;
@@ -108,7 +106,7 @@ public sealed class ScheduleTransitionsStep(
         // The branch is a copy-on-write view of the step's single build, retargeted so the timer
         // script sees ITS transition — not a fresh (expensive) context per timer.
         return await Result.Ok(baseScriptContext.CreateBranchFor(scheduledTransition))
-            .BindAsync(scriptContext => EvaluateTimerAsync(context, scheduledTransition, scriptContext, cancellationToken))
+            .BindAsync(scriptContext => timerEvaluator.EvaluateAsync(context, scheduledTransition, scriptContext, cancellationToken))
             .Map(timerSchedule => BuildSchedulingInfo(context, scheduledTransition, timerSchedule))
             .ThenAsync(info => EnqueueAndPersistAsync(info, cancellationToken));
     }
@@ -130,43 +128,6 @@ public sealed class ScheduleTransitionsStep(
             .WithHeaders(context.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value))
             .WithRouteValues(context.RouteValues.ToDictionary(kvp => kvp.Key, kvp => kvp.Value))
             .BuildAsync(cancellationToken);
-    }
-
-    /// <summary>
-    /// Evaluates timer to get the schedule.
-    /// </summary>
-    private async Task<Result<TimerSchedule>> EvaluateTimerAsync(
-        TransitionExecutionContext context,
-        Transition scheduledTransition,
-        ScriptContext scriptContext,
-        CancellationToken cancellationToken)
-    {
-        // Caller roles (context.Caller) — council 2026-11-12-script-caller-roles-background (Chair override):
-        // a timer script runs when its state is ENTERED (arming), not when the timer fires, and sees the roles of
-        // the caller who drove that hop. A state entered by a System hop (a fired timer re-arming, a SubFlow
-        // resume, a continuation) has no caller: the accessor is unavailable there, so a timer script that reads
-        // roles must guard IsAvailable and choose a default. Exposed on this timer's branch only.
-        var caller = callerAccessorFactory?.ForHop(context.Actor, context.Headers, cancellationToken)
-                     ?? NullCallerAccessor.Instance;
-        var schedule = await ExecuteTimerWithCallerAsync(scheduledTransition, scriptContext, caller, cancellationToken);
-
-        // Roles were read while the provider could not answer: arming a timer from an unidentified caller's
-        // schedule (or from whatever the script fell back to) is not decided — fail the step (retryable 110006).
-        return caller.ResolutionFailed
-            ? Result<TimerSchedule>.Fail(WorkflowErrors.CallerRolesUnavailable())
-            : schedule;
-    }
-
-    private async Task<Result<TimerSchedule>> ExecuteTimerWithCallerAsync(
-        Transition scheduledTransition,
-        ScriptContext scriptContext,
-        ICallerAccessor caller,
-        CancellationToken cancellationToken)
-    {
-        using (scriptContext.ExposeCaller(caller))
-        {
-            return await taskTimerService.ExecuteTimerAsync(scheduledTransition.Timer!, scriptContext, cancellationToken);
-        }
     }
 
     /// <summary>
