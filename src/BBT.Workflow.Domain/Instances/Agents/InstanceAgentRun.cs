@@ -3,7 +3,7 @@ using BBT.Aether.Domain.Entities;
 namespace BBT.Workflow.Instances.Agents;
 
 /// <summary>Outcome of an agent run.</summary>
-public enum AgentRunStatus : short
+public enum AgentRunStatus : short // skipcq: CS-P1021 — stored in a smallint column
 {
     /// <summary>The run is in progress (never committed in Faz 1; the row is written once).</summary>
     Running = 1,

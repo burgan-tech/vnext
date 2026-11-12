@@ -1066,6 +1066,10 @@ public partial class WorkflowValidator
             case TriggerType.Event:
                 ValidateManualOrEventTransition(transition, basePath, result);
                 break;
+
+            default:
+                // Every trigger type is handled above; an undefined value has no trigger-specific rules.
+                break;
         }
     }
 
@@ -1134,12 +1138,7 @@ public partial class WorkflowValidator
         if (transition.Rule == null || !ConditionScriptLocations.IsDynamicExpresso(transition.Rule.Location))
             return;
 
-        string code;
-        try
-        {
-            code = transition.Rule.DecodedCode.Trim();
-        }
-        catch (InvalidOperationException)
+        if (!TryDecode(transition.Rule, out var code))
         {
             result.AddError(new ValidationResult(
                 $"Auto transition '{transition.Key}' Dynamic Expresso rule has invalid Base64 or encoding.",
@@ -1694,4 +1693,19 @@ public partial class WorkflowValidator
     }
 
     #endregion
+
+    /// <summary>The trimmed source of a script; false when its Base64 or encoding is invalid.</summary>
+    private static bool TryDecode(ScriptCode script, out string code)
+    {
+        try
+        {
+            code = script.DecodedCode.Trim();
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            code = string.Empty;
+            return false;
+        }
+    }
 }
