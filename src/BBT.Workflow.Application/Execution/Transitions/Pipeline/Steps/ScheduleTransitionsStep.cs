@@ -163,8 +163,10 @@ public sealed class ScheduleTransitionsStep(
         ICallerAccessor caller,
         CancellationToken cancellationToken)
     {
-        using var exposure = scriptContext.ExposeCaller(caller);
-        return await taskTimerService.ExecuteTimerAsync(scheduledTransition.Timer!, scriptContext, cancellationToken);
+        using (scriptContext.ExposeCaller(caller))
+        {
+            return await taskTimerService.ExecuteTimerAsync(scheduledTransition.Timer!, scriptContext, cancellationToken);
+        }
     }
 
     /// <summary>

@@ -111,8 +111,10 @@ public sealed class AutoConditionEvaluator(
     private async Task<Result<bool>> ExecuteWithCallerAsync(
         ScriptCode rule, ScriptContext scriptContext, ICallerAccessor caller, CancellationToken cancellationToken)
     {
-        using var exposure = scriptContext.ExposeCaller(caller);
-        return await taskConditionService.ExecuteConditionAsync(rule, scriptContext, cancellationToken);
+        using (scriptContext.ExposeCaller(caller))
+        {
+            return await taskConditionService.ExecuteConditionAsync(rule, scriptContext, cancellationToken);
+        }
     }
 
     private static AutoConditionEvaluation MapToEvaluation(string transitionKey, bool conditionResult)
