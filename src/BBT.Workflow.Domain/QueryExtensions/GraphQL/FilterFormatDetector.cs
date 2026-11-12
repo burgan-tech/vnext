@@ -116,9 +116,6 @@ public static class FilterFormatDetector
         attributes[field] = condition;
         SetOperatorValue(condition, op, value);
 
-        if (attributes.Count == 0)
-            return null;
-
         return new GraphQLFilterNode
         {
             Attributes = attributes
