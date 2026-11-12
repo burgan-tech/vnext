@@ -30,7 +30,8 @@ public interface IInstanceSchemaFunctionCache
 
     /// <summary>
     /// Builds the schema-function cache key:
-    /// <c>schema-fn:{domain}:{workflow}:{instance}:{callerHash}:{transitionKey}</c>.
+    /// <c>schema-fn:{domain}:{workflow}:{instance}:{callerHash}:{requestHeaderHash}:{transitionKey}</c>;
+    /// the header hash keeps a header-driven rule-based transition schema from sharing an entry across header values.
     /// </summary>
     string BuildKey(GetSchemaInput input, string transitionKey);
 
@@ -42,7 +43,7 @@ public interface IInstanceSchemaFunctionCache
 
     /// <summary>
     /// Schema ETag: hash of (instance id, latest data ETag, effective state, flow version,
-    /// caller scope, transition key) — transition resolution depends on the current state
+    /// caller scope, request-header hash, transition key) — transition resolution depends on the current state
     /// (equal to the effective state whenever no active subflow exists, and subflow-active
     /// instances bypass this cache).
     /// </summary>

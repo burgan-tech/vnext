@@ -142,6 +142,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             currentUser: Substitute.For<ICurrentUser>(),
             descentLimiter: new HumanTask.HumanTaskDescentLimiter(
                 Microsoft.Extensions.Options.Options.Create(new HumanTask.HumanTaskFunctionOptions())),
+            transitionSchemaResolver: NSubstitute.Substitute.For<BBT.Workflow.Execution.Validation.ITransitionSchemaResolver>(),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 
@@ -876,6 +877,29 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     /// instant — and no href, since callers cannot trigger them. Caller-triggerable entries carry
     /// no <c>executeAtUtc</c>.
     /// </summary>
+    [Fact]
+    public async Task TransitionList_SchemasOnly_HasSchemaTrue()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        var transition = Transition.Create("approve", TestState, "approved", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code);
+        transition.SetSchemas(SchemaSelection.CreateWithSchemas(
+            SchemaEntry.CreateDefault(new Reference("approve-schema", TestDomain, "sys-schemas", TestVersion))));
+        state.AddTransition(transition);
+        instance.ChangeState(state);
+        SetupCommonMocks(instance, BuildWorkflow(state));
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        var item = result.Result.Value!.Transitions.Single(t => t.Name == "approve");
+        item.Schema.ShouldNotBeNull();
+        item.Schema!.HasSchema.ShouldBeTrue();
+    }
+
     [Fact]
     public async Task GetInstanceStateAsync_ListsScheduledEntriesInTransitions_OrderedByExecuteAt()
     {

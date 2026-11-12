@@ -90,7 +90,7 @@ public sealed class FunctionInfoAppServiceTests : IDisposable
             urlTemplateBuilder: new UrlTemplateBuilder(Options.Create(new UrlTemplateOptions())),
             functionAccessPolicy: new FunctionAccessPolicy(),
             contractResolver: new FunctionContractResolver(
-                _conditionService, NullLogger<FunctionContractResolver>.Instance),
+                new BBT.Workflow.Contracts.ContractEntrySelector(_conditionService), NullLogger<FunctionContractResolver>.Instance),
             viewContentResolutionService: _viewContentResolution);
     }
 

@@ -28,7 +28,7 @@ public sealed class FunctionContractResolverTests
     public FunctionContractResolverTests()
     {
         _resolver = new FunctionContractResolver(
-            _conditionService, NullLogger<FunctionContractResolver>.Instance);
+            new BBT.Workflow.Contracts.ContractEntrySelector(_conditionService), NullLogger<FunctionContractResolver>.Instance);
     }
 
     [Theory]

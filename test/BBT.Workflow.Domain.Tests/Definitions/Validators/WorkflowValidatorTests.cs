@@ -2108,4 +2108,142 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
     }
 
     #endregion
+
+    #region Transition schemas validation
+
+    private const string TsRef1 = """{ "key": "s1", "domain": "d", "flow": "sys-schemas", "version": "1.0.0" }""";
+    private const string TsRef2 = """{ "key": "s2", "domain": "d", "flow": "sys-schemas", "version": "1.0.0" }""";
+    private const string TsRule = """{ "location": "./src/R.csx", "code": "cmV0dXJuIHRydWU7" }""";
+
+    private WorkflowDefinition WorkflowWithTransition(string triggerFields)
+    {
+        var json = $$"""
+        {
+            "type": "F",
+            "labels": [{"label": "Test", "language": "en"}],
+            "states": [
+                {
+                    "key": "initial",
+                    "stateType": "initial",
+                    "labels": [{"label": "Initial", "language": "en"}],
+                    "transitions": [
+                        {
+                            "key": "t1",
+                            "target": "done",
+                            "labels": [{"label": "T", "language": "en"}],
+                            {{triggerFields}}
+                        }
+                    ]
+                },
+                {
+                    "key": "done",
+                    "stateType": "finish",
+                    "labels": [{"label": "Done", "language": "en"}],
+                    "transitions": []
+                }
+            ],
+            "sharedTransitions": [],
+            "startTransition": {
+                "key": "start",
+                "target": "initial",
+                "triggerType": "manual",
+                "labels": [{"label": "Start", "language": "en"}]
+            }
+        }
+        """;
+        return DeserializeWorkflow(json);
+    }
+
+    [Fact]
+    public void AutoTransition_WithSchemas_IsRejected()
+    {
+        var workflow = WorkflowWithTransition($$"""
+            "triggerType": "automatic",
+            "rule": {{TsRule}},
+            "schemas": [ { "schema": {{TsRef1}} } ]
+            """);
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldContain(e => e.ErrorMessage!.Contains("cannot have a schema definition")
+            && e.MemberNames.Any(m => m.EndsWith(".schemas")));
+    }
+
+    [Fact]
+    public void AutoTransition_WithSchema_ReportsTheSchemaMember()
+    {
+        var workflow = WorkflowWithTransition($$"""
+            "triggerType": "automatic",
+            "rule": {{TsRule}},
+            "schema": {{TsRef1}}
+            """);
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldContain(e => e.ErrorMessage!.Contains("cannot have a schema definition")
+            && e.MemberNames.Any(m => m.EndsWith(".Schema")));
+    }
+
+    [Fact]
+    public void ScheduledTransition_WithSchemas_IsRejected()
+    {
+        var workflow = WorkflowWithTransition($$"""
+            "triggerType": "scheduled",
+            "timer": { "reset": "N", "duration": "PT1M" },
+            "schemas": [ { "schema": {{TsRef1}} } ]
+            """);
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldContain(e => e.ErrorMessage!.Contains("cannot have a schema definition")
+            && e.MemberNames.Any(m => m.EndsWith(".schemas")));
+    }
+
+    [Fact]
+    public void Schemas_RuleLessEntryNotLast_IsRejected()
+    {
+        var workflow = WorkflowWithTransition($$"""
+            "triggerType": "manual",
+            "schemas": [ { "schema": {{TsRef1}} }, { "rule": {{TsRule}}, "schema": {{TsRef2}} } ]
+            """);
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldContain(e =>
+            e.ErrorMessage!.Contains("declares no rule") && e.MemberNames.Any(m => m.EndsWith(".schemas[0]")));
+    }
+
+    [Fact]
+    public void Schemas_InvalidRuleScript_IsRejected()
+    {
+        var workflow = WorkflowWithTransition($$"""
+            "triggerType": "manual",
+            "schemas": [
+                { "rule": { "location": "./src/R.csx" }, "schema": {{TsRef1}} },
+                { "schema": {{TsRef2}} }
+            ]
+            """);
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldContain(e =>
+            e.MemberNames.Any(m => m.Contains(".schemas[0]")) && e.ErrorMessage!.Contains("never executed"));
+    }
+
+    [Fact]
+    public void Schemas_RuleThenFallback_IsValid()
+    {
+        var workflow = WorkflowWithTransition($$"""
+            "triggerType": "manual",
+            "schemas": [ { "rule": {{TsRule}}, "schema": {{TsRef1}} }, { "schema": {{TsRef2}} } ]
+            """);
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors
+            .Where(e => e.MemberNames.Any(m => m.Contains(".schemas[")))
+            .ShouldBeEmpty();
+    }
+
+    #endregion
 }

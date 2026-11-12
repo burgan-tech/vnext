@@ -1269,6 +1269,26 @@ public static partial class WorkflowLogs
         this ILogger logger, Guid instanceId, string targetState);
 
     /// <summary>
+    /// Logs when a rule on a transition schema entry could not be evaluated. The entry is skipped.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10261,
+        Level = LogLevel.Warning,
+        Message = "Transition {TransitionKey} schema rule evaluation failed for entry {SchemaKey}: {ErrorMessage}. Skipping entry.")]
+    public static partial void TransitionSchemaRuleEvaluationFailed(
+        this ILogger logger, string transitionKey, string schemaKey, string errorMessage);
+
+    /// <summary>
+    /// Logs when a transition declares rule-based schemas and no entry matched.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10262,
+        Level = LogLevel.Warning,
+        Message = "Transition {TransitionKey} has no schema entry matching the instance")]
+    public static partial void TransitionSchemaNotMatched(
+        this ILogger logger, string transitionKey);
+
+    /// <summary>
     /// Logs when task instance resolution fails (for DirectTrigger, GetInstanceData).
     /// </summary>
     [LoggerMessage(
@@ -5528,6 +5548,18 @@ public static partial class WorkflowLogs
         this ILogger logger,
         string functionKey,
         string schemaKey);
+
+    /// <summary>
+    /// Logs when a function declares a rule-based input schema and no entry matched the request, so the
+    /// request is rejected.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 80009,
+        Level = LogLevel.Warning,
+        Message = "Function {FunctionKey} input schema has no entry matching the request; request rejected")]
+    public static partial void FunctionInputSchemaNotMatched(
+        this ILogger logger,
+        string functionKey);
 
     /// <summary>
     /// Logs when a rule on a function contract entry could not be evaluated. The entry is skipped and

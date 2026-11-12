@@ -170,6 +170,7 @@ public sealed class InstanceQueryAppServiceCorrelationTreeTests : IDisposable
             instanceSchemaFunctionCache: Substitute.For<Caching.IInstanceSchemaFunctionCache>(),
             humanTaskFunctionCache: Substitute.For<Caching.IHumanTaskFunctionCache>(),
             descentLimiter: new HumanTaskDescentLimiter(Options.Create(new HumanTaskFunctionOptions())),
+            transitionSchemaResolver: NSubstitute.Substitute.For<BBT.Workflow.Execution.Validation.ITransitionSchemaResolver>(),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 

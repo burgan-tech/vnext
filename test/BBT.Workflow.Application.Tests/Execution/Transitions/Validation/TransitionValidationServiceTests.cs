@@ -34,6 +34,7 @@ public class TransitionValidationServiceTests
 {
     private readonly Mock<IJsonSchemaValidator> _mockSchemaValidator;
     private readonly Mock<IComponentCacheStore> _mockComponentCacheStore;
+    private readonly ITransitionSchemaResolver _schemaResolver;
     private readonly TransitionExecutionPolicy _transitionExecutionPolicy;
     private readonly TransitionValidationService _service;
 
@@ -49,11 +50,104 @@ public class TransitionValidationServiceTests
 
         _transitionExecutionPolicy = new TransitionExecutionPolicy(composite);
 
+        // Default: the resolver hands back the transition's own single schema (or none).
+        _schemaResolver = Substitute.For<ITransitionSchemaResolver>();
+        _schemaResolver
+            .ResolveAsync(default!, default!, default!, default, default)
+            .ReturnsForAnyArgs(call =>
+                Task.FromResult(Result<Reference?>.Ok(call.ArgAt<Transition>(2)?.Schema)));
+
         _service = new TransitionValidationService(
             _transitionExecutionPolicy,
             _mockSchemaValidator.Object,
             _mockComponentCacheStore.Object,
-            Substitute.For<BBT.Workflow.Versions.IVersionRegistryWriteGuard>());
+            Substitute.For<BBT.Workflow.Versions.IVersionRegistryWriteGuard>(),
+            _schemaResolver);
+    }
+
+    [Fact]
+    public async Task RuleBasedSchema_NoMatch_ReturnsTransitionSchemaNotMatched()
+    {
+        var context = CreateValidTransitionContext();
+        _schemaResolver
+            .ResolveAsync(default!, default!, default!, default, default)
+            .ReturnsForAnyArgs(Task.FromResult(
+                Result<Reference?>.Fail(WorkflowErrors.TransitionSchemaNotMatched(context.TransitionKey))));
+
+        var result = await _service.ValidateAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.TransitionSchemaNotMatched);
+        _mockSchemaValidator.Verify(
+            x => x.Validate(It.IsAny<JsonElement>(), It.IsAny<JsonElement?>(), It.IsAny<SchemaValidationOptions>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task RuleBasedSchema_Match_ValidatesAgainstMatchedSchema()
+    {
+        var schemaRefB = new Reference("schema-b", "test-domain", "sys-schemas", "1.0.0");
+        var context = CreateValidTransitionContext();
+        var schemaDefinition = CreateMockSchemaDefinition("schema-b");
+        _schemaResolver
+            .ResolveAsync(default!, default!, default!, default, default)
+            .ReturnsForAnyArgs(Task.FromResult(Result<Reference?>.Ok(schemaRefB)));
+        _mockComponentCacheStore
+            .Setup(x => x.GetSchemaAsync(schemaRefB.Domain, schemaRefB.Key, schemaRefB.Version, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<SchemaDefinition>.Ok(schemaDefinition));
+        _mockSchemaValidator
+            .Setup(x => x.Validate(schemaDefinition.Schema, It.IsAny<JsonElement?>(), It.IsAny<SchemaValidationOptions>()))
+            .Returns(Result.Ok());
+
+        var result = await _service.ValidateAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        _mockSchemaValidator.Verify(
+            x => x.Validate(schemaDefinition.Schema, It.IsAny<JsonElement?>(), It.IsAny<SchemaValidationOptions>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task NoSchema_Accepts()
+    {
+        var context = CreateValidTransitionContext();
+
+        var result = await _service.ValidateAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        _mockSchemaValidator.Verify(
+            x => x.Validate(It.IsAny<JsonElement>(), It.IsAny<JsonElement?>(), It.IsAny<SchemaValidationOptions>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task MissingWorkflow_WithSchemaDeclared_FailsClosedWithoutCallingTheResolver()
+    {
+        var context = CreateTransitionContextWithSchema(
+            new Reference("schema-a", "test-domain", "sys-schemas", "1.0.0"));
+        typeof(TransitionExecutionContext).GetProperty(nameof(TransitionExecutionContext.Workflow))!
+            .SetValue(context, null);
+
+        var result = await _service.ValidateAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.TransitionSchemaNotMatched);
+        await _schemaResolver.DidNotReceiveWithAnyArgs()
+            .ResolveAsync(default!, default!, default!, default, default);
+    }
+
+    [Fact]
+    public async Task MissingWorkflow_WithoutSchema_Accepts()
+    {
+        var context = CreateValidTransitionContext();
+        typeof(TransitionExecutionContext).GetProperty(nameof(TransitionExecutionContext.Workflow))!
+            .SetValue(context, null);
+
+        var result = await _service.ValidateAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _schemaResolver.DidNotReceiveWithAnyArgs()
+            .ResolveAsync(default!, default!, default!, default, default);
     }
 
     #region ValidateAsync Tests

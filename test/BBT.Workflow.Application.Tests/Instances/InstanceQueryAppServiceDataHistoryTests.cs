@@ -104,6 +104,7 @@ public class InstanceQueryAppServiceDataHistoryTests : IDisposable
             humanTaskFunctionCache: Substitute.For<Caching.IHumanTaskFunctionCache>(),
             currentUser: Substitute.For<ICurrentUser>(),
             descentLimiter: new HumanTaskDescentLimiter(Options.Create(new HumanTaskFunctionOptions())),
+            transitionSchemaResolver: NSubstitute.Substitute.For<BBT.Workflow.Execution.Validation.ITransitionSchemaResolver>(),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 

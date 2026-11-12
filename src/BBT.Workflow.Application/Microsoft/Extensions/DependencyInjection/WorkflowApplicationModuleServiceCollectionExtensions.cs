@@ -142,7 +142,9 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IRelatedInstanceQueryAppService, RelatedInstanceQueryAppService>();
         services.AddScoped<IViewContentResolutionService, ViewContentResolutionService>();
         services.AddScoped<IInstanceRetryAppService, InstanceRetryAppService>();
+        services.AddScoped<BBT.Workflow.Contracts.IContractEntrySelector, BBT.Workflow.Contracts.ContractEntrySelector>();
         services.AddScoped<IFunctionContractResolver, FunctionContractResolver>();
+        services.AddScoped<BBT.Workflow.Execution.Validation.ITransitionSchemaResolver, BBT.Workflow.Execution.Validation.TransitionSchemaResolver>();
         services.AddScoped<IFunctionAccessPolicy, FunctionAccessPolicy>();
         services.AddScoped<IFunctionRequestValidationService, FunctionRequestValidationService>();
         services.AddScoped<IFunctionAppService, FunctionAppService>();

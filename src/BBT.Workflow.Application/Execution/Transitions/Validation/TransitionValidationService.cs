@@ -18,7 +18,8 @@ public class TransitionValidationService(
     TransitionExecutionPolicy transitionExecutionPolicy,
     IJsonSchemaValidator schemaValidator,
     IComponentCacheStore componentCacheStore,
-    IVersionRegistryWriteGuard versionRegistryWriteGuard) : ITransitionValidationService
+    IVersionRegistryWriteGuard versionRegistryWriteGuard,
+    ITransitionSchemaResolver schemaResolver) : ITransitionValidationService
 {
     /// <inheritdoc />
     /// <summary>
@@ -100,12 +101,26 @@ public class TransitionValidationService(
                 return guardResult;
         }
 
-        // Guard: No schema defined
-        if (context.Transition?.Schema is null)
+        if (context.Transition is null)
+            return Result.Ok();
+
+        // Defensive: without the workflow and instance nothing can be resolved — no schema declared
+        // accepts, a declared one fails closed.
+        if (context.Workflow is null || context.Instance is null)
+            return context.Transition.HasSchema
+                ? Result.Fail(WorkflowErrors.TransitionSchemaNotMatched(context.TransitionKey))
+                : Result.Ok();
+
+        // Rule-based selection: the first matching `schemas` entry wins; none matching is a rejection.
+        var resolved = await schemaResolver.ResolveAsync(
+            context.Workflow, context.Instance, context.Transition, context.Headers, cancellationToken);
+        if (!resolved.IsSuccess)
+            return Result.Fail(resolved.Error);
+        if (resolved.Value is null)
             return Result.Ok();
 
         var schemaResult = await componentCacheStore.GetSchemaAsync(
-            context.Transition.Schema, cancellationToken);
+            resolved.Value, cancellationToken);
 
         if (!schemaResult.IsSuccess)
             return Result.Fail(schemaResult.Error);

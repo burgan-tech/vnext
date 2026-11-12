@@ -726,5 +726,113 @@ public class TransitionTests : DomainTestBase<DomainEntryPoint>
 
         Assert.Equal("A", doc.RootElement.GetProperty("executionType").GetString());
     }
-}
 
+    #region Rule-based schemas
+
+    private const string SchemaRef1 = """{ "key": "s1", "domain": "d", "flow": "sys-schemas", "version": "1.0.0" }""";
+    private const string SchemaRef2 = """{ "key": "s2", "domain": "d", "flow": "sys-schemas", "version": "1.0.0" }""";
+    private const string RuleJson = """{ "location": "./src/R.csx", "code": "cmV0dXJuIHRydWU7" }""";
+
+    private static Transition DeserializeTransition(string extra) =>
+        System.Text.Json.JsonSerializer.Deserialize<Transition>(
+            $$"""{ "key": "t", "target": "x", "triggerType": 0, "versionStrategy": "Patch", "labels": [] {{extra}} }""",
+            JsonSerializerConstants.JsonOptions)!;
+
+    [Fact]
+    public void Schemas_ArrayForm_Deserializes()
+    {
+        var transition = DeserializeTransition(
+            $$""", "schemas": [ { "rule": {{RuleJson}}, "schema": {{SchemaRef1}} }, { "schema": {{SchemaRef2}} } ]""");
+
+        var selection = transition.SchemaSelection;
+        Assert.NotNull(selection);
+        Assert.Equal(2, selection.Schemas.Count);
+        Assert.NotNull(selection.Schemas[0].Rule);
+        Assert.Equal("s1", selection.Schemas[0].Schema.Key);
+        Assert.Null(selection.Schemas[1].Rule);
+        Assert.True(transition.HasSchema);
+    }
+
+    [Fact]
+    public void SchemaOnly_ExposesSingleFallbackSelection()
+    {
+        var transition = DeserializeTransition($$""", "schema": {{SchemaRef1}}""");
+
+        var selection = transition.SchemaSelection;
+        Assert.NotNull(selection);
+        var entry = Assert.Single(selection.Schemas);
+        Assert.Null(entry.Rule);
+        Assert.Equal("s1", entry.Schema.Key);
+        Assert.True(transition.HasSchema);
+    }
+
+    [Fact]
+    public void SchemaAndSchemas_SchemasWins()
+    {
+        var transition = DeserializeTransition(
+            $$""", "schema": {{SchemaRef1}}, "schemas": [ { "schema": {{SchemaRef2}} } ]""");
+
+        var entry = Assert.Single(transition.SchemaSelection!.Schemas);
+        Assert.Equal("s2", entry.Schema.Key);
+        Assert.Equal("s1", transition.Schema!.Key);
+    }
+
+    [Fact]
+    public void SetSchemas_NonEmpty_IsExposedAndWinsOverSchema()
+    {
+        var transition = DeserializeTransition($$""", "schema": {{SchemaRef1}}""");
+        var other = new Reference("s2", "d", "sys-schemas", "1.0.0");
+
+        transition.SetSchemas(SchemaSelection.CreateDefault(other));
+
+        var entry = Assert.Single(transition.SchemaSelection!.Schemas);
+        Assert.Equal("s2", entry.Schema.Key);
+        Assert.True(transition.HasSchema);
+    }
+
+    [Fact]
+    public void SetSchemas_Empty_DoesNotHideSchema()
+    {
+        var transition = DeserializeTransition($$""", "schema": {{SchemaRef1}}""");
+
+        transition.SetSchemas(new SchemaSelection());
+
+        Assert.True(transition.HasSchema);
+        var entry = Assert.Single(transition.SchemaSelection!.Schemas);
+        Assert.Equal("s1", entry.Schema.Key);
+    }
+
+    [Fact]
+    public void SetSchemas_EmptyWithoutSchema_HasNoSchema()
+    {
+        var transition = DeserializeTransition("");
+
+        transition.SetSchemas(new SchemaSelection());
+
+        Assert.False(transition.HasSchema);
+        Assert.Null(transition.SchemaSelection);
+    }
+
+    [Fact]
+    public void NoSchema_HasSchemaFalse()
+    {
+        var transition = DeserializeTransition("");
+
+        Assert.Null(transition.SchemaSelection);
+        Assert.False(transition.HasSchema);
+    }
+
+    [Fact]
+    public void SchemaOnly_RoundTrip_WritesSchemaNotSchemas()
+    {
+        var transition = DeserializeTransition($$""", "schema": {{SchemaRef1}}""");
+
+        var json = System.Text.Json.JsonSerializer.Serialize(transition, JsonSerializerConstants.JsonOptions);
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+
+        Assert.True(doc.RootElement.TryGetProperty("schema", out _));
+        Assert.False(doc.RootElement.TryGetProperty("schemas", out _));
+    }
+
+    #endregion
+}

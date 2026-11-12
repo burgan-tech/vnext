@@ -49,11 +49,11 @@ Conversion is handled by `ViewDefinitionJsonConverter` and `SchemaSelectionJsonC
 | Entry's rule evaluates true | Wins |
 | Entry's rule evaluates false | Skip to the next entry |
 | Entry's rule fails to evaluate | Logged at Warning, entry skipped — never fatal |
-| Every entry carried a rule and none matched | No contract (`Ok(null)`) — **not** an error |
+| Every entry carried a rule and none matched | No contract (`Ok(null)`); `inputSchema` validation then rejects the request (`Function:800006`) |
 | Script context could not be built | Failure |
 
 **No contract is not an error.** A function may legitimately have no applicable view for a given
-request. Callers decide what that means: request validation treats it as "nothing to validate", the
+request. Callers decide what that means: request validation rejects an `inputSchema` that matches no entry (`400`, `Function:800006`), the
 info endpoint reports `hasView: false`, and the content routes return `404`
 (`Function:800004`).
 
@@ -92,12 +92,42 @@ unchanged.
 
 | Surface | Slot | Behaviour on no match |
 | --- | --- | --- |
-| `FunctionRequestValidationService` (execute) | `inputSchema` | Body is not validated |
+| `FunctionRequestValidationService` (execute) | `inputSchema` | `400` `Function:800006` for a request with a body; a bodyless request is accepted. End the list with a rule-less entry to keep accepting unmatched callers |
 | `/info` | all four | `hasView` / `hasSchema` false, href still emitted |
 | `/view?target=input\|output` | `inputView` / `outputView` | `404` |
 | `/schema?target=input\|output` | `inputSchema` / `outputSchema` | `404` |
 
-`outputSchema` is never enforced at runtime — it is declarative, surfaced for clients and tooling.
+Views and `outputSchema` behave as before on no match. `outputSchema` is never enforced at runtime — it is declarative, surfaced for clients and tooling.
+
+## Transitions
+
+A transition (state-level, shared, start, cancel, updateData, exit) declares its payload schema the same
+way: `schema` (one reference, unchanged) or `schemas` (rule-based entries, like `views`). Entries are
+walked in declaration order, the first matching `rule` wins, a rule-less entry is the fallback and must
+be last; `schemas` wins over `schema`; automatic and scheduled transitions may not declare `schemas`.
+
+- **Rule context:** workflow, instance, runtime, transition, `body` (the instance's latest data, `{}`
+  when none) and the request headers. There are no query parameters.
+- **Write path:** nothing declared, accept. Declared but no entry matches, `400` `Transition:100025`
+  (the instance keeps its state and is not faulted).
+- **Read path:** the schema function serves the matched entry; no match is `404`
+  ("No schema entry matched for transition {key} in state {state}"). `hasSchema` in transition lists is
+  declared-only (`schema` or a non-empty `schemas`), like `hasView`.
+- **Cache:** the schema-function cache key and ETag also hash the non-volatile request headers
+  (`RequestHeaderHash`, shared with the HumanTask function cache), so a header-driven rule never gets
+  another header value's entry or a false `304`. Tracing ids, transport noise and the conditional /
+  cache-directive headers (`If-None-Match`, `Cache-Control`, ...) are excluded, otherwise a revalidating
+  client would never match its own ETag; `x-forwarded-for` / `x-real-ip` stay in because a rule may read them.
+- **Order:** `TransitionValidationService.ValidateAsync` resolves the schema (including any rule script)
+  before the state-machine / actor-type policy check (`TransitionExecutionPolicy`), so a request that
+  policy would refuse (wrong state, wrong actor) receives `400` `Transition:100025` first when no entry
+  matches. Role authorization is not decided on this write path (the gateway decides it), so there is no
+  `403` here to pre-empt.
+- **Bodyless requests:** a function request without a body is accepted even when no `inputSchema` entry
+  matches (`FunctionRequestValidationService` returns before rule evaluation), whereas a transition with
+  `schemas` and no matching entry is rejected regardless of the body.
+- **Functions differ in one respect:** a rule-based function `inputSchema` with no match rejects with
+  `400` `Function:800006` (above), where a transition reports `Transition:100025`.
 
 ## Access control
 

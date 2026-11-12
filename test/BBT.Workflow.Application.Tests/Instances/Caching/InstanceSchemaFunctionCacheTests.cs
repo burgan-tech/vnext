@@ -78,6 +78,82 @@ public class InstanceSchemaFunctionCacheTests
     }
 
     [Fact]
+    public void SchemaKeyAndEtag_ChangeWithARuleReadableHeader()
+    {
+        // A rule-based transition schema may be selected on any request header, so two callers that
+        // differ only in `channel` must not share a cached body or a validator.
+        var sut = CreateSut();
+        var a = CreateSchemaInput(headers: new() { ["channel"] = "A" });
+        var b = CreateSchemaInput(headers: new() { ["channel"] = "B" });
+
+        sut.BuildKey(a, "approve").ShouldNotBe(sut.BuildKey(b, "approve"));
+        sut.ComputeEtag(a, CreateFingerprint(), "approve").ShouldNotBe(sut.ComputeEtag(b, CreateFingerprint(), "approve"));
+    }
+
+    [Fact]
+    public void SchemaKeyAndEtag_IgnoreVolatileHeaders()
+    {
+        var sut = CreateSut();
+        var a = CreateSchemaInput(headers: new() { ["channel"] = "A", ["x-request-id"] = "r1", ["traceparent"] = "t1" });
+        var b = CreateSchemaInput(headers: new() { ["channel"] = "A", ["X-Request-Id"] = "r2", ["traceparent"] = "t2" });
+
+        sut.BuildKey(a, "approve").ShouldBe(sut.BuildKey(b, "approve"));
+        sut.ComputeEtag(a, CreateFingerprint(), "approve").ShouldBe(sut.ComputeEtag(b, CreateFingerprint(), "approve"));
+    }
+
+    [Fact]
+    public void SchemaKeyAndEtag_IgnoreConditionalRequestAndTraceHeaders()
+    {
+        // Production binds every request header into GetSchemaInput.Headers, including the conditional
+        // ones; a client revalidating with If-None-Match must not change the ETag it is comparing against.
+        var sut = CreateSut();
+        var a = CreateSchemaInput(headers: new() { ["channel"] = "A" });
+        var b = CreateSchemaInput(headers: new()
+        {
+            ["channel"] = "A",
+            ["if-none-match"] = "\"previous-etag\"",
+            ["If-Match"] = "\"x\"",
+            ["if-modified-since"] = "Tue, 10 Nov 2026 10:00:00 GMT",
+            ["if-unmodified-since"] = "Tue, 10 Nov 2026 10:00:00 GMT",
+            ["if-range"] = "\"x\"",
+            ["cache-control"] = "no-cache",
+            ["pragma"] = "no-cache",
+            ["b3"] = "abc-def-1",
+            ["x-b3-traceid"] = "t",
+            ["x-b3-spanid"] = "s",
+            ["x-b3-parentspanid"] = "p",
+            ["x-b3-sampled"] = "1",
+            ["x-b3-flags"] = "1",
+            ["x-amzn-trace-id"] = "Root=1-abc"
+        });
+
+        sut.BuildKey(a, "approve").ShouldBe(sut.BuildKey(b, "approve"));
+        sut.ComputeEtag(a, CreateFingerprint(), "approve").ShouldBe(sut.ComputeEtag(b, CreateFingerprint(), "approve"));
+    }
+
+    [Fact]
+    public void SchemaKeyAndEtag_StillFoldInForwardedAddressHeaders()
+    {
+        // A rule may legitimately read x-forwarded-for / x-real-ip, so they stay part of the key.
+        var sut = CreateSut();
+        var a = CreateSchemaInput(headers: new() { ["x-forwarded-for"] = "1.1.1.1" });
+        var b = CreateSchemaInput(headers: new() { ["x-forwarded-for"] = "2.2.2.2" });
+
+        sut.BuildKey(a, "approve").ShouldNotBe(sut.BuildKey(b, "approve"));
+    }
+
+    [Fact]
+    public void MasterKeyAndEtag_IgnoreArbitraryHeaders()
+    {
+        var sut = CreateSut();
+        var a = CreateMasterInput(headers: new() { ["channel"] = "A" });
+        var b = CreateMasterInput(headers: new() { ["channel"] = "B" });
+
+        sut.BuildKey(a).ShouldBe(sut.BuildKey(b));
+        sut.ComputeEtag(a, CreateFingerprint()).ShouldBe(sut.ComputeEtag(b, CreateFingerprint()));
+    }
+
+    [Fact]
     public void SchemaBuildKey_DiffersByTransitionKey()
     {
         var sut = CreateSut();

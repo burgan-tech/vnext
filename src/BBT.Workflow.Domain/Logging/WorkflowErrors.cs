@@ -240,6 +240,15 @@ public static class WorkflowErrors
             target: transitionKey);
 
     /// <summary>
+    /// The transition declares rule-based schemas and none of them matched the instance.
+    /// </summary>
+    public static Error TransitionSchemaNotMatched(string transitionKey)
+        => Error.Validation(
+            WorkflowErrorCodes.TransitionSchemaNotMatched,
+            $"Transition '{transitionKey}' declares rule-based schemas and none of them matches the instance.",
+            target: transitionKey);
+
+    /// <summary>
     /// When the instance has an active SubFlow, a shared transition's target must be $self so the state does not change.
     /// </summary>
     /// <param name="transitionKey">The shared transition key.</param>
@@ -654,6 +663,15 @@ public static class WorkflowErrors
         => Error.Validation(
             WorkflowErrorCodes.FunctionContractTargetInvalid,
             $"Unknown target '{target}'. Expected 'input' or 'output'.");
+
+    /// <summary>
+    /// The function declares a rule-based <c>inputSchema</c>, none of its entries matched, and the request carries a body.
+    /// </summary>
+    /// <param name="functionKey">The function key.</param>
+    public static Error FunctionInputSchemaNotMatched(string functionKey)
+        => Error.Validation(
+            WorkflowErrorCodes.FunctionInputSchemaNotMatched,
+            $"Function '{functionKey}' declares a rule-based input schema and the request matches none of its entries.");
 
     #endregion
 
