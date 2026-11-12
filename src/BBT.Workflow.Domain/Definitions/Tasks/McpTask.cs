@@ -78,7 +78,7 @@ public sealed class McpTask : WorkflowTask
     public void SetArgumentsElement(JsonElement? arguments) => Arguments = arguments;
 
     /// <inheritdoc />
-    protected override void Configure(JsonElement config)
+    protected override void Configure(JsonElement config) // skipcq: CS-R1140 — a flat read of optional config fields
     {
         base.Configure(config);
 
