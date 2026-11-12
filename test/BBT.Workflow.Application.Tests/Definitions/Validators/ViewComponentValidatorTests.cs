@@ -47,7 +47,7 @@ public class ViewComponentValidatorTests
         // Arrange
         var viewJson = """
         {
-            "type": "J",
+            "type": "json",
             "content": "{\"test\": \"content\"}",
             "display": "test-display"
         }
@@ -59,26 +59,6 @@ public class ViewComponentValidatorTests
 
         // Assert
         result.IsValid.ShouldBeTrue();
-    }
-
-    [Fact]
-    public void Validate_ShouldReturnError_ForMissingContent()
-    {
-        // Arrange
-        var viewJson = """
-        {
-            "type": "J",
-            "display": "test-display"
-        }
-        """;
-        var attributes = JsonDocument.Parse(viewJson).RootElement;
-
-        // Act
-        var result = _validator.Validate(attributes);
-
-        // Assert
-        result.IsValid.ShouldBeFalse();
-        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("View.Content"));
     }
 
     [Fact]

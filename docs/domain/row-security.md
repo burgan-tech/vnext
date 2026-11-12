@@ -297,7 +297,7 @@ live (`ComponentValidationWarning` plus the code in the message).
 | RS-E02 | error | dynamic grant (`$user.`, `$userBehalfOf.`, `$role.`) used as a rule role |
 | RS-E03 | (reserved) | `allOf` / `anyOf` used as a rule role — not emitted by the runtime: refused at JSON binding (`400 App:900006`), reported first by `vnext-schema` |
 | RS-E04 | error | static and reserved roles mixed in one rule |
-| RS-E05 | error | reserved role other than `$InstanceStarter` / `$InstanceBehalfOfStarter` |
+| RS-E05 | error | reserved role other than `$InstanceStarter` / `$InstanceBehalfOfStarter` (for example `$Everyone`) |
 | RS-E06 | error | instance-starter shorthand on a column it does not belong to |
 | RS-E07 | error | malformed `$.context.` path, unknown source (`Route`, `Query`) or unknown `CurrentUser` field |
 | RS-E08 | error | filter on, or above, an `x-encryption: encrypt` path |

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -42,6 +43,8 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
     private readonly IInstanceRepository _instanceRepository;
     private readonly ITransitionAuthorizationManager _transitionAuthorizationManager;
     private readonly Caching.IInstanceSchemaFunctionCache _instanceSchemaFunctionCache;
+    private readonly BBT.Workflow.Execution.Validation.ITransitionSchemaResolver _transitionSchemaResolver =
+        Substitute.For<BBT.Workflow.Execution.Validation.ITransitionSchemaResolver>();
     private readonly InstanceQueryAppService _service;
     private readonly IServiceProvider _ambientServiceProvider;
     private readonly IServiceProvider? _previousAmbientServiceProvider;
@@ -84,6 +87,12 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
                 Arg.Any<CancellationToken>())
             .Returns(true);
 
+        // Default: behave like the real resolver for a single-`schema` transition (its schema, no script).
+        _transitionSchemaResolver
+            .ResolveAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<Instance>(), Arg.Any<Transition>(),
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<CancellationToken>())
+            .Returns(call => Task.FromResult(Result<Reference?>.Ok(call.ArgAt<Transition>(2).Schema)));
+
         _service = new InstanceQueryAppService(
             serviceProvider: _ambientServiceProvider,
             runtimeInfoProvider: _runtimeInfoProvider,
@@ -121,6 +130,7 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
             currentUser: Substitute.For<ICurrentUser>(),
             descentLimiter: new HumanTask.HumanTaskDescentLimiter(
                 Microsoft.Extensions.Options.Options.Create(new HumanTask.HumanTaskFunctionOptions())),
+            transitionSchemaResolver: _transitionSchemaResolver,
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 
@@ -176,6 +186,29 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
 
         result.IsNotModified.ShouldBeTrue();
         await _instanceSchemaFunctionCache.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _instanceRepository.DidNotReceive()
+            .FindByIdentifierAsReadOnlyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetSchemaAsync_WhenHeadersCarryIfNoneMatchAsBoundInProduction_Returns304()
+    {
+        var instanceId = Guid.NewGuid();
+        EnableCache();
+        SetupFingerprint(instanceId);
+
+        // Production copies the request headers wholesale into Headers, If-None-Match included.
+        var input = CreateInput(instanceId.ToString());
+        input.IfNoneMatch = "\"etag-current\"";
+        input.Headers = new Dictionary<string, string?>
+        {
+            ["if-none-match"] = "\"etag-current\"",
+            ["cache-control"] = "no-cache"
+        };
+
+        var result = await _service.GetSchemaAsync(input, TestTransition, CancellationToken.None);
+
+        result.IsNotModified.ShouldBeTrue();
         await _instanceRepository.DidNotReceive()
             .FindByIdentifierAsReadOnlyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
@@ -266,6 +299,84 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
         result.Result.IsSuccess.ShouldBeFalse();
         await _instanceSchemaFunctionCache.DidNotReceive()
             .SetAsync(Arg.Any<string>(), Arg.Any<Caching.SchemaFunctionCacheEntry>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetSchema_RuleBased_ReturnsMatchedSchema()
+    {
+        var (instance, workflow) = CreateInstanceWithTransitionSchema(withSchemaRef: false);
+        workflow.GetState(TestState).Value!.Transitions.First().SetSchemas(SchemaSelection.CreateWithSchemas(
+            SchemaEntry.CreateDefault(new Reference("fallback-schema", TestDomain, "sys-schemas", TestVersion))));
+        SetupFullPathMocks(instance, workflow);
+        _componentCacheStore
+            .GetSchemaAsync(TestDomain, "matched-schema", Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<SchemaDefinition>.Ok(SchemaFromJson()));
+        _transitionSchemaResolver
+            .ResolveAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<Instance>(), Arg.Any<Transition>(),
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Reference?>.Ok(new Reference("matched-schema", TestDomain, "sys-schemas", TestVersion)));
+
+        var result = await _service.GetSchemaAsync(CreateInput(instance.Id.ToString()), TestTransition, CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        await _componentCacheStore.Received(1)
+            .GetSchemaAsync(TestDomain, "matched-schema", Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        await _componentCacheStore.DidNotReceive()
+            .GetSchemaAsync(TestDomain, "fallback-schema", Arg.Any<string?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetSchema_RuleBased_NoMatch_Returns404()
+    {
+        var (instance, workflow) = CreateInstanceWithTransitionSchema(withSchemaRef: false);
+        workflow.GetState(TestState).Value!.Transitions.First().SetSchemas(SchemaSelection.CreateWithSchemas(
+            SchemaEntry.CreateWithRule(
+                new Reference("gold-schema", TestDomain, "sys-schemas", TestVersion),
+                new ScriptCode("./rule.csx", "e30="))));
+        SetupFullPathMocks(instance, workflow);
+        _transitionSchemaResolver
+            .ResolveAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<Instance>(), Arg.Any<Transition>(),
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Reference?>.Fail(Error.Validation(WorkflowErrorCodes.TransitionSchemaNotMatched, "no schema entry matched")));
+
+        var result = await _service.GetSchemaAsync(CreateInput(instance.Id.ToString()), TestTransition, CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeFalse();
+        result.Result.Error.Message.ShouldContain("No schema entry matched");
+    }
+
+    [Fact]
+    public async Task GetSchema_ResolverFailureOtherThanNoMatch_PassesThroughUnchanged()
+    {
+        var (instance, workflow) = CreateInstanceWithTransitionSchema(withSchemaRef: false);
+        workflow.GetState(TestState).Value!.Transitions.First().SetSchemas(SchemaSelection.CreateWithSchemas(
+            SchemaEntry.CreateDefault(new Reference("fallback-schema", TestDomain, "sys-schemas", TestVersion))));
+        SetupFullPathMocks(instance, workflow);
+        var failure = Error.Failure("Script:1", "rule script blew up");
+        _transitionSchemaResolver
+            .ResolveAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<Instance>(), Arg.Any<Transition>(),
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Reference?>.Fail(failure));
+
+        var result = await _service.GetSchemaAsync(CreateInput(instance.Id.ToString()), TestTransition, CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeFalse();
+        result.Result.Error.Code.ShouldBe("Script:1");
+        result.Result.Error.Message.ShouldBe("rule script blew up");
+    }
+
+    [Fact]
+    public async Task GetSchema_SingleSchema_Unchanged()
+    {
+        var (instance, workflow) = CreateInstanceWithTransitionSchema();
+        SetupFullPathMocks(instance, workflow);
+
+        var result = await _service.GetSchemaAsync(CreateInput(instance.Id.ToString()), TestTransition, CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        await _componentCacheStore.Received(1)
+            .GetSchemaAsync(TestDomain, "approve-schema", Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        result.Result.Value!.Labels.ShouldNotBeNull();
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

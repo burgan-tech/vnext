@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Tasks.Coordinator;
 using Xunit;
@@ -37,7 +38,14 @@ public sealed class TaskPhaseActivityTests : IDisposable
         {
             ShouldListenTo = source => source.Name == sourceName,
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
+            // The listener is process-wide: spans of tests running in parallel arrive here too, on their threads.
+            ActivityStopped = activity =>
+            {
+                lock (collected)
+                {
+                    collected.Add(activity);
+                }
+            }
         };
         ActivitySource.AddActivityListener(listener);
         _listeners.Add(listener);
@@ -50,13 +58,21 @@ public sealed class TaskPhaseActivityTests : IDisposable
         var collected = new List<Activity>();
         using var listener = CreateListener("BBT.Workflow.Tasks", collected);
 
+        ActivitySpanId spanId;
         using (var activity = TaskExecutionActivityHelper.StartActivity(
                    TaskExecutionActivityHelper.OperationPrepareInput, "my-task", "Http"))
         {
             Assert.NotNull(activity);
+            spanId = activity.SpanId;
         }
 
-        var span = Assert.Single(collected);
+        Activity[] mine;
+        lock (collected)
+        {
+            mine = collected.Where(a => a.SpanId == spanId).ToArray();
+        }
+
+        var span = Assert.Single(mine);
         Assert.Equal("Task.PrepareInput", span.DisplayName);
         Assert.Equal("my-task", span.GetTagItem(TelemetryConstants.TagNames.TaskKey));
         Assert.Equal(TelemetryConstants.SpanCategories.Business,

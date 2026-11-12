@@ -13,8 +13,10 @@ namespace BBT.Workflow.Instances.Caching;
 public sealed class DataFunctionCacheEntry
 {
     /// <summary>
-    /// Unquoted fingerprint ETag the response was built under
-    /// (hash of instance id + latest data ETag + flow version + caller scope).
+    /// Unquoted CACHE-VALIDITY ETag of the stored data payload — hash of instance id + latest data
+    /// ETag + flow version + caller scope (<c>IDataFunctionCache.ComputeDataEtag</c>). Deliberately
+    /// NOT the representation ETag the response carried: that one also covers the effective state,
+    /// which does not change the body kept here.
     /// </summary>
     public string Etag { get; set; } = string.Empty;
 

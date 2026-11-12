@@ -68,8 +68,10 @@ public sealed class InstanceQueryAppService(
     Caching.IInstanceSchemaFunctionCache instanceSchemaFunctionCache,
     Caching.IHumanTaskFunctionCache humanTaskFunctionCache,
     HumanTask.HumanTaskDescentLimiter descentLimiter,
+    Execution.Validation.ITransitionSchemaResolver transitionSchemaResolver,
     ILogger<InstanceQueryAppService> logger,
-    IRowSecurityService? rowSecurityService = null)
+    IRowSecurityService? rowSecurityService = null,
+    ICallerAccessorFactory? callerAccessorFactory = null)
     : ApplicationService(serviceProvider), IInstanceQueryAppService
 {
     private static readonly ConcurrentDictionary<string, BuildGate> ActiveSubflowBuildGates = new();
@@ -1350,6 +1352,28 @@ public sealed class InstanceQueryAppService(
         CancellationToken cancellationToken)
     {
         var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(instanceIdentifier, cancellationToken);
+        return TagRootAndEnsureFound(instance, instanceIdentifier);
+    }
+
+    /// <summary>
+    /// The state function's load: the same read-only aggregate as
+    /// <see cref="GetInstanceByIdOrKeyAsync(string, CancellationToken)"/> plus the instance's full
+    /// correlation set (active and completed), both from ONE correlation query — the aggregate's
+    /// open-only collection is derived from it instead of being read again by an include.
+    /// </summary>
+    private async Task<Result<(Instance Instance, List<InstanceCorrelation> AllCorrelations)>>
+        GetInstanceWithAllCorrelationsAsync(
+            string instanceIdentifier,
+            CancellationToken cancellationToken)
+    {
+        var (instance, allCorrelations) = await instanceRepository
+            .FindByIdentifierAsReadOnlyWithAllCorrelationsAsync(instanceIdentifier, cancellationToken);
+        return TagRootAndEnsureFound(instance, instanceIdentifier)
+            .Map(found => (found, allCorrelations));
+    }
+
+    private static Result<Instance> TagRootAndEnsureFound(Instance? instance, string instanceIdentifier)
+    {
         var result = instance.EnsureNotNull(WorkflowErrors.InstanceNotFound(instanceIdentifier));
         if (result.IsSuccess)
         {
@@ -1598,13 +1622,20 @@ public sealed class InstanceQueryAppService(
 
                     result.EntityEtag = entityEtag;
 
-                    // Same fingerprint-ETag the fast path computes from the projection query.
-                    // Pinned-version requests hash the RESOLVED row's ETag instead of the latest
-                    // one (a write into that version line creates a new row with a new ULID).
-                    var etag = dataFunctionCache.ComputeEtag(input, isLatestRequest
+                    // Same fingerprint the fast path projects. Pinned-version requests hash the
+                    // RESOLVED row's ETag instead of the latest one (a write into that version line
+                    // creates a new row with a new ULID).
+                    var responseFingerprint = isLatestRequest
                         ? InstanceDataFingerprint.FromInstance(instance)
                         : new InstanceDataFingerprint(instance.Id, instance.Key, instanceData?.ETag,
-                            instance.FlowVersion, instance.EffectiveState, instance.HasActiveSubFlow));
+                            instance.FlowVersion, instance.EffectiveState, instance.HasActiveSubFlow);
+
+                    // Two identities, two questions — see IDataFunctionCache. The representation
+                    // ETag covers the state (extension output follows it); the entry is stamped with
+                    // the data-only identity so a state change that leaves the body untouched does
+                    // not throw that body away.
+                    var etag = dataFunctionCache.ComputeEtag(input, responseFingerprint);
+                    var dataEtag = dataFunctionCache.ComputeDataEtag(input, responseFingerprint);
 
                     // Warm the cache before the 304 decision so a Not-Modified outcome still
                     // stores the entry. Only latest-data responses with an existing data row are
@@ -1619,7 +1650,7 @@ public sealed class InstanceQueryAppService(
                     {
                         await dataFunctionCache.SetAsync(dataCacheKey, new Caching.DataFunctionCacheEntry
                         {
-                            Etag = etag,
+                            Etag = dataEtag,
                             EntityEtag = entityEtag,
                             Data = result.Data
                         }, dataFunctionCache.ResolveTtlSeconds(flow.Config?.FunctionCache), cancellationToken);
@@ -1655,6 +1686,8 @@ public sealed class InstanceQueryAppService(
         if (fingerprint is null)
             return (null, null);
 
+        // The 304 decision is made against the representation ETag (state included, because the
+        // extension output a 304 withholds is derived from it) ...
         var etag = dataFunctionCache.ComputeEtag(input, fingerprint);
 
         if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
@@ -1670,9 +1703,14 @@ public sealed class InstanceQueryAppService(
             return (null, null);
         }
 
-        if (!string.Equals(entry.Etag, etag, StringComparison.Ordinal))
+        // ... while the stored body is validated against the data-only identity, so a transition
+        // that moved the state without writing data keeps serving its still-correct payload (the
+        // build then reuses it and skips the x-roles filtering pass).
+        var dataEtag = dataFunctionCache.ComputeDataEtag(input, fingerprint);
+
+        if (!string.Equals(entry.Etag, dataEtag, StringComparison.Ordinal))
         {
-            logger.DataFunctionCacheInvalidated(input.Instance, entry.Etag, etag);
+            logger.DataFunctionCacheInvalidated(input.Instance, entry.Etag, dataEtag);
             return (null, null);
         }
 
@@ -1808,22 +1846,21 @@ public sealed class InstanceQueryAppService(
             using var read = InstanceReadActivityHelper.StartRead(
                 InstanceReadKinds.State, input.Domain, input.Workflow);
 
-            return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
-            .BindAsync(instance =>
-                componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, instance.FlowVersion ?? input.Version, cancellationToken)
-                    .MapAsync(workflow => (instance, workflow)))
+            return await GetInstanceWithAllCorrelationsAsync(input.Instance, cancellationToken)
+            .BindAsync(loaded =>
+                componentCacheStore.GetFlowAsync(input.Domain, input.Workflow, loaded.Instance.FlowVersion ?? input.Version, cancellationToken)
+                    .MapAsync(workflow => (instance: loaded.Instance, workflow, loaded.AllCorrelations)))
             .MatchAsync(
                 onSuccess: async data =>
                 {
                     using var instanceScope = BeginInstanceScope(data.instance);
 
-                    // Full correlation set (active + completed), ordered by creation time. The aggregate's
-                    // own ChildCorrelations collection is loaded with an active-only filtered include, so
-                    // the completed rows the response exposes require this dedicated read. Ordering is
-                    // applied here rather than in the shared repository method, whose ParentState ordering
-                    // the instance-correlation and monitor consumers already depend on.
-                    var allCorrelations = (await instanceCorrelationRepository
-                            .GetByParentAsync(data.instance.Id, cancellationToken))
+                    // Full correlation set (active + completed), ordered by creation time. It comes from
+                    // the same single correlation query that filled the aggregate's open-only
+                    // ChildCorrelations, in the repository's ParentState/CompletedAt order — the order
+                    // GetByParentAsync returns, which the stable OrderBy below needs to break CreatedAt
+                    // ties exactly as before.
+                    var allCorrelations = data.AllCorrelations
                         .OrderBy(c => c.CreatedAt)
                         .ToList();
 
@@ -2238,7 +2275,7 @@ public sealed class InstanceQueryAppService(
                         transition = currentWorkflow.ResolveTransition(key, currentStateValue);
                         hasView = transition?.View is { Views.Count: > 0 };
                         loadData = false;
-                        hasSchema = transition?.Schema != null;
+                        hasSchema = transition?.HasSchema == true;
                         annotations = transition?.Annotations;
                     }
 
@@ -2286,7 +2323,7 @@ public sealed class InstanceQueryAppService(
             {
                 var transition = currentWorkflow.ResolveTransition(transitionKey, currentStateValue);
                 var hasView = transition?.View is { Views.Count: > 0 };
-                var hasSchema = transition?.Schema != null;
+                var hasSchema = transition?.HasSchema == true;
                 return WithDefinitionDescriptors(new TransitionItem
                 {
                     Name = transitionKey,
@@ -3322,7 +3359,27 @@ public sealed class InstanceQueryAppService(
 
         var transition = currentWorkflow.ResolveTransition(transitionKey, currentState);
 
-        if (transition?.Schema == null)
+        if (transition == null || !transition.HasSchema)
+        {
+            return Result<GetSchemaOutput>.Fail(
+                Error.NotFound("notfound",
+                    $"Schema not found for transition {transitionKey} in state {instance.CurrentState}"));
+        }
+
+        var resolved = await transitionSchemaResolver.ResolveAsync(
+            currentWorkflow, instance, transition, input.Headers, cancellationToken);
+        if (!resolved.IsSuccess)
+        {
+            // Only "no entry matched" is a 404; any other failure keeps its own error.
+            return resolved.Error.Code == WorkflowErrorCodes.TransitionSchemaNotMatched
+                ? Result<GetSchemaOutput>.Fail(
+                    Error.NotFound("notfound",
+                        $"No schema entry matched for transition {transitionKey} in state {instance.CurrentState}"))
+                : Result<GetSchemaOutput>.Fail(resolved.Error);
+        }
+
+        var schemaReference = resolved.Value;
+        if (schemaReference == null)
         {
             return Result<GetSchemaOutput>.Fail(
                 Error.NotFound("notfound",
@@ -3331,9 +3388,9 @@ public sealed class InstanceQueryAppService(
 
         // Fetch and return the schema using Railway pattern
         return await componentCacheStore.GetSchemaAsync(
-                transition.Schema.Domain,
-                transition.Schema.Key,
-                transition.Schema.Version,
+                schemaReference.Domain,
+                schemaReference.Key,
+                schemaReference.Version,
                 cancellationToken)
             .MapAsync(schema => new GetSchemaOutput
             {
@@ -3447,6 +3504,8 @@ public sealed class InstanceQueryAppService(
             .WithBody(instanceData?.Data ?? new JsonData("{}"))
             .WithHeaders(input.Headers)
             .WithQueryParameters(input.QueryParameters)
+            // View rules may select by the caller's resolved roles; resolved only if a rule reads them.
+            .WithCaller(callerAccessorFactory?.ForRequest(input.Headers, cancellationToken))
             .BuildAsync(cancellationToken);
 
         // One span for the whole ordered walk, not one per rule: the question is "how many rules ran
@@ -3473,6 +3532,14 @@ public sealed class InstanceQueryAppService(
                 viewEntry.Rule,
                 scriptContext,
                 cancellationToken);
+
+            // A rule that read the caller's roles while the role provider could not answer decides
+            // nothing; a later entry or the fallback would be a view chosen for an unidentified caller.
+            if (scriptContext.Caller.ResolutionFailed)
+            {
+                InstanceReadActivityHelper.SetViewResolution(viewResolve, rulesEvaluated, null);
+                return Result<GetViewOutput>.Fail(WorkflowErrors.CallerRolesUnavailable());
+            }
 
             if (ruleResult is { IsSuccess: true, Value: true })
             {

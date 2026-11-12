@@ -1,6 +1,7 @@
 using BBT.Aether.Application.Services;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
+using BBT.Workflow.Authorization;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Functions.Contracts;
@@ -32,7 +33,8 @@ public sealed class FunctionInfoAppService(
     IUrlTemplateBuilder urlTemplateBuilder,
     IFunctionAccessPolicy functionAccessPolicy,
     IFunctionContractResolver contractResolver,
-    IViewContentResolutionService viewContentResolutionService)
+    IViewContentResolutionService viewContentResolutionService,
+    ICallerAccessorFactory callerAccessorFactory)
     : ApplicationService(serviceProvider), IFunctionInfoAppService
 {
     private const string TargetInput = "input";
@@ -326,7 +328,7 @@ public sealed class FunctionInfoAppService(
         if (!access.IsSuccess)
             return Result<FunctionInfoOutput>.Fail(access.Error);
 
-        var scriptContext = CreateLazyScriptContext(function, instance, workflow, headers, queryParameters);
+        var scriptContext = CreateLazyScriptContext(instance, workflow, headers, queryParameters);
 
         var slots = new Dictionary<FunctionContractSlot, FunctionContractResolution?>();
         foreach (var slot in Enum.GetValues<FunctionContractSlot>())
@@ -385,7 +387,7 @@ public sealed class FunctionInfoAppService(
         if (!access.IsSuccess)
             return Result<Reference>.Fail(access.Error);
 
-        var scriptContext = CreateLazyScriptContext(function, instance, workflow, headers, queryParameters);
+        var scriptContext = CreateLazyScriptContext(instance, workflow, headers, queryParameters);
 
         var resolution = await contractResolver.ResolveAsync(function, slot, scriptContext, cancellationToken);
         if (!resolution.IsSuccess)
@@ -404,7 +406,6 @@ public sealed class FunctionInfoAppService(
     /// transition view rules read.
     /// </summary>
     private LazyScriptContext CreateLazyScriptContext(
-        Function function,
         Instance? instance,
         Definitions.Workflow? workflow,
         Dictionary<string, string?>? headers,
@@ -417,6 +418,7 @@ public sealed class FunctionInfoAppService(
             .WithBody(instance?.LatestData?.Data ?? new JsonData("{}"))
             .WithHeaders(headers)
             .WithQueryParameters(queryParameters)
+            .WithCaller(callerAccessorFactory.ForRequest(headers, ct))
             .BuildAsync(ct));
     }
 

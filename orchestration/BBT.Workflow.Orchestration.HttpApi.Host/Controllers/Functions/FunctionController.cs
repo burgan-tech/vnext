@@ -1,11 +1,17 @@
 using System.Text.Json;
 using BBT.Aether.AspNetCore.Controllers;
+using BBT.Aether.AspNetCore.Results;
+using BBT.Aether.Results;
 using BBT.Aether.Users;
+using BBT.Workflow.Authorization;
 using BBT.Workflow.Definitions.Functions;
 using BBT.Workflow.Functions;
+using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.DTOs;
+using BBT.Workflow.Logging;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
+using Microsoft.AspNetCore.Routing;
 
 namespace BBT.Workflow.Controllers.Instances;
 
@@ -22,8 +28,56 @@ public sealed class FunctionController(
     IFunctionMetricsAppService functionMetricsAppService,
     ICurrentUser currentUser,
     IInstanceFunctionHandlerFactory handlerFactory,
-    IDomainFunctionHandlerFactory domainHandlerFactory) : AetherControllerBase
+    IDomainFunctionHandlerFactory domainHandlerFactory,
+    IAuthorizeAppService authorizeAppService) : AetherControllerBase
 {
+    /// <summary>The workflow-scoped <c>authorize</c> type that asks whether the caller may start an instance.</summary>
+    private const string AuthorizeTypeInstance = "instance";
+
+    /// <summary>
+    /// Workflow-scoped <c>authorize</c>: answers whether the caller may START an instance of the
+    /// workflow, from the workflow's own <c>startTransition.roles</c>. There is no instance to address
+    /// before a start, so a gateway gates <c>POST .../instances/start</c> with this call.
+    /// <c>type=instance</c> ("may this caller start an instance?") is the only supported type today; the
+    /// parameter exists so other workflow-scoped questions can be added. The caller's roles are resolved exactly as on the
+    /// instance-scoped <c>authorize</c>.
+    /// </summary>
+    /// <param name="domain">Domain of the workflow.</param>
+    /// <param name="workflow">Workflow key.</param>
+    /// <param name="type">What is authorized. Supported: <c>instance</c> (start a new instance). Ordinal; required.</param>
+    /// <param name="role">Optional role parameter, composed as on the instance-scoped endpoint.</param>
+    /// <param name="version">Optional workflow version; the same version the start request would use.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <response code="200">The caller may start an instance.</response>
+    /// <response code="400">The <c>type</c> is missing or unsupported (<c>Authorization:110005</c>).</response>
+    /// <response code="403">The caller may not start an instance.</response>
+    /// <response code="404">Workflow or version not found.</response>
+    [HttpGet("{domain}/workflows/{workflow}/functions/authorize")]
+    public async Task<IActionResult> AuthorizeStartAsync(
+        [FromRoute] string domain,
+        [FromRoute] string workflow,
+        [FromQuery] string? type = null,
+        [FromQuery] string? role = null,
+        [FromQuery] string? version = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!string.Equals(type, AuthorizeTypeInstance, StringComparison.Ordinal))
+            return FromResult(Result<AuthorizeOutput>.Fail(WorkflowErrors.AuthorizeUnsupportedType(type)));
+
+        var binding = HttpContext.GetRequestBindingContext();
+        var routeValues = HttpContext.GetRouteData()?.Values
+            .ToDictionary(kv => kv.Key, kv => kv.Value?.ToString());
+        var requestContext = new AuthorizationRequestContext(binding.Headers, binding.QueryParameters, routeValues);
+
+        var result = await authorizeAppService.GetStartAuthorizeResultAsync(
+            domain, workflow, role, version, requestContext, cancellationToken);
+
+        if (!result.IsSuccess || result.Value!.Allowed)
+            return result.ToActionResult(HttpContext);
+
+        return new ObjectResult(result.Value) { StatusCode = 403 };
+    }
+
     /// <summary>
     /// Paged execution metrics for a domain-registered function (vnext-client-sdk-core#60, item D):
     /// its recent runs (newest first) plus a window summary (count / p50 / p95 / failure-rate). A

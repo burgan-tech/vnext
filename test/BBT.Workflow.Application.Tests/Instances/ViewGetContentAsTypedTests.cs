@@ -21,13 +21,29 @@ public class ViewGetContentAsTypedTests
         return view;
     }
 
+    /// <summary>
+    /// <see cref="View.Content"/> is <c>object</c> since #431 (8033a65e), so a deserialized view holds its
+    /// content as a <see cref="JsonElement"/>; a non-JSON type, or JSON content that does not parse, is
+    /// returned as that element. The contract is the wire shape: a JSON string carrying the content.
+    /// </summary>
+    private static void AssertStringContent(object result, string expected)
+    {
+        var text = result switch
+        {
+            string s => s,
+            JsonElement { ValueKind: JsonValueKind.String } el => el.GetString(),
+            _ => throw new ShouldAssertException($"Expected string content but got {result.GetType().Name}.")
+        };
+        text.ShouldBe(expected);
+        JsonSerializer.Serialize(result).ShouldBe(JsonSerializer.Serialize(expected));
+    }
+
     [Fact]
     public void GetContentAsTyped_Html_ReturnsContentAsString()
     {
         var view = CreateView(ViewType.Html, "<p>hello</p>");
         var result = view.GetContentAsTyped();
-        result.ShouldBeOfType<string>();
-        result.ShouldBe("<p>hello</p>");
+        AssertStringContent(result, "<p>hello</p>");
     }
 
     [Fact]
@@ -35,8 +51,7 @@ public class ViewGetContentAsTypedTests
     {
         var view = CreateView(ViewType.Markdown, "# Title");
         var result = view.GetContentAsTyped();
-        result.ShouldBeOfType<string>();
-        result.ShouldBe("# Title");
+        AssertStringContent(result, "# Title");
     }
 
     [Fact]
@@ -55,8 +70,7 @@ public class ViewGetContentAsTypedTests
     {
         var view = CreateView(ViewType.Json, "not valid json");
         var result = view.GetContentAsTyped();
-        result.ShouldBeOfType<string>();
-        result.ShouldBe("not valid json");
+        AssertStringContent(result, "not valid json");
     }
 
     [Fact]
@@ -74,8 +88,7 @@ public class ViewGetContentAsTypedTests
     {
         var view = CreateView(ViewType.DeepLink, "not json");
         var result = view.GetContentAsTyped();
-        result.ShouldBeOfType<string>();
-        result.ShouldBe("not json");
+        AssertStringContent(result, "not json");
     }
 
     [Fact]

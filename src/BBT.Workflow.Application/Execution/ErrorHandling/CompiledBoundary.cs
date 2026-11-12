@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using BBT.Workflow.Definitions;
 
 namespace BBT.Workflow.Execution.ErrorHandling;
@@ -64,6 +65,40 @@ public sealed class CompiledBoundary
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// One memo per <see cref="ErrorBoundaryLevel"/>, keyed by the <see cref="ErrorBoundary"/> definition
+    /// object. Error boundaries are immutable records owned by cached workflow/task/state definitions and
+    /// replaced whole on publish, so reference identity is a safe key: a republished definition is a new
+    /// object (fresh compile), and an evicted one takes its entry with it (weak key). A
+    /// <see cref="CompiledBoundary"/> is itself immutable, so sharing it across executions is safe.
+    /// </summary>
+    private static readonly ConditionalWeakTable<ErrorBoundary, CompiledBoundary>[] CompiledByLevel =
+        Enum.GetValues<ErrorBoundaryLevel>()
+            .Select(_ => new ConditionalWeakTable<ErrorBoundary, CompiledBoundary>())
+            .ToArray();
+
+    /// <summary>
+    /// <see cref="Compile"/> memoized per (definition object, level) — the per-task hot path calls this
+    /// on every execution, and the rule sort it would otherwise repeat is pure in its inputs.
+    /// </summary>
+    public static CompiledBoundary? CompileCached(ErrorBoundary? boundary, ErrorBoundaryLevel level)
+    {
+        if (boundary == null || boundary.OnError.Count == 0)
+            return null;
+
+        var index = (int)level;
+        if ((uint)index >= (uint)CompiledByLevel.Length)
+            return Compile(boundary, level);
+
+        var table = CompiledByLevel[index];
+        if (table.TryGetValue(boundary, out var cached))
+            return cached;
+
+        // Losing a first-use race only costs a duplicate compile; GetValue keeps one winner.
+        var compiled = Compile(boundary, level)!;
+        return table.GetValue(boundary, _ => compiled);
     }
 
     /// <summary>

@@ -1,4 +1,12 @@
 {
+  "0.0.104": {
+    "authorize-queryroles-leaf-missing-fallback": "48590f6e4305c92eb66f3f53bb20e791c1d7a995da1496b680471a94e2424363",
+    "fanout-ignored-item-keeps-error": "b570a8dc663f5e8fb66c1b630255a22ecc36ca5b0803b55b26bfaed463078c66",
+    "human-task-due-by-priority": "281f0b2a6d34335e0346e8327e311ea45013d3e5d76b52d6c09cd0d6cda55ffb",
+    "instance-modified-at-stamp": "35e363699f7a96b6e7785479e014f58fb543d82d8b7d1af33a5fa5a29a1b009c",
+    "sync-response-state": "9dc4d77478fde2d628b70d4861acdcdd78f096fd5529753af151c9f036b8577d",
+    "transition-hop-db-round-trips": "62aa11bbc747783b4baf9c5c8693c9f0f150d1967c285be52748c1d272f80fe1"
+  },
   "0.0.103": {
     "inline-handoff-settle-and-longpoll-observability": "9727db0498e0a9894c771c29535f8229f25579453c7b8ba6095b2f839c43ea9d",
     "python-runtime-container": "bee26cd265056ee3cdd5e065bd0168c53a150b9545ec28a12130a42a52e41e28"

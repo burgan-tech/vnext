@@ -1,5 +1,7 @@
+using BBT.Workflow.Scripting.Caller;
+using BBT.Workflow.ExceptionHandling;
+using BBT.Workflow.Authorization;
 using System.Text.Json;
-using BBT.Aether.Guids;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
@@ -19,9 +21,9 @@ public sealed class SubflowOutputMappingService(
     IScriptEngine scriptEngine,
     IScriptContextFactory scriptContextFactory,
     IRuntimeInfoProvider runtimeInfoProvider,
-    IGuidGenerator guidGenerator,
     ILogger<SubflowOutputMappingService> logger,
-    ICarriedHeaderPolicy? carriedHeaderPolicy = null)
+    ICarriedHeaderPolicy? carriedHeaderPolicy = null,
+    ICallerAccessorFactory? callerAccessorFactory = null)
     : ISubflowOutputMappingService
 {
     /// <inheritdoc />
@@ -89,6 +91,55 @@ public sealed class SubflowOutputMappingService(
         }
     }
 
+    // Caller roles (context.Caller) in SubFlow output mappings — council 2026-11-12-script-caller-roles-background
+    // (Chair override; the council itself proposed leaving this surface unavailable). The identity is the CHILD
+    // SETTLER's: the headers of the request that completed the child, carried on the untrusted instance.sub.*
+    // event and re-filtered by ICarriedHeaderPolicy — not the parent's starter. A child settled by a timer carries
+    // no headers and the accessor is unavailable. Mitigations: roles are resolved before the terminal lock
+    // (WarmCallerRolesAsync) and a provider failure is TRANSIENT (redelivered), never a permanent parent fault.
+
+    /// <inheritdoc />
+    public async Task WarmCallerRolesAsync(
+        Guid parentInstanceId,
+        SubflowOutputMappingPlan plan,
+        IReadOnlyDictionary<string, string?>? carriedHeaders,
+        CancellationToken cancellationToken = default)
+    {
+        if (plan.ParentState?.SubFlow?.Mapping is not { } mapping || plan.MappingInstance is null)
+            return;
+
+        // Cheap, conservative trigger: only a mapping whose source names Caller pays the provider call here. A
+        // mapping that reaches the accessor only through a helper still works — it resolves inside the lock.
+        if (!mapping.DecodedCode.Contains("Caller", StringComparison.Ordinal))
+            return;
+
+        var caller = CreateCaller(carriedHeaders, cancellationToken);
+        if (!caller.IsAvailable)
+            return;
+
+        try
+        {
+            await caller.RolesAsync();
+        }
+        catch (CallerRolesUnavailableException)
+        {
+            throw new CallerRolesUnavailableTransientException(parentInstanceId);
+        }
+    }
+
+    private ICallerAccessor CreateCaller(
+        IReadOnlyDictionary<string, string?>? carriedHeaders,
+        CancellationToken cancellationToken)
+    {
+        if (callerAccessorFactory is null || carriedHeaderPolicy is not { ExposeToOutputMapping: true })
+            return NullCallerAccessor.Instance;
+
+        var applied = carriedHeaderPolicy.Apply(carriedHeaders);
+        return applied is { Count: > 0 }
+            ? callerAccessorFactory.ForRequest(applied, cancellationToken)
+            : NullCallerAccessor.Instance;
+    }
+
     /// <inheritdoc />
     public async Task<Result> ApplyPreparedAsync(
         Instance parentInstance,
@@ -100,6 +151,8 @@ public sealed class SubflowOutputMappingService(
     {
         if (plan.ParentState is null || plan.MappingInstance is null)
             return Result.Ok();
+
+        var caller = CreateCaller(carriedHeaders, cancellationToken);
 
         try
         {
@@ -116,6 +169,9 @@ public sealed class SubflowOutputMappingService(
             if (carriedHeaderPolicy is { ExposeToOutputMapping: true })
                 builder = builder.WithHeaders(carriedHeaderPolicy.Apply(carriedHeaders));
 
+            if (caller.IsAvailable)
+                builder = builder.WithCaller(caller);
+
             var scriptContext = await builder.BuildAsync(cancellationToken);
 
             using var scriptActivity = ScriptActivityHelper.StartExecuteActivity("subflowOutputMapping");
@@ -126,6 +182,11 @@ public sealed class SubflowOutputMappingService(
             {
                 outputMappingResult = await subFlowMapping.OutputHandler(scriptContext);
             }
+
+            // Roles were read while the provider could not answer: nothing the mapping produced is persisted,
+            // and the completion is redelivered instead of faulting the parent.
+            if (caller.ResolutionFailed)
+                throw new CallerRolesUnavailableTransientException(parentInstance.Id);
 
             var hasData = outputMappingResult?.Data != null;
             if (hasData)
@@ -155,6 +216,14 @@ public sealed class SubflowOutputMappingService(
             // DaprClient call inside the mapping timing out) is a downstream fault, not this case;
             // it falls through to the permanent failed-Result path below.
             throw;
+        }
+        catch (CallerRolesUnavailableTransientException)
+        {
+            throw;
+        }
+        catch (Exception) when (caller.ResolutionFailed)
+        {
+            throw new CallerRolesUnavailableTransientException(parentInstance.Id);
         }
         catch (Exception ex)
         {

@@ -46,7 +46,7 @@ public static class WorkflowDomainModuleServiceCollectionExtensions
         services.AddSingleton<WorkflowValidator>();
         services.AddSingleton<IResultRuleEngine<State>, ResultRuleEngine<State>>();
         services.AddSingleton<IJsonSchemaValidator, CachedJsonSchemaValidator>();
-        services.AddScoped<IJsonCanonicalizer, JsonCanonicalizer>();
+        services.AddSingleton<IJsonCanonicalizer, JsonCanonicalizer>();
         return services;
     }
 }

@@ -392,6 +392,75 @@ public class StateFunctionCacheTests
         afterAccept.ShouldNotBe(beforeAccept);
     }
 
+    /// <summary>
+    /// Byte-identity pin: the key and both ETag variants for fixed inputs. A cache key or ETag that
+    /// moves for an unchanged instance and caller would make every parked poller refetch (key) or,
+    /// worse, never match again (ETag) — an observable contract change. Literals captured from the
+    /// implementation before the caller-scope hash was memoised and the material join stopped boxing.
+    /// </summary>
+    [Fact]
+    public void BuildKey_and_ComputeEtag_are_byte_identical_for_fixed_inputs()
+    {
+        _currentUser.Id.Returns("user-1");
+        _currentUser.ActorUserName.Returns("actor-1");
+        _currentUser.UserName.Returns("subject-1");
+        var sut = CreateSut();
+        var input = CreateInput(
+            role: "maker",
+            roles: ["maker", "checker"],
+            extensions: ["ext-b", "ext-a"],
+            version: "1.2.0",
+            headers: new Dictionary<string, string?> { ["Accept-Language"] = "tr-TR" });
+        var fingerprint = CreateFingerprint(
+            correlationCount: 3,
+            completedCorrelationCount: 2,
+            lastCorrelationCompletedAt: new DateTime(2026, 1, 2, 3, 4, 5, 678, DateTimeKind.Utc),
+            lastSubFlowStateChangedAt: new DateTime(2026, 2, 3, 4, 5, 6, 789, DateTimeKind.Utc),
+            hasActiveIncident: true);
+
+        var key = sut.BuildKey(input);
+        var etag = sut.ComputeEtag(input, fingerprint);
+        var subFlowEtag = sut.ComputeEtag(input, fingerprint with { HasActiveSubFlow = true },
+            new GetInstanceStateOutput { State = "sub-review", Status = InstanceStatus.Busy });
+
+        key.ShouldBe("state-fn:v14:test-domain:test-flow:instance-1:b543189985b3b2e3");
+        etag.ShouldBe("997b1c41830040997941d0dc3a5ec7ec");
+        subFlowEtag.ShouldBe("94c90a92c0c75107aab59fdd55d80fb9");
+
+        // Same answers on repeated calls with the same request (the per-request memo) ...
+        sut.BuildKey(input).ShouldBe(key);
+        sut.ComputeEtag(input, fingerprint).ShouldBe(etag);
+
+        // ... and with a fresh, equal request object (no reliance on reference identity for the value).
+        var equalInput = CreateInput(
+            role: "maker",
+            roles: ["checker", "maker"],
+            extensions: ["ext-a", "ext-b"],
+            version: "1.2.0",
+            headers: new Dictionary<string, string?> { ["Accept-Language"] = "tr-TR" });
+        CreateSut().BuildKey(equalInput).ShouldBe(key);
+    }
+
+    [Fact]
+    public void Caller_scope_is_recomputed_when_the_caller_identity_changes_on_the_same_request_object()
+    {
+        var sut = CreateSut();
+        var input = CreateInput();
+        var fingerprint = CreateFingerprint();
+
+        _currentUser.ActorUserName.Returns("alice");
+        var aliceKey = sut.BuildKey(input);
+        var aliceEtag = sut.ComputeEtag(input, fingerprint);
+
+        _currentUser.ActorUserName.Returns("bob");
+        sut.BuildKey(input).ShouldNotBe(aliceKey);
+        sut.ComputeEtag(input, fingerprint).ShouldNotBe(aliceEtag);
+
+        input.Role = "checker";
+        _currentUser.ActorUserName.Returns("alice");
+        sut.BuildKey(input).ShouldNotBe(aliceKey);
+    }
+
     private static InstanceStateFingerprint CreateFingerprint(
         int correlationCount = 0,
         int completedCorrelationCount = 0,

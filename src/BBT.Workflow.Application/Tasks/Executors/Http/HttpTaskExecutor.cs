@@ -1,6 +1,7 @@
 using System.Text;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Invocation;
@@ -78,8 +79,8 @@ public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        // Create envelope for remote execution
-        var envelopeResult = TaskBindingMapper.CreateEnvelope(task);
+        // Map the task to its binding object; it is serialized only if the call leaves the process.
+        var envelopeResult = TaskBindingMapper.CreateBinding(task);
         if (!envelopeResult.IsSuccess)
         {
             Logger.TaskEnvelopeCreationFailed(
@@ -96,10 +97,13 @@ public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
         var traceContext = _remoteInvoker.CreateTraceContext(context.ScriptContext);
 
         // The caller's credential travels with the task's own headers, in-process and to the Execution host alike.
-        var envelope = WithCallerCredential(envelopeResult.Value!, context.ScriptContext);
+        // Applied to the mapped binding object: the dispatcher serializes it only when the call leaves the
+        // process (Remote), so the default Local path pays no JSON round trip.
+        var binding = TaskBindingCredentials.WithCallerCredential(
+            (HttpTaskBinding)envelopeResult.Value.Binding, CallerHeadersOf(context.ScriptContext));
 
         var result = await _dispatcher.DispatchAsync(
-            task, Execution.TaskTypes.Http, envelope, traceContext, cancellationToken);
+            task, Execution.TaskTypes.Http, binding, traceContext, cancellationToken);
 
         if (!result.IsSuccess)
         {

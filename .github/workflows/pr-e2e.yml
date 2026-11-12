@@ -1,0 +1,198 @@
+name: PR E2E
+
+# Runs vnext-example's integration tests (tests/Core.IntegrationTests) against the runtime BUILT
+# FROM THE PR HEAD, never an image (docs/testing/integration-testing.md). Who runs and which suites:
+# scripts/ci/lib/e2e.mjs selectRun — AI PRs always, other PRs with label `e2e` (suites from an
+# `E2E suites: A, B` line) or `e2e:full`, the full set nightly. No secret is used here, so fork PRs are
+# safe; pr-e2e-report.yml writes the result to the PR from a separate workflow_run.
+# Policy: docs/governance/ai-engineering-pipeline.md §10.2.
+
+on:
+  pull_request:
+    branches: [master, 'release-*', 'sprint-*']
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  schedule:
+    - cron: '17 1 * * *'
+  workflow_dispatch:
+    inputs:
+      suites:
+        description: 'Suites, comma-separated (empty = full set)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.s.outputs.run }}
+      suites: ${{ steps.s.outputs.suites }}
+      why: ${{ steps.s.outputs.why }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - id: s
+        env:
+          E2E_INPUT_SUITES: ${{ inputs.suites }}
+        run: |
+          node scripts/ci/e2e.mjs select | tee -a "$GITHUB_OUTPUT"
+
+  e2e:
+    needs: select
+    if: needs.select.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    concurrency:
+      group: pr-e2e-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    env:
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+      SUITES: ${{ needs.select.outputs.suites }}
+      WHY: ${{ needs.select.outputs.why }}
+      PR: ${{ github.event.pull_request.number || '' }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+      SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      OUT: ${{ github.workspace }}/e2e-out
+      # Linux: the Dapr sidecar containers reach the hosts through host-gateway, not loopback.
+      VNEXT_HOST_BIND: 0.0.0.0
+      VNEXT_HEALTH_TIMEOUT: '300'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The PR head, not the merge ref: the evidence names a commit of the PR (PR-E2E-RUN).
+          ref: ${{ env.SHA }}
+          path: vnext
+          persist-credentials: false
+
+      - name: Pick the vnext-example branch
+        id: example
+        # A companion PR in vnext-example uses the same branch name (§10.3); otherwise master.
+        run: |
+          ref=master
+          if [[ "$HEAD_REF" =~ ^[A-Za-z0-9._/-]+$ ]] && git ls-remote --exit-code --heads https://github.com/burgan-tech/vnext-example.git "refs/heads/$HEAD_REF" >/dev/null 2>&1; then
+            ref="$HEAD_REF"
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "vnext-example: $ref"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: burgan-tech/vnext-example
+          ref: ${{ steps.example.outputs.ref }}
+          path: vnext-example
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.2xx
+            10.0.x
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Prepare the runner
+        run: |
+          mkdir -p "$OUT"
+          echo "{\"stage\":\"prepare\"}" > "$OUT/stage.json"
+          sudo sysctl -w fs.inotify.max_user_instances=8192
+          sudo sysctl -w fs.inotify.max_user_watches=524288
+          cd vnext && ./scripts/setup-netstandard-ref.sh
+          node scripts/ci/e2e.mjs filter ../vnext-example/tests/Core.IntegrationTests/Tests "$SUITES" > "$OUT/filter.txt" 2> "$OUT/note.txt"
+          echo "filter: $(cat "$OUT/filter.txt")"
+          if [ -s "$OUT/note.txt" ]; then echo "::warning::$(cat "$OUT/note.txt")"; echo "WHY=$WHY; $(cat "$OUT/note.txt")" >> "$GITHUB_ENV"; echo "SUITES=" >> "$GITHUB_ENV"; fi
+
+      - name: Bring up core (infra, sidecars, migrator, hosts built from the PR)
+        run: |
+          echo "{\"stage\":\"runtime\"}" > "$OUT/stage.json"
+          cd vnext/etc/docker && ./run-docker.sh up core < /dev/null
+
+      - name: Publish the system package
+        # SDK publishes the domain components (core/**) itself, never the system package.
+        run: |
+          echo "{\"stage\":\"system-package\"}" > "$OUT/stage.json"
+          for i in $(seq 1 60); do curl -fs -o /dev/null http://localhost:3005/health && break; sleep 5; done
+          status_url=$(curl -fsS -X POST http://localhost:3005/api/package/runtime/publish \
+            -H 'content-type: application/json' -d '{"appDomain":"core"}' | jq -r .statusUrl)
+          case "$status_url" in /api/package/publish/status/*) ;; *) echo "::error::no statusUrl"; exit 1 ;; esac
+          for i in $(seq 1 120); do
+            s=$(curl -fsS "http://localhost:3005$status_url" | jq -r .status)
+            echo "publish: $s"
+            case "$s" in completed) exit 0 ;; failed|cancelled) docker logs init | tail -50; exit 1 ;; esac
+            sleep 5
+          done
+          echo "::error::system package publish did not finish in 10 min"; exit 1
+
+      - name: Start and warm up MockLab
+        run: |
+          echo "{\"stage\":\"mocklab\"}" > "$OUT/stage.json"
+          cd vnext-example && docker compose up -d --quiet-pull
+          for i in $(seq 1 60); do [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3001/)" != 000 ] && break; sleep 2; done
+          sleep 10
+
+      - name: Run the integration tests
+        id: tests
+        run: |
+          echo "{\"stage\":\"tests\"}" > "$OUT/stage.json"
+          filter=$(cat "$OUT/filter.txt")
+          args=(-c Release --logger "trx;LogFileName=e2e.trx" --results-directory "$OUT/trx" --blame-hang --blame-hang-timeout 6m)
+          [ -n "$filter" ] && args+=(--filter "$filter")
+          cd vnext-example && dotnet test tests/Core.IntegrationTests "${args[@]}" || echo "tests exited $?"
+          test -f "$OUT/trx/e2e.trx" || { echo "::error::no TRX — the test run crashed or hung"; exit 1; }
+
+      - name: Render the evidence
+        id: evidence
+        run: |
+          echo "{\"stage\":\"evidence\"}" > "$OUT/stage.json"
+          reds=$(node vnext/scripts/ci/e2e.mjs reds "$RUN_URL" "$OUT/trx/e2e.trx")
+          set -- --trx "$OUT/trx/e2e.trx" --runtime-sha "$SHA" --base-url http://localhost:4201
+          [ -n "$reds" ] && set -- "$@" --reds "$reds"
+          node vnext/scripts/governance/e2e-evidence.mjs "$@" > "$OUT/evidence.md"
+          cat "$OUT/evidence.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "{\"stage\":\"done\"}" > "$OUT/stage.json"
+          [ -z "$reds" ] || { echo "::error::$reds"; exit 1; }
+
+      - name: Record the outcome
+        if: always()
+        run: |
+          mkdir -p "$OUT"
+          node -e '
+            const fs = require("fs"); const o = process.env.OUT;
+            const stage = (() => { try { return JSON.parse(fs.readFileSync(o + "/stage.json", "utf8")).stage; } catch { return "prepare"; } })();
+            fs.writeFileSync(o + "/meta.json", JSON.stringify({ pr: process.env.PR ? Number(process.env.PR) : null,
+              sha: process.env.SHA, headRef: process.env.HEAD_REF, runUrl: process.env.RUN_URL,
+              suites: process.env.SUITES, why: process.env.WHY, stage, evidence: fs.existsSync(o + "/evidence.md") }));'
+          cat "$OUT/meta.json"
+          mkdir -p "$OUT/logs"
+          cp -R vnext/.vnext-local/domains/core/logs/. "$OUT/logs/" 2>/dev/null || true
+          docker logs init > "$OUT/logs/init.log" 2>&1 || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr-e2e
+          path: |
+            e2e-out/meta.json
+            e2e-out/evidence.md
+            e2e-out/trx/*.trx
+          if-no-files-found: warn
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr-e2e-logs
+          path: e2e-out/logs/
+          if-no-files-found: ignore
+          retention-days: 7

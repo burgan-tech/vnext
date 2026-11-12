@@ -341,6 +341,36 @@ public static partial class WorkflowLogs
         string? errorCode);
 
     /// <summary>
+    /// Logs when an updateData execution found the instance parked Busy with no live owner but lost
+    /// the continuation claim to a concurrent updateData that satisfied the same auto gate. The
+    /// winner is already running the chain from the same state; running it a second time would
+    /// repeat every side effect of that chain.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10182,
+        Level = LogLevel.Information,
+        Message = "UpdateData {TransitionKey} on instance {InstanceId} lost the continuation claim for {NextTransitionKey} in state {StateKey}; a concurrent continuation owns it")]
+    public static partial void UpdateDataContinuationClaimLost(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        string nextTransitionKey,
+        string? stateKey);
+
+    /// <summary>
+    /// Logs when clearing an updateData continuation claim failed. Harmless for correctness: the
+    /// claim expires after its TTL; until then a later continuation from the same state drops.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10183,
+        Level = LogLevel.Warning,
+        Message = "Failed to release the continuation claim on instance {InstanceId}; it expires after its TTL")]
+    public static partial void UpdateDataContinuationClaimReleaseFailed(
+        this ILogger logger,
+        Exception exception,
+        Guid instanceId);
+
+    /// <summary>
     /// Logs when the InstanceData write funnel could not acquire the per-instance FOR UPDATE
     /// row lock within lock_timeout — a concurrent writer held it for the whole wait budget.
     /// </summary>
@@ -1025,6 +1055,238 @@ public static partial class WorkflowLogs
         Message = "Scheduled transition {TransitionKey} took over the parked Busy of instance {InstanceId} in interaction wait {StateKey}")]
     public static partial void ScheduledTransitionTookOverInteractionWait(
         this ILogger logger, Guid instanceId, string stateKey, string transitionKey);
+
+    // ---- Task execution / per-hop step hot-path logs (10240–10262, one contiguous block) ----
+
+    /// <summary>
+    /// Per-task start of the error-aware execution loop (TaskExecutionEngine). Was Information; demoted to Debug — it fires on every task.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10240,
+        Level = LogLevel.Debug,
+        Message = "Executing task {TaskKey} with error-aware retry.")]
+    public static partial void TaskExecutionStarting(
+        this ILogger logger, string taskKey);
+
+    /// <summary>
+    /// Per-task success of the error-aware execution loop. Was Information; demoted to Debug — it fires on every task.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10241,
+        Level = LogLevel.Debug,
+        Message = "Task {TaskKey} completed successfully. Total duration: {Duration}ms")]
+    public static partial void TaskExecutionSucceeded(
+        this ILogger logger, string taskKey, long duration);
+
+    /// <summary>
+    /// Business failure with no ErrorBoundary; the flow continues through auto-transitions.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10242,
+        Level = LogLevel.Debug,
+        Message = "Task {TaskKey} failed with business error but no ErrorBoundary defined. Flow will continue with auto-transitions.")]
+    public static partial void TaskBusinessFailureWithoutBoundary(
+        this ILogger logger, string taskKey);
+
+    /// <summary>
+    /// No task-journal persistence strategy exists for the execution origin.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10243,
+        Level = LogLevel.Debug,
+        Message = "No persistence strategy found for origin {TaskExecutionOrigin}, skipping persistence")]
+    public static partial void TaskPersistenceStrategyNotFound(
+        this ILogger logger, string taskExecutionOrigin);
+
+    /// <summary>
+    /// One execution attempt of a task (TaskExecutionEngine.ExecuteCoreAsync).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10244,
+        Level = LogLevel.Debug,
+        Message = "Executing task {TaskKey} of type {TaskType} for instance {InstanceId} (retry attempt)")]
+    public static partial void TaskExecutionAttemptStarting(
+        this ILogger logger, string taskKey, string taskType, Guid? instanceId);
+
+    /// <summary>
+    /// A task executor starts its template-method lifecycle (TaskExecutorBase).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10245,
+        Level = LogLevel.Debug,
+        Message = "Executing task {TaskKey} with executor {Executor}")]
+    public static partial void TaskExecutorStarting(
+        this ILogger logger, string taskKey, string executor);
+
+    /// <summary>
+    /// SetBusyStep skipped: the instance is already Busy.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10246,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} is already Busy, skipping SetBusyStep")]
+    public static partial void SetBusySkippedAlreadyBusy(
+        this ILogger logger, Guid instanceId);
+
+    /// <summary>
+    /// SetBusyStep skipped: the instance is already completed.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10247,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} is already completed, skipping SetBusyStep")]
+    public static partial void SetBusySkippedCompleted(
+        this ILogger logger, Guid instanceId);
+
+    /// <summary>
+    /// SetBusyStep aligned the in-memory aggregate to the Busy row admission already wrote.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10248,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} aggregate aligned to admission's Busy for transition {TransitionKey}")]
+    public static partial void SetBusyAlignedToAdmission(
+        this ILogger logger, Guid instanceId, string transitionKey);
+
+    /// <summary>
+    /// SetBusyStep's CAS flipped the row to Busy.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10249,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} set to Busy for transition {TransitionKey}")]
+    public static partial void SetBusyFlipped(
+        this ILogger logger, Guid instanceId, string transitionKey);
+
+    /// <summary>
+    /// SetBusyStep's CAS found the row no longer Active.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10250,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} was no longer Active at SetBusy for transition {TransitionKey}; continuing without the flip")]
+    public static partial void SetBusyFlipLost(
+        this ILogger logger, Guid instanceId, string transitionKey);
+
+    /// <summary>
+    /// ResolveAvailableStep deferred the Active status to after post-commit.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10251,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} deferred Available status after transition to state {TargetState}")]
+    public static partial void ResolveAvailableDeferred(
+        this ILogger logger, Guid instanceId, string targetState);
+
+    /// <summary>
+    /// ResolveAvailableStep skipped: this execution does not own the status.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10252,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} status not owned by this execution, skipping ResolveAvailableStep")]
+    public static partial void ResolveAvailableSkippedNotOwner(
+        this ILogger logger, Guid instanceId);
+
+    /// <summary>
+    /// ResolveAvailableStep skipped: not Busy or already completed.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10253,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} is not Busy or already completed, skipping ResolveAvailableStep")]
+    public static partial void ResolveAvailableSkippedNotBusy(
+        this ILogger logger, Guid instanceId);
+
+    /// <summary>
+    /// ResolveAvailableStep keeps Busy: an automatic transition continues the chain.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10254,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} has NextTransition ({NextTransition}), staying Busy")]
+    public static partial void ResolveAvailableStayBusyNextTransition(
+        this ILogger logger, Guid instanceId, string nextTransition);
+
+    /// <summary>
+    /// ResolveAvailableStep keeps Busy: terminal reached.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10255,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} reached terminal state {TargetState}, staying Busy")]
+    public static partial void ResolveAvailableStayBusyTerminal(
+        this ILogger logger, Guid instanceId, string targetState);
+
+    /// <summary>
+    /// ResolveAvailableStep found no target state (defensive).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10256,
+        Level = LogLevel.Warning,
+        Message = "Instance {InstanceId} has null target state, skipping ResolveAvailableStep")]
+    public static partial void ResolveAvailableNullTarget(
+        this ILogger logger, Guid instanceId);
+
+    /// <summary>
+    /// ResolveAvailableStep keeps Busy: the target state has the Busy subtype.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10257,
+        Level = LogLevel.Warning,
+        Message = "Instance {InstanceId} has Busy subtype in state {TargetState}, skipping ResolveAvailableStep")]
+    public static partial void ResolveAvailableBusySubtype(
+        this ILogger logger, Guid instanceId, string targetState);
+
+    /// <summary>
+    /// ResolveAvailableStep leaves a Finish state to HandleFinishStep.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10258,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} is in Finish state, status will be Completed")]
+    public static partial void ResolveAvailableFinishState(
+        this ILogger logger, Guid instanceId);
+
+    /// <summary>
+    /// ResolveAvailableStep keeps Busy: the target state has automatic transitions.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10259,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} target state {TargetState} has auto transitions, staying Busy")]
+    public static partial void ResolveAvailableStayBusyAutoTransitions(
+        this ILogger logger, Guid instanceId, string targetState);
+
+    /// <summary>
+    /// ResolveAvailableStep: all conditions for Available are met.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10260,
+        Level = LogLevel.Debug,
+        Message = "Instance {InstanceId} meets all conditions for Available status in state {TargetState}")]
+    public static partial void ResolveAvailableConditionsMet(
+        this ILogger logger, Guid instanceId, string targetState);
+
+    /// <summary>
+    /// Logs when a rule on a transition schema entry could not be evaluated. The entry is skipped.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10261,
+        Level = LogLevel.Warning,
+        Message = "Transition {TransitionKey} schema rule evaluation failed for entry {SchemaKey}: {ErrorMessage}. Skipping entry.")]
+    public static partial void TransitionSchemaRuleEvaluationFailed(
+        this ILogger logger, string transitionKey, string schemaKey, string errorMessage);
+
+    /// <summary>
+    /// Logs when a transition declares rule-based schemas and no entry matched.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10262,
+        Level = LogLevel.Warning,
+        Message = "Transition {TransitionKey} has no schema entry matching the instance")]
+    public static partial void TransitionSchemaNotMatched(
+        this ILogger logger, string transitionKey);
 
     /// <summary>
     /// Logs when task instance resolution fails (for DirectTrigger, GetInstanceData).
@@ -3491,6 +3753,28 @@ public static partial class WorkflowLogs
         bool allowed);
 
     /// <summary>
+    /// Logs when <c>authorize?queryRoles=true</c> descended to an active SubFlow whose child instance
+    /// could not be loaded yet, and the deepest existing instance decided instead (vnext#1181).
+    /// </summary>
+    /// <remarks>
+    /// The window opens when the parent commits its SubFlow correlation and closes when the child's row
+    /// is created by the post-commit start job. Without this line a refusal inside that window logged the
+    /// same <c>Allowed: False</c> as a genuine grant refusal and the two could not be told apart.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 50046,
+        Level = LogLevel.Information,
+        Message = "Authorize leaf missing, decided at deepest existing instance. Domain: {Domain}, Workflow: {Workflow}, Instance: {InstanceId}, MissingSubFlow: {SubFlow}, MissingSubInstance: {SubInstanceId}, Allowed: {Allowed}")]
+    public static partial void AuthorizeLeafMissingFallback(
+        this ILogger logger,
+        string domain,
+        string workflow,
+        string instanceId,
+        string subFlow,
+        string subInstanceId,
+        bool allowed);
+
+    /// <summary>
     /// Logs when authorization matrix system function is invoked.
     /// </summary>
     [LoggerMessage(
@@ -4479,6 +4763,18 @@ public static partial class WorkflowLogs
         int roleCount);
 
     /// <summary>
+    /// Logs when a rule-based schema or view selection read the caller's roles and the provider could not
+    /// answer; the selection fails with <c>Authorization:110006</c>. Role values are never logged.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20519,
+        Level = LogLevel.Warning,
+        Message = "Caller roles could not be resolved for a rule-based selection; the selection fails. FailureKind={FailureKind}")]
+    public static partial void CallerRolesUnavailableForSelection(
+        this ILogger logger,
+        string? failureKind);
+
+    /// <summary>
     /// Logs when the long-poll ownership gate could not establish the caller's roles and therefore
     /// declined to arm the pause. The transition continues normally; nothing faults. Only a provider
     /// that fails reaches it — morph-idm's failures arrive as an empty set and are logged as 20442/20463.
@@ -5264,6 +5560,18 @@ public static partial class WorkflowLogs
         this ILogger logger,
         string functionKey,
         string schemaKey);
+
+    /// <summary>
+    /// Logs when a function declares a rule-based input schema and no entry matched the request, so the
+    /// request is rejected.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 80009,
+        Level = LogLevel.Warning,
+        Message = "Function {FunctionKey} input schema has no entry matching the request; request rejected")]
+    public static partial void FunctionInputSchemaNotMatched(
+        this ILogger logger,
+        string functionKey);
 
     /// <summary>
     /// Logs when a rule on a function contract entry could not be evaluated. The entry is skipped and

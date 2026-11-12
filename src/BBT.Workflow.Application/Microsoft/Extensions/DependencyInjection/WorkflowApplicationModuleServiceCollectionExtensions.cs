@@ -142,7 +142,9 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddScoped<IRelatedInstanceQueryAppService, RelatedInstanceQueryAppService>();
         services.AddScoped<IViewContentResolutionService, ViewContentResolutionService>();
         services.AddScoped<IInstanceRetryAppService, InstanceRetryAppService>();
+        services.AddScoped<BBT.Workflow.Contracts.IContractEntrySelector, BBT.Workflow.Contracts.ContractEntrySelector>();
         services.AddScoped<IFunctionContractResolver, FunctionContractResolver>();
+        services.AddScoped<BBT.Workflow.Execution.Validation.ITransitionSchemaResolver, BBT.Workflow.Execution.Validation.TransitionSchemaResolver>();
         services.AddScoped<IFunctionAccessPolicy, FunctionAccessPolicy>();
         services.AddScoped<IFunctionRequestValidationService, FunctionRequestValidationService>();
         services.AddScoped<IFunctionAppService, FunctionAppService>();
@@ -174,8 +176,9 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         // Fallback, so a host wiring only this module still resolves it. Infrastructure registers the
         // configured provider afterwards and, being an explicit Add, wins over this.
         services.TryAddScoped<ICallerRoleResolver, DefaultCallerRoleResolver>();
+        services.AddScoped<ICallerAccessorFactory, CallerAccessorFactory>();
         services.AddScoped<IAuthorizeAppService, AuthorizeAppService>();
-        services.AddScoped<IRepresentationEtagService, RepresentationEtagService>();
+        services.AddSingleton<IRepresentationEtagService, RepresentationEtagService>();
         services.AddScoped<ISchemaFieldFilterService, SchemaFieldFilterService>();
         services.AddScoped<BBT.Workflow.Instances.IInstanceDataReadService, BBT.Workflow.Instances.InstanceDataReadService>();
         services.AddScoped<BBT.Workflow.Instances.IComputedFieldReadService, BBT.Workflow.Instances.ComputedFieldReadService>();

@@ -5,6 +5,7 @@ using System.Globalization;
 using BBT.Aether.Application.Services;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
+using BBT.Workflow.Authorization;
 using BBT.Aether.Users;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
@@ -40,7 +41,8 @@ public sealed class FunctionAppService(
     IFunctionAccessPolicy functionAccessPolicy,
     IFunctionRequestValidationService functionRequestValidationService,
     IFunctionExecutionJournal functionExecutionJournal,
-    ICurrentUser currentUser)
+    ICurrentUser currentUser,
+    ICallerAccessorFactory callerAccessorFactory)
     : ApplicationService(serviceProvider), IFunctionAppService
 {
     /// <inheritdoc />
@@ -255,6 +257,9 @@ public sealed class FunctionAppService(
         // Built once and shared by input-schema rule evaluation, the cache key expression and the tasks.
         // Lazy because a function whose input schema declares no rules must not pay for a context it
         // would only need after validation anyway.
+        // The caller's roles are exposed to input-schema selection rules only (closed below, before the
+        // cache key expression and the tasks, whose response cache does not vary by role).
+        var caller = callerAccessorFactory.ForRequest(headers, cancellationToken);
         var lazyScriptContext = new LazyScriptContext(ct => scriptContextFactory.NewBuilder(instanceRepository)
             .WithWorkflow(workflow)
             .WithInstance(instance)
@@ -263,6 +268,7 @@ public sealed class FunctionAppService(
             .WithHeaders(headers)
             .WithQueryParameters(queryParameters)
             .WithMetadata(metadata)
+            .WithCaller(caller)
             .BuildAsync(ct));
 
         Result inputValidation;
@@ -273,6 +279,8 @@ public sealed class FunctionAppService(
         }
         if (!inputValidation.IsSuccess)
             return Result<FunctionResponseOutput>.Fail(inputValidation.Error);
+
+        caller.Close();
 
         var scriptContextResult = await lazyScriptContext.GetAsync(cancellationToken);
         if (!scriptContextResult.IsSuccess)

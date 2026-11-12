@@ -14,8 +14,10 @@ public static class FilterFormatDetector
     /// </summary>
     private static readonly Regex LegacyFilterPattern = new(
         @"^(attributes=|key=|status=|flow=|currentstate=|state=|createdat=|modifiedat=|completedat=|istransient=)?[a-zA-Z0-9._]+=(?:eq|ne|gt|ge|lt|le|between|match|like|startswith|endswith|in|nin):.+$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase,
-        TimeSpan.FromMilliseconds(100));
+        // NonBacktracking: linear time by construction, so ReDoS protection does not depend on a wall-clock
+        // timeout — a 100 ms timeout tripped under CI load (a GC pause mid-match) and misread a valid legacy
+        // filter as an unrecognized one. Only IsMatch is used, so no capture semantics are involved.
+        RegexOptions.NonBacktracking | RegexOptions.IgnoreCase);
 
     /// <summary>
     /// Detects the format of a filter string
@@ -113,9 +115,6 @@ public static class FilterFormatDetector
         var condition = new FieldCondition();
         attributes[field] = condition;
         SetOperatorValue(condition, op, value);
-
-        if (attributes.Count == 0)
-            return null;
 
         return new GraphQLFilterNode
         {

@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
+using BBT.Workflow.Application.Tests.Telemetry;
 using BBT.Workflow.BackgroundJobs.Handlers;
 using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.Execution;
@@ -49,24 +50,10 @@ public sealed class TransitionTimerJobHandlerTests
         Version = "1.0.0"
     };
 
-    private static (ActivityListener Listener, List<Activity> Collected) Listen()
-    {
-        var collected = new List<Activity>();
-        var listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == "BBT.Workflow.BackgroundJobs",
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
-        };
-        ActivitySource.AddActivityListener(listener);
-        return (listener, collected);
-    }
-
     [Fact]
     public async Task HandleAsync_MarksTheJobSpanErrorWhenTheTransitionFails()
     {
-        var (listener, collected) = Listen();
-        using var _ = listener;
+        using var spans = new TraceSpanCollector("BBT.Workflow.BackgroundJobs");
         _executionService
             .Setup(s => s.ExecuteTransitionAsync(
                 It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
@@ -74,7 +61,7 @@ public sealed class TransitionTimerJobHandlerTests
 
         await CreateHandler().HandleAsync(CreatePayload(), CancellationToken.None);
 
-        var job = Assert.Single(collected, a => a.OperationName == "TransitionTimerJob.Execute");
+        var job = Assert.Single(spans.Spans, a => a.OperationName == "TransitionTimerJob.Execute");
         Assert.Equal(ActivityStatusCode.Error, job.Status);
         Assert.Equal("Instance:100031", job.GetTagItem("error.code"));
     }
@@ -82,8 +69,7 @@ public sealed class TransitionTimerJobHandlerTests
     [Fact]
     public async Task HandleAsync_MarksTheJobSpanOkWhenTheTransitionSucceeds()
     {
-        var (listener, collected) = Listen();
-        using var _ = listener;
+        using var spans = new TraceSpanCollector("BBT.Workflow.BackgroundJobs");
         _executionService
             .Setup(s => s.ExecuteTransitionAsync(
                 It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
@@ -91,7 +77,7 @@ public sealed class TransitionTimerJobHandlerTests
 
         await CreateHandler().HandleAsync(CreatePayload(), CancellationToken.None);
 
-        var job = Assert.Single(collected, a => a.OperationName == "TransitionTimerJob.Execute");
+        var job = Assert.Single(spans.Spans, a => a.OperationName == "TransitionTimerJob.Execute");
         Assert.Equal(ActivityStatusCode.Ok, job.Status);
     }
 }

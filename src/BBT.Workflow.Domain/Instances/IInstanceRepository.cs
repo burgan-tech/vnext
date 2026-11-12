@@ -25,6 +25,19 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The read-only (no-tracking) load of <see cref="FindByIdentifierAsReadOnlyAsync"/> — same
+    /// identifier resolution, same data rows, same open-only <see cref="Instance.ChildCorrelations"/>
+    /// — that also hands back the instance's FULL correlation set (open and completed) from the same
+    /// single correlation query, ordered by <c>ParentState</c> then <c>CompletedAt</c> exactly like
+    /// <see cref="IInstanceCorrelationRepository.GetByParentAsync"/>. For readers that need both (the
+    /// state function), this replaces the open-correlation include plus a second, all-rows read.
+    /// <c>AllCorrelations</c> is empty when the instance is not found.
+    /// </summary>
+    Task<(Instance? Instance, List<InstanceCorrelation> AllCorrelations)> FindByIdentifierAsReadOnlyWithAllCorrelationsAsync(
+        string identifier,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Loads several instances by id for read-only projection, including only their data rows.
     /// Unlike <see cref="FindByIdentifierAsReadOnlyAsync"/> this omits the ChildCorrelations include,
     /// because callers of this method never read correlations. Ids with no matching row are omitted.
@@ -297,6 +310,33 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         Guid instanceId,
         CancellationToken cancellationToken = default,
         InstanceStatus? effectiveStatus = null);
+
+    /// <summary>
+    /// Claims the right to continue a parked Busy instance from <paramref name="expectedState"/>:
+    /// a set-based compare-and-set on the instance row that succeeds only while the row is still
+    /// Busy in that state and no other execution holds an unexpired claim. Two <c>updateData</c>
+    /// executions that both find the auto gate satisfied race here, and exactly one wins; the loser
+    /// drops its continuation because the winner is already advancing from the same state.
+    /// </summary>
+    /// <param name="instanceId">The parked instance.</param>
+    /// <param name="expectedState">The state the caller's auto transition leaves from.</param>
+    /// <param name="utcNow">Claim timestamp.</param>
+    /// <param name="ttl">A claim older than this is treated as abandoned (a crashed owner), so the
+    /// gate can never stay closed for longer than the TTL.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>True when this call took the claim.</returns>
+    Task<bool> TryClaimContinuationAsync(
+        Guid instanceId,
+        string expectedState,
+        DateTime utcNow,
+        TimeSpan ttl,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Clears the continuation claim taken by <see cref="TryClaimContinuationAsync"/>. Called when
+    /// the claiming chain ends; best effort — an uncleared claim expires after its TTL.
+    /// </summary>
+    Task ReleaseContinuationClaimAsync(Guid instanceId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Writes <see cref="Instance.EffectiveStatus"/> alone, for an ancestor whose own status does

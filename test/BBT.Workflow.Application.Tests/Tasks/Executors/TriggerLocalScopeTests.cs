@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
+using BBT.Workflow.Application.Tests.Telemetry;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
 using BBT.Workflow.Gateway;
@@ -149,22 +150,12 @@ public sealed class TriggerLocalScopeTests : IDisposable
         var runtime = Substitute.For<IRuntimeInfoProvider>();
         runtime.Domain.Returns(LocalDomain);
 
-        Activity? triggerLocal = null;
-        using var probe = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == TaskSourceName,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStarted = a =>
-            {
-                if (a.OperationName.StartsWith(TaskExecutionActivityHelper.OperationTriggerLocal, StringComparison.Ordinal))
-                    triggerLocal = a;
-            }
-        };
-        ActivitySource.AddActivityListener(probe);
+        using var spans = new TraceSpanCollector(TaskSourceName);
 
         await CreateExecutor(gateway, runtime).ExecuteAsync(CreateContext(task), CancellationToken.None);
 
-        triggerLocal.ShouldBeNull();
+        spans.Spans.ShouldNotContain(a =>
+            a.OperationName.StartsWith(TaskExecutionActivityHelper.OperationTriggerLocal, StringComparison.Ordinal));
         await gateway.DidNotReceiveWithAnyArgs().GetInstanceAsync(default!, default);
     }
 }

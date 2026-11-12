@@ -128,26 +128,54 @@ public sealed class AuthorizeAppService(
             // parent-owned transitions, transition overrides — and never touched the
             // subflow. Spanning the method would report a descent that did not happen, and
             // "this trace has no Subflow.Descend" would stop meaning "nothing descended".
-            using var descent = InstanceReadActivityHelper.StartDescendScope(
+            Result<AuthorizeOutput> forwarded;
+            using (InstanceReadActivityHelper.StartDescendScope(
                 runtimeInfoProvider,
                 subflow.SubFlowDomain,
                 subflow.SubFlowName,
                 subflow.SubFlowInstanceId.ToString(),
                 instance!.Id.ToString(),
-                TelemetryConstants.DescentFunctions.Authorize);
+                TelemetryConstants.DescentFunctions.Authorize))
+            {
+                forwarded = await authorizeGateway.GetAuthorizeResultForInstanceAsync(
+                    subflow.SubFlowDomain,
+                    subflow.SubFlowName,
+                    subflow.SubFlowInstanceId.ToString(),
+                    roleForForward,
+                    transitionKey,
+                    functionKey,
+                    version,
+                    checkQueryRoles,
+                    checkAck,
+                    requestContext,
+                    cancellationToken);
+            }
 
-            return await authorizeGateway.GetAuthorizeResultForInstanceAsync(
-                subflow.SubFlowDomain,
-                subflow.SubFlowName,
-                subflow.SubFlowInstanceId.ToString(),
-                roleForForward,
-                transitionKey,
-                functionKey,
-                version,
-                checkQueryRoles,
-                checkAck,
-                requestContext,
-                cancellationToken);
+            // The deepest EXISTING instance decides (vnext#1181). The parent commits its SubFlow
+            // correlation in its own transaction (HandleSubFlowStep) and the child's row is created
+            // afterwards by the post-commit StartSubflowJob, so for a while — hundreds of milliseconds
+            // in practice, indefinitely when the start fails — the correlation points at a child that
+            // cannot be loaded. The child then answers "not found" without evaluating a single grant,
+            // and passing that through denied every queryRoles probe that landed in the window. Until
+            // the child exists, this instance is the leaf: it is what the state function shows in the
+            // same window (it falls back to the main flow's view when the descent fails), and there is
+            // no child data to expose. Only queryRoles falls back — a transition or function forwarded
+            // to a child that does not exist cannot execute either, so false is the true answer there.
+            if (checkQueryRoles
+                && forwarded is { IsSuccess: true, Value: { Allowed: false, Reason: AuthorizeOutput.Reasons.InstanceNotFound } })
+            {
+                using var fallbackDecision = AuthorizationActivityHelper.StartDecide();
+                AuthorizationActivityHelper.SetFallback(fallbackDecision, AuthorizationActivityHelper.FallbackLeafMissing);
+                var fallbackAllowed = await EvaluateQueryRolesAsync(
+                    wf, resolvedForForward.Value, instance, requestContext, cancellationToken);
+                AuthorizationActivityHelper.SetDecision(fallbackDecision, fallbackAllowed, resolvedForForward.Value?.Count ?? 0);
+
+                logger.AuthorizeLeafMissingFallback(
+                    domain, workflow, instanceId, subflow.SubFlowName, subflow.SubFlowInstanceId.ToString(), fallbackAllowed);
+                return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = fallbackAllowed });
+            }
+
+            return forwarded;
         }
 
         // `ack` composes the role parameter ADDITIVELY on every path, like the awaiting-parent branch
@@ -166,7 +194,15 @@ public sealed class AuthorizeAppService(
         AuthorizationActivityHelper.SetDecision(decision, allowed, callerRolesResult.Value?.Count ?? 0);
 
         logger.AuthorizeRequest(domain, workflow, instanceId, DescribeTarget(transitionKey, functionKey, checkQueryRoles, checkAck), Describe(callerRolesResult.Value), allowed);
-        return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = allowed });
+
+        // A missing instance answers false WITHOUT evaluating a grant. Saying so lets a parent that
+        // descended here tell "the leaf refused" from "the leaf does not exist yet" (vnext#1181); a
+        // direct caller keeps its 403 and simply sees the reason.
+        return Result<AuthorizeOutput>.Ok(new AuthorizeOutput
+        {
+            Allowed = allowed,
+            Reason = instance is null ? AuthorizeOutput.Reasons.InstanceNotFound : null
+        });
     }
 
     /// <summary>
@@ -187,6 +223,41 @@ public sealed class AuthorizeAppService(
     /// request parameter — under an external provider that parameter is usually absent, and logging it
     /// would record an empty role for every decision.
     /// </summary>
+    /// <inheritdoc />
+    public async Task<Result<AuthorizeOutput>> GetStartAuthorizeResultAsync(
+        string domain,
+        string workflow,
+        string? role,
+        string? version = null,
+        AuthorizationRequestContext? requestContext = null,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(domain);
+        var workflowResult = await componentCacheStore.GetFlowAsync(domain, workflow, NormalizeVersion(version), cancellationToken);
+        if (!workflowResult.IsSuccess)
+            return Result<AuthorizeOutput>.Fail(workflowResult.Error);
+
+        var wf = workflowResult.Value!;
+
+        var callerRoles = await GetCallerRolesAsync(role, requestContext, cancellationToken);
+        if (!callerRoles.IsSuccess)
+            return Result<AuthorizeOutput>.Fail(callerRoles.Error);
+
+        // No instance exists before a start, so the evaluator takes its no-instance path: static roles
+        // and $Everyone are compared, every instance-bound leaf is "no match". Neither the state gate nor
+        // availableIn applies — the start transition belongs to no state.
+        using var decision = AuthorizationActivityHelper.StartDecide();
+        var allowed = wf.StartTransition is { } start
+                      && await transitionAuthorizationManager.IsTransitionAllowedForRoleAsync(
+                          wf, start, instance: null, callerRoles.Value, requestContext, cancellationToken);
+        AuthorizationActivityHelper.SetDecision(decision, allowed, callerRoles.Value?.Count ?? 0);
+
+        if (logger.IsEnabled(LogLevel.Information))
+            logger.AuthorizeRequest(domain, workflow, string.Empty, $"start:{wf.StartTransition?.Key}", Describe(callerRoles.Value), allowed);
+
+        return Result<AuthorizeOutput>.Ok(new AuthorizeOutput { Allowed = allowed });
+    }
+
     private static string Describe(IReadOnlyList<string>? roles) =>
         roles is { Count: > 0 } ? string.Join(",", roles) : string.Empty;
 

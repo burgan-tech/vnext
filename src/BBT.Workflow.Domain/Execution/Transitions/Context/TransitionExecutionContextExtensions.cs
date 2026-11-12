@@ -23,13 +23,7 @@ public static class TransitionExecutionContextExtensions
     /// Matches both the workflow's configured updateData key and the well-known reserved key.
     /// </summary>
     public static bool IsUpdateDataTransition(this TransitionExecutionContext ctx)
-    {
-        var key = ctx.Transition?.Key;
-        if (key is null) return false;
-
-        return key.Equals(Definitions.WellKnownTransitionKeys.UpdateData, StringComparison.OrdinalIgnoreCase)
-            || ctx.Workflow.UpdateData?.Key.Equals(key, StringComparison.OrdinalIgnoreCase) == true;
-    }
+        => ctx.Workflow.IsUpdateDataKey(ctx.Transition?.Key);
 
     /// <summary>
     /// Determines whether the current transition is an exit transition.

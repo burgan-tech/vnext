@@ -112,17 +112,35 @@ public class HttpResponseMessageExtensionsTests
     [Fact]
     public async Task ReadDecompressedContentAsync_WithCancellation_ShouldRespectToken()
     {
-        // Arrange
-        var content = "Test content";
+        // Arrange: a stream-backed body, so reading it is real I/O. An in-memory StringContent
+        // is already buffered and HttpContent returns it without consulting the token.
         var response = new HttpResponseMessage
         {
-            Content = new StringContent(content)
+            Content = new StreamContent(new MemoryStream(Encoding.UTF8.GetBytes("Test content")))
         };
-        var cts = new CancellationTokenSource();
-        cts.Cancel();
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        // Act & Assert: the exact subtype (TaskCanceledException vs OperationCanceledException)
+        // is a framework detail; the contract is that the read is cancelled.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await response.ReadDecompressedContentAsync(cts.Token));
+    }
+
+    [Fact]
+    public async Task ReadDecompressedContentAsync_GzipWithCancellation_ShouldRespectToken()
+    {
+        // Arrange
+        var response = new HttpResponseMessage
+        {
+            Content = new ByteArrayContent(CompressString("Test content"))
+        };
+        response.Content.Headers.ContentEncoding.Add("gzip");
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
 
         // Act & Assert
-        await Assert.ThrowsAsync<TaskCanceledException>(async () =>
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
             await response.ReadDecompressedContentAsync(cts.Token));
     }
 

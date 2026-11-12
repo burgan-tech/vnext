@@ -438,8 +438,10 @@ public class StateTests
     }
 
     [Fact]
-    public void HasOnlyManualOrEventTransitions_ShouldReturnFalse_WhenHasAutomaticTransition()
+    public void HasOnlyManualOrEventTransitions_ShouldReturnTrue_WhenManualTransitionSitsBesideAutomaticTransition()
     {
+        // An instance can rest in a state as long as at least one transition waits for an
+        // outside trigger (68d804223 changed All to Any).
         // Arrange
         var state = State.Create("test-state", StateType.Intermediate, StateSubType.Success, "Patch");
         var manualTransition = Transition.Create("submit", "test-state", "next", TriggerType.Manual, "Patch");
@@ -448,12 +450,14 @@ public class StateTests
         state.AddTransition(autoTransition);
 
         // Act & Assert
-        Assert.False(state.HasOnlyManualOrEventTransitions);
+        Assert.True(state.HasOnlyManualOrEventTransitions);
     }
 
     [Fact]
-    public void HasOnlyManualOrEventTransitions_ShouldReturnFalse_WhenHasScheduledTransition()
+    public void HasOnlyManualOrEventTransitions_ShouldReturnTrue_WhenHasScheduledTransition()
     {
+        // A scheduled transition waits for its timer, so it counts as a rest point
+        // (b2bad70fe routed timeout transitions through the full pipeline).
         // Arrange
         var state = State.Create("test-state", StateType.Intermediate, StateSubType.Success, "Patch");
         var manualTransition = Transition.Create("submit", "test-state", "next", TriggerType.Manual, "Patch");
@@ -462,7 +466,7 @@ public class StateTests
         state.AddTransition(scheduledTransition);
 
         // Act & Assert
-        Assert.False(state.HasOnlyManualOrEventTransitions);
+        Assert.True(state.HasOnlyManualOrEventTransitions);
     }
 
     [Fact]

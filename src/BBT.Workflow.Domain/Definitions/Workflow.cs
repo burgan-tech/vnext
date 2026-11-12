@@ -490,6 +490,16 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     }
 
     /// <summary>
+    /// True when <paramref name="key"/> names this workflow's updateData transition: the reserved alias
+    /// or the configured key, case-insensitively. The single answer behind
+    /// <c>TransitionExecutionContext.IsUpdateDataTransition</c> and the task-output writer.
+    /// </summary>
+    public bool IsUpdateDataKey(string? key) =>
+        key is not null
+        && (key.Equals(WellKnownTransitionKeys.UpdateData, StringComparison.OrdinalIgnoreCase)
+            || UpdateData?.Key.Equals(key, StringComparison.OrdinalIgnoreCase) == true);
+
+    /// <summary>
     /// True when the key names a well-known workflow-level transition, whether by reserved alias or by
     /// configured key — including when that transition is not configured on this workflow, so callers
     /// that must exclude reserved keys from state-machine rules still do so.

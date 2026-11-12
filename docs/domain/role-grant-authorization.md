@@ -101,7 +101,7 @@ empty grant set → allowed
 5. **A caller with no roles cannot clear a role-bound deny.** A static role (`blocked`) or a
    `$role.$.context…` reference is a statement about the caller's *roles*; with none to compare,
    "nothing matched" is not evidence that the caller is not the denied one, so the deny refuses.
-   Identity-bound denies — the four predefined roles and `$user.` / `$userBehalfOf.` — match on the
+   Identity-bound denies — the predefined roles and `$user.` / `$userBehalfOf.` — match on the
    caller's identity, not its roles, and keep their normal evaluation. Stated precisely this is the
    three-valued rule of [Combinators](#combinators-allof--anyof): a role-bound leaf is *Unknown* for a
    role-less caller, and a deny fires on Yes **or** Unknown.
@@ -216,6 +216,7 @@ latest data. Evaluating the deny group first means a refused caller never pays f
 |---|---|---|
 | Static | `backoffice.operator` | caller roles, `OrdinalIgnoreCase` |
 | Predefined — actor | `$InstanceStarter`, `$PreviousUser` | `ICurrentUser.ActorUserName` vs `Instance.CreatedBy` / last manual transition's `CreatedBy` |
+| Predefined — everyone | `$Everyone` | nothing; matches every caller (see below) |
 | Predefined — behalf-of | `$InstanceBehalfOfStarter`, `$PreviousBehalfOfUser` | `ICurrentUser.UserName` vs `Instance.CreatedByBehalfOf` / last manual transition's `CreatedByBehalfOf` |
 | Dynamic | `$role.$.context.Headers.x-branch`, `$user.$.context.Instance.Data.ownerId` | value resolved from the authorization context |
 
@@ -255,14 +256,17 @@ Shape rules, enforced at publish (`RoleGrantDefinitionRules`) and when a schema'
 
 A condition does not always have a yes/no answer. A **role-bound leaf** (a static role or a `$role.`
 reference) is a statement about the caller's *roles*; for a caller with no roles it is neither
-proven nor disproven, so it is **Unknown**. **Identity leaves** — the four predefined roles, `$user.`
+proven nor disproven, so it is **Unknown**. **Identity leaves** — the predefined roles, `$user.`
 and `$userBehalfOf.` — compare the caller's identity, so they are always **Yes** or **No**. On the
-no-instance path (no instance to read the starter or history from) an identity leaf is **No**.
+no-instance path (no instance to read the starter or history from) an identity leaf is **No**; `$Everyone`
+reads nothing from an instance and stays **Yes** there too. `startTransition.roles` are always
+evaluated on this path — see [`authorize?type=instance`](authorize-function.md#starting-an-instance--typeinstance).
 
 | Leaf | Caller has roles | Caller has no roles |
 |---|---|---|
 | static role / `$role.…` | Yes if matched, else No | **Unknown** |
 | `$InstanceStarter`, `$PreviousUser`, `$InstanceBehalfOfStarter`, `$PreviousBehalfOfUser`, `$user.…`, `$userBehalfOf.…` | Yes / No | Yes / No |
+| `$Everyone` | **Yes** | **Yes** |
 
 Combinators fold their children (Kleene):
 
@@ -293,6 +297,8 @@ is what makes the examples below work for role-less callers too.
 | Starter or the person they act for | `allow anyOf[$InstanceStarter, $InstanceBehalfOfStarter]` |
 | Four eyes: the maker acts, but not twice | `allow maker`, `deny allOf[maker, $PreviousUser]` |
 | Blacklist: block a role only for its own starter | `deny allOf[blocked, $InstanceStarter]` |
+| Hide from everyone | `deny $Everyone` |
+| Open to everyone, explicitly | `allow $Everyone` |
 
 The four-eyes pair means: whoever holds `maker` is allowed, *unless* they hold `maker` **and** were also
 the previous user. A caller without `maker` cannot satisfy the `allOf`, so the deny does not fire for them
@@ -318,11 +324,31 @@ literal and **case-sensitive**. Anything else with a qualifier prefix is a publi
 is evaluated for** — also when the grant is a parent-stamped override running on a child. A parent's
 override naming `$InstanceStarter` therefore means the *child's* starter, not the parent's.
 
+### `$Everyone`
+
+`$Everyone` is an identity leaf that is **Yes for every caller**: with or without roles, with or without an
+instance loaded. So `deny $Everyone` refuses everybody and `allow $Everyone` admits everybody. A caller
+that holds a role literally named `$Everyone` changes nothing for a `$Everyone` grant, the decision is made on
+the grant side; what changes is a grant that used to target a static role named `$Everyone` (see below).
+
+- Accepted on every role-grant surface (`transition.roles`, `queryRoles`, `availableIn[].roles`, function
+  `roles`, subflow overrides, schema `x-roles`) and as a combinator child.
+- Refused in `x-masking.roles` / `x-encryption.roles`: there it would exempt every caller. Publish rejects
+  it, and the read path also drops it (fail closed).
+- Refused in row-security rules (RS-E05, see [row-security](row-security.md)).
+- Spelling is `Ordinal`: `$everyone` or `$EVERYONE` is a publish error on every surface that takes role
+  grants, with the message "predefined roles are case-sensitive, write '$Everyone'". Only `$Everyone` gets
+  this check; extending it to the older predefined roles could reject definitions that are already published.
+- A static role that is literally named `$Everyone` (held by a caller or sent in the `role` header)
+  changes meaning, because the predefined match runs before the static comparison. The collision is
+  negligible and is stated in the release note.
+
 ### Where combinators are not accepted
 
 `x-masking` and `x-encryption` exemption lists take plain `{ "role", "grant": "allow" }` entries only
 (`RoleGrantDefinitionRules.ValidateExemption` rejects a combinator at publish). They are an allow-list of
-who sees a value in the clear; a three-valued fold has no place there. `x-roles` field visibility,
+who sees a value in the clear; a three-valued fold has no place there, and `$Everyone` is refused for the
+same reason (it would exempt every caller). `x-roles` field visibility,
 `transition.roles`, `queryRoles`, `availableIn.roles`, function `roles` and subflow overrides all accept
 combinators.
 
