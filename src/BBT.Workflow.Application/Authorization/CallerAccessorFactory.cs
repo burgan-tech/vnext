@@ -1,3 +1,4 @@
+using BBT.Workflow.Shared;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting.Caller;
 using Microsoft.Extensions.Logging;
@@ -38,4 +39,13 @@ public sealed class CallerAccessorFactory(
                 resolution.Outcome == CallerRoleOutcome.FromHeader);
         });
     }
+
+    /// <inheritdoc />
+    public ICallerAccessor ForHop(
+        ExecutionActor actor,
+        IReadOnlyDictionary<string, string?>? headers,
+        CancellationToken cancellationToken = default) =>
+        actor == ExecutionActor.User
+            ? ForRequest(headers, cancellationToken)
+            : NullCallerAccessor.Instance;
 }

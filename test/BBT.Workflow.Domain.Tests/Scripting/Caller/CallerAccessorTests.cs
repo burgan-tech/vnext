@@ -111,4 +111,20 @@ public sealed class CallerAccessorTests
         context.Caller.ShouldBeSameAs(accessor);
         context.CreateParallelBranch().Caller.ShouldBeSameAs(accessor);
     }
+
+    [Fact]
+    public async Task ExposeCaller_IsScoped_ThenClosedAndRestored()
+    {
+        var context = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance).Build();
+        var accessor = new CallerAccessor(() => Task.FromResult(new CallerRoleSnapshot(["r"], false, false)));
+
+        using (context.ExposeCaller(accessor))
+        {
+            context.Caller.ShouldBeSameAs(accessor);
+            (await context.Caller.HasRoleAsync("r")).ShouldBeTrue();
+        }
+
+        context.Caller.ShouldBeSameAs(NullCallerAccessor.Instance);
+        accessor.IsAvailable.ShouldBeFalse();
+    }
 }

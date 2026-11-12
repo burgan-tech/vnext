@@ -359,7 +359,7 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
 - `views[]` on states/transitions, first matching `IConditionMapping` rule wins; last rule-less entry
   is the fallback. `loadData: true` → instance data loaded with the view.
 - Transition `schemas[]` (rule-based, wins over `schema`): first match wins, declared but no match → 400 `Transition:100025`, none declared → accept — [function-contract-resolution § Transitions](../../docs/runtime/function-contract-resolution.md#transitions).
-- Selection rules read the caller's resolved roles via `context.Caller` (request-bound selection only; Unavailable elsewhere); a provider failure fails the selection (`Authorization:110006`, 503), never a fallback — `docs/runtime/script-caller-roles.md`.
+- `context.Caller` (resolved caller roles): selection rules, plus auto rules / timer scripts on caller-driven hops and SubFlow output mappings (child settler); never task mappings or System hops. Provider failure: selection 503 / step fails / completion redelivered (`Authorization:110006`), never a fallback — `docs/runtime/script-caller-roles.md`.
 
 ## TransitionExecutionContext
 

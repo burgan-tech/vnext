@@ -86,6 +86,13 @@ public sealed class CallerAccessorFactoryTests
         await _resolver.DidNotReceiveWithAnyArgs().ResolveRolesAsync(default);
     }
 
+    [Fact]
+    public void ForHop_SystemActor_IsUnavailable_UserActor_IsTheRequestCaller()
+    {
+        _factory.ForHop(BBT.Workflow.Shared.ExecutionActor.System, _headers).ShouldBeSameAs(NullCallerAccessor.Instance);
+        _factory.ForHop(BBT.Workflow.Shared.ExecutionActor.User, _headers).ShouldBeOfType<CallerAccessor>();
+    }
+
     private void Answer(CallerRoleResolution resolution) =>
         _resolver.ResolveRoleSetAsync(Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(resolution));

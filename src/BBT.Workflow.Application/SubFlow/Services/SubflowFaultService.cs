@@ -1,3 +1,4 @@
+using BBT.Aether.Results;
 using BBT.Aether.Events;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Options;
@@ -279,13 +280,25 @@ public sealed class SubflowFaultService(
                             carriedHeaders: carriedHeaderPolicy?.Capture(input.CarriedHeaders));
                     }
 
-                    var mappingResult = await outputMappingService.ApplyAsync(
-                        parentInstance,
-                        parentWorkflow,
-                        correlation.ParentState,
-                        input.InstanceData,
-                        cancellationToken,
-                        input.CarriedHeaders);
+                    // On the FAULT path a failed output mapping is logged and settlement proceeds (existing
+                    // behaviour). A mapping that read caller roles while the provider was down is treated the same
+                    // way here rather than blocking the fault's settlement on the identity provider.
+                    Result mappingResult;
+                    try
+                    {
+                        mappingResult = await outputMappingService.ApplyAsync(
+                            parentInstance,
+                            parentWorkflow,
+                            correlation.ParentState,
+                            input.InstanceData,
+                            cancellationToken,
+                            input.CarriedHeaders);
+                    }
+                    catch (CallerRolesUnavailableTransientException ex)
+                    {
+                        mappingResult = Result.Fail(WorkflowErrors.SubFlowOutputMappingFailed(
+                            parentInstance.Id, ex.Message));
+                    }
 
                     // Output-mapping failures are permanent at this boundary. Recoverable
                     // assembly-load contention is handled locally by CSharpEvaluator. Failure is

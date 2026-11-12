@@ -30,5 +30,5 @@ public sealed class NullCallerAccessor : ICallerAccessor
     public Task<bool> HasRoleAsync(string role) => throw Unavailable();
 
     private static CallerRolesUnavailableException Unavailable() => new(
-        "Caller roles are not available here: they are exposed to rule-based schema and view selection on a caller's request only.");
+        "Caller roles are not available here: this script has no caller (a task mapping, or a hop driven by the system such as a fired timer). Check context.Caller.IsAvailable first.");
 }

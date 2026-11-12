@@ -40,29 +40,62 @@ Reads throw `CallerRolesUnavailableException` when the surface has no caller or 
 
 ## Where it is available
 
-Only rule-based **selection** on a caller's request:
+Every script sees `context.Caller`; whether it can read roles depends on the surface. Each decision is pinned in
+a code comment at the wiring site, and was taken by two council sessions: `2026-11-12-script-caller-roles`
+(selection surfaces) and `2026-11-12-script-caller-roles-background` (automatic rules, timers, SubFlow output
+mapping — added by a Chair override of the council's narrower proposal).
 
-- transition `schemas` (write validation and the `functions/schema` read),
-- function `inputSchema` / `outputSchema` / `inputView` / `outputView` rules (execute and `/info`, `/view`, `/schema`),
-- state / transition `views` rules (`functions/view`).
+| Surface | Available | Whose roles | When the provider fails |
+| --- | --- | --- | --- |
+| Transition `schemas` rule (write validation, `functions/schema`) | Yes | the request's caller | selection fails: `503` `Authorization:110006` |
+| Function `inputSchema` / `outputSchema` / `inputView` / `outputView` rule | Yes | the request's caller | selection fails: `503` `Authorization:110006` |
+| State / transition `views` rule (`functions/view`) | Yes | the request's caller | selection fails: `503` `Authorization:110006` |
+| Automatic-transition `rule` | Yes, on caller-driven hops | the caller who drove the hop: the request, the async-accept job (it replays the caller's headers), and auto hops chained inline after them | the step fails (`Authorization:110006`, retryable) through the error boundary; the DefaultAutoTransition is **not** taken |
+| Timer script (`ITimerMapping`) | Yes, when the state is entered by a caller | the caller who drove the hop that **entered** the state — timers are computed at arming, not at firing | the step fails (`Authorization:110006`) |
+| SubFlow output mapping (completion) | Yes, when the child's settling request carried headers | the **child settler** — the caller whose request completed the child, from the headers carried on `instance.sub.completed` and re-filtered by the carried-header policy; not the parent's starter | transient: the completion is rolled back and redelivered (relay / Inbox), the parent is **not** faulted; roles are resolved before the terminal lock |
+| SubFlow output mapping on the fault path | as above | as above | logged as a failed mapping (existing fault-path behaviour); settlement continues |
+| Task mappings (OnEntry, OnExit, OnExecute, function tasks), transition `mapping`, extensions, resource lock, event mappings | No | — | — |
 
-Everywhere else — task mappings, OnEntry/OnExit/OnExecute, automatic-transition rules, timers, event
-handlers, subflow callbacks, the Execution host — `IsAvailable` is false and a read throws. There is no
-caller to ask for in the background, and an empty set would be indistinguishable from "holds no role".
+"No caller" means `IsAvailable` is false and a read throws — never an empty set:
 
-On the function execute path the accessor is **closed** after input-schema selection, before the cache key
-expression and the tasks run: the function response cache does not vary by role, so a task must not read it.
+- **System hops** — a fired timer (`TransitionTimerJobHandler`, `ExecutionActor.System`, no headers), a SubFlow
+  resume, a continuation — have no caller. An automatic rule there, or a timer script whose state was entered by
+  such a hop (a timer that **re-arms** after firing), cannot read roles. Guard with `IsAvailable` and pick a
+  default:
+
+  ```csharp
+  public async Task<TimerSchedule> Handler(ScriptContext context)
+  {
+      var vip = context.Caller.IsAvailable && await context.Caller.HasRoleAsync("vip");
+      return TimerSchedule.FromDuration(vip ? TimeSpan.FromHours(48) : TimeSpan.FromHours(24));
+  }
+  ```
+
+- A **child settled by a timer** carries no headers, so its parent's output mapping has no caller.
+
+The automatic-rule context is shared with the hop's task mappings; the accessor is exposed for the rule being
+evaluated only and closed afterwards, so a task mapping never sees it. On the function execute path the accessor
+is closed after input-schema selection, before the cache key expression and the tasks (the response cache does
+not vary by role).
+
+**Known, separate:** an automatic rule that throws for any other reason still reads as "not satisfied" (the next
+automatic transition or the DefaultAutoTransition may fire). Closing that for every rule is a behaviour change
+and is tracked separately; only the caller-roles failure is closed here.
 
 ## Cost
 
-Nothing is resolved until a rule reads roles. A rule that never reads them costs no provider call. Within
+Nothing is resolved until a script reads roles. A rule that never reads them costs no provider call. Within
 one request the provider answers at most once — the accessor memoizes, and `morph-idm` already memoizes per
 request scope and credential, shared with every other surface of the request (authorization, cache keys).
-Across requests there is no cache: every request whose rule reads roles makes one provider call.
+A chain of automatic hops run inline shares one scope and one call; every new scope (an async job, a SubFlow
+completion) makes its own. Across requests there is no cache. An automatic rule or timer script waits for the
+provider while the instance is Busy (no transaction or lock lease is held); the morph-idm circuit breaker was
+observed not to open on timeouts, so an outage costs up to the provider timeout (5 s) per scope.
 
 ## When the provider cannot answer
 
-If a rule reads roles and the provider fails (morph-idm error, timeout, open circuit breaker), the selection
+If a script reads roles and the provider fails (morph-idm error, timeout, open circuit breaker), the outcome is
+decided by the runtime, per surface (table above) — never a fallback. On request surfaces the selection
 **fails** with `503` `Authorization:110006` (`CallerRolesUnavailable`, retryable) instead of falling through
 to a later entry or the fallback. This holds whatever the rule did with the exception — returned false,
 rethrew, or swallowed it and returned true: the selection loops check `ResolutionFailed` after every rule.
