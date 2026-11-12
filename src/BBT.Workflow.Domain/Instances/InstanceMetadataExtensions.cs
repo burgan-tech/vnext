@@ -13,7 +13,13 @@ public static class InstanceMetadataExtensions
     /// transition path completes/faults the instance. Idempotent: a key already tracked is ignored.
     /// The key set is stored as a JSON array string under <see cref="DomainConsts.MetaDataKeys.ResourceLocks"/>.
     /// </summary>
-    public static void TrackResourceLock(this Instance instance, string resourceKey)
+    /// <param name="acquiredAt">
+    /// When the lock was taken, supplied by the caller so the Application layer's <c>IClock</c> is the
+    /// single source of time: the hold-duration metric subtracts this value with the same clock, and a
+    /// substituted clock in a test must move both ends together. Null falls back to the wall clock,
+    /// matching the rest of this aggregate.
+    /// </param>
+    public static void TrackResourceLock(this Instance instance, string resourceKey, DateTime? acquiredAt = null)
     {
         if (instance is null)
             throw new ArgumentNullException(nameof(instance));
@@ -26,11 +32,52 @@ public static class InstanceMetadataExtensions
 
         keys.Add(resourceKey);
 
+        var acquisitionTimes = ReadLockAcquisitionTimes(instance);
+        acquisitionTimes[resourceKey] = (acquiredAt ?? DateTime.UtcNow).ToString("O", CultureInfo.InvariantCulture);
+
         var metadata = new ExtraPropertyDictionary(instance.ExtraProperties ?? new ExtraPropertyDictionary())
         {
-            [DomainConsts.MetaDataKeys.ResourceLocks] = JsonSerializer.Serialize(keys)
+            [DomainConsts.MetaDataKeys.ResourceLocks] = JsonSerializer.Serialize(keys),
+            [DomainConsts.MetaDataKeys.ResourceLockAcquiredAt] = JsonSerializer.Serialize(acquisitionTimes)
         };
         instance.SetMetaData(metadata);
+    }
+
+    /// <summary>
+    /// When this instance acquired <paramref name="resourceKey"/>, or <c>null</c> when it is not
+    /// recorded — an instance that started before the stamp existed, or metadata that will not parse.
+    /// Used to meter how long a lock was actually held, which is the signal that tells a healthy
+    /// release apart from one that only happened when the TTL ran out.
+    /// </summary>
+    public static DateTime? GetResourceLockAcquiredAt(this Instance instance, string resourceKey)
+    {
+        if (instance is null)
+            throw new ArgumentNullException(nameof(instance));
+
+        if (!ReadLockAcquisitionTimes(instance).TryGetValue(resourceKey, out var raw))
+            return null;
+
+        return DateTime.TryParse(
+            raw, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
+            ? parsed
+            : null;
+    }
+
+    private static Dictionary<string, string> ReadLockAcquisitionTimes(Instance instance)
+    {
+        var raw = GetString(instance.ExtraProperties, DomainConsts.MetaDataKeys.ResourceLockAcquiredAt);
+        if (string.IsNullOrWhiteSpace(raw))
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+
+        try
+        {
+            return JsonSerializer.Deserialize<Dictionary<string, string>>(raw)
+                   ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
     }
 
     /// <summary>
