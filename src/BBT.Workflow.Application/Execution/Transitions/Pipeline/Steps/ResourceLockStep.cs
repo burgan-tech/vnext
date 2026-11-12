@@ -1,3 +1,4 @@
+using BBT.Aether.Clock;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
@@ -18,7 +19,8 @@ public sealed class ResourceLockStep(
     IScriptContextFactory scriptContextFactory,
     IInstanceRepository instanceRepository,
     IResourceLockService resourceLockService,
-    IRuntimeInfoProvider runtimeInfoProvider) : ITransitionStep
+    IRuntimeInfoProvider runtimeInfoProvider,
+    IClock? clock = null) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.ResourceLock;
@@ -87,14 +89,26 @@ public sealed class ResourceLockStep(
     {
         var acquired = await resourceLockService.AcquireAsync(resourceKey, owner, lockDef.TtlSeconds, ct);
         if (!acquired)
-            return Result<StepOutcome>.Fail(ExecutionErrors.ResourceLockConflict(resourceKey));
+        {
+            // The policy decides what losing the race MEANS, and the two outcomes differ in kind, not
+            // degree: Abort treats it as a failure (the pipeline faults the instance), Reject treats it
+            // as a normal "not your turn" — the pipeline returns the failure without faulting and hands
+            // the Busy reservation back itself (TransitionPipeline, guarded by context.OwnsStatus).
+            // Nothing downstream compensates that flip: this path runs no settle, so without that
+            // explicit handback the caller would get its 409 and the instance would stay wedged in Busy.
+            // Separate error codes keep the Abort/Reject difference visible to the caller instead of
+            // hiding it behind one 409.
+            return Result<StepOutcome>.Fail(lockDef.OnConflict == ResourceLockConflictPolicy.Reject
+                ? ExecutionErrors.ResourceLockRejected(resourceKey)
+                : ExecutionErrors.ResourceLockConflict(resourceKey));
+        }
 
         // Record the key on the instance so its terminal cleanup releases the lock automatically,
         // independent of which transition path completes/faults the instance. The pipeline's normal
         // persistence flushes this ExtraProperties change; if the transition rolls back before commit
         // (or the instance snapshot is absent), the lock's TTL remains the safety net — the same
         // fallback as an un-run explicit Release.
-        context.Instance?.TrackResourceLock(resourceKey);
+        context.Instance?.TrackResourceLock(resourceKey, clock?.UtcNow ?? DateTime.UtcNow);
 
         return Result<StepOutcome>.Ok(StepOutcome.Continue());
     }

@@ -215,9 +215,34 @@ public static class WorkflowErrorCodes
     
     public const string ExecutionStepFailed = "Execution:200002";
     public const string ResourceLockConflict = "Execution:200010";
+
     public const string ResourceLockKeyEmpty = "Execution:200011";
     public const string ResourceLockKeyResolutionFailed = "Execution:200012";
     public const string ResourceLockInvalidAction = "Execution:200013";
+
+    /// <summary>
+    /// The transition lost a resource-lock race under <c>onConflict: Reject</c>.
+    /// <para>
+    /// <b>Client guidance.</b> Both this and <see cref="ResourceLockConflict"/> answer 409, and the
+    /// difference is what happened to the instance:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>
+    /// <c>Execution:200010</c> (<c>onConflict: Abort</c>, the default) — the instance is FAULTED. The
+    /// contended work is gone; retrying means starting a NEW instance.
+    /// </description></item>
+    /// <item><description>
+    /// <c>Execution:200014</c> (<c>onConflict: Reject</c>) — the instance is untouched and still Active.
+    /// Repeat the SAME call once the lock frees; no new instance, no cleanup.
+    /// </description></item>
+    /// </list>
+    /// <para>
+    /// A domain that would rather not answer the caller at all can leave <c>onConflict</c> at Abort and
+    /// add an <c>errorBoundary</c> rule for <c>Execution:200010</c>, which reroutes the instance instead
+    /// of faulting it.
+    /// </para>
+    /// </summary>
+    public const string ResourceLockRejected = "Execution:200014";
     
     #endregion
     

@@ -428,6 +428,18 @@
       "description": "Before: only the set-based status writes (Busy flip and release, un-fault, effective-status projection and its revert, long-poll arm) moved Instances.ModifiedAt, so a completed, cancelled or faulted instance kept a time from before its final transition started, and an updateData did not move it. Now every transition stamps it, a same-state one included (a completion with the same instant as completedAt), and every data row an updateData writes (request body or task output) stamps its enteredAt, as does a stage, tags or key change; an updateData that changes none of these moves nothing. Filters and sorts on modifiedAt, and reports reading it as 'last change', see the new values; rows written before the upgrade keep their old values.",
       "action": "No change is required. Re-check consumers that read modifiedAt as the time of the last status change: it is now the time of the last transition or data change.",
       "documentation": "docs/runtime/instance-filtering-and-queries.md"
+    },
+    {
+      "id": "instances-continuation-claimed-at-column",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "Instances.ContinuationClaimedAt (migration 20261109120000_AddInstanceContinuationClaim)",
+      "since": "0.0.105",
+      "severity": "info",
+      "title": "Parked Busy continuations are claimed once per state",
+      "description": "Before: when several updateData requests found an instance parked in Busy (an interaction wait with no live owner), every one of them took the parked pipeline over and ran the automatic chain again — duplicate parent notifications and finalize calls, and a stale Status=B written back over the settled state. Now a continuation first claims the instance with one set-based UPDATE on the new nullable column Instances.ContinuationClaimedAt (Status='B' AND CurrentState unchanged AND no claim younger than 60 s); the winner runs the chain and clears the claim, a loser drops its continuation and logs 10182 (UpdateDataContinuationClaimLost). The claim does not move modifiedAt. Every host also adds Application Name (OTEL_SERVICE_NAME, else DAPR_APP_ID, else the host name) to a Postgres connection string that has none, so pg_stat_activity and PgBouncer SHOW CLIENTS name the owning host.",
+      "action": "Run DbMigrator before rolling out the hosts (it adds the nullable column). No configuration change is required; a connection string that already sets Application Name is left as it is.",
+      "documentation": "docs/runtime/status-locking.md"
     }
   ]
 }

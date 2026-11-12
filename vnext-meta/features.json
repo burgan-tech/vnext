@@ -1,5 +1,5 @@
 {
-  "runtimeVersion": "0.0.104",
+  "runtimeVersion": "0.0.105",
   "engine": {
     "historyMode": {
       "since": "0.0.100",
@@ -670,6 +670,34 @@
         "PATCH {domain}/workflows/{workflow}/instances/{instance}/transitions/{transition}",
         "POST {domain}/workflows/{workflow}/sub/instances/start"
       ]
+    },
+    "everyonePredefinedRole": {
+      "since": "0.0.105",
+      "status": "stable",
+      "description": "$Everyone is a predefined role that is Yes for every caller: with or without roles, with or without an instance loaded (also on the static no-instance path). deny $Everyone refuses everybody, allow $Everyone admits everybody; a caller holding a role named $Everyone changes nothing (decided on the grant side). Accepted on every role-grant surface (transition roles, queryRoles, availableIn roles, function roles, subflow overrides, schema x-roles) and as an allOf/anyOf child. Rejected at publish in x-masking.roles / x-encryption.roles (it would exempt every caller; also dropped at read time, fail closed) and in rowSecurity.rules[].roles (RS-E05). Matching is Ordinal: a miscased spelling ($everyone, $EVERYONE) is a publish error on every role-grant surface; only $Everyone gets this check, extending it to the existing predefined roles could reject published definitions. Collision note: a static role literally named $Everyone, held by a caller or sent in the role header, changes meaning because the predefined match runs before the static comparison; the collision is negligible. PURELY ADDITIVE otherwise.",
+      "schemaPath": "roles[] | queryRoles[] | transitions[].roles[] | availableIn[].roles[] | schema.attributes.schema.properties[].x-roles[]",
+      "documentation": "docs/domain/role-grant-authorization.md"
+    },
+    "scriptCallerRoles": {
+      "since": "0.0.105",
+      "status": "stable",
+      "description": "ScriptContext.Caller (ICallerAccessor: HasRoleAsync, RolesAsync, IsAvailable, ResolutionFailed, RolesFromHeader) exposes the caller's role set as resolved by the configured caller-role provider (default: token claims, else the gateway role header; morph-idm: the identity service, a non-blank role header replaces its answer). Available to rule-based selection on a caller's request (transition schemas, function contract slots, state/transition views), to automatic-transition rules and timer scripts on caller-driven hops (request, async-accept job, inline auto chain; timers are computed at arming), and to SubFlow output mappings (the child settler's carried identity; resolved before the terminal lock; provider failure is transient and redelivered, never a parent fault). System hops (fired timer, SubFlow resume, continuation), task mappings, transition mappings, extensions, resource lock and event mappings: IsAvailable is false and a read throws CallerRolesUnavailableException; an automatic rule or timer that read roles while the provider failed fails the step (110006) instead of taking the DefaultAutoTransition; on function execute the accessor is closed after input-schema selection, before the cache key and tasks. Resolved lazily on the first read, at most once per request (shared with the provider's per-request memo); rules that never read roles cost no provider call. If a rule reads roles and the provider fails, the selection fails with 503 Authorization:110006 (retryable) whatever the rule returned or swallowed, and nothing is cached; rules that do not read roles are unaffected. Role selection is UX/contract selection, not authorization. PURELY ADDITIVE.",
+      "schemaPath": "scripts (C#): ScriptContext.Caller",
+      "documentation": "docs/runtime/script-caller-roles.md"
+    },
+    "startTransitionAuthorize": {
+      "since": "0.0.105",
+      "status": "stable",
+      "description": "GET {domain}/workflows/{workflow}/functions/authorize?type=instance[&version=x][&role=r] answers whether the caller may start an instance of the workflow, from the workflow's own startTransition.roles, before any instance exists. Lets a gateway gate POST {domain}/workflows/{workflow}/instances/start the way it gates transitions with the instance-scoped authorize. type says what is authorized: instance (start a new instance) is the only supported value; the parameter exists so other workflow-scoped questions can be added. It is required and ordinal; a missing or unknown value is a 400 Authorization:110005 (AuthorizeUnsupportedType) naming the supported values, with no default. The caller's roles are resolved exactly as on the instance-scoped authorize (configured provider, role parameter composed per provider). Evaluation is the no-instance path of the single role grant evaluator: static roles and $Everyone are compared; instance-bound leaves ($InstanceStarter, $PreviousUser, $InstanceBehalfOfStarter, $PreviousBehalfOfUser, $user., $userBehalfOf., $role. context references) have nothing to resolve against and never match, so they neither admit nor refuse - a start transition guarded only by such a grant is closed to everyone. No grants allow. availableIn and the state gate do not apply. 200 when allowed, 403 with { allowed: false } when not, 404 for an unknown workflow or version. The runtime itself still does not check startTransition.roles at POST .../instances/start, consistent with every other transition. PURELY ADDITIVE.",
+      "schemaPath": "startTransition.roles[]",
+      "documentation": "docs/domain/authorize-function.md"
+    },
+    "transitionRuleBasedSchemas": {
+      "since": "0.0.105",
+      "status": "stable",
+      "description": "Every transition kind (state, shared, start, cancel, updateData, exit) may declare schemas, a rule-based list of schema entries next to the unchanged schema, mirroring view/views. Entries are walked in declaration order, the first matching rule wins, a rule-less entry is the fallback and must be last; schemas wins over schema; automatic and scheduled transitions may not declare schemas. The rule context is workflow, instance, runtime, transition, body (the instance's latest data, or {} when none) and the request headers; there are no query parameters. WRITE PATH: no schema declared accepts the request; a declared schemas list with no matching entry rejects it with 400 Transition:100025 and leaves the instance in its state. READ PATH: the instance schema function serves the matched entry; no match is 404. hasSchema in transition lists is declared-only (schema or a non-empty schemas), like hasView. The schema-function cache key and ETag also hash the non-volatile request headers (RequestHeaderHash), so header-driven rules never receive another header value's cached entry or a false 304. PURELY ADDITIVE: a transition declaring only schema behaves as before. Requires vnext-schema 0.0.60 (transitions[].schemas).",
+      "schemaPath": "transitions[].schemas, sharedTransitions[].schemas, startTransition.schemas, cancel.schemas, updateData.schemas, exit.schemas",
+      "documentation": "docs/runtime/function-contract-resolution.md"
     }
   }
 }
