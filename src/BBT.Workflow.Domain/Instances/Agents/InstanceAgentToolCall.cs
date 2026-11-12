@@ -4,7 +4,7 @@ using BBT.Workflow.Definitions;
 namespace BBT.Workflow.Instances.Agents;
 
 /// <summary>Outcome of one tool call.</summary>
-public enum AgentToolCallStatus : short
+public enum AgentToolCallStatus : short // skipcq: CS-P1021 — stored in a smallint column
 {
     /// <summary>The tool returned.</summary>
     Completed = 1,

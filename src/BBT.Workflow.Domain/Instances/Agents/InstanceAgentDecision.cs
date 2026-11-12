@@ -4,7 +4,7 @@ using BBT.Workflow.Definitions;
 namespace BBT.Workflow.Instances.Agents;
 
 /// <summary>Who produced the selected transition.</summary>
-public enum AgentDecisionSource : short
+public enum AgentDecisionSource : short // skipcq: CS-P1021 — stored in a smallint column
 {
     /// <summary>The model chose.</summary>
     Model = 1,
