@@ -241,6 +241,17 @@
       "replacement": "Helm pythonRuntime block; Orchestration Workflow:PythonRuntime:AppId / InvokeMethod / TimeoutGraceSeconds",
       "severity": "warning",
       "message": "The Execution host no longer reads any Python:* setting; leftover overrides are ignored (unbound keys). Python runs in the domain's own runtime container and Orchestration calls it, configured by Workflow:PythonRuntime (set by the Helm chart when pythonRuntime is enabled). See migration python-task-handler-contract."
+    },
+    {
+      "id": "function-input-schema-no-match-accepts",
+      "type": "behavior",
+      "component": "function",
+      "path": "inputSchema",
+      "deprecatedSince": "0.0.105",
+      "removedAt": null,
+      "replacement": "Add a rule-less fallback entry as the last inputSchema entry to keep accepting unmatched callers",
+      "severity": "warning",
+      "message": "A rule-based inputSchema whose entries all carry a rule and none match now rejects the request with 400 Function:800006; it used to skip validation."
     }
   ]
 }

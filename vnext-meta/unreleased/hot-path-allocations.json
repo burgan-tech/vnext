@@ -1,7 +1,0 @@
-{
-  "releaseNote": {
-    "summary": "Cuts per-request work on read and task paths (ETag, role grants, task bindings, instance loads) and fixes representation ETags for strings with escapes.",
-    "breaking": false,
-    "docs": []
-  }
-}

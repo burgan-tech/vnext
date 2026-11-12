@@ -28,6 +28,22 @@ public static class WorkflowMetrics
         description: "Trigger-to-rest duration of a workflow instance activation episode.");
 
     /// <summary>
+    /// How long a transition-level resource lock was actually held, in milliseconds — acquire to
+    /// release. Tagged by <c>vnext.domain</c> and <c>vnext.flow.key</c>.
+    /// <para>
+    /// This is the alarm for a lock that is not handed back on time. Release travels an at-least-once
+    /// path, so a stalled cleanup leaves the lock standing until its TTL: the holder is long finished
+    /// and every queued instance burns its retry budget against nobody. That shows up here, and only
+    /// here, as hold durations climbing toward the configured TTL — alert on the upper percentiles
+    /// approaching it rather than on any single lock.
+    /// </para>
+    /// </summary>
+    public static readonly Histogram<double> ResourceLockHoldDurationMs = Meter.CreateHistogram<double>(
+        "workflow_resource_lock_hold_duration_ms",
+        unit: "ms",
+        description: "Acquire-to-release duration of a transition-level resource lock.");
+
+    /// <summary>
     /// One count per resume request of a pipeline paused for declarative long-poll termination.
     /// Tagged by <c>vnext.domain</c>, <c>vnext.flow.key</c>, <c>vnext.activation.trigger</c>
     /// (<c>ack</c> = the client acknowledged, <c>ack-timeout</c> = the fallback job fired because it

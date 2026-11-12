@@ -1,8 +1,11 @@
+using BBT.Aether.Clock;
 using BBT.Aether.Results;
+using BBT.Aether.Uow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.SubFlow.Headers;
+using BBT.Workflow.Telemetry;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Pipeline.Steps;
@@ -13,6 +16,13 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// This step runs after all other pipeline steps to ensure proper completion.
 /// Uses Result pattern for exception-free error handling.
 /// SubItem completion events are now published as domain events via Instance.Complete().
+///
+/// It is also where a terminal instance hands back its distributed resource locks. That release is
+/// armed on the ambient unit of work's OnCompleted, so it runs only once the terminal state is
+/// COMMITTED: releasing before the commit would free the lock for a transition that may still roll
+/// back, letting a second instance into the section the lock exists to serialize. The event-driven
+/// cleanup path (InstanceCancellationService) stays as an idempotent backstop for the terminal paths
+/// that never reach this step.
 /// </summary>
 /// <param name="instanceRepository">Persists the finished instance.</param>
 /// <param name="logger">Step logger.</param>
@@ -25,6 +35,9 @@ public sealed class HandleFinishStep(
     ILogger<HandleFinishStep> logger,
     ISubItemEventDataResolver? subItemDataResolver = null,
     IInstanceDataWriteService? instanceDataWriteService = null,
+    IResourceLockService? resourceLockService = null,
+    IUnitOfWorkManager? uowManager = null,
+    IClock? clock = null,
     ICarriedHeaderPolicy? carriedHeaderPolicy = null,
     BBT.Workflow.Instances.Agents.IAgentSessionStore? agentSessionStore = null) : ITransitionStep
 {
@@ -63,6 +76,7 @@ public sealed class HandleFinishStep(
                 },
                 cancellationToken);
             context.Items["IsFinishState"] = true;
+            await ArmResourceLockReleaseAsync(context, cancellationToken);
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
@@ -73,6 +87,7 @@ public sealed class HandleFinishStep(
             .TapAsync(ctx => instanceRepository.UpdateAsync(ctx.Instance, true, cancellationToken))
             .TapAsync(ctx => DeleteAgentSessionsAsync(ctx, cancellationToken))
             .Tap(ctx => ctx.Items["IsFinishState"] = true)
+            .TapAsync(ctx => ArmResourceLockReleaseAsync(ctx, cancellationToken))
             .Map(_ => StepOutcome.Continue());
     }
 
@@ -88,6 +103,85 @@ public sealed class HandleFinishStep(
             return;
 
         await agentSessionStore.DeleteInstanceSessionsAsync(context.Instance.Id, cancellationToken);
+    }
+
+    /// <summary>
+    /// Hands back every distributed lock this instance holds, once the terminal state is committed.
+    ///
+    /// Timing is the whole point. Freeing the lock inline would publish "the section is free" while the
+    /// transaction can still roll back; waiting for the cleanup EVENT (outbox to Dapr to inbox) frees it
+    /// only as fast as that chain drains, and a chain that stalls leaves the lock to its TTL — every
+    /// queued instance then burns its retry budget against a holder that finished minutes ago. On the
+    /// ambient unit of work's OnCompleted it is neither: the commit has landed and the release is still
+    /// in this request.
+    ///
+    /// Best-effort by design: the release is idempotent, the TTL is the ultimate safety net, and a lock
+    /// that cannot be handed back must never fail a business transition that already committed.
+    /// </summary>
+    private async Task ArmResourceLockReleaseAsync(
+        TransitionExecutionContext context, CancellationToken cancellationToken)
+    {
+        if (resourceLockService is null)
+            return;
+
+        var lockKeys = context.Instance.GetTrackedResourceLocks();
+        if (lockKeys.Count == 0)
+            return;
+
+        var instanceId = context.Instance.Id;
+        var owner = instanceId.ToString();
+        var held = lockKeys
+            .Select(key => (Key: key, AcquiredAt: context.Instance.GetResourceLockAcquiredAt(key)))
+            .ToList();
+        var domain = context.Domain;
+        var flowKey = context.Workflow.Key;
+
+        var uow = uowManager?.Current;
+        if (uow is null)
+        {
+            // No ambient unit of work: the repository update above stands on its own, so there is no
+            // commit left to wait for. AWAITED on purpose — IResourceLockService is scoped, and letting
+            // the release outlive this step would hand it a DaprClient from a scope that may already be
+            // disposed. The latency is one release call on a path that is already finishing.
+            await ReleaseAllAsync(held, owner, instanceId, domain, flowKey, cancellationToken);
+            return;
+        }
+
+        // OnCompleted runs while the unit of work — and therefore the scope that owns the lock service
+        // — is still alive.
+        uow.OnCompleted(async _ =>
+            await ReleaseAllAsync(held, owner, instanceId, domain, flowKey, CancellationToken.None));
+    }
+
+    private async Task ReleaseAllAsync(
+        IReadOnlyList<(string Key, DateTime? AcquiredAt)> held,
+        string owner,
+        Guid instanceId,
+        string domain,
+        string flowKey,
+        CancellationToken cancellationToken)
+    {
+        foreach (var (lockKey, acquiredAt) in held)
+        {
+            try
+            {
+                await resourceLockService!.ReleaseAsync(lockKey, owner, cancellationToken);
+
+                // Metered only when the acquisition was stamped: an instance started before the stamp
+                // existed would otherwise report its whole age as the hold time and poison the signal.
+                if (acquiredAt is { } start)
+                {
+                    WorkflowMetrics.ResourceLockHoldDurationMs.Record(
+                        ((clock?.UtcNow ?? DateTime.UtcNow) - start).TotalMilliseconds,
+                        new KeyValuePair<string, object?>(TelemetryConstants.TagNames.Domain, domain),
+                        new KeyValuePair<string, object?>(TelemetryConstants.TagNames.Flow, flowKey));
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.ResourceLockAutoReleaseError(ex, lockKey, instanceId);
+            }
+        }
     }
 
     /// <summary>
