@@ -278,6 +278,12 @@ public static class WorkflowErrorCodes
     /// <summary>Workflow-scoped authorize was called without a supported <c>type</c> (supported: <c>instance</c>).</summary>
     public const string AuthorizeUnsupportedType = "Authorization:110005";
 
+    /// <summary>
+    /// A rule-based selection (schema or view) read the caller's roles and the caller-role provider could
+    /// not answer, so the selection cannot be decided. Transient: the request can be retried. Maps to HTTP 503.
+    /// </summary>
+    public const string CallerRolesUnavailable = "Authorization:110006";
+
     #endregion
     
     #region Discovery Errors (700xxx)

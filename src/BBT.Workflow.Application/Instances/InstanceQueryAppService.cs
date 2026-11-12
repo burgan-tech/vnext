@@ -70,7 +70,8 @@ public sealed class InstanceQueryAppService(
     HumanTask.HumanTaskDescentLimiter descentLimiter,
     Execution.Validation.ITransitionSchemaResolver transitionSchemaResolver,
     ILogger<InstanceQueryAppService> logger,
-    IRowSecurityService? rowSecurityService = null)
+    IRowSecurityService? rowSecurityService = null,
+    ICallerAccessorFactory? callerAccessorFactory = null)
     : ApplicationService(serviceProvider), IInstanceQueryAppService
 {
     private static readonly ConcurrentDictionary<string, BuildGate> ActiveSubflowBuildGates = new();
@@ -3503,6 +3504,8 @@ public sealed class InstanceQueryAppService(
             .WithBody(instanceData?.Data ?? new JsonData("{}"))
             .WithHeaders(input.Headers)
             .WithQueryParameters(input.QueryParameters)
+            // View rules may select by the caller's resolved roles; resolved only if a rule reads them.
+            .WithCaller(callerAccessorFactory?.ForRequest(input.Headers, cancellationToken))
             .BuildAsync(cancellationToken);
 
         // One span for the whole ordered walk, not one per rule: the question is "how many rules ran
@@ -3529,6 +3532,14 @@ public sealed class InstanceQueryAppService(
                 viewEntry.Rule,
                 scriptContext,
                 cancellationToken);
+
+            // A rule that read the caller's roles while the role provider could not answer decides
+            // nothing; a later entry or the fallback would be a view chosen for an unidentified caller.
+            if (scriptContext.Caller.ResolutionFailed)
+            {
+                InstanceReadActivityHelper.SetViewResolution(viewResolve, rulesEvaluated, null);
+                return Result<GetViewOutput>.Fail(WorkflowErrors.CallerRolesUnavailable());
+            }
 
             if (ruleResult is { IsSuccess: true, Value: true })
             {

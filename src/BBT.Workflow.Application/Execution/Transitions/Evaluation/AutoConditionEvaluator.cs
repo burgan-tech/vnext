@@ -1,3 +1,5 @@
+using BBT.Workflow.Scripting.Caller;
+using BBT.Workflow.Authorization;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
@@ -18,7 +20,8 @@ public sealed class AutoConditionEvaluator(
     IScriptContextFactory scriptContextFactory,
     IInstanceRepository instanceRepository,
     ILogger<AutoConditionEvaluator> logger,
-    IRuntimeInfoProvider runtimeInfoProvider) : IAutoConditionEvaluator
+    IRuntimeInfoProvider runtimeInfoProvider,
+    ICallerAccessorFactory? callerAccessorFactory = null) : IAutoConditionEvaluator
 {
     /// <inheritdoc />
     /// <summary>
@@ -77,10 +80,30 @@ public sealed class AutoConditionEvaluator(
                     innerCt => CreateScriptContextAsync(context, innerCt),
                     ct);
 
-                var conditionResult = await taskConditionService.ExecuteConditionAsync(
-                    transition.Rule!,
-                    scriptContext,
-                    ct);
+                // Caller roles (context.Caller) — decided in council 2026-11-12-script-caller-roles-background
+                // (Chair override): automatic-transition rules see the roles of the caller who drove this hop
+                // (the request, the async-accept job replaying its headers, the auto hops chained inline after
+                // them). System hops (a fired timer, a SubFlow resume, a continuation) have no caller and get the
+                // unavailable accessor. The context is SHARED with this hop's OnEntry/OnExit/OnExecute/ResourceLock
+                // task mappings, so the caller is exposed for this rule only and closed afterwards.
+                var caller = callerAccessorFactory?.ForHop(context.Actor, context.Headers, ct)
+                             ?? NullCallerAccessor.Instance;
+                Result<bool> conditionResult;
+                using (scriptContext.ExposeCaller(caller))
+                {
+                    conditionResult = await taskConditionService.ExecuteConditionAsync(
+                        transition.Rule!,
+                        scriptContext,
+                        ct);
+                }
+
+                // A rule that read the caller's roles while the provider could not answer decides nothing,
+                // whatever it returned, threw or swallowed: abandon the whole evaluation (the DefaultAutoTransition
+                // included) instead of routing the instance on an unidentified caller. Retryable 110006; the step
+                // fails through the error boundary. (A rule that throws for any OTHER reason still reads as
+                // "not satisfied" here — a pre-existing behaviour whose fix is a separate, announced change.)
+                if (caller.ResolutionFailed)
+                    throw new CallerRolesUnavailableForAutoRuleException(transition.Key);
 
                 return MapToEvaluation(transition.Key, conditionResult.Value);
             },
@@ -110,6 +133,10 @@ public sealed class AutoConditionEvaluator(
         TransitionExecutionContext context,
         Exception ex)
     {
+        // Already logged (20519) by the accessor factory with the provider's failure kind.
+        if (ex is CallerRolesUnavailableForAutoRuleException)
+            return WorkflowErrors.CallerRolesUnavailable();
+
         logger.TransitionRuleFailed(transition.Key, context.InstanceId, ex.Message);
 
         return ExecutionErrors.TransitionRuleEvaluationFailed(transition.Key, ex.Message, ex.ToString());
@@ -136,3 +163,6 @@ public sealed class AutoConditionEvaluator(
     }
 }
 
+/// <summary>Raised inside the guarded evaluation so the TryAsync wrapper maps it to <c>Authorization:110006</c>.</summary>
+internal sealed class CallerRolesUnavailableForAutoRuleException(string transitionKey)
+    : Exception($"Caller roles could not be resolved for automatic transition '{transitionKey}'.");

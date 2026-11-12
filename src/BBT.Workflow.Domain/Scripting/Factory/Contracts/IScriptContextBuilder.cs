@@ -14,6 +14,13 @@ public interface IScriptContextBuilder
     /// Sets the runtime information provider for the ScriptContext.
     /// </summary>
     IScriptContextBuilder WithRuntime(IRuntimeInfoProvider runtimeInfoProvider);
+
+    /// <summary>
+    /// Sets the caller accessor rule scripts read roles through (<see cref="ScriptContext.Caller"/>).
+    /// Only request-bound selection surfaces set it; everywhere else the context keeps
+    /// <see cref="Caller.NullCallerAccessor"/>.
+    /// </summary>
+    IScriptContextBuilder WithCaller(Caller.ICallerAccessor? caller);
     
     /// <summary>
     /// Sets the workflow by retrieving it from cache using domain, workflow key, and version.

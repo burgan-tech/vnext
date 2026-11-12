@@ -4763,6 +4763,18 @@ public static partial class WorkflowLogs
         int roleCount);
 
     /// <summary>
+    /// Logs when a rule-based schema or view selection read the caller's roles and the provider could not
+    /// answer; the selection fails with <c>Authorization:110006</c>. Role values are never logged.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20519,
+        Level = LogLevel.Warning,
+        Message = "Caller roles could not be resolved for a rule-based selection; the selection fails. FailureKind={FailureKind}")]
+    public static partial void CallerRolesUnavailableForSelection(
+        this ILogger logger,
+        string? failureKind);
+
+    /// <summary>
     /// Logs when the long-poll ownership gate could not establish the caller's roles and therefore
     /// declined to arm the pause. The transition continues normally; nothing faults. Only a provider
     /// that fails reaches it — morph-idm's failures arrive as an empty set and are logged as 20442/20463.

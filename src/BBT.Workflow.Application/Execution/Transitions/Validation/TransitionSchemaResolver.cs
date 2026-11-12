@@ -1,4 +1,5 @@
 using BBT.Aether.Results;
+using BBT.Workflow.Authorization;
 using BBT.Workflow.Contracts;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Functions.Contracts;
@@ -22,6 +23,7 @@ public sealed class TransitionSchemaResolver(
     IScriptContextFactory scriptContextFactory,
     IInstanceRepository instanceRepository,
     IRuntimeInfoProvider runtimeInfoProvider,
+    ICallerAccessorFactory callerAccessorFactory,
     ILogger<TransitionSchemaResolver> logger) : ITransitionSchemaResolver
 {
     /// <inheritdoc />
@@ -49,6 +51,8 @@ public sealed class TransitionSchemaResolver(
             .WithTransition(transition.Key)
             .WithBody(instance.LatestData?.Data ?? new JsonData("{}"))
             .WithHeaders(headerCopy)
+            // Rules may select by the caller's resolved roles; resolved only if a rule reads them.
+            .WithCaller(callerAccessorFactory.ForRequest(headerCopy, ct))
             .BuildAsync(ct));
 
         var selected = await selector.SelectAsync(

@@ -1,5 +1,6 @@
 using BBT.Aether.Results;
 using BBT.Workflow.Functions.Contracts;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Tasks.Coordinator;
 
 namespace BBT.Workflow.Contracts;
@@ -30,6 +31,12 @@ public sealed class ContractEntrySelector(ITaskConditionService taskConditionSer
                 candidate.Rule,
                 contextResult.Value!,
                 cancellationToken);
+
+            // A rule that read the caller's roles while the role provider could not answer decides
+            // nothing - whatever it returned, threw or swallowed. Falling through to a later entry would
+            // serve a contract chosen for a caller we could not identify, so the selection fails instead.
+            if (contextResult.Value!.Caller.ResolutionFailed)
+                return Result<ContractSelection?>.Fail(WorkflowErrors.CallerRolesUnavailable());
 
             if (ruleResult is { IsSuccess: true, Value: true })
                 return Result<ContractSelection?>.Ok(

@@ -748,6 +748,15 @@ public static class WorkflowErrors
             WorkflowErrorCodes.CallerRoleResolutionFailed,
             $"Caller roles could not be resolved from provider '{provider}': {reason}");
 
+    /// <summary>
+    /// A rule-based schema or view selection read the caller's roles and the provider could not answer.
+    /// The selection fails instead of falling through to a later (possibly looser) entry; retryable.
+    /// </summary>
+    public static Error CallerRolesUnavailable()
+        => Error.Transient(
+            WorkflowErrorCodes.CallerRolesUnavailable,
+            "The caller's roles could not be resolved, so a rule-based selection that reads them cannot be decided; the request can be retried");
+
     #endregion
 
     #region Discovery Errors

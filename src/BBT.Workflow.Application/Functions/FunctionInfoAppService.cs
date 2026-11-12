@@ -1,6 +1,7 @@
 using BBT.Aether.Application.Services;
 using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
+using BBT.Workflow.Authorization;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Functions.Contracts;
@@ -32,7 +33,8 @@ public sealed class FunctionInfoAppService(
     IUrlTemplateBuilder urlTemplateBuilder,
     IFunctionAccessPolicy functionAccessPolicy,
     IFunctionContractResolver contractResolver,
-    IViewContentResolutionService viewContentResolutionService)
+    IViewContentResolutionService viewContentResolutionService,
+    ICallerAccessorFactory callerAccessorFactory)
     : ApplicationService(serviceProvider), IFunctionInfoAppService
 {
     private const string TargetInput = "input";
@@ -417,6 +419,7 @@ public sealed class FunctionInfoAppService(
             .WithBody(instance?.LatestData?.Data ?? new JsonData("{}"))
             .WithHeaders(headers)
             .WithQueryParameters(queryParameters)
+            .WithCaller(callerAccessorFactory.ForRequest(headers, ct))
             .BuildAsync(ct));
     }
 
