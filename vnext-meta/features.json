@@ -1,5 +1,5 @@
 {
-  "runtimeVersion": "0.0.103",
+  "runtimeVersion": "0.0.104",
   "engine": {
     "historyMode": {
       "since": "0.0.100",
@@ -660,6 +660,16 @@
       "status": "stable",
       "description": "SubflowCompletionService used to open one more unit of work after the parent's resume for a single set-based UPDATE (InstanceCorrelation.SettledAt, the duplicate-delivery fast-path marker). The completion relay now hands the terminal outcome to the resume (ExecutionInfo.SubFlowResumeTerminalOutcome / SubFlowResumeSettledAt, mirrored on PipelineDirectives) and ClearBusyOnResumeStep stamps the marker inside the resume hop's own unit of work; the meaning is unchanged (the parent's resume reached the database) and a resume that fails afterwards still reverts the correlation, which clears the marker. The separate best-effort write remains only for a resume that stopped before its first step (AutoTransitionConditionNotMet, InstanceCompleted). One fewer DbContext, connection rental and round trip per completion; measured on morph-idm zeebe-approval (test, 2026-11-03) five such writes per ack-timeout chain.",
       "documentation": "docs/architecture/subflow-execution.md"
+    },
+    "syncResponseState": {
+      "since": "0.0.104",
+      "status": "stable",
+      "description": "currentState and effectiveState on sync start/transition responses (vnext#1182), next to status and effectiveStatus. Same names and values as metadata.currentState / metadata.effectiveState on the instance GET: the persisted columns, no SubFlow descent - not the state function's state, which is the active SubFlow leaf's. Also carried by the identity-only answer a runtime-internal sync call gets (cross-domain sub/instances/start, subflow forward relay), so a sync SubProcess task output holds the child's state: data.value.currentState on a same-domain start, data.currentState on a cross-domain one. Read from the instance the sync path already holds; no extra database read on any path. An async 202 does not carry them. Purely additive; the representation ETag of a sync response changes once because the body gained two fields, the state function body and ResponseShapeVersion are untouched.",
+      "apiEndpoints": [
+        "POST {domain}/workflows/{workflow}/instances/start",
+        "PATCH {domain}/workflows/{workflow}/instances/{instance}/transitions/{transition}",
+        "POST {domain}/workflows/{workflow}/sub/instances/start"
+      ]
     }
   }
 }

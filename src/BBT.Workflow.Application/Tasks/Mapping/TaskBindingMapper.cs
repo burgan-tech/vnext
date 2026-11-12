@@ -30,6 +30,14 @@ public static class TaskBindingMapper
     }
 
     /// <summary>
+    /// Maps a WorkflowTask to its binding object and wire task type WITHOUT serializing it — for callers
+    /// that hand the object to <c>ITaskInvocationDispatcher.DispatchAsync&lt;TBinding&gt;</c>, which only
+    /// serializes when the call actually leaves the process. Same mapping and error results as
+    /// <see cref="CreateEnvelope"/>.
+    /// </summary>
+    public static Result<(string TaskType, object Binding)> CreateBinding(WorkflowTask task) => MapToBinding(task);
+
+    /// <summary>
     /// Maps a WorkflowTask to its corresponding binding type and task type string.
     /// </summary>
     private static Result<(string TaskType, object Binding)> MapToBinding(WorkflowTask task)

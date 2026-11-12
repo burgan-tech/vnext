@@ -150,6 +150,11 @@ public static class InstancesModelCreatingExtensions
                 .HasColumnType("timestamp with time zone")
                 .HasComputedColumnSql("COALESCE(\"ModifiedAt\", \"CreatedAt\")", stored: true);
 
+            // Shadow column: the updateData continuation claim on a parked Busy instance
+            // (IInstanceRepository.TryClaimContinuationAsync). Written and cleared only set-based.
+            b.Property<DateTime?>(InstanceContinuationClaim.ColumnName)
+                .HasColumnType("timestamp with time zone");
+
             // Runtime hot-path partial indexes. Runtime DB queries only ever filter by
             // Status = 'A' (Active); 'B' (Busy) is consumed in-memory and 'F' (Faulted)
             // retry path performs a PK lookup. Keeping the partial filter narrow lets the

@@ -258,6 +258,10 @@ public sealed class TransitionAuthorizationManager(
         if (candidates.Count == 0)
             return [];
 
+        // The parent's stamped override map, deserialized ONCE for the batch: the prefetch hint and the
+        // per-key loop below both look keys up in it (it used to be re-read twice per candidate).
+        var overrides = instance is null ? null : SubFlowTransitionOverrideReader.TryRead(instance);
+
         // The prefetch hint must cover the grants that will actually be evaluated, which for an
         // overridden transition is the parent's set and not the child's — a $PreviousUser grant
         // missing from the hint can never match.
@@ -266,15 +270,14 @@ public sealed class TransitionAuthorizationManager(
             workflow,
             requestContext,
             candidates.SelectMany(c =>
-                EffectiveTransitionGrants(instance, c.Transition).Concat(c.StateEntry?.Roles ?? [])),
+                (SubFlowTransitionOverrideReader.TryReadRoles(overrides, c.Transition.Key) ?? c.Transition.Roles)
+                .Concat(c.StateEntry?.Roles ?? [])),
             cancellationToken);
 
         var result = new List<string>(candidates.Count);
         foreach (var (key, transition, stateEntry) in candidates)
         {
-            var stamped = instance is null
-                ? null
-                : SubFlowTransitionOverrideReader.TryReadRoles(instance, transition.Key);
+            var stamped = SubFlowTransitionOverrideReader.TryReadRoles(overrides, transition.Key);
 
             var allowed = stamped is { Count: > 0 }
                 ? evaluator.IsAnyRoleAllowed(callerRoles, stamped, transition)
@@ -367,9 +370,13 @@ public sealed class TransitionAuthorizationManager(
             ? null
             : SubFlowStateOverrideReader.TryReadQueryRoles(instance, currentStateKey);
 
-        var queryRoles = overridden is { Count: > 0 }
-            ? overridden
-            : state is { QueryRoles.Count: > 0 } ? state.QueryRoles : workflow.QueryRoles;
+        IReadOnlyCollection<RoleGrant> queryRoles;
+        if (overridden is { Count: > 0 })
+            queryRoles = overridden;
+        else if (state is { QueryRoles.Count: > 0 })
+            queryRoles = state.QueryRoles;
+        else
+            queryRoles = workflow.QueryRoles;
 
         return await IsAnyRoleAllowedForGrantsAsync(callerRoles, queryRoles, instance, requestContext, cancellationToken);
     }
@@ -417,7 +424,8 @@ public sealed class TransitionAuthorizationManager(
     /// Static comparison only: with no instance there is nothing for a predefined or identity-bound
     /// dynamic leaf to resolve against, so those leaves are <see cref="GrantMatch.No"/> here. A
     /// role-bound leaf is <see cref="GrantMatch.Unknown"/> for a caller with no roles, exactly as on
-    /// the instance-bound path.
+    /// the instance-bound path. <c>$Everyone</c> is the one identity leaf that needs nothing to
+    /// resolve against: it is <see cref="GrantMatch.Yes"/> here for every caller.
     /// </para>
     /// </remarks>
     public static bool EvaluateRolesStatic(
@@ -435,11 +443,24 @@ public sealed class TransitionAuthorizationManager(
                 normalized.Add(role.Trim());
         }
 
-        return RoleGrantMatcher.Decide(roleGrants, leafRole =>
-            !IsRoleBound(leafRole) ? GrantMatch.No
-            : normalized.Count == 0 ? GrantMatch.Unknown
-            : MatchesAnyStatic(leafRole, normalized) ? GrantMatch.Yes
-            : GrantMatch.No, defaultAllowWhenNoAllowGrant);
+        return RoleGrantMatcher.Decide(
+            roleGrants, leafRole => MatchStaticLeaf(leafRole, normalized), defaultAllowWhenNoAllowGrant);
+    }
+
+    /// <summary>
+    /// How one leaf matches on the no-instance path: <c>$Everyone</c> is Yes, a leaf that is not
+    /// role-bound has nothing to resolve against (No), a role-bound leaf is Unknown for a role-less
+    /// caller, else Yes only when one of the caller's roles names it.
+    /// </summary>
+    private static GrantMatch MatchStaticLeaf(string leafRole, List<string> normalized)
+    {
+        if (PredefinedInstanceRoles.IsEveryone(leafRole))
+            return GrantMatch.Yes;
+        if (!IsRoleBound(leafRole))
+            return GrantMatch.No;
+        if (normalized.Count == 0)
+            return GrantMatch.Unknown;
+        return MatchesAnyStatic(leafRole, normalized) ? GrantMatch.Yes : GrantMatch.No;
     }
 
     /// <summary>
@@ -483,6 +504,10 @@ public sealed class TransitionAuthorizationManager(
             or PredefinedInstanceRoles.PreviousUser
             or PredefinedInstanceRoles.InstanceBehalfOfStarter
             or PredefinedInstanceRoles.PreviousBehalfOfUser)
+            return false;
+
+        // $Everyone is trim-tolerant (IsEveryone), so a padded spelling must classify the same way here.
+        if (PredefinedInstanceRoles.IsEveryone(leafRole))
             return false;
 
         var dynamicGrant = DynamicRoleGrant.TryParse(leafRole);

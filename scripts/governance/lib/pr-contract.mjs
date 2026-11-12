@@ -9,6 +9,7 @@ import {
   parseMetaImpact,
 } from './pr-body.mjs';
 import { META_FILES, isFragmentPath } from './meta-lint.mjs';
+import { isAiPr, checkAiRecord } from './ai-record.mjs';
 
 /** @typedef {{id:string, severity:'error'|'warning', file:string, message:string}} Finding */
 
@@ -59,6 +60,8 @@ export function checkPr(pr) {
   for (const key of required) {
     if (!present(key)) add('PR-SECTION', `Section "${key}" is missing or still blank.`);
   }
+  // AI PRs carry the decision record on every tier, light ones included.
+  if (isAiPr(pr.labels)) checkAiRecord(pr, sections, pr.impactRules ?? [], add);
   if (light) return findings;
 
   const milestoneTitle = pr.milestone?.title ?? '';

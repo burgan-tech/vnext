@@ -43,10 +43,22 @@ public static class SubFlowTransitionOverrideReader
         if (string.IsNullOrEmpty(transitionKey))
             return null;
 
-        var map = TryRead(instance);
+        return TryReadRoles(TryRead(instance), transitionKey);
+    }
 
-        return map is not null
-               && map.TryGetValue(transitionKey, out var tOverride)
+    /// <summary>
+    /// The grants a map already read with <see cref="TryRead"/> stamps for one transition, or null when it
+    /// stamps none for it — the same answer as <see cref="TryReadRoles(Instance, string)"/>, without
+    /// deserializing the stamp again. For a caller that resolves many keys of one instance.
+    /// </summary>
+    public static IReadOnlyCollection<RoleGrant>? TryReadRoles(
+        IReadOnlyDictionary<string, SubFlowTransitionOverride>? map,
+        string transitionKey)
+    {
+        if (map is null || string.IsNullOrEmpty(transitionKey))
+            return null;
+
+        return map.TryGetValue(transitionKey, out var tOverride)
                && tOverride.Roles is { Count: > 0 }
             ? tOverride.Roles
             : null;

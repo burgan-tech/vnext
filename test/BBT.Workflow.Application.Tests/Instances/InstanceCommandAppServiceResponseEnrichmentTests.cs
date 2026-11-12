@@ -210,6 +210,85 @@ public class InstanceCommandAppServiceResponseEnrichmentTests : IDisposable
             .FindByIdentifierAsReadOnlyAsync(default!, default);
     }
 
+    [Fact]
+    public async Task TransitionAsync_SyncRequest_CarriesTheInstanceStateFromTheProjection()
+    {
+        var instanceId = Guid.NewGuid();
+        SetupActiveSnapshot(instanceId);
+        SetupExecution(instanceId);
+        _instanceRepository.FindByIdentifierAsReadOnlyAsync(instanceId.ToString(), Arg.Any<CancellationToken>())
+            .Returns(InstanceAt(instanceId, "otp-waiting"));
+
+        var result = await _service.TransitionAsync(
+            instanceId.ToString(), "regular-transition", CreateInput(sync: true), CancellationToken.None);
+
+        // vnext#1182: the state rides with the status, from the instance the projection already holds.
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.CurrentState.ShouldBe("otp-waiting");
+        result.Value.EffectiveState.ShouldBe("otp-waiting");
+        await _instanceRepository.Received(1)
+            .FindByIdentifierAsReadOnlyAsync(instanceId.ToString(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task TransitionAsync_SyncRequestWithSuppression_CarriesTheStateWithoutAnyRead()
+    {
+        var instanceId = Guid.NewGuid();
+        SetupActiveSnapshot(instanceId);
+        _executionService
+            .ExecuteTransitionAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = instanceId,
+                Status = InstanceStatus.Active,
+                PipelineInstance = InstanceAt(instanceId, "approved")
+            }));
+        var input = CreateInput(sync: true);
+        input.SuppressResponseEnrichment = true;
+
+        var result = await _service.TransitionAsync(
+            instanceId.ToString(), "regular-transition", input, CancellationToken.None);
+
+        // Identity-only stays identity-only in cost: the state comes off the pipeline's instance.
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.CurrentState.ShouldBe("approved");
+        result.Value.EffectiveState.ShouldBe("approved");
+        result.Value.Attributes.ShouldBeNull();
+        await _instanceRepository.DidNotReceiveWithAnyArgs()
+            .FindByIdentifierAsReadOnlyAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task TransitionAsync_AsyncRequest_CarriesNoState()
+    {
+        var instanceId = Guid.NewGuid();
+        SetupActiveSnapshot(instanceId);
+        _executionService
+            .ExecuteTransitionAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = instanceId,
+                Status = InstanceStatus.Busy,
+                PipelineInstance = InstanceAt(instanceId, "approved")
+            }));
+        var input = CreateInput(sync: false);
+        input.SuppressResponseEnrichment = true;
+
+        var result = await _service.TransitionAsync(
+            instanceId.ToString(), "regular-transition", input, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.CurrentState.ShouldBeNull();
+        result.Value.EffectiveState.ShouldBeNull();
+    }
+
+    private static Instance InstanceAt(Guid instanceId, string state)
+    {
+        var instance = Instance.Create(instanceId, Flow, Version, "key");
+        instance.ChangeState(State.Create(state, StateType.Intermediate, StateSubType.None, "Patch"));
+        return instance;
+    }
+
     private void SetupActiveSnapshot(Guid instanceId)
         => _instanceRepository
             .GetExecutionSnapshotAsync(instanceId.ToString(), Arg.Any<CancellationToken>())

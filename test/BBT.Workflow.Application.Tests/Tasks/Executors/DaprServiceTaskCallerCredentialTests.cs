@@ -38,13 +38,13 @@ public sealed class DaprServiceTaskCallerCredentialTests
             """.ToJsonElement());
         task.SetReference(new Reference("call-partner", "test-domain", "sys-tasks", "1.0.0"));
 
-        BBT.Workflow.Tasks.TaskEnvelope? sent = null;
+        BBT.Workflow.Execution.Bindings.DaprServiceBinding? sent = null;
         var dispatcher = Substitute.For<ITaskInvocationDispatcher>();
-        dispatcher.DispatchAsync(Arg.Any<WorkflowTask>(), Arg.Any<string>(), Arg.Any<BBT.Workflow.Tasks.TaskEnvelope>(),
+        dispatcher.DispatchAsync(Arg.Any<WorkflowTask>(), Arg.Any<string>(), Arg.Any<BBT.Workflow.Execution.Bindings.DaprServiceBinding>(),
                 Arg.Any<BBT.Workflow.Tasks.TaskTraceContext>(), Arg.Any<CancellationToken>())
             .Returns(call =>
             {
-                sent = call.ArgAt<BBT.Workflow.Tasks.TaskEnvelope>(2);
+                sent = call.ArgAt<BBT.Workflow.Execution.Bindings.DaprServiceBinding>(2);
                 return Result<BBT.Workflow.Tasks.TaskInvocationResult>.Ok(
                     BBT.Workflow.Tasks.TaskInvocationResult.Success(data: JsonSerializer.SerializeToElement(new { ok = true })));
             });
@@ -68,7 +68,7 @@ public sealed class DaprServiceTaskCallerCredentialTests
             CancellationToken.None);
 
         var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(
-            sent!.Binding.GetProperty("Headers").GetString()!)!;
+            sent!.Headers!)!;
         headers["role"].ShouldBe("svc.reader");
         headers["sub"].ShouldBe("alice");
         headers["act_sub"].ShouldBe("alice-actor");

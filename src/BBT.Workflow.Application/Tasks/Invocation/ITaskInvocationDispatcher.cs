@@ -22,4 +22,20 @@ public interface ITaskInvocationDispatcher
         TaskEnvelope envelope,
         TaskTraceContext traceContext,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Same decision and result contract as the envelope overload, for a binding the caller holds as
+    /// its mapped object. Local, with an <see cref="ITypedLocalTaskInvoker{TBinding}"/> registered for
+    /// the wire type: the object is handed over as-is (no JSON round trip). Every other route —
+    /// Remote above all — serializes it into the exact envelope the envelope overload would have
+    /// received (<c>TaskType = wireTaskType</c>, <c>TaskKey = task.Key</c>, binding serialized with
+    /// its runtime type).
+    /// </summary>
+    Task<Result<TaskInvocationResult>> DispatchAsync<TBinding>(
+        WorkflowTask task,
+        string wireTaskType,
+        TBinding binding,
+        TaskTraceContext traceContext,
+        CancellationToken cancellationToken = default)
+        where TBinding : class;
 }

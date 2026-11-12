@@ -164,7 +164,8 @@ function, so clients reuse their existing rendering path.
 All six routes run the **same** scope and role gates as execution
 (`IFunctionAccessPolicy`), so a caller who could not invoke the function cannot learn its shape
 either: a denied caller gets `403`, not an empty description. A slot that resolves to nothing on a
-content route is `404` (`Function:800004`); an unrecognized `target` is `400` (`Function:800005`).
+content route is `404` (`Function:800004`); an unrecognized `target` is `400` (`Function:800005`). A rule-based
+`inputSchema` that matches no entry rejects a request with a body at execution with `400` (`Function:800006`).
 
 **Built-in system functions are not describable.** `state`, `view`, `data`, `schema`, `authorize`,
 `permissions`, `instance-correlation`, `human-task`, `master`, `catalog` and `file` have no `sys-functions` component, so

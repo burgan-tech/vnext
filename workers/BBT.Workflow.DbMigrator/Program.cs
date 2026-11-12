@@ -20,6 +20,9 @@ if (builder.Configuration.GetValue<bool>("Vault:Enabled", false))
         daprClient);
 }
 
+// After every connection-string source: adds Application Name when the string has none.
+builder.Configuration.ApplyDatabaseConnectionDefaults("vnext-db-migrator");
+
 var configuration = builder.Configuration;
 
 builder.Services

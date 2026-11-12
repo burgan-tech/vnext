@@ -1,0 +1,192 @@
+name: AI Quality Gate
+
+# Independent Quality Gate of the AI pipeline (docs/governance/ai-engineering-pipeline.md §7.2, §8).
+# Reviews every open PR into master / release-v* once its CI for the HEAD commit has reported:
+# one gate comment per PR (<!-- ai-quality-gate:v1 -->) with the verdict PASS / CHANGES_REQUIRED /
+# INCONCLUSIVE / COUNCIL. For a pipeline PR, apply mode also moves the linked issue's state.
+#
+# Trust model. `workflow_run` runs THIS file from the default branch with secrets, also for fork PRs.
+# Everything executed comes from the default-branch checkout (the trusted tooling is staged before
+# any PR code is fetched); the PR's code is fetched into ./pr and is only READ by the agent, never
+# built or run. The prompt is passed from the trusted copy, so a PR cannot rewrite its own reviewer.
+# The CI evidence is evaluated by scripts/ai/gate/collect.mjs; the agent only reviews the diff and
+# can only add blocking findings. An unchanged evidence fingerprint skips the PR.
+# Mode: AI_MODE = dry-run (default: comment only) | apply. Model: AI_GATE_MODEL.
+
+on:
+  workflow_run:
+    workflows: ['Unit Tests', 'SonarQube', 'PR Contract']
+    types: [completed]
+  schedule:
+    - cron: '47 * * * *'
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'PR number (empty = sweep open PRs)'
+        required: false
+      force:
+        description: 'Review even if the evidence is unchanged'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  checks: read
+  statuses: read
+
+concurrency:
+  group: ai-quality-gate-${{ inputs.pr || github.event.workflow_run.head_sha || 'sweep' }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AI_MODE: ${{ vars.AI_MODE || 'dry-run' }}
+      AI_GATE_MODEL: ${{ vars.AI_GATE_MODEL || 'claude-sonnet-5-5-medium' }}
+      AI_MAX_REPAIRS: ${{ vars.AI_MAX_REPAIRS || '3' }}
+      HAS_AUTH: ${{ secrets.CURSOR_API_KEY != '' }}
+    steps:
+      - name: Check credentials
+        if: env.HAS_AUTH != 'true'
+        run: echo "::notice::CURSOR_API_KEY not set; AI Quality Gate skipped."
+
+      - uses: actions/checkout@v4
+        # The default branch: the only code this job executes.
+        if: env.HAS_AUTH == 'true'
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        if: env.HAS_AUTH == 'true'
+        with:
+          node-version: '24'
+
+      - name: Run AI script tests
+        if: env.HAS_AUTH == 'true'
+        run: node --test "scripts/ai/test/*.test.mjs"
+
+      - name: Stage trusted tooling
+        if: env.HAS_AUTH == 'true'
+        run: |
+          # The runner context is not available in job-level env: the paths are exported here.
+          TOOLS="$RUNNER_TEMP/ai-tools" AI_IN="$RUNNER_TEMP/ai-in" AI_OUT="$RUNNER_TEMP/ai-out"
+          printf 'TOOLS=%s\nAI_IN=%s\nAI_OUT=%s\n' "$TOOLS" "$AI_IN" "$AI_OUT" >> "$GITHUB_ENV"
+          mkdir -p "$TOOLS/scripts/triage" "$TOOLS/scripts/governance" "$TOOLS/config" "$AI_IN" "$AI_OUT"
+          cp -R scripts/ai "$TOOLS/scripts/"
+          cp -R scripts/triage/lib "$TOOLS/scripts/triage/"
+          cp -R scripts/governance/lib "$TOOLS/scripts/governance/"
+          cp .github/ai/gate.json .github/ai/impact-paths.json .github/ai/quality-gate.md "$TOOLS/config/"
+
+      - name: Collect PRs and CI evidence
+        id: collect
+        if: env.HAS_AUTH == 'true'
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          PR: ${{ inputs.pr }}
+          FORCE: ${{ inputs.force && '--force' || '' }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          PR_LIST: ${{ join(github.event.workflow_run.pull_requests.*.number, ' ') }}
+        run: |
+          set -- --out "$AI_IN" --config "$TOOLS/config/gate.json" --impact-rules "$TOOLS/config/impact-paths.json" $FORCE
+          if [ -n "$PR" ]; then
+            node "$TOOLS/scripts/ai/gate/collect.mjs" --pr "$PR" "$@"
+          elif [ -n "$SHA" ]; then
+            node "$TOOLS/scripts/ai/gate/collect.mjs" --sha "$SHA" ${PR_LIST:+--pr-list "$PR_LIST"} "$@"
+          else
+            node "$TOOLS/scripts/ai/gate/collect.mjs" --sweep --limit 2 "$@"
+          fi
+
+      - name: Install Cursor CLI
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.agent != ''
+        # Same pinned, verified package as issue-triage.yml; upgrade all together.
+        env:
+          CURSOR_CLI_VERSION: 2026.10.22-27dcf5f
+          CURSOR_CLI_SHA256: 85296944e4600a83c4b764f578d1502bf9c416db200d33a593e8f3ecabfdc294
+        run: |
+          pkg="$RUNNER_TEMP/cursor-cli.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSL -o "$pkg" "https://downloads.cursor.com/lab/$CURSOR_CLI_VERSION/linux/x64/agent-cli-package.tar.gz"
+          echo "$CURSOR_CLI_SHA256  $pkg" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/cursor-cli"
+          tar --strip-components=1 -xzf "$pkg" -C "$RUNNER_TEMP/cursor-cli"
+          echo "$RUNNER_TEMP/cursor-cli" >> "$GITHUB_PATH"
+
+      - name: Review with Cursor (read-only, PR code never executed)
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.agent != ''
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          PRS: ${{ steps.collect.outputs.agent }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          export CURSOR_CONFIG_DIR="$RUNNER_TEMP/cursor-config"
+          mkdir -p "$CURSOR_CONFIG_DIR"
+          cat > "$CURSOR_CONFIG_DIR/cli-config.json" <<'JSON'
+          {
+            "version": 1,
+            "editor": { "vimMode": false },
+            "permissions": {
+              "allow": ["Read(**)"],
+              "deny": [
+                "Shell(*)", "Write(**)", "Write(/**)", "WebFetch(*)", "Mcp(*:*)",
+                "Read(.git/**)",
+                "Read(/proc/**)", "Read(/sys/**)", "Read(/etc/**)", "Read(/root/**)",
+                "Read(/tmp/**)", "Read(/opt/**)", "Read(/usr/**)", "Read(/var/**)",
+                "Read(/home/runner/.cursor/**)", "Read(/home/runner/.config/**)", "Read(/home/runner/.ssh/**)",
+                "Read(/home/runner/.docker/**)", "Read(/home/runner/.npm/**)", "Read(/home/runner/.npmrc)",
+                "Read(/home/runner/.gitconfig)",
+                "Read(/home/runner/work/_temp/**)", "Read(/home/runner/work/_actions/**)"
+              ]
+            }
+          }
+          JSON
+          prompt="$(cat "$TOOLS/config/quality-gate.md")"
+          for n in $PRS; do
+            echo "::group::PR #$n"
+            rm -rf pr && git init -q pr
+            git -C pr fetch -q --depth 1 "$REPO_URL" "pull/$n/head" && git -C pr checkout -q --detach FETCH_HEAD
+            mkdir -p pr/.ai/in && cp "$AI_IN/$n.json" pr/.ai/in/ && { cp "$AI_IN/$n.diff" pr/.ai/in/ 2>/dev/null || true; }
+            ( cd pr && timeout 1500 cursor-agent -p --trust --mode ask --output-format json --model "$AI_GATE_MODEL" \
+                "$prompt
+
+          ---
+          Review PR #$n now. Input: .ai/in/$n.json and .ai/in/$n.diff. Answer with the result JSON object only." \
+                > "$AI_OUT/$n.json" ) || echo "::warning::Cursor agent exited non-zero on #$n"
+            dirty="$(git -C pr status --porcelain --untracked-files=all -- . ':!.ai')"
+            if [ -n "$dirty" ]; then
+              echo "::error::The review agent changed files in PR #$n's checkout; its review is discarded."
+              rm -f "$AI_OUT/$n.json"
+            fi
+            echo "::endgroup::"
+          done
+
+      - name: Generate GitHub App token
+        # Issue labels must start the Developer; GITHUB_TOKEN events do not trigger workflows.
+        # Down-scoped to issues + pull requests, never workflows (§7.1).
+        id: app
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.prs != '' && env.AI_MODE == 'apply'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Apply results
+        if: env.HAS_AUTH == 'true' && steps.collect.outputs.prs != ''
+        env:
+          AI_APP_TOKEN: ${{ steps.app.outputs.token }}
+          AI_REDACT: |
+            ${{ secrets.CURSOR_API_KEY }}
+            ${{ secrets.SONAR_TOKEN }}
+            ${{ github.token }}
+            ${{ steps.app.outputs.token }}
+        run: |
+          node "$TOOLS/scripts/ai/gate/apply.mjs" --mode "$AI_MODE" \
+            --in "$AI_IN" --results "$AI_OUT" --config "$TOOLS/config/gate.json"

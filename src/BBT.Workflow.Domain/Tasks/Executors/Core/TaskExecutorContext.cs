@@ -40,6 +40,15 @@ public sealed record TaskExecutorContext(
     public JsonData? RawInvocationResult { get; set; }
 
     /// <summary>
+    /// Whether this execution's task journal row is persisted, i.e. whether the journal payloads
+    /// (<see cref="RawInvocationResult"/>, request, response) are read by anything. False when the engine
+    /// resolved no persistence strategy (e.g. <c>attributes.history: none</c>): the executor then skips
+    /// materializing <see cref="RawInvocationResult"/>, which would only be discarded. Defaults to true so
+    /// any caller that builds a context directly keeps today's behaviour.
+    /// </summary>
+    public bool CapturesJournalPayloads { get; init; } = true;
+
+    /// <summary>
     /// Per-execution compiled-mapping factory memo, keyed by (mapping, target type) — see
     /// <c>TaskExecutorBase.GetOrCompileMappingAsync</c>. Boxed as <see cref="object"/> because a
     /// record cannot declare a dictionary whose value type varies by the generic <c>T</c> callers

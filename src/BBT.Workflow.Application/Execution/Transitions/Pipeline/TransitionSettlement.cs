@@ -66,6 +66,13 @@ internal static class TransitionSettlement
             }
         }
 
+        // A same-state hop left its ModifiedAt stamp to the write that closes it (ChangeStateStep).
+        // The Busy release above is that write and stamps the row itself; when it did not happen —
+        // the hop ends parked in Busy, waits on a SubFlow, or does not hold the status — nothing else
+        // will, so stamp the aggregate here: the enclosing unit of work's commit sends it.
+        if (context.Directives.ModifiedAtStampPending && !flipped)
+            context.Instance.MarkModified();
+
         // What the CAS did is the one thing vnext.settle.status cannot say: the same value is
         // stamped whether this hop made the instance Active, lost the race, or never tried.
         activity?.SetTag(

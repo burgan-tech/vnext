@@ -552,11 +552,31 @@ public sealed class MorphIdmCallerRoleResolverTests
     private sealed class SpanCollector : IDisposable
     {
         private readonly ActivityListener _listener;
+        private readonly List<Activity> _captured = [];
+        private readonly Activity? _previous;
 
-        public List<Activity> Captured { get; } = [];
+        // The listener is process-wide: tests running in parallel emit on the same source, on their
+        // threads. Only spans in the trace of this collector's own root are captured, under a lock.
+        private readonly Activity _root;
+
+        public IReadOnlyList<Activity> Captured
+        {
+            get
+            {
+                lock (_captured)
+                {
+                    return _captured.ToArray();
+                }
+            }
+        }
 
         public SpanCollector()
         {
+            _previous = Activity.Current;
+            Activity.Current = null;
+            _root = new Activity("test-root").SetIdFormat(ActivityIdFormat.W3C).Start();
+            var traceId = _root.TraceId;
+
             _listener = new ActivityListener
             {
                 // Matched against the const, never against AuthorizationActivityHelper.ActivitySource:
@@ -565,7 +585,11 @@ public sealed class MorphIdmCallerRoleResolverTests
                 // type for every later test in the process.
                 ShouldListenTo = source => source.Name == AuthorizationActivityHelper.SourceName,
                 Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
-                ActivityStopped = activity => Captured.Add(activity)
+                ActivityStopped = activity =>
+                {
+                    if (activity.TraceId != traceId) return;
+                    lock (_captured) _captured.Add(activity);
+                }
             };
             ActivitySource.AddActivityListener(_listener);
 
@@ -576,7 +600,12 @@ public sealed class MorphIdmCallerRoleResolverTests
                 throw new InvalidOperationException("SpanCollector registered but the source has no listeners");
         }
 
-        public void Dispose() => _listener.Dispose();
+        public void Dispose()
+        {
+            _listener.Dispose();
+            _root.Stop();
+            Activity.Current = _previous;
+        }
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────────

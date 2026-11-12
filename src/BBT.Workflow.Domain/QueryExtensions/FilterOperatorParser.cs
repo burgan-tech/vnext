@@ -7,10 +7,11 @@ namespace BBT.Workflow.Definitions;
 
 public static class FilterOperatorParser
 {
+    // NonBacktracking: linear time by construction (ReDoS-safe without a wall-clock timeout, which tripped under
+    // load). The groups are unambiguous — ([^=]+) cannot contain '=' — so captures match the backtracking engine.
     private static readonly Regex OperatorRegex = new(
-        @"^([^=]+)=(eq|ne|gt|ge|lt|le|between|match|like|startswith|endswith|in|nin):(.+)$", 
-        RegexOptions.Compiled | RegexOptions.IgnoreCase,
-        TimeSpan.FromMilliseconds(100));
+        @"^([^=]+)=(eq|ne|gt|ge|lt|le|between|match|like|startswith|endswith|in|nin):(.+)$",
+        RegexOptions.NonBacktracking | RegexOptions.IgnoreCase);
     
     private static readonly Regex BetweenRegex = new(
         @"^(.+),(.+)$", 
@@ -31,7 +32,7 @@ public static class FilterOperatorParser
             if (!match.Success)
             {
                 // Fallback to simple equals if no operator specified
-                var simpleRegex = new Regex(@"^([^=]+)=(.+)$", RegexOptions.None, TimeSpan.FromMilliseconds(100));
+                var simpleRegex = new Regex(@"^([^=]+)=(.+)$", RegexOptions.NonBacktracking);
                 var simpleMatch = simpleRegex.Match(input);
                 if (simpleMatch.Success)
                 {

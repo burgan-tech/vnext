@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text.Json;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
@@ -18,7 +19,9 @@ namespace BBT.Workflow.Authorization;
 /// </summary>
 internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
 {
-    private const string NoTransitionCacheKey = "";
+    private const string InstanceSegment = "Instance";
+    private const string DataSegment = "Data";
+    private const string TransitionSegment = "Transition";
 
     private readonly Instance? _instance;
     private readonly WorkflowDefinition? _workflow;
@@ -28,11 +31,32 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
     private readonly string? _subjectUserName;
 
     /// <summary>
-    /// Authorization context elements memoized per transition key. Built lazily: a grant set with no
-    /// dynamic grant never triggers a build, which matters because building serializes the instance's
-    /// full latest data.
+    /// The transition-independent part of the authorization context — <c>Instance</c> WITHOUT its
+    /// <c>Data</c>, <c>Workflow</c>, <c>Body</c>, <c>Headers</c>, <c>QueryParameters</c>, <c>RouteValues</c> —
+    /// built once per evaluator, lazily: a grant set with no dynamic grant never triggers a build.
     /// </summary>
-    private readonly Dictionary<string, JsonElement> _authContextCache = new(StringComparer.Ordinal);
+    /// <remarks>
+    /// It used to be one combined document per TRANSITION KEY, each carrying a full copy of the instance's
+    /// latest data (written out, copied to an array and re-parsed into a pooled <see cref="JsonDocument"/>
+    /// that was never disposed). A state with N transitions copied the data N times. Now
+    /// <c>Instance.Data.*</c> is resolved against <see cref="_instanceData"/> directly and <c>Transition.*</c>
+    /// against a four-field element per key, so the data is never copied at all. The root's and
+    /// <c>Instance</c>'s property names are distinct case-insensitively, so routing a path on its leading
+    /// segments selects exactly the node the case-insensitive walk over the old combined document reached.
+    /// </remarks>
+    private JsonElement? _baseContext;
+
+    /// <summary>
+    /// <c>instance.LatestData.Data</c> as the old combined document embedded it; null when the instance has
+    /// no latest data (the old document embedded <c>{}</c>, which no path can resolve a value from).
+    /// Captured with <see cref="_baseContext"/>.
+    /// </summary>
+    private JsonElement? _instanceData;
+
+    /// <summary>
+    /// The <c>Transition</c> node per transition key — memoized by key exactly as the combined document was.
+    /// </summary>
+    private Dictionary<string, JsonElement>? _transitionContexts;
 
     internal RoleGrantEvaluator(
         Instance? instance,
@@ -85,8 +109,8 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
         //   roles=approver,blocked  -> [approve, cancel]   ← the deny did not veto
         //
         // Deny runs FIRST, and not only because a refusal is the cheaper answer: matching an allow
-        // is the side that resolves predefined and dynamic grants, and a dynamic grant's context
-        // build serializes the instance's full latest data. A refusal now skips that entirely.
+        // is the side that resolves predefined and dynamic grants, and a dynamic grant builds the
+        // authorization context. A refusal now skips that entirely.
         //
         // ── Phase 2: the ALLOW group, OR ────────────────────────────────────────────────────────
         //
@@ -103,9 +127,11 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
         // that is a proven No still rules the whole deny out (Unknown AND No = No).
         var noRoles = HasNoRoles(roles);
         return RoleGrantMatcher.Decide(grants, leafRole =>
-            noRoles && TransitionAuthorizationManager.IsRoleBound(leafRole)
-                ? GrantMatch.Unknown
-                : MatchesAnyRole(leafRole, roles, transition) ? GrantMatch.Yes : GrantMatch.No);
+        {
+            if (noRoles && TransitionAuthorizationManager.IsRoleBound(leafRole))
+                return GrantMatch.Unknown;
+            return MatchesAnyRole(leafRole, roles, transition) ? GrantMatch.Yes : GrantMatch.No;
+        });
     }
 
     /// <summary>
@@ -175,7 +201,7 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
         {
             return ResolveDynamicRoleMatch(
                 dynamicGrant,
-                () => GetAuthContext(transition),
+                path => ResolveContextPath(path, transition),
                 normalizedRole,
                 _actorUserName,
                 _subjectUserName);
@@ -185,14 +211,60 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
         return string.Equals(grantRole, normalizedRole, StringComparison.OrdinalIgnoreCase);
     }
 
-    private JsonElement GetAuthContext(Transition? transition)
+    /// <summary>
+    /// Resolves a <c>$.context.</c> navigation path to its values — the same values
+    /// <see cref="ContextPathResolver.Resolve(JsonElement, string)"/> returned against the old combined
+    /// per-transition document.
+    /// </summary>
+    private IReadOnlyList<string> ResolveContextPath(string navigationPath, Transition? transition)
     {
-        var cacheKey = transition?.Key ?? NoTransitionCacheKey;
-        if (_authContextCache.TryGetValue(cacheKey, out var cached))
+        // Built first and unconditionally, as the combined document was before any path was walked: an
+        // instance whose latest data cannot be written fails here exactly as it failed there.
+        var baseContext = GetBaseContext();
+
+        var segments = ContextPathResolver.SplitSegments(navigationPath);
+        if (segments.Length == 0)
+            return [];
+
+        if (segments.Length >= 2
+            && string.Equals(segments[0], InstanceSegment, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(segments[1], DataSegment, StringComparison.OrdinalIgnoreCase))
+        {
+            return _instanceData is { } data
+                ? ContextPathResolver.Resolve(data, segments, 2)
+                : [];
+        }
+
+        if (string.Equals(segments[0], TransitionSegment, StringComparison.OrdinalIgnoreCase))
+        {
+            // A null transition was a JSON null in the combined document: nothing below it, no leaf value.
+            return transition is null
+                ? []
+                : ContextPathResolver.Resolve(GetTransitionContext(transition), segments, 1);
+        }
+
+        return ContextPathResolver.Resolve(baseContext, segments, 0);
+    }
+
+    private JsonElement GetBaseContext()
+    {
+        if (_baseContext is { } built)
+            return built;
+
+        _instanceData = _instance?.LatestData?.Data.JsonElement;
+        var element = BuildBaseContextElement(_instance, _instanceData, _workflow, _requestContext);
+        _baseContext = element;
+        return element;
+    }
+
+    private JsonElement GetTransitionContext(Transition transition)
+    {
+        _transitionContexts ??= new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        if (_transitionContexts.TryGetValue(transition.Key, out var cached))
             return cached;
 
-        var element = BuildAuthorizationContextElement(_instance, transition, _workflow, _requestContext);
-        _authContextCache[cacheKey] = element;
+        var element = BuildTransitionElement(transition);
+        _transitionContexts[transition.Key] = element;
         return element;
     }
 
@@ -209,6 +281,10 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
     {
         if (string.IsNullOrWhiteSpace(grantRole))
             return null;
+
+        // $Everyone is every caller; nothing about the instance or the caller can make it No.
+        if (PredefinedInstanceRoles.IsEveryone(grantRole))
+            return true;
 
         if (string.Equals(grantRole, PredefinedInstanceRoles.InstanceStarter, StringComparison.Ordinal))
             return !string.IsNullOrEmpty(actorUserName) &&
@@ -242,7 +318,7 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
     /// </summary>
     private static bool ResolveDynamicRoleMatch(
         DynamicRoleGrant grant,
-        Func<JsonElement> getAuthContext,
+        Func<string, IReadOnlyList<string>> resolvePath,
         string normalizedCallerRole,
         string? actorUserName,
         string? subjectUserName)
@@ -255,7 +331,7 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
         if (string.IsNullOrWhiteSpace(navigationPath))
             return false;
 
-        var values = ContextPathResolver.Resolve(getAuthContext(), navigationPath);
+        var values = resolvePath(navigationPath);
         if (values.Count == 0)
             return false;
 
@@ -277,20 +353,23 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
     }
 
     /// <summary>
-    /// Builds a <see cref="JsonElement"/> representing the authorization context,
-    /// structured to match the <c>$.context.*</c> path namespace used in dynamic role grants.
+    /// Builds the transition-independent authorization context, structured to match the <c>$.context.*</c>
+    /// path namespace used in dynamic role grants: <c>Instance</c> (without <c>Data</c>, which
+    /// <see cref="ResolveContextPath"/> reads from the instance's own element), <c>Transition</c> as null
+    /// (resolved per key by <see cref="GetTransitionContext"/>), <c>Workflow</c>, an empty <c>Body</c> (the
+    /// request body is not available at authorization time), and the request context's dictionaries.
     /// <para>
-    /// Includes <c>Instance</c>, <c>Transition</c>, <c>Workflow</c> when available.
-    /// <c>Body</c> is an empty object (the request body is not available at authorization time).
+    /// Parsed with <see cref="JsonElement.ParseValue"/>, which backs the element with an unpooled document:
+    /// nothing is rented, so nothing has to be disposed when the evaluator goes out of scope.
     /// </para>
     /// </summary>
-    private static JsonElement BuildAuthorizationContextElement(
+    private static JsonElement BuildBaseContextElement(
         Instance? instance,
-        Transition? transition,
+        JsonElement? instanceData,
         WorkflowDefinition? workflow,
         AuthorizationRequestContext? requestContext)
     {
-        using var buffer = new MemoryStream();
+        var buffer = new ArrayBufferWriter<byte>(512);
         using (var writer = new Utf8JsonWriter(buffer))
         {
             writer.WriteStartObject();
@@ -322,10 +401,13 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
                 writer.WriteString("CreatedByBehalfOf", instance.CreatedByBehalfOf);
                 writer.WriteString("ModifiedBy", instance.ModifiedBy);
                 writer.WriteString("ModifiedByBehalfOf", instance.ModifiedByBehalfOf);
-                writer.WritePropertyName("Data");
-                var dataElement = instance.LatestData?.Data.JsonElement
-                    ?? JsonDocument.Parse("{}").RootElement;
-                dataElement.WriteTo(writer);
+                // Data is not copied. An element that cannot be written (Undefined) failed the old
+                // combined build here; keep failing it, at the same point, with the same exception.
+                if (instanceData is { ValueKind: JsonValueKind.Undefined } unwritable)
+                {
+                    writer.WritePropertyName("Data");
+                    unwritable.WriteTo(writer);
+                }
                 writer.WriteEndObject();
             }
             else
@@ -333,21 +415,8 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
                 writer.WriteNull("Instance");
             }
 
-            // Transition
-            if (transition != null)
-            {
-                writer.WritePropertyName("Transition");
-                writer.WriteStartObject();
-                writer.WriteString("Key", transition.Key);
-                writer.WriteString("From", transition.From);
-                writer.WriteString("Target", transition.Target);
-                writer.WriteString("TriggerType", transition.TriggerType.ToString());
-                writer.WriteEndObject();
-            }
-            else
-            {
-                writer.WriteNull("Transition");
-            }
+            // Transition: resolved per key, never from here.
+            writer.WriteNull("Transition");
 
             // Workflow
             if (workflow != null)
@@ -377,7 +446,30 @@ internal sealed class RoleGrantEvaluator : IRoleGrantEvaluator
             writer.WriteEndObject();
         }
 
-        return JsonDocument.Parse(buffer.ToArray()).RootElement;
+        return ParseUnpooled(buffer);
+    }
+
+    /// <summary>The <c>Transition</c> node of the authorization context for one transition.</summary>
+    private static JsonElement BuildTransitionElement(Transition transition)
+    {
+        var buffer = new ArrayBufferWriter<byte>(128);
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("Key", transition.Key);
+            writer.WriteString("From", transition.From);
+            writer.WriteString("Target", transition.Target);
+            writer.WriteString("TriggerType", transition.TriggerType.ToString());
+            writer.WriteEndObject();
+        }
+
+        return ParseUnpooled(buffer);
+    }
+
+    private static JsonElement ParseUnpooled(ArrayBufferWriter<byte> buffer)
+    {
+        var reader = new Utf8JsonReader(buffer.WrittenSpan);
+        return JsonElement.ParseValue(ref reader);
     }
 
     private static void WriteStringDictionary(

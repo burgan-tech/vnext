@@ -1,6 +1,7 @@
 using System.Text;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
@@ -79,7 +80,7 @@ public sealed class DaprServiceTaskExecutor : TaskExecutorBase<DaprServiceTask>
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        var envelopeResult = TaskBindingMapper.CreateEnvelope(task);
+        var envelopeResult = TaskBindingMapper.CreateBinding(task);
         if (!envelopeResult.IsSuccess)
         {
             Logger.TaskEnvelopeCreationFailed(
@@ -96,10 +97,13 @@ public sealed class DaprServiceTaskExecutor : TaskExecutorBase<DaprServiceTask>
         var traceContext = _remoteInvoker.CreateTraceContext(context.ScriptContext);
 
         // The caller's credential travels with the task's own headers, in-process and to the Execution host alike.
-        var envelope = WithCallerCredential(envelopeResult.Value!, context.ScriptContext);
+        // Applied to the mapped binding object: the dispatcher serializes it only when the call leaves the
+        // process (Remote), so the default Local path pays no JSON round trip.
+        var binding = TaskBindingCredentials.WithCallerCredential(
+            (DaprServiceBinding)envelopeResult.Value.Binding, CallerHeadersOf(context.ScriptContext));
 
         var result = await _dispatcher.DispatchAsync(
-            task, Execution.TaskTypes.DaprService, envelope, traceContext, cancellationToken);
+            task, Execution.TaskTypes.DaprService, binding, traceContext, cancellationToken);
 
         if (!result.IsSuccess)
         {

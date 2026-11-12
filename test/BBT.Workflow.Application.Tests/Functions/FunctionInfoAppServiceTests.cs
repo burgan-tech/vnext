@@ -1,3 +1,4 @@
+using BBT.Workflow.Scripting.Caller;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -74,6 +75,7 @@ public sealed class FunctionInfoAppServiceTests : IDisposable
         builder.WithBody(Arg.Any<object?>()).Returns(builder);
         builder.WithHeaders(Arg.Any<Dictionary<string, string?>?>()).Returns(builder);
         builder.WithQueryParameters(Arg.Any<Dictionary<string, string?>?>()).Returns(builder);
+        builder.WithCaller(Arg.Any<ICallerAccessor?>()).Returns(builder);
         builder.BuildAsync(Arg.Any<CancellationToken>())
             .Returns(new ScriptContext(NullLogger<ScriptContext>.Instance));
 
@@ -90,8 +92,10 @@ public sealed class FunctionInfoAppServiceTests : IDisposable
             urlTemplateBuilder: new UrlTemplateBuilder(Options.Create(new UrlTemplateOptions())),
             functionAccessPolicy: new FunctionAccessPolicy(),
             contractResolver: new FunctionContractResolver(
-                _conditionService, NullLogger<FunctionContractResolver>.Instance),
-            viewContentResolutionService: _viewContentResolution);
+                new BBT.Workflow.Contracts.ContractEntrySelector(_conditionService), NullLogger<FunctionContractResolver>.Instance),
+            viewContentResolutionService: _viewContentResolution,
+            callerAccessorFactory: new CallerAccessorFactory(
+                Substitute.For<ICallerRoleResolver>(), NullLogger<CallerAccessorFactory>.Instance));
     }
 
     public void Dispose()

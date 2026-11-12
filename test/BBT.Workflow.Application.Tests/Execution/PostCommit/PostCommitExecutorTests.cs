@@ -114,6 +114,49 @@ public class PostCommitExecutorTests
         observedTransitionKey.ShouldBe("test-transition");
     }
 
+    /// <summary>
+    /// The handler dispatch caches the closed handler type and a typed invoker per job type. Two job
+    /// types dispatched repeatedly must each still reach their own handler, with the job and context
+    /// they were given.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_DispatchesEachJobTypeToItsOwnHandler_AcrossRepeatedCalls()
+    {
+        var testHandler = Substitute.For<IPostCommitHandler<TestJob>>();
+        testHandler.HandleAsync(Arg.Any<TestJob>(), Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Ok());
+        var otherHandler = Substitute.For<IPostCommitHandler<OtherTestJob>>();
+        otherHandler.HandleAsync(Arg.Any<OtherTestJob>(), Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Ok());
+        _serviceProvider.GetService(typeof(IPostCommitHandler<TestJob>)).Returns(testHandler);
+        _serviceProvider.GetService(typeof(IPostCommitHandler<OtherTestJob>)).Returns(otherHandler);
+
+        var context = CreateContext();
+        var first = new TestJob();
+        var other = new OtherTestJob("payload");
+
+        for (var round = 0; round < 3; round++)
+        {
+            var result = await _executor.ExecuteAsync(new IPostCommitJob[] { first, other }, context, CancellationToken.None);
+            result.IsSuccess.ShouldBeTrue();
+        }
+
+        await testHandler.Received(3).HandleAsync(first, context, Arg.Any<CancellationToken>());
+        await otherHandler.Received(3).HandleAsync(other, context, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NoHandlerRegistered_FailsWithConfigInvalid()
+    {
+        _serviceProvider.GetService(typeof(IPostCommitHandler<OtherTestJob>)).Returns((object?)null);
+
+        var result = await _executor.ExecuteAsync(
+            new IPostCommitJob[] { new OtherTestJob("x") }, CreateContext(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error!.Value.Message.ShouldContain("No post-commit handler registered for: OtherTestJob");
+    }
+
     private static TransitionExecutionContext CreateContext()
     {
         var instanceId = Guid.NewGuid();
@@ -168,4 +211,7 @@ public class PostCommitExecutorTests
     /// touching the idempotency store.
     /// </summary>
     public sealed record TestJob : IPostCommitJob;
+
+    /// <summary>A second job type, to prove the per-type dispatch cache keeps types apart.</summary>
+    public sealed record OtherTestJob(string Payload) : IPostCommitJob;
 }

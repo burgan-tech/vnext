@@ -1,5 +1,6 @@
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Invocation;
@@ -74,7 +75,7 @@ public sealed class SoapTaskExecutor : TaskExecutorBase<SoapTask>
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        var envelopeResult = TaskBindingMapper.CreateEnvelope(task);
+        var envelopeResult = TaskBindingMapper.CreateBinding(task);
         if (!envelopeResult.IsSuccess)
         {
             Logger.TaskEnvelopeCreationFailed(
@@ -91,10 +92,13 @@ public sealed class SoapTaskExecutor : TaskExecutorBase<SoapTask>
         var traceContext = _remoteInvoker.CreateTraceContext(context.ScriptContext);
 
         // The caller's credential travels with the task's own headers, in-process and to the Execution host alike.
-        var envelope = WithCallerCredential(envelopeResult.Value!, context.ScriptContext);
+        // Applied to the mapped binding object: the dispatcher serializes it only when the call leaves the
+        // process (Remote), so the default Local path pays no JSON round trip.
+        var binding = TaskBindingCredentials.WithCallerCredential(
+            (SoapTaskBinding)envelopeResult.Value.Binding, CallerHeadersOf(context.ScriptContext));
 
         var result = await _dispatcher.DispatchAsync(
-            task, Execution.TaskTypes.Soap, envelope, traceContext, cancellationToken);
+            task, Execution.TaskTypes.Soap, binding, traceContext, cancellationToken);
 
         if (!result.IsSuccess)
         {

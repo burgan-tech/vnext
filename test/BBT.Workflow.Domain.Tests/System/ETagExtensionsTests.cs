@@ -36,8 +36,9 @@ public class ETagExtensionsTests
     }
 
     [Fact]
-    public void MatchesIfNoneMatch_ShouldBeCaseInsensitive()
+    public void MatchesIfNoneMatch_ShouldBeCaseSensitive()
     {
+        // Entity-tags compare character by character (RFC 9110 §8.8.3.2); 90338a2e6 made this Ordinal.
         // Arrange
         var currentETag = "\"ABC123\"";
         var ifNoneMatch = "\"abc123\"";
@@ -46,7 +47,7 @@ public class ETagExtensionsTests
         var result = currentETag.MatchesIfNoneMatch(ifNoneMatch);
 
         // Assert
-        Assert.True(result);
+        Assert.False(result);
     }
 
     [Fact]
@@ -106,7 +107,7 @@ public class ETagExtensionsTests
     }
 
     [Fact]
-    public void MatchesIfNoneMatch_ShouldBeOrdinalIgnoreCase()
+    public void MatchesIfNoneMatch_ShouldUseOrdinalComparison()
     {
         // Arrange
         var currentETag = "\"AbC123\"";
@@ -116,7 +117,8 @@ public class ETagExtensionsTests
         var result = currentETag.MatchesIfNoneMatch(ifNoneMatch);
 
         // Assert
-        Assert.True(result);
+        Assert.False(result);
+        Assert.True("\"AbC123\"".MatchesIfNoneMatch("\"AbC123\""));
     }
 }
 

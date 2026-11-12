@@ -142,6 +142,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             currentUser: Substitute.For<ICurrentUser>(),
             descentLimiter: new HumanTask.HumanTaskDescentLimiter(
                 Microsoft.Extensions.Options.Options.Create(new HumanTask.HumanTaskFunctionOptions())),
+            transitionSchemaResolver: NSubstitute.Substitute.For<BBT.Workflow.Execution.Validation.ITransitionSchemaResolver>(),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 
@@ -876,6 +877,29 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     /// instant — and no href, since callers cannot trigger them. Caller-triggerable entries carry
     /// no <c>executeAtUtc</c>.
     /// </summary>
+    [Fact]
+    public async Task TransitionList_SchemasOnly_HasSchemaTrue()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        var transition = Transition.Create("approve", TestState, "approved", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code);
+        transition.SetSchemas(SchemaSelection.CreateWithSchemas(
+            SchemaEntry.CreateDefault(new Reference("approve-schema", TestDomain, "sys-schemas", TestVersion))));
+        state.AddTransition(transition);
+        instance.ChangeState(state);
+        SetupCommonMocks(instance, BuildWorkflow(state));
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        var item = result.Result.Value!.Transitions.Single(t => t.Name == "approve");
+        item.Schema.ShouldNotBeNull();
+        item.Schema!.HasSchema.ShouldBeTrue();
+    }
+
     [Fact]
     public async Task GetInstanceStateAsync_ListsScheduledEntriesInTransitions_OrderedByExecuteAt()
     {
@@ -2267,7 +2291,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         result.IsNotModified.ShouldBeTrue();
         await _stateFunctionCache.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
         await _instanceRepository.DidNotReceive()
-            .FindByIdentifierAsReadOnlyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+            .FindByIdentifierAsReadOnlyWithAllCorrelationsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
 
         // The read-path budget as a call count rather than a latency threshold — a structural claim,
         // so it needs no measurement to hold. Exactly ONE fingerprint projection answers the 304,
@@ -2440,7 +2464,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         // The aggregate was never loaded: the wait replaced a descent, which is the gate's reason
         // for existing.
         await _instanceRepository.DidNotReceive()
-            .FindByIdentifierAsReadOnlyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+            .FindByIdentifierAsReadOnlyWithAllCorrelationsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     /// <summary>
@@ -2484,7 +2508,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         result.Result.Value!.ETag.ShouldBe("\"etag-current\"");
         result.Result.Value!.EntityEtag.ShouldBe("\"entity-1\"");
         await _instanceRepository.DidNotReceive()
-            .FindByIdentifierAsReadOnlyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+            .FindByIdentifierAsReadOnlyWithAllCorrelationsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     /// <summary>
@@ -2510,6 +2534,15 @@ public class InstanceQueryAppServiceStateTests : IDisposable
             TestCacheKey,
             Arg.Is<Caching.StateFunctionCacheEntry>(e => e.Etag == "etag-current"),
             Arg.Any<CancellationToken>());
+
+        // The build loads the aggregate and the full correlation set through ONE combined finder:
+        // no separate open-correlation load and no second all-correlations read.
+        await _instanceRepository.Received(1)
+            .FindByIdentifierAsReadOnlyWithAllCorrelationsAsync(instance.Id.ToString(), Arg.Any<CancellationToken>());
+        await _instanceRepository.DidNotReceive()
+            .FindByIdentifierAsReadOnlyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _instanceCorrelationRepository.DidNotReceive()
+            .GetByParentAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
     }
 
     /// <summary>
@@ -2532,7 +2565,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         // Assert — full rebuild + cache refresh under the current ETag
         result.Result.IsSuccess.ShouldBeTrue();
         await _instanceRepository.Received(1)
-            .FindByIdentifierAsReadOnlyAsync(instance.Id.ToString(), Arg.Any<CancellationToken>());
+            .FindByIdentifierAsReadOnlyWithAllCorrelationsAsync(instance.Id.ToString(), Arg.Any<CancellationToken>());
         await _stateFunctionCache.Received(1).SetAsync(
             TestCacheKey,
             Arg.Is<Caching.StateFunctionCacheEntry>(e => e.Etag == "etag-current"),
@@ -2595,7 +2628,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         // Assert — the full path answered (here: success, since the aggregate is mocked)
         result.Result.IsSuccess.ShouldBeTrue();
         await _instanceRepository.Received(1)
-            .FindByIdentifierAsReadOnlyAsync(instance.Id.ToString(), Arg.Any<CancellationToken>());
+            .FindByIdentifierAsReadOnlyWithAllCorrelationsAsync(instance.Id.ToString(), Arg.Any<CancellationToken>());
     }
 
     // ── Cache helpers ────────────────────────────────────────────────────────
@@ -2710,6 +2743,7 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         _instanceRepository
             .FindByIdentifierAsReadOnlyAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
             .Returns(instance);
+        _stubbedInstances[instance.Id] = instance;
 
         _componentCacheStore
             .GetFlowAsync(TestDomain, TestWorkflow, Arg.Any<string?>(), Arg.Any<CancellationToken>())
@@ -2766,9 +2800,12 @@ public class InstanceQueryAppServiceStateTests : IDisposable
     /// aggregate's own collection is loaded active-only in production.
     /// </summary>
     private void SetupFullCorrelations(Guid instanceId, List<InstanceCorrelation> correlations) =>
-        _instanceCorrelationRepository
-            .GetByParentAsync(instanceId, Arg.Any<CancellationToken>())
-            .Returns(correlations);
+        _instanceRepository
+            .FindByIdentifierAsReadOnlyWithAllCorrelationsAsync(instanceId.ToString(), Arg.Any<CancellationToken>())
+            .Returns((_stubbedInstances[instanceId], correlations));
+
+    /// <summary>Instances stubbed by <see cref="SetupCommonMocks"/>, by id, for the combined load.</summary>
+    private readonly Dictionary<Guid, Instance> _stubbedInstances = new();
 
     /// <summary>
     /// Builds a correlation for <paramref name="parentInstanceId"/>, optionally already terminated.

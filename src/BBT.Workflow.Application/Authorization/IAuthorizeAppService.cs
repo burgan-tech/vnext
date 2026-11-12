@@ -27,6 +27,22 @@ public interface IAuthorizeAppService : IApplicationService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns whether the caller may start an instance of the workflow: the workflow's own
+    /// <c>startTransition</c> grants are evaluated without an instance. Lets a gateway gate
+    /// <c>POST .../instances/start</c>, where there is no instance to address yet.
+    /// Instance-bound grants (<c>$InstanceStarter</c>, <c>$PreviousUser</c>, the behalf-of pair,
+    /// <c>$user.</c> / <c>$userBehalfOf.</c> / <c>$role.</c> context references) have nothing to resolve
+    /// against and never match: they neither allow nor deny. No grants → allowed.
+    /// </summary>
+    Task<Result<AuthorizeOutput>> GetStartAuthorizeResultAsync(
+        string domain,
+        string workflow,
+        string? role,
+        string? version = null,
+        AuthorizationRequestContext? requestContext = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the authorization matrix in instance context. When instance has active subflow, returns subflow's matrix; otherwise returns workflow's matrix.
     /// </summary>
     Task<Result<AuthorizationMatrixOutput>> GetAuthorizationMatrixForInstanceAsync(

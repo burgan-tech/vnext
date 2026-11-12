@@ -159,11 +159,12 @@ Rule ids: `PR-*` in [reviewer: evidence §4](code-review/reviewers/evidence.md),
 
 | Script | Does | Run |
 |---|---|---|
-| [`scripts/governance/pr-contract.mjs`](../scripts/governance/pr-contract.mjs) | Checks a PR body, title, milestone and handoff docs against [the template](../.github/PULL_REQUEST_TEMPLATE.md), then lints `vnext-meta/` | CI: `PR Contract` workflow on every non-draft PR (`PR_CONTRACT_MODE` = `warn` / `enforce`). Locally: `--pr <n>`, or a draft with `--body-file <path> --title "<t>" [--milestone vX.Y.Z] [--files-from-git <base>]` |
+| [`scripts/governance/pr-contract.mjs`](../scripts/governance/pr-contract.mjs) | Checks a PR body, title, milestone and handoff docs against [the template](../.github/PULL_REQUEST_TEMPLATE.md), then lints `vnext-meta/`; on a PR with `ai:` labels also the AI decision record and the declared impact against [`.github/ai/impact-paths.json`](../.github/ai/impact-paths.json) (`PR-AI-*`) | CI: `PR Contract` workflow on every non-draft PR (`PR_CONTRACT_MODE` = `warn` / `enforce`). Locally: `--pr <n>`, or a draft with `--body-file <path> --title "<t>" [--milestone vX.Y.Z] [--files-from-git <base>] [--labels a,b]` |
 | [`scripts/governance/e2e-evidence.mjs`](../scripts/governance/e2e-evidence.mjs) | Renders the PR's `## E2E evidence` block from vnext-example TRX files | `--trx <file>... --runtime-sha <sha> --base-url <url> [--reds "<text>"]` |
 | [`scripts/governance/meta-lint.mjs`](../scripts/governance/meta-lint.mjs) | Deterministic lint of `vnext-meta/` (parse, shape, manifest order, `since` timeline, registry keys in code) | `[--milestone vX.Y.Z] [--json]`; also part of every PR Contract run, regardless of title |
 | [`scripts/governance/meta-stamp.mjs`](../scripts/governance/meta-stamp.mjs) | Release stamp: turns `vnext-meta/unreleased/` fragments into versioned data files, adds the manifest row, records and deletes the fragments, deletes back-merge leftovers ([format](../vnext-meta/unreleased/README.md)) | `--version X.Y.Z [--date YYYY-MM-DD] [--schema-version X.Y.Z] [--meta-dir <path>] [--notes-out <file>] [--dry-run]`; CI: the release `prepare` job, lint → stamp → lint |
 | [`scripts/governance/meta-sync.mjs`](../scripts/governance/meta-sync.mjs) | Syncs a patch line's released `vnext-meta/` into master (every manifest row master lacks, union of ids and feature keys, lower version wins) | `--source <dir> --target <dir> [--dry-run]`; CI: `sync-meta-to-master` job of the release workflow, for lines that are not the latest ([process](governance/release-lines.md)) |
+| [`scripts/ci/unit-tests-report.mjs`](../scripts/ci/unit-tests-report.mjs) | Summarises unit-test TRX files (failures grouped by error signature) and fails on any failure — the suite is kept green ([policy](testing/unit-tests.md)) | CI: `Unit Tests` workflow ([`pr-tests.yml`](../.github/workflows/pr-tests.yml); `UNIT_TESTS_MODE=report` is an outage-only switch). Locally: `--trx <file>... [--mode enforce\|report] [--summary <md>] [--failures-out <json>]`; tests: `node --test "scripts/ci/test/*.test.mjs"` |
 | [`.github/workflows/backport.yml`](../.github/workflows/backport.yml) | Opens a backport PR to `release-vX.Y` for a merged PR labelled `backport/release-vX.Y` | CI: `pull_request_target` on `closed` / `labeled`; process: [Release lines](governance/release-lines.md) |
 
 **Issue triage** — the one automation that writes to GitHub without a per-action approval, and only
@@ -181,9 +182,33 @@ never Urgent) and Effort (the agent's estimate), and the `vNext` org project wit
 app needs Issues and Organization projects read/write) and are skipped with a warning without it. Repository variable `TRIAGE_MODE` = `dry-run`
 (default, comment only) / `apply`; secret `CURSOR_API_KEY` (the
 shared CI Cursor account), without which the job is a no-op; `TRIAGE_MODEL` overrides the pinned model
-(`claude-sonnet-5-5-medium`; names from `agent --list-models`). Labels: `node scripts/triage/sync-labels.mjs [--apply]`. Tests:
+(`claude-sonnet-5-5-medium`; names from `agent --list-models`). Labels: `node scripts/triage/sync-labels.mjs [--apply]` writes every group of `labels.json`, the pipeline's
+`ai:*` groups included, and never deletes. Tests (also run by the `Unit Tests` workflow on every PR):
 `node --test "scripts/triage/test/*.test.mjs"`. Issue text is untrusted (public repo): the agent has
 no shell, write, network or GitHub access, and a changed working tree blocks the apply step.
+
+**AI engineering pipeline** *(being rolled out)* — extends the same model to planning,
+council, implementation and PR review, driven by `ai:*` labels:
+[AI engineering pipeline](governance/ai-engineering-pipeline.md). Built so far: the **Director**
+(`.github/workflows/ai-director.yml`, prompt `.github/ai/director.md`, scripts `scripts/ai/director/`)
+plans an issue when a maintainer adds `ai:ready` / `ai:replan`; `AI_MODE` = `dry-run` (default, plan
+comment only) / `apply` (labels via the GitHub App); model `AI_DIRECTOR_MODEL`. The **Quality Gate**
+(`.github/workflows/ai-quality-gate.yml`, prompt `.github/ai/quality-gate.md`, evidence list
+`.github/ai/gate.json`, scripts `scripts/ai/gate/`) reviews every open PR into `master` /
+`release-v*` once its CI reported, one comment per PR; model `AI_GATE_MODEL`, repair limit
+`AI_MAX_REPAIRS`. Locally: `SONAR_TOKEN=… node scripts/ai/gate/collect.mjs --pr <n> --force --out <dir>`
+then `apply.mjs --in <dir> --print`. The **Council** (`.github/workflows/ai-council.yml`, prompt
+`.github/ai/council.md`, scripts `scripts/ai/council/`) judges an issue labelled `ai:council-required`
+that has a Director plan; one comment per issue with the verdict and the decision-log row; model
+`AI_COUNCIL_MODEL`. Locally: `node scripts/ai/council/collect.mjs --issue <n> --force --out <dir>` then
+`apply.mjs --in <dir> --print`. The **Developer** (`.github/workflows/ai-developer.yml`, prompt
+`.github/ai/developer.md`, scripts `scripts/ai/developer/`) implements an issue labelled `ai:planned`
+or repairs its PR on `ai:changes-required`: the agent job edits source folders and builds/tests only
+through the `ai-dotnet` sandbox; a separate write job checks the diff policy, pushes `ai/issue-<n>`
+and opens the draft PR; model `AI_DEVELOPER_MODEL`. Locally: `node scripts/ai/developer/collect.mjs
+--issue <n> --out <dir>` shows the mode it would run. Locally:
+`node scripts/ai/director/collect.mjs --issue <n>` then `apply.mjs --print`. Tests:
+`node --test "scripts/ai/test/*.test.mjs"` (also in the `Unit Tests` workflow).
 
 ## 7. vnext-meta and documentation
 

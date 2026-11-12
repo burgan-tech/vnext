@@ -8,7 +8,6 @@ using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Extentions;
@@ -21,7 +20,6 @@ public sealed class InstanceExtensionService(
     ITaskCoordinatorExtended taskCoordinator,
     IRuntimeInfoProvider runtimeInfoProvider,
     ICurrentSchema currentSchema,
-    IServiceScopeFactory serviceScopeFactory,
     ILogger<InstanceExtensionService> logger) : IInstanceExtensionService, IListExtensionServiceFactory
 {
     private bool _reuseListDefinitions;
@@ -30,7 +28,7 @@ public sealed class InstanceExtensionService(
 
     /// <inheritdoc />
     public IInstanceExtensionService CreateForList() => new InstanceExtensionService(
-        componentCacheStore, taskCoordinator, runtimeInfoProvider, currentSchema, serviceScopeFactory, logger)
+        componentCacheStore, taskCoordinator, runtimeInfoProvider, currentSchema, logger)
         { _reuseListDefinitions = true };
 
     /// <inheritdoc />
@@ -184,7 +182,13 @@ public sealed class InstanceExtensionService(
 
     /// <summary>
     /// Fetches extensions from references in parallel.
-    /// Each fetch runs in its own DI scope to avoid concurrent DbContext access.
+    /// <para>
+    /// Calls the injected store directly. <see cref="IComponentCacheStore"/> is a singleton, so the
+    /// per-reference DI scope this used to open resolved the very same instance and only paid for a
+    /// scope; the database isolation it was meant to provide already lives one level down —
+    /// <c>RuntimeCacheBackend</c> opens its own scope and a RequiresNew unit of work for every load
+    /// that reaches the database, so concurrent misses never share the caller's DbContext.
+    /// </para>
     /// Failed fetches are filtered out - the system continues with available extensions.
     /// </summary>
     private async Task<List<Extension>> FetchExtensionsFromReferencesAsync(
@@ -200,9 +204,7 @@ public sealed class InstanceExtensionService(
         {
             var key = (reference.Domain, reference.Flow, reference.Key, reference.Version);
             if (_reuseListDefinitions && _definitions.TryGetValue(key, out var prepared)) return prepared;
-            await using var scope = serviceScopeFactory.CreateAsyncScope();
-            var scopedCacheStore = scope.ServiceProvider.GetRequiredService<IComponentCacheStore>();
-            var result = await scopedCacheStore.GetExtensionAsync(reference, cancellationToken);
+            var result = await componentCacheStore.GetExtensionAsync(reference, cancellationToken);
             return result.IsSuccess ? result.Value : null;
         });
 

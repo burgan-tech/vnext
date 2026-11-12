@@ -1,7 +1,7 @@
 using BBT.Aether.Results;
+using BBT.Workflow.Contracts;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
-using BBT.Workflow.Tasks.Coordinator;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Functions.Contracts;
@@ -13,7 +13,7 @@ namespace BBT.Workflow.Functions.Contracts;
 /// evaluated is logged and skipped rather than failing the request.
 /// </summary>
 public sealed class FunctionContractResolver(
-    ITaskConditionService taskConditionService,
+    IContractEntrySelector selector,
     ILogger<FunctionContractResolver> logger) : IFunctionContractResolver
 {
     /// <inheritdoc />
@@ -27,42 +27,25 @@ public sealed class FunctionContractResolver(
         if (candidates.Count == 0)
             return Result<FunctionContractResolution?>.Ok(null);
 
-        foreach (var candidate in candidates)
-        {
-            // A rule-less entry is the declared fallback - it always wins from here on, so nothing
-            // after it can ever be reached (the component validator enforces that it is last).
-            if (candidate.Rule == null)
-                return Result<FunctionContractResolution?>.Ok(
-                    new FunctionContractResolution(candidate.Reference, MatchedByRule: false, candidate.LoadData));
+        var selection = await selector.SelectAsync(
+            candidates,
+            scriptContext,
+            (candidate, message) => logger.FunctionContractRuleEvaluationFailed(
+                function.Key,
+                slot.ToString(),
+                candidate.Reference.Key,
+                message),
+            cancellationToken);
 
-            var contextResult = await scriptContext.GetAsync(cancellationToken);
-            if (!contextResult.IsSuccess)
-                return Result<FunctionContractResolution?>.Fail(contextResult.Error);
+        if (!selection.IsSuccess)
+            return Result<FunctionContractResolution?>.Fail(selection.Error);
 
-            var ruleResult = await taskConditionService.ExecuteConditionAsync(
-                candidate.Rule,
-                contextResult.Value!,
-                cancellationToken);
-
-            if (ruleResult is { IsSuccess: true, Value: true })
-                return Result<FunctionContractResolution?>.Ok(
-                    new FunctionContractResolution(candidate.Reference, MatchedByRule: true, candidate.LoadData));
-
-            // A rule that threw tells us nothing about the entry - skip it and let a later entry or the
-            // fallback answer, exactly as view selection does.
-            if (!ruleResult.IsSuccess)
-            {
-                logger.FunctionContractRuleEvaluationFailed(
-                    function.Key,
-                    slot.ToString(),
-                    candidate.Reference.Key,
-                    ruleResult.Error.Message ?? "unknown");
-            }
-        }
-
-        // Every entry carried a rule and none matched: the function declares no contract for this
-        // request. Not an error - the caller decides what an absent contract means.
-        return Result<FunctionContractResolution?>.Ok(null);
+        // No entry won: the function declares no contract for this request. Not an error - the caller
+        // decides what an absent contract means.
+        return Result<FunctionContractResolution?>.Ok(
+            selection.Value is { } won
+                ? new FunctionContractResolution(won.Reference, won.MatchedByRule, won.LoadData)
+                : null);
     }
 
     /// <summary>
@@ -88,6 +71,4 @@ public sealed class FunctionContractResolver(
         definition is null
             ? []
             : definition.Views.Select(e => new ContractCandidate(e.Rule, e.View, e.LoadData)).ToList();
-
-    private sealed record ContractCandidate(ScriptCode? Rule, Reference Reference, bool? LoadData);
 }

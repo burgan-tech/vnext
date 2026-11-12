@@ -161,6 +161,10 @@ public sealed class SubflowCompletionService(
                 // the other delivery of this very signal, and once it has committed this delivery
                 // has nothing left to do — so it stops waiting instead of acquiring the lock only to
                 // load the parent and find the correlation closed.
+                // Caller roles for the output mapping are resolved here, outside the terminal lock (see
+                // ISubflowOutputMappingService.WarmCallerRolesAsync); a provider failure is transient.
+                await WarmCallerRolesBeforeLockAsync(preparedMapping, completedInput, cancellationToken);
+
                 var terminalLockWait = TerminalLockWait.WhileCorrelationOpen(
                     terminalGuard, completedInput.InstanceId, completedInput.SubInstanceId,
                     SubItemTerminalOutcome.Completed);
@@ -394,6 +398,15 @@ public sealed class SubflowCompletionService(
             }
         }
     }
+
+    private Task WarmCallerRolesBeforeLockAsync(
+        Result<SubflowOutputMappingPlan>? preparedMapping,
+        FlowCompletedInput completedInput,
+        CancellationToken cancellationToken) =>
+        preparedMapping is { IsSuccess: true } plan
+            ? outputMappingService.WarmCallerRolesAsync(
+                completedInput.InstanceId, plan.Value!, completedInput.CarriedHeaders, cancellationToken)
+            : Task.CompletedTask;
 
     private async Task MarkSettlementBestEffortAsync(
         Guid subInstanceId,

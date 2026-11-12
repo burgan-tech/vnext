@@ -240,6 +240,15 @@ public static class WorkflowErrors
             target: transitionKey);
 
     /// <summary>
+    /// The transition declares rule-based schemas and none of them matched the instance.
+    /// </summary>
+    public static Error TransitionSchemaNotMatched(string transitionKey)
+        => Error.Validation(
+            WorkflowErrorCodes.TransitionSchemaNotMatched,
+            $"Transition '{transitionKey}' declares rule-based schemas and none of them matches the instance.",
+            target: transitionKey);
+
+    /// <summary>
     /// When the instance has an active SubFlow, a shared transition's target must be $self so the state does not change.
     /// </summary>
     /// <param name="transitionKey">The shared transition key.</param>
@@ -655,6 +664,15 @@ public static class WorkflowErrors
             WorkflowErrorCodes.FunctionContractTargetInvalid,
             $"Unknown target '{target}'. Expected 'input' or 'output'.");
 
+    /// <summary>
+    /// The function declares a rule-based <c>inputSchema</c>, none of its entries matched, and the request carries a body.
+    /// </summary>
+    /// <param name="functionKey">The function key.</param>
+    public static Error FunctionInputSchemaNotMatched(string functionKey)
+        => Error.Validation(
+            WorkflowErrorCodes.FunctionInputSchemaNotMatched,
+            $"Function '{functionKey}' declares a rule-based input schema and the request matches none of its entries.");
+
     #endregion
 
     #region Authorization Errors
@@ -666,6 +684,19 @@ public static class WorkflowErrors
         => Error.Validation(
             WorkflowErrorCodes.AuthorizeRequiresExactlyOneTarget,
             "Authorize requires exactly one of transitionKey, functionKey, queryRoles or ack (instance only)",
+            target: "authorize");
+
+    /// <summary>
+    /// Workflow-scoped authorize (<c>GET .../workflows/{workflow}/functions/authorize</c>) was called with a
+    /// missing or unsupported <c>type</c>. There is no default type: a caller who forgot it must not receive
+    /// a verdict about some other question. Values match ordinally.
+    /// </summary>
+    public static Error AuthorizeUnsupportedType(string? type)
+        => Error.Validation(
+            WorkflowErrorCodes.AuthorizeUnsupportedType,
+            string.IsNullOrWhiteSpace(type)
+                ? "Workflow-scoped authorize requires the 'type' query parameter. Supported: instance"
+                : $"Workflow-scoped authorize does not support type '{type}'. Supported: instance",
             target: "authorize");
 
     /// <summary>
@@ -716,6 +747,15 @@ public static class WorkflowErrors
         => Error.Forbidden(
             WorkflowErrorCodes.CallerRoleResolutionFailed,
             $"Caller roles could not be resolved from provider '{provider}': {reason}");
+
+    /// <summary>
+    /// A rule-based schema or view selection read the caller's roles and the provider could not answer.
+    /// The selection fails instead of falling through to a later (possibly looser) entry; retryable.
+    /// </summary>
+    public static Error CallerRolesUnavailable()
+        => Error.Transient(
+            WorkflowErrorCodes.CallerRolesUnavailable,
+            "The caller's roles could not be resolved, so a rule-based selection that reads them cannot be decided; the request can be retried");
 
     #endregion
 

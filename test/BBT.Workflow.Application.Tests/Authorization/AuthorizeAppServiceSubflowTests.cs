@@ -228,6 +228,115 @@ public sealed class AuthorizeAppServiceSubflowTests : IDisposable
             default!, default!, default, default, default);
     }
 
+    // ------------------------------------------- leaf not created yet (vnext#1181)
+
+    /// <summary>The child answers "not found": its row is not created yet, no grant was evaluated.</summary>
+    private void GivenLeafNotFound() =>
+        _gateway.GetAuthorizeResultForInstanceAsync(
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool>(),
+                Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<AuthorizeOutput>.Ok(new AuthorizeOutput
+            {
+                Allowed = false,
+                Reason = AuthorizeOutput.Reasons.InstanceNotFound
+            }));
+
+    /// <summary>
+    /// The parent's SubFlow correlation is committed before the child's row exists. A queryRoles probe
+    /// landing in that window used to pass the child's "not found" through as a deny (403 on the
+    /// client's state poll). The deepest EXISTING instance decides instead — this one.
+    /// </summary>
+    [Fact]
+    public async Task QueryRoles_LeafNotCreatedYet_ParentDecides_Allows()
+    {
+        var parent = ParentWithActiveSubflow();
+        GivenInstance(parent);
+        GivenLeafNotFound();
+        GivenRootQueryVerdict(true);
+
+        var result = await AuthorizeQueryRolesAsync();
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Allowed.ShouldBeTrue();
+        result.Value.Reason.ShouldBeNull();
+        await _authManager.Received(1).IsQueryAllowedAsync(
+            Arg.Any<WorkflowDefinition>(), Arg.Is<Instance>(i => i.Id == parent.Id),
+            Arg.Any<IReadOnlyCollection<string>?>(),
+            Arg.Any<AuthorizationRequestContext?>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>The fallback evaluates the parent's grants; it does not default to allow.</summary>
+    [Fact]
+    public async Task QueryRoles_LeafNotCreatedYet_ParentDenies_Denies()
+    {
+        GivenInstance(ParentWithActiveSubflow());
+        GivenLeafNotFound();
+        GivenRootQueryVerdict(false);
+
+        (await AuthorizeQueryRolesAsync()).Value!.Allowed.ShouldBeFalse();
+    }
+
+    /// <summary>
+    /// A leaf that EXISTS and refuses is still the refusal — the parent's grants are not consulted.
+    /// Only the "not found" reason falls back.
+    /// </summary>
+    [Fact]
+    public async Task QueryRoles_LeafExistsAndDenies_DoesNotFallBack()
+    {
+        GivenInstance(ParentWithActiveSubflow());
+        GivenLeafVerdict(false);
+        GivenRootQueryVerdict(true);
+
+        (await AuthorizeQueryRolesAsync()).Value!.Allowed.ShouldBeFalse();
+        await _authManager.DidNotReceiveWithAnyArgs().IsQueryAllowedAsync(
+            default!, default!, default, default, default);
+    }
+
+    /// <summary>
+    /// A transition forwarded to a child that does not exist cannot execute either, so the child's
+    /// "not found" stays a refusal there; only queryRoles falls back.
+    /// </summary>
+    [Fact]
+    public async Task Transition_LeafNotCreatedYet_StaysDenied()
+    {
+        GivenParentWithSharedTransition(ParentInWaitingWithActiveSubflow(), availableIn: "some-other-state");
+        GivenLeafNotFound();
+        GivenRootQueryVerdict(true);
+
+        (await AuthorizeTransitionAsync("escalate")).Value!.Allowed.ShouldBeFalse();
+        await _authManager.DidNotReceiveWithAnyArgs().IsQueryAllowedAsync(
+            default!, default!, default, default, default);
+    }
+
+    /// <summary>
+    /// The addressed instance itself is missing: still a refusal (a direct caller keeps its 403), but
+    /// the answer says no grant was evaluated, which is what a descending parent reads.
+    /// </summary>
+    [Fact]
+    public async Task QueryRoles_InstanceNotFound_DeniesWithReason()
+    {
+        _instanceRepository.FindByIdentifierAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns((Instance?)null);
+        _componentCache.GetFlowAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(Result<WorkflowDefinition>.Ok(BuildParentWorkflow()));
+
+        var result = await AuthorizeQueryRolesAsync();
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Allowed.ShouldBeFalse();
+        result.Value.Reason.ShouldBe(AuthorizeOutput.Reasons.InstanceNotFound);
+    }
+
+    /// <summary>An ordinary decision carries no <c>reason</c> in the body — the shape is unchanged.</summary>
+    [Fact]
+    public void AuthorizeOutput_WithoutReason_SerializesAllowedOnly()
+    {
+        JsonSerializer.Serialize(new AuthorizeOutput { Allowed = true }).ShouldBe("""{"allowed":true}""");
+        JsonSerializer.Serialize(new AuthorizeOutput { Allowed = false, Reason = AuthorizeOutput.Reasons.InstanceNotFound })
+            .ShouldBe("""{"allowed":false,"reason":"instance-not-found"}""");
+    }
+
     // --------------------------------------------------------------- ack target
 
     /// <summary>

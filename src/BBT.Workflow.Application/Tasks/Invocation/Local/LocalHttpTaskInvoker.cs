@@ -14,7 +14,7 @@ namespace BBT.Workflow.Tasks.Invocation.Local;
 /// </summary>
 public sealed class LocalHttpTaskInvoker(
     IHttpClientFactory httpClientFactory,
-    ILogger<LocalHttpTaskInvoker> logger) : ILocalTaskInvoker
+    ILogger<LocalHttpTaskInvoker> logger) : ITypedLocalTaskInvoker<HttpTaskBinding>
 {
     /// <summary>
     /// The type-22 wrapper's task-type label. Kept as the ONE condition that routes logging to the
@@ -46,6 +46,16 @@ public sealed class LocalHttpTaskInvoker(
         return await InvokeAsync(
             taskKey, typedBinding, traceContext, TaskTypes.Http, cancellationToken);
     }
+
+    /// <inheritdoc />
+    /// <remarks>The type-6 task's own label (<see cref="TaskTypes.Http"/>), exactly what the
+    /// <see cref="JsonElement"/> overload passes.</remarks>
+    Task<TaskInvocationResult> ITypedLocalTaskInvoker<HttpTaskBinding>.InvokeAsync(
+        string? taskKey,
+        HttpTaskBinding binding,
+        TaskTraceContext? traceContext,
+        CancellationToken cancellationToken)
+        => InvokeAsync(taskKey, binding, traceContext, TaskTypes.Http, cancellationToken);
 
     /// <summary>
     /// The typed entry point. Public so the type-22 wrapper (<c>ExternalHttpTaskInvoker</c>) can

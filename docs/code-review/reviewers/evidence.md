@@ -27,6 +27,7 @@ These are mechanical, fast, and each one is CRITICAL because CI or a later reade
 - [ ] `evidence/unit-pins-invariant` — where the change restores or protects a documented invariant, the test pins the invariant itself, not the incidental symptom. The repo's existing pinning tests are the model: `SubStateChangeCoalescingTests`, `InstanceIncidentPersistenceTests`, `TaskStepIncidentPersistenceTests`, `RoleGrantEvaluatorTests`, `DynamicRoleGrantTests`.
 - [ ] `evidence/unit-no-overmock` — the test asserts behaviour, not the call sequence of its own mocks.
 - [ ] `evidence/unit-naming` — the test name states the claim; xUnit + NSubstitute/Shouldly per the repo's convention.
+- [ ] `evidence/unit-green` — the `Unit Tests` check is green for the HEAD commit. A red is CRITICAL whether or not this PR caused it; there is no pre-existing-failure exception ([policy](../../testing/unit-tests.md)). A test whose expected value was changed must say why the old expectation was wrong.
 
 ## 3. Integration-test policy (`evidence/it-*`)
 
@@ -62,6 +63,11 @@ and the skills point here.
 | `PR-HANDOFF` | Each `yes` row links a `docs/integration/<product>/*.md` file changed in this PR, or a PR/issue URL in `burgan-tech/<product>`. |
 | `PR-HANDOFF-DOC` | A linked handoff doc has frontmatter with the right `product`, the PR's `milestone`, and `status` `pending`/`in-progress`/`done` ([convention](../../integration/README.md)). |
 | `PR-META` | `## vnext-meta impact` says `updated` only when a `vnext-meta/unreleased/<slug>.json` fragment or a shipped `vnext-meta/*.json` data file changed (not `package.json`, `package-lock.json` or a README), and `not-needed` (with a reason) only when none did. |
+| `PR-AI-LABELS` | A PR carrying any `ai:` label (made by the [AI pipeline](../../governance/ai-engineering-pipeline.md)) has exactly one `ai:semver-*` and one `ai:impact-*` label. Applies on every tier. |
+| `PR-AI-GUARD` | An AI PR is never `ai:semver-major`; a breaking change goes to a human. |
+| `PR-AI-IMPACT` | An AI PR labelled `ai:impact-low` touches no path in [`.github/ai/impact-paths.json`](../../../.github/ai/impact-paths.json) (migrations, authorization, security, script sandbox, public API and contracts, pipeline order, state-function shape, Dapr components, `.github/`). |
+| `PR-AI-COUNCIL` | An AI PR with `ai:council-required` also carries `ai:council-approved`. |
+| `PR-AI-RECORD` | An AI PR has a filled `## AI decision record`: `Issue: #<n>`, a `Classification:` line that matches the labels, a `Council:` line (with `ai:council-required`: the `APPROVED` verdict and the session link), a `### Done / skipped` table with Build, Unit tests and E2E rows, and `### Test it locally` steps ([format](../../governance/ai-engineering-pipeline.md#9-the-ai-pr-body--what-the-human-gets)). |
 | `META-*` | The same run lints `vnext-meta/` on every PR regardless of title (`scripts/governance/meta-lint.mjs`; rule ids in the [`vnext-meta-validator` checks](../../../.claude/skills/vnext-meta-validator/CHECKS.md)). |
 
 What CI cannot judge, and this reviewer does:

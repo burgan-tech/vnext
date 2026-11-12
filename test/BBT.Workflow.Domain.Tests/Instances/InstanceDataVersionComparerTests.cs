@@ -966,6 +966,169 @@ public class InstanceDataVersionComparerTests : DomainTestBase<DomainEntryPoint>
 
     #endregion
 
+    #region Bare artifact row vs package-stamped rows (#1164)
+
+    [Fact]
+    public void FindBestMatch_ArtifactRequest_ShouldPreferHighestPkgRow_OverBareRow()
+    {
+        // Arrange - a legacy bare "1.0.0" row next to package-stamped rows of the same artifact
+        var versions = new List<string>
+        {
+            "1.0.0",
+            "1.0.0-pkg.0.0.49+x",
+            "1.0.0-pkg.0.0.50+x"
+        };
+
+        // Act
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0");
+
+        // Assert
+        Assert.Equal("1.0.0-pkg.0.0.50+x", result);
+    }
+
+    [Fact]
+    public void FindBestMatch_ArtifactRequest_ShouldPreferPkgRow_RegardlessOfCandidateOrder()
+    {
+        // Arrange - bare row last; the result must not depend on enumeration order
+        var versions = new List<string>
+        {
+            "1.0.0-pkg.0.0.50+morph-touch",
+            "1.0.0-pkg.0.0.36+morph-touch",
+            "1.0.0"
+        };
+
+        // Act
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0");
+
+        // Assert
+        Assert.Equal("1.0.0-pkg.0.0.50+morph-touch", result);
+    }
+
+    [Fact]
+    public void FindBestMatch_ArtifactRequest_ShouldAgreeWithHighestOrderedRow()
+    {
+        // Arrange - the IsLatest row of an artifact line is its highest-ordered version
+        var versions = new List<string>
+        {
+            "1.0.0",
+            "1.0.0-pkg.0.0.38+x",
+            "1.0.0-pkg.0.0.50+x",
+            "1.0.0-pkg.0.0.49+x"
+        };
+        var highest = versions
+            .OrderByDescending(v => v, InstanceDataVersionComparer.StringVersionComparer.Instance)
+            .First();
+
+        // Act
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0");
+
+        // Assert
+        Assert.Equal(highest, result);
+    }
+
+    [Fact]
+    public void FindBestMatch_ArtifactRequest_ShouldReturnBareRow_WhenNoPkgRowExists()
+    {
+        // Arrange - plain SemVer instance data (no package stamping)
+        var versions = new List<string> { "1.0.0", "1.0.1", "2.0.0" };
+
+        // Act
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0");
+
+        // Assert
+        Assert.Equal("1.0.0", result);
+    }
+
+    [Fact]
+    public void FindBestMatch_ArtifactRequest_ShouldIgnorePkgRowsOfOtherArtifacts()
+    {
+        // Arrange
+        var versions = new List<string> { "1.0.0", "1.0.1-pkg.0.0.50+x", "2.0.0-pkg.0.0.60+x" };
+
+        // Act
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0");
+
+        // Assert
+        Assert.Equal("1.0.0", result);
+    }
+
+    [Fact]
+    public void FindBestMatch_ArtifactRequest_ShouldBeCaseInsensitive_ForPrereleaseArtifact()
+    {
+        // Arrange
+        var versions = new List<string>
+        {
+            "1.0.0-alpha.1",
+            "1.0.0-alpha.1-pkg.0.0.2+x"
+        };
+
+        // Act
+        var lower = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0-alpha.1");
+        var upper = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0-ALPHA.1");
+
+        // Assert
+        Assert.Equal("1.0.0-alpha.1-pkg.0.0.2+x", lower);
+        Assert.Equal(lower, upper);
+    }
+
+    [Fact]
+    public void FindBestMatch_FullVersionRequest_ShouldMatchExactlyOnly()
+    {
+        // Arrange
+        var versions = new List<string>
+        {
+            "1.0.0",
+            "1.0.0-pkg.0.0.49+x",
+            "1.0.0-pkg.0.0.50+x"
+        };
+
+        // Act
+        var exact = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0-pkg.0.0.49+x");
+        var exactOtherCase = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0-PKG.0.0.49+X");
+        var miss = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0-pkg.0.0.51+x");
+
+        // Assert
+        Assert.Equal("1.0.0-pkg.0.0.49+x", exact);
+        Assert.Equal("1.0.0-pkg.0.0.49+x", exactOtherCase);
+        Assert.Null(miss);
+    }
+
+    [Fact]
+    public void FindBestMatch_UpperCasePkgSpelling_ShouldResolveLikeLowerCase()
+    {
+        // Arrange - "1.0.0-PKG.0.0.49" fails the case-sensitive full-version test and parses as an
+        // artifact version; NormalizeRequest maps both spellings to one cache key, so they must agree.
+        var versions = new List<string> { "1.0.0", "1.0.0-pkg.0.0.49", "1.0.0-pkg.0.0.50" };
+
+        // Act
+        var lower = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0-pkg.0.0.49");
+        var upper = InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0-PKG.0.0.49");
+
+        // Assert
+        Assert.Equal("1.0.0-pkg.0.0.49", lower);
+        Assert.Equal(lower, upper);
+    }
+
+    [Fact]
+    public void FindBestMatch_PackageOnlyRequest_ShouldStillResolve_WithBareRowsPresent()
+    {
+        // Arrange
+        var versions = new List<string>
+        {
+            "1.0.0",
+            "1.0.0-pkg.00.01.417+onboarding",
+            "1.0.0-pkg.00.01.418+onboarding"
+        };
+
+        // Act
+        var result = InstanceDataVersionComparer.FindBestMatch(versions, "00.01.417");
+
+        // Assert
+        Assert.Equal("1.0.0-pkg.00.01.417+onboarding", result);
+    }
+
+    #endregion
+
     private InstanceData CreateInstanceData(string version)
     {
         var instance = InstanceFactory.CreateDefault();

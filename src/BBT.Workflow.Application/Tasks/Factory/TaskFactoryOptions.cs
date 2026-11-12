@@ -14,7 +14,9 @@ public sealed class TaskFactoryOptions
 
     /// <summary>
     /// Gets or sets whether to use object pooling for task instances.
-    /// Default is false for development, true for production environments.
+    /// Default is false, and no shipped configuration turns it on: the hosts' appsettings set it to
+    /// false and the Helm chart does not override it, so production runs the plain
+    /// <see cref="TaskFactory"/> and the pool settings below are not read.
     /// </summary>
     public bool UseObjectPooling { get; set; } = false;
 
