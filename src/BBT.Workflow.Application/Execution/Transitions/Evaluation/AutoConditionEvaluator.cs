@@ -88,14 +88,7 @@ public sealed class AutoConditionEvaluator(
                 // task mappings, so the caller is exposed for this rule only and closed afterwards.
                 var caller = callerAccessorFactory?.ForHop(context.Actor, context.Headers, ct)
                              ?? NullCallerAccessor.Instance;
-                Result<bool> conditionResult;
-                using (scriptContext.ExposeCaller(caller))
-                {
-                    conditionResult = await taskConditionService.ExecuteConditionAsync(
-                        transition.Rule!,
-                        scriptContext,
-                        ct);
-                }
+                var conditionResult = await ExecuteWithCallerAsync(transition.Rule!, scriptContext, caller, ct);
 
                 // A rule that read the caller's roles while the provider could not answer decides nothing,
                 // whatever it returned, threw or swallowed: abandon the whole evaluation (the DefaultAutoTransition
@@ -115,6 +108,13 @@ public sealed class AutoConditionEvaluator(
     /// Maps the boolean condition result to an AutoConditionEvaluation.
     /// Pure transformation function.
     /// </summary>
+    private async Task<Result<bool>> ExecuteWithCallerAsync(
+        ScriptCode rule, ScriptContext scriptContext, ICallerAccessor caller, CancellationToken cancellationToken)
+    {
+        using var exposure = scriptContext.ExposeCaller(caller);
+        return await taskConditionService.ExecuteConditionAsync(rule, scriptContext, cancellationToken);
+    }
+
     private static AutoConditionEvaluation MapToEvaluation(string transitionKey, bool conditionResult)
     {
         var status = conditionResult
@@ -164,5 +164,5 @@ public sealed class AutoConditionEvaluator(
 }
 
 /// <summary>Raised inside the guarded evaluation so the TryAsync wrapper maps it to <c>Authorization:110006</c>.</summary>
-internal sealed class CallerRolesUnavailableForAutoRuleException(string transitionKey)
+public sealed class CallerRolesUnavailableForAutoRuleException(string transitionKey)
     : Exception($"Caller roles could not be resolved for automatic transition '{transitionKey}'.");

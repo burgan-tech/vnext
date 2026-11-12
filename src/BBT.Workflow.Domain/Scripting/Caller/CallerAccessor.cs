@@ -56,17 +56,7 @@ public sealed class CallerAccessor : ICallerAccessor
             throw new CallerRolesUnavailableException(
                 "Caller roles are no longer available: they are exposed to the rule-based selection only.");
 
-        CallerRoleSnapshot snapshot;
-        try
-        {
-            snapshot = await _resolution.Value.ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _failed = true;
-            throw new CallerRolesUnavailableException("Caller roles could not be resolved.", ex);
-        }
-
+        var snapshot = await ResolveAsync().ConfigureAwait(false);
         if (snapshot.Failed)
         {
             _failed = true;
@@ -75,6 +65,19 @@ public sealed class CallerAccessor : ICallerAccessor
 
         _resolved = snapshot;
         return snapshot.Roles;
+    }
+
+    private async Task<CallerRoleSnapshot> ResolveAsync()
+    {
+        try
+        {
+            return await _resolution.Value.ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _failed = true;
+            throw new CallerRolesUnavailableException("Caller roles could not be resolved.", ex);
+        }
     }
 
     /// <inheritdoc />

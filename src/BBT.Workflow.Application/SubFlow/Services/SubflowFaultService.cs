@@ -283,22 +283,8 @@ public sealed class SubflowFaultService(
                     // On the FAULT path a failed output mapping is logged and settlement proceeds (existing
                     // behaviour). A mapping that read caller roles while the provider was down is treated the same
                     // way here rather than blocking the fault's settlement on the identity provider.
-                    Result mappingResult;
-                    try
-                    {
-                        mappingResult = await outputMappingService.ApplyAsync(
-                            parentInstance,
-                            parentWorkflow,
-                            correlation.ParentState,
-                            input.InstanceData,
-                            cancellationToken,
-                            input.CarriedHeaders);
-                    }
-                    catch (CallerRolesUnavailableTransientException ex)
-                    {
-                        mappingResult = Result.Fail(WorkflowErrors.SubFlowOutputMappingFailed(
-                            parentInstance.Id, ex.Message));
-                    }
+                    var mappingResult = await ApplyOutputMappingOnFaultAsync(
+                        parentInstance, parentWorkflow, correlation.ParentState, input, cancellationToken);
 
                     // Output-mapping failures are permanent at this boundary. Recoverable
                     // assembly-load contention is handled locally by CSharpEvaluator. Failure is
@@ -671,4 +657,27 @@ public sealed class SubflowFaultService(
         CarriedHeaders = input.CarriedHeaders,
         RearmAttempt = rearmAttempt
     };
+
+    /// <summary>
+    /// Applies the output mapping on the fault path. A mapping that read caller roles while the provider was
+    /// down becomes a failed mapping result (logged by the caller, settlement continues) instead of the
+    /// transient exception the completion path redelivers on.
+    /// </summary>
+    private async Task<Result> ApplyOutputMappingOnFaultAsync(
+        Instance parentInstance,
+        Definitions.Workflow parentWorkflow,
+        string parentState,
+        SubFlowFaultedInput input,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await outputMappingService.ApplyAsync(
+                parentInstance, parentWorkflow, parentState, input.InstanceData, cancellationToken, input.CarriedHeaders);
+        }
+        catch (CallerRolesUnavailableTransientException ex)
+        {
+            return Result.Fail(WorkflowErrors.SubFlowOutputMappingFailed(parentInstance.Id, ex.Message));
+        }
+    }
 }

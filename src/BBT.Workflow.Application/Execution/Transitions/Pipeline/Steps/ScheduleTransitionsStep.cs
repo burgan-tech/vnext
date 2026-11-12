@@ -148,20 +148,23 @@ public sealed class ScheduleTransitionsStep(
         // roles must guard IsAvailable and choose a default. Exposed on this timer's branch only.
         var caller = callerAccessorFactory?.ForHop(context.Actor, context.Headers, cancellationToken)
                      ?? NullCallerAccessor.Instance;
-        Result<TimerSchedule> schedule;
-        using (scriptContext.ExposeCaller(caller))
-        {
-            schedule = await taskTimerService.ExecuteTimerAsync(
-                scheduledTransition.Timer!,
-                scriptContext,
-                cancellationToken);
-        }
+        var schedule = await ExecuteTimerWithCallerAsync(scheduledTransition, scriptContext, caller, cancellationToken);
 
         // Roles were read while the provider could not answer: arming a timer from an unidentified caller's
         // schedule (or from whatever the script fell back to) is not decided — fail the step (retryable 110006).
         return caller.ResolutionFailed
             ? Result<TimerSchedule>.Fail(WorkflowErrors.CallerRolesUnavailable())
             : schedule;
+    }
+
+    private async Task<Result<TimerSchedule>> ExecuteTimerWithCallerAsync(
+        Transition scheduledTransition,
+        ScriptContext scriptContext,
+        ICallerAccessor caller,
+        CancellationToken cancellationToken)
+    {
+        using var exposure = scriptContext.ExposeCaller(caller);
+        return await taskTimerService.ExecuteTimerAsync(scheduledTransition.Timer!, scriptContext, cancellationToken);
     }
 
     /// <summary>
