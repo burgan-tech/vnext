@@ -22,9 +22,9 @@ public sealed class AgentRunRecorder(Guid runId, Guid instanceId, EffectiveAgent
     public Guid RunId => runId;
 
     /// <summary>Recorded calls in order.</summary>
-    public IReadOnlyList<InstanceAgentToolCall> Calls // skipcq: CS-P1026 — a snapshot taken under the lock; tools record calls in parallel
+    public IReadOnlyList<InstanceAgentToolCall> Calls
     {
-        get
+        get // skipcq: CS-P1026 — a snapshot taken under the lock; tools record calls in parallel
         {
             lock (_gate)
                 return _calls.ToList();
