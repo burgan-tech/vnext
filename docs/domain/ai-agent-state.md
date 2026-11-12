@@ -300,7 +300,8 @@ count against `maxEntries`:
 
 A held call without an answer is denied (`"no approval answer was given"`) and journaled `Denied`; calls
 the model made in the same turn that need no approval run automatically. A state with `memory.mode: none`
-still keeps a session row for the round trip. Approval works on the final agent only; a participant that
+still keeps a session row for the round trip, with either storage (a `provider` row carries the provider
+conversation id). Approval works on the final agent only; a participant that
 requests one fails.
 
 ## Multi-agent states

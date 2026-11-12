@@ -112,7 +112,7 @@ public partial class WorkflowValidator
 
         const string wf = nameof(Workflow);
 
-        if (!workflow.States.Any(s => s.StateType == StateType.Finish))
+        if (workflow.States.All(s => s.StateType != StateType.Finish))
         {
             result.AddError(new ValidationResult(
                 $"A workflow with {HistoryNone} must declare at least one Finish state (stateType 3).",

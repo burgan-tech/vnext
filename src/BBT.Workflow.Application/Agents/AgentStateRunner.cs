@@ -210,8 +210,9 @@ public sealed class AgentStateRunner(
         var memoryMode = memory.Mode ?? AgentMemoryMode.State;
         var useProviderSession = memory.Storage == AgentMemoryStorage.Provider && profile.SupportsServiceSessions;
         var scopeKey = ScopeKey(memoryMode, memory, context, agent, templateScope);
-        // Held tool calls are resumed from a session, so a state without memory still keeps one for the approval round trip.
-        var approvalScopeKey = scopeKey ?? (useProviderSession ? null : $"i:{context.InstanceId:N}:{context.WorkflowKey}:{state.Key}");
+        // Held tool calls are resumed from a session, so a state without memory still keeps one for the approval round
+        // trip, whatever the storage: a provider session needs the row too, it carries the provider conversation id.
+        var approvalScopeKey = scopeKey ?? $"i:{context.InstanceId:N}:{context.WorkflowKey}:{state.Key}";
         var readScopeKey = approvalAnswers is not null ? approvalScopeKey : scopeKey;
         AgentSessionSnapshot? snapshot = null;
         if (readScopeKey is not null)
@@ -250,32 +251,26 @@ public sealed class AgentStateRunner(
         logger.AgentRunStarted(runId, agent.Key, agent.Version, state.Key, instance.Id, agent.Provider);
 
         // 7. Provider run, under the bulkhead.
-        AgentRunResult result;
-        using (var slot = limiter.TryAcquire())
-        {
-            result = slot is null
-                ? AgentRunResult.Failed(AgentRunStatus.Failed, $"capacity: AiAgent:MaxConcurrentRuns ({settings.MaxConcurrentRuns}) reached")
-                : await runtime.RunAsync(new AgentRunRequest(
-                    runId,
-                    agent.Key,
-                    agent.Provider,
-                    profile,
-                    instructions,
-                    userPrompt,
-                    schema,
-                    agent.Model,
-                    tools,
-                    policy,
-                    snapshot?.Messages,
-                    snapshot?.ProviderConversationId,
-                    useProviderSession,
-                    memory.MaxMessages ?? 40,
-                    CaptureTranscript: (audit?.Transcript ?? AgentTranscriptMode.None) != AgentTranscriptMode.None,
-                    Compaction: memory.Compaction ?? AgentMemoryCompaction.Trim,
-                    SeedMessages: seedMessages,
-                    ApprovalAnswers: approvalAnswers,
-                    FullTranscript: audit?.Transcript == AgentTranscriptMode.Full), cancellationToken);
-        }
+        var result = await RunLimitedAsync(new AgentRunRequest(
+            runId,
+            agent.Key,
+            agent.Provider,
+            profile,
+            instructions,
+            userPrompt,
+            schema,
+            agent.Model,
+            tools,
+            policy,
+            snapshot?.Messages,
+            snapshot?.ProviderConversationId,
+            useProviderSession,
+            memory.MaxMessages ?? 40,
+            CaptureTranscript: (audit?.Transcript ?? AgentTranscriptMode.None) != AgentTranscriptMode.None,
+            Compaction: memory.Compaction ?? AgentMemoryCompaction.Trim,
+            SeedMessages: seedMessages,
+            ApprovalAnswers: approvalAnswers,
+            FullTranscript: audit?.Transcript == AgentTranscriptMode.Full), cancellationToken);
 
         foreach (var denied in approvalAnswers?.Where(a => !a.Approved && a.Pending.RequiresConfirmation) ?? [])
             recorder.RecordApproval(denied.Pending, AgentToolCallStatus.Denied, denied.Reason);
@@ -743,15 +738,9 @@ public sealed class AgentStateRunner(
         var schema = augment is null ? agent.Output!.Schema!.Value : augment(agent.Output!.Schema!.Value);
         var instructions = agent.Instructions!.Resolved;
 
-        AgentRunResult result;
-        using (var slot = limiter.TryAcquire())
-        {
-            result = slot is null
-                ? AgentRunResult.Failed(AgentRunStatus.Failed, $"capacity: AiAgent:MaxConcurrentRuns ({settings.MaxConcurrentRuns}) reached")
-                : await runtime.RunAsync(new AgentRunRequest(
-                    row.Id, agent.Key, agent.Provider, profile, instructions, prompt, schema, agent.Model, tools, policy,
-                    null, null, false, 0, CaptureTranscript: false), cancellationToken);
-        }
+        var result = await RunLimitedAsync(new AgentRunRequest(
+            row.Id, agent.Key, agent.Provider, profile, instructions, prompt, schema, agent.Model, tools, policy,
+            null, null, false, 0, CaptureTranscript: false), cancellationToken);
 
         ApplyResult(row, result, recorder, agent.Audit, settings, schema, [], prompt, AgentTemplateRenderer.Sha256(instructions), tools);
         if (result.Status == AgentRunStatus.ApprovalRequested)
@@ -759,6 +748,15 @@ public sealed class AgentStateRunner(
 
         logger.AgentRunCompleted(row.Id, row.InstanceId, clock.ElapsedMilliseconds, row.Iterations, row.ToolCallCount, row.TotalTokens);
         return (row, Finish(result.Status, result.FailureReason, recorder.Calls), result.Status == AgentRunStatus.Completed ? result.Output : null);
+    }
+
+    /// <summary>One provider run under the <c>AiAgent:MaxConcurrentRuns</c> bulkhead; a full bulkhead fails the run.</summary>
+    private async Task<AgentRunResult> RunLimitedAsync(AgentRunRequest request, CancellationToken cancellationToken)
+    {
+        using var slot = limiter.TryAcquire();
+        return slot is null
+            ? AgentRunResult.Failed(AgentRunStatus.Failed, $"capacity: AiAgent:MaxConcurrentRuns ({options.Value.MaxConcurrentRuns}) reached")
+            : await runtime.RunAsync(request, cancellationToken);
     }
 
     private static string ParticipantBlock(InstanceAgentRun run, JsonElement? output)

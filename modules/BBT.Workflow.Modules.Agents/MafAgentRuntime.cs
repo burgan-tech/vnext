@@ -97,8 +97,8 @@ internal sealed class MafAgentRuntime(IChatClientProvider provider, IJsonSchemaV
             var received = new List<ChatMessage>();
             int promptTokens = 0, completionTokens = 0, iterations = 0;
             int argumentCorrections = 0, outputRepairs = 0;
-            AgentResponse response;
-            List<ToolApprovalRequestContent> held;
+            AgentResponse? response = null;
+            List<ToolApprovalRequestContent> held = [];
             JsonElement output = default;
             string? outputErrors = null;
             string? argumentErrors = null;
@@ -132,20 +132,15 @@ internal sealed class MafAgentRuntime(IChatClientProvider provider, IJsonSchemaV
                     if (argumentCorrections >= MaxArgumentCorrections)
                         break;
                     argumentCorrections++;
-                    input = [new ChatMessage(ChatRole.User, held.Select(r => (AIContent)(invalid.TryGetValue(r.RequestId, out var errors)
-                        ? r.CreateResponse(false, $"invalid arguments, the call did not run: {errors}. Call the tool again with arguments that match its schema.")
-                        : r.RequiresConfirmation
-                            ? r.CreateResponse(false, "not run: another call in this turn had invalid arguments. Call the tool again if you still need it.")
-                            : r.CreateResponse(true))).ToList())];
+                    input = [new ChatMessage(ChatRole.User, held.Select(r => CorrectionAnswer(r, invalid)).ToList())];
                     sent.AddRange(input);
                     continue;
                 }
 
                 argumentErrors = null;
-                if (!TryParseObject(response.Text, out output))
-                    outputErrors = "the answer is not a JSON object";
-                else
-                    outputErrors = AgentSchemaCheck.Describe(schemaValidator, request.OutputSchema, output);
+                outputErrors = TryParseObject(response.Text, out output)
+                    ? AgentSchemaCheck.Describe(schemaValidator, request.OutputSchema, output)
+                    : "the answer is not a JSON object";
                 if (outputErrors is null || outputRepairs >= MaxOutputRepairs)
                     break;
 
@@ -303,6 +298,19 @@ internal sealed class MafAgentRuntime(IChatClientProvider provider, IJsonSchemaV
 
     private static string NameOf(ToolApprovalRequestContent request) =>
         (request.ToolCall as FunctionCallContent)?.Name ?? string.Empty;
+
+    /// <summary>
+    /// The answer to a held call in a correction turn: a call with invalid arguments is denied with its errors, another
+    /// call that needs confirmation is denied so the model calls it again, and a call that needs none runs.
+    /// </summary>
+    private static AIContent CorrectionAnswer(ToolApprovalRequestContent request, IReadOnlyDictionary<string, string> invalid)
+    {
+        if (invalid.TryGetValue(request.RequestId, out var errors))
+            return request.CreateResponse(false, $"invalid arguments, the call did not run: {errors}. Call the tool again with arguments that match its schema.");
+        if (request.RequiresConfirmation)
+            return request.CreateResponse(false, "not run: another call in this turn had invalid arguments. Call the tool again if you still need it.");
+        return request.CreateResponse(true);
+    }
 
     /// <summary>The argument errors of a held call, or null when they match (or the tool has no check).</summary>
     private static string? ArgumentErrors(IReadOnlyList<AgentToolDefinition> tools, ToolApprovalRequestContent request)
