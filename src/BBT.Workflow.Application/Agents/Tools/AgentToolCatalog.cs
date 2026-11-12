@@ -58,7 +58,7 @@ public sealed class AgentToolCatalog(
 
         foreach (var tool in ctx.Agent.Tools)
         {
-            if (tool.Roles is { Count: > 0 } roles && !roles.Any(r => ctx.CallerRoles.Contains(r, StringComparer.OrdinalIgnoreCase)))
+            if (tool.Roles is { Count: > 0 } roles && roles.All(r => !ctx.CallerRoles.Contains(r, StringComparer.OrdinalIgnoreCase)))
                 continue;
 
             if (tool.Kind == AgentToolKind.Mcp)
@@ -106,10 +106,14 @@ public sealed class AgentToolCatalog(
         return tools;
     }
 
-    private static string? BindingRef(AgentTool tool) =>
-        tool.Binding.Task is { } t ? $"sys-tasks/{t.Domain}/{t.Key}@{t.Version}"
-        : tool.Binding.Code is { IsReference: true, CodeReference: { } r } ? $"sys-mappings/{r.Domain}/{r.Key}@{r.Version}"
-        : null;
+    private static string? BindingRef(AgentTool tool)
+    {
+        if (tool.Binding.Task is { } t)
+            return $"sys-tasks/{t.Domain}/{t.Key}@{t.Version}";
+        if (tool.Binding.Code is { IsReference: true, CodeReference: { } r })
+            return $"sys-mappings/{r.Domain}/{r.Key}@{r.Version}";
+        return null;
+    }
 
     private static Func<AgentToolInvocation, CancellationToken, Task<AgentToolResult>> StubBody(JsonElement parameters) =>
         (invocation, _) => Task.FromResult(new AgentToolResult(
@@ -179,21 +183,20 @@ public sealed class AgentToolCatalog(
         async (invocation, cancellationToken) =>
         {
             var code = tool.Binding.Code!;
-            object? value;
-            if (ConditionScriptLocations.IsDynamicExpresso(code.Location))
-            {
-                value = EvaluateExpression(code.DecodedCode.Trim(), invocation.Arguments, ctx.ScriptContext);
-            }
-            else
-            {
-                var handler = await scriptEngine.CompileToInstanceAsync<IToolHandler>(
-                    code, flowScripts: ctx.ScriptContext.Workflow?.Scripts, cancellationToken: cancellationToken);
-                value = await handler.Handler(invocation.Arguments, ctx.ScriptContext.CreateParallelBranch());
-            }
+            var value = ConditionScriptLocations.IsDynamicExpresso(code.Location)
+                ? EvaluateExpression(code.DecodedCode.Trim(), invocation.Arguments, ctx.ScriptContext)
+                : await RunHandlerAsync(code, invocation, ctx, cancellationToken);
 
             return new AgentToolResult(AgentToolCallStatus.Completed,
                 value is string s ? s : JsonSerializer.Serialize(value, JsonSerializerConstants.JsonOptions));
         };
+
+    private async Task<object?> RunHandlerAsync(ScriptCode code, AgentToolInvocation invocation, AgentToolBuildContext ctx, CancellationToken cancellationToken)
+    {
+        var handler = await scriptEngine.CompileToInstanceAsync<IToolHandler>(
+            code, flowScripts: ctx.ScriptContext.Workflow?.Scripts, cancellationToken: cancellationToken);
+        return await handler.Handler(invocation.Arguments, ctx.ScriptContext.CreateParallelBranch());
+    }
 
     private static object? EvaluateExpression(string expression, JsonElement args, ScriptContext context)
     {

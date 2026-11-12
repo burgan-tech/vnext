@@ -34,7 +34,7 @@ public sealed class AgentSessionSweeperHostedService(
             {
                 await SweepAllAsync(stoppingToken);
             }
-            catch (Exception) when (!stoppingToken.IsCancellationRequested)
+            catch (Exception) when (!stoppingToken.IsCancellationRequested) // skipcq: CS-R1008 — a failed sweep waits for the next tick
             {
                 // A failed sweep is retried on the next tick; expired rows are also ignored on read.
             }
@@ -43,26 +43,31 @@ public sealed class AgentSessionSweeperHostedService(
 
     private async Task SweepAllAsync(CancellationToken cancellationToken)
     {
-        IReadOnlyList<string> schemas;
-        await using (var scope = scopeFactory.CreateAsyncScope())
+        foreach (var schema in await ListSchemasAsync(cancellationToken))
         {
-            var context = await scope.ServiceProvider.GetRequiredService<IAetherDbContextProvider<WorkflowDbContext>>()
-                .GetDbContextAsync(cancellationToken);
-            schemas = await context.Database
-                .SqlQueryRaw<string>("SELECT table_schema AS \"Value\" FROM information_schema.tables WHERE table_name = 'AgentSessions'")
-                .ToListAsync(cancellationToken);
+            // A full batch means more expired rows may be left in this schema.
+            var deleted = BatchSize;
+            while (deleted == BatchSize && !cancellationToken.IsCancellationRequested)
+                deleted = await SweepBatchAsync(schema, cancellationToken);
         }
+    }
 
-        foreach (var schema in schemas)
-        {
-            int deleted;
-            do
-            {
-                await using var scope = scopeFactory.CreateAsyncScope();
-                using var _ = scope.ServiceProvider.GetRequiredService<ICurrentSchema>().Change(schema);
-                deleted = await scope.ServiceProvider.GetRequiredService<IAgentSessionStore>().SweepExpiredAsync(BatchSize, cancellationToken);
-            }
-            while (deleted == BatchSize && !cancellationToken.IsCancellationRequested);
-        }
+    /// <summary>Schemas that hold an <c>AgentSessions</c> table.</summary>
+    private async Task<IReadOnlyList<string>> ListSchemasAsync(CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var context = await scope.ServiceProvider.GetRequiredService<IAetherDbContextProvider<WorkflowDbContext>>()
+            .GetDbContextAsync(cancellationToken);
+        return await context.Database
+            .SqlQueryRaw<string>("SELECT table_schema AS \"Value\" FROM information_schema.tables WHERE table_name = 'AgentSessions'")
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>Deletes one batch of expired rows in a schema; returns how many it deleted.</summary>
+    private async Task<int> SweepBatchAsync(string schema, CancellationToken cancellationToken)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        using var _ = scope.ServiceProvider.GetRequiredService<ICurrentSchema>().Change(schema); // skipcq: CS-W1100 — the schema scope ends on dispose
+        return await scope.ServiceProvider.GetRequiredService<IAgentSessionStore>().SweepExpiredAsync(BatchSize, cancellationToken);
     }
 }

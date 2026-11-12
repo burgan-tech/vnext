@@ -180,35 +180,29 @@ public sealed class AgentStateRunner(
         logger.AgentRunStarted(runId, agent.Key, agent.Version, state.Key, instance.Id, agent.Provider);
 
         // 7. Provider run, under the bulkhead.
-        AgentRunResult result;
-        using (var slot = limiter.TryAcquire())
-        {
-            result = slot is null
-                ? AgentRunResult.Failed(AgentRunStatus.Failed, $"capacity: AiAgent:MaxConcurrentRuns ({settings.MaxConcurrentRuns}) reached")
-                : await runtime.RunAsync(new AgentRunRequest(
-                    runId,
-                    agent.Key,
-                    agent.Provider,
-                    profile,
-                    instructions,
-                    userPrompt,
-                    schema,
-                    agent.Model,
-                    tools,
-                    policy,
-                    snapshot?.Messages,
-                    snapshot?.ProviderConversationId,
-                    useProviderSession,
-                    memory.MaxMessages ?? 40,
-                    CaptureTranscript: (audit?.Transcript ?? AgentTranscriptMode.None) != AgentTranscriptMode.None), cancellationToken);
-        }
+        var result = await RunLimitedAsync(new AgentRunRequest(
+            runId,
+            agent.Key,
+            agent.Provider,
+            profile,
+            instructions,
+            userPrompt,
+            schema,
+            agent.Model,
+            tools,
+            policy,
+            snapshot?.Messages,
+            snapshot?.ProviderConversationId,
+            useProviderSession,
+            memory.MaxMessages ?? 40,
+            CaptureTranscript: (audit?.Transcript ?? AgentTranscriptMode.None) != AgentTranscriptMode.None), cancellationToken);
 
         ApplyResult(run, result, recorder, audit, settings, schema, candidates, userPrompt, instructionsHash, tools);
 
         // 8. Decision.
-        string? selected;
-        AgentDecisionSource source;
-        string? reasonText;
+        string? selected = null;
+        var source = AgentDecisionSource.Rules;
+        string? reasonText = null;
         if (result.Status == AgentRunStatus.Completed)
         {
             reasonText = AgentDecisionSupport.ReadString(result.Output, AgentDecisionSupport.ReasonProperty);
@@ -235,8 +229,6 @@ public sealed class AgentStateRunner(
                     break;
                 }
                 default:
-                    selected = null;
-                    source = AgentDecisionSource.Rules;
                     break;
             }
         }
@@ -267,6 +259,15 @@ public sealed class AgentStateRunner(
 
         return await FinishAsync(context, run, recorder.Calls, run.Status, run.FailureReason, decisionSpec, candidates, selected,
             source, reasonText, clock, recorder, cancellationToken, written: true);
+    }
+
+    /// <summary>One provider run under the <c>AiAgent:MaxConcurrentRuns</c> bulkhead; a full bulkhead fails the run.</summary>
+    private async Task<AgentRunResult> RunLimitedAsync(AgentRunRequest request, CancellationToken cancellationToken)
+    {
+        using var slot = limiter.TryAcquire();
+        return slot is null
+            ? AgentRunResult.Failed(AgentRunStatus.Failed, $"capacity: AiAgent:MaxConcurrentRuns ({options.Value.MaxConcurrentRuns}) reached")
+            : await runtime.RunAsync(request, cancellationToken);
     }
 
     private async Task<Result<AgentHopDecision>> FinishAsync(

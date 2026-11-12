@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -68,14 +69,14 @@ public static partial class AgentTemplateRenderer
             {
                 name = raw[..bracket];
                 foreach (Match m in Index().Matches(raw[bracket..]))
-                    indexes.Add(int.Parse(m.Groups[1].Value));
+                {
+                    if (int.TryParse(m.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var index))
+                        indexes.Add(index);
+                }
             }
 
-            if (name.Length > 0)
-            {
-                if (current.ValueKind != JsonValueKind.Object || !TryGetCaseInsensitive(current, name, out current))
-                    return null;
-            }
+            if (name.Length > 0 && (current.ValueKind != JsonValueKind.Object || !TryGetCaseInsensitive(current, name, out current)))
+                return null;
 
             foreach (var i in indexes)
             {

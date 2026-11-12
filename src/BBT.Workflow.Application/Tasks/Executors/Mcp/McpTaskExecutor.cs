@@ -109,7 +109,7 @@ public sealed class McpTaskExecutor(
         var timeout = TimeSpan.FromSeconds(Math.Clamp(task.TimeoutSeconds, 1, McpTask.MaxTimeoutSeconds));
         var request = new McpRequest(task.Endpoint, headers, task.Operation, task.Tool, task.Uri, task.Prompt, task.Arguments, timeout);
 
-        McpCallResult result;
+        McpCallResult? result = null;
         try
         {
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -120,7 +120,7 @@ public sealed class McpTaskExecutor(
         {
             return Fail($"MCP {task.Operation} did not answer within {timeout.TotalSeconds:0}s.", 408);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException) // skipcq: CS-R1008 — any gateway failure is a 502 task result
         {
             return Fail($"MCP {task.Operation} failed: {ex.Message}", 502);
         }

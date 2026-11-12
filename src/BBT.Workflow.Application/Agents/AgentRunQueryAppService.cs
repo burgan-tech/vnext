@@ -65,8 +65,7 @@ public sealed class AgentRunQueryAppService(
         runtimeInfoProvider.Check(input.Domain);
         using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.AgentRuns, input.Domain, input.Workflow); // skipcq: CS-W1100 — held for its scope; disposing ends the span
 
-        Guid instanceId;
-        if (!Guid.TryParse(input.Instance, out instanceId))
+        if (!Guid.TryParse(input.Instance, out var instanceId))
         {
             var instance = await instanceRepository.FindByIdentifierAsReadOnlyAsync(input.Instance, cancellationToken);
             if (instance is null)
