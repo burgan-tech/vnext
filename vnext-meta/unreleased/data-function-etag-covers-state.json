@@ -1,7 +1,0 @@
-{
-  "releaseNote": {
-    "summary": "The data function's ETag now covers the instance state as well as its data, so a transition that writes no data no longer answers 304 with the previous state's extension output.",
-    "breaking": false,
-    "docs": []
-  }
-}

@@ -1,4 +1,15 @@
 {
+  "0.0.105": {
+    "artifact-version-prefers-pkg-row": "9a4a7a2fdc29a3d88c2c1fb0d1aa5b6f29cecede7522c24bc774ceff5dd079b9",
+    "data-function-etag-covers-state": "f74b0360b099f9eb16f909e0b8761b4803c920070230c4af71d273e7fe8bfbea",
+    "everyone-predefined-role": "33872df228326c30f5f065a278b3798e3e409936e678860c842ce8946fa0d1a1",
+    "function-input-schema-no-match-rejects": "ebd113d388512fb8161e42fad8de194a79cb0328244b9eb55303d27522459e41",
+    "hot-path-allocations": "2b6b78970241217ab379a722457bacd5f16323d8b2536b6a362999d867a00de2",
+    "script-caller-roles": "430740814818db3d708df8ae3255c0552994ed20aca59d750f0d03f1f8b36c45",
+    "start-transition-authorize": "d73ff9e61f659bbbecf4a4a50b7239bf19fcfd93b8d52986dd2165b9e7c3330f",
+    "transition-rule-based-schemas": "216e85d670029337843bfe2a009cf327859a563447fb99326b4d47c340a2ab23",
+    "updatedata-continuation-claim": "43cf52c7cf98007b4ab9cc8516018b40ec093c29982262508e5b6241114f38a8"
+  },
   "0.0.104": {
     "authorize-queryroles-leaf-missing-fallback": "48590f6e4305c92eb66f3f53bb20e791c1d7a995da1496b680471a94e2424363",
     "fanout-ignored-item-keeps-error": "b570a8dc663f5e8fb66c1b630255a22ecc36ca5b0803b55b26bfaed463078c66",
