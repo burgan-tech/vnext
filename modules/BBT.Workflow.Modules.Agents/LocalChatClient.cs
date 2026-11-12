@@ -79,9 +79,7 @@ internal sealed class LocalChatClient(string modelName) : IChatClient
         if (schema.TryGetProperty("enum", out var e) && e.ValueKind == JsonValueKind.Array && e.GetArrayLength() > 0)
             return JsonSerializer.Deserialize<object>(e[0].GetRawText());
 
-        var type = schema.TryGetProperty("type", out var t)
-            ? t.ValueKind == JsonValueKind.Array ? t.EnumerateArray().Select(x => x.GetString()).FirstOrDefault(x => x != "null") : t.GetString()
-            : "object";
+        var type = SchemaType(schema);
 
         switch (type)
         {
@@ -108,5 +106,15 @@ internal sealed class LocalChatClient(string modelName) : IChatClient
             default:
                 return null;
         }
+    }
+
+    /// <summary>The schema's <c>type</c>: the first non-null entry of a type list, <c>object</c> when absent.</summary>
+    private static string? SchemaType(JsonElement schema)
+    {
+        if (!schema.TryGetProperty("type", out var t))
+            return "object";
+        return t.ValueKind == JsonValueKind.Array
+            ? t.EnumerateArray().Select(x => x.GetString()).FirstOrDefault(x => x != "null")
+            : t.GetString();
     }
 }

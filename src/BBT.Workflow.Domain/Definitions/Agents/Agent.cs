@@ -1,5 +1,4 @@
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 using BBT.Aether;
 using BBT.Workflow.Runtime;
 
@@ -75,7 +74,7 @@ public sealed class Agent : IDomainEntity, IReferenceSetter
 
     /// <summary>Semantic version without build metadata.</summary>
     [JsonIgnore]
-    public string SemanticVersion => Regex.Match(Version, @"^([^+]+)").Groups[1].Value;
+    public string SemanticVersion => Version.IndexOf('+') is var plus and >= 0 ? Version[..plus] : Version;
 
     /// <summary>The component type key, <c>sys-agents</c>.</summary>
     public static string ComponentTypeKey => RuntimeSysSchemaInfo.Agents;

@@ -30,7 +30,7 @@ internal sealed class RetryingChatClient(IChatClient inner, EffectiveAgentPolicy
             {
                 return await base.GetResponseAsync(list, options, cancellationToken);
             }
-            catch (Exception ex) when (attempt < policy.RetryMaxAttempts && IsRetryable(ex, cancellationToken))
+            catch (Exception ex) when (attempt < policy.RetryMaxAttempts && IsRetryable(ex, cancellationToken)) // skipcq: CS-R1008 — providers throw unrelated types; IsRetryable classifies them
             {
                 var delay = policy.RetryBackoffMs * (1 << (attempt - 1));
                 await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(delay, 10_000)), cancellationToken);

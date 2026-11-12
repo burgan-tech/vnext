@@ -53,14 +53,13 @@ public sealed class AgentStateRunner(
         var binding = state.Agent!;
         var decisionSpec = binding.Decision!;
         var fallback = decisionSpec.Fallback!;
-        var reserved = decisionSpec.ReservedKeys.ToHashSet(StringComparer.Ordinal);
         var settings = options.Value;
         var runId = Guid.NewGuid();
         var startedAt = DateTime.UtcNow;
         var clock = Stopwatch.StartNew();
         var instance = context.Instance;
 
-        using var activity = MafActivity.Start(state.Key, runId);
+        using var activity = MafActivity.Start(state.Key, runId); // skipcq: CS-W1100 — held for its scope; disposing ends the span
 
         var entryNo = await journal.CountRunsAsync(instance.Id, state.Key, cancellationToken) + 1;
         var run = new InstanceAgentRun(runId)
@@ -247,7 +246,9 @@ public sealed class AgentStateRunner(
             if (policy.OnProviderError == AgentProviderErrorAction.Fault &&
                 result.Status is AgentRunStatus.Failed or AgentRunStatus.Timeout)
             {
-                await journal.AddAsync(run, recorder.Calls, DecisionRow(run, mode, AgentDecisionSource.Fallback, null, result.FailureReason, candidates, false), cancellationToken);
+                // Journaled like every other path (IsFallback, FinishedAt, DurationMs); no data write, the hop fails.
+                await FinishAsync(context, run, recorder.Calls, run.Status, run.FailureReason, decisionSpec, candidates, null,
+                    AgentDecisionSource.Fallback, result.FailureReason, clock, recorder, cancellationToken, written: true);
                 return Result<AgentHopDecision>.Fail(Error.Failure(WorkflowErrorCodes.AgentRunFailed, $"Agent run failed: {result.FailureReason}"));
             }
 

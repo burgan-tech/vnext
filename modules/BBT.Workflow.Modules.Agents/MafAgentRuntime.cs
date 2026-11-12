@@ -144,7 +144,7 @@ internal sealed class MafAgentRuntime(IChatClientProvider provider, ILoggerFacto
                 using var doc = JsonDocument.Parse(bytes);
                 return await agent.DeserializeSessionAsync(doc.RootElement.Clone(), null, cancellationToken);
             }
-            catch (Exception ex) when (ex is JsonException or InvalidOperationException or NotSupportedException)
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException or NotSupportedException) // skipcq: CS-R1008 — filtered to the three failures of an unreadable session
             {
                 // An unreadable session starts over; the step logs the reset from the message count.
             }

@@ -63,7 +63,7 @@ public sealed class AgentRunQueryAppService(
     public async Task<Result<GetAgentRunsOutput>> GetAsync(GetAgentRunsInput input, CancellationToken cancellationToken = default)
     {
         runtimeInfoProvider.Check(input.Domain);
-        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.AgentRuns, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.AgentRuns, input.Domain, input.Workflow); // skipcq: CS-W1100 — held for its scope; disposing ends the span
 
         Guid instanceId;
         if (!Guid.TryParse(input.Instance, out instanceId))

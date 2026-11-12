@@ -79,26 +79,7 @@ public sealed class EfCoreAgentSessionStore(IAetherDbContextProvider<WorkflowDbC
             data = Seal(Compress(messages), key, write.ScopeKey);
         }
 
-        var table = $"\"{(context.CurrentSchemaName ?? "public").Replace("\"", "", StringComparison.Ordinal)}\".\"AgentSessions\"";
-
-        // The guard always references @expected: an empty expected version (no row was read) never
-        // matches, so a row created in the meantime is reported as a conflict instead of overwritten.
-        var sql =
-            $"INSERT INTO {table} (\"ScopeKey\", \"Mode\", \"Storage\", \"AgentKey\", \"AgentVersion\", \"InstructionsHash\", " +
-            "\"SessionData\", \"ProviderConversationId\", \"EncryptionKey\", \"MessageCount\", \"SizeBytes\", \"OwnerInstanceId\", " +
-            "\"LastInstanceId\", \"LastRunId\", \"UpdatedAt\", \"ExpiresAt\") " +
-            "VALUES (@scope, @mode, @storage, @agentKey, @agentVersion, @instructionsHash, @data, @conversationId, @key, " +
-            "@messageCount, @sizeBytes, @owner, @lastInstance, @lastRun, @updatedAt, @expiresAt) " +
-            "ON CONFLICT (\"ScopeKey\") DO UPDATE SET " +
-            "\"Mode\" = EXCLUDED.\"Mode\", \"Storage\" = EXCLUDED.\"Storage\", \"AgentKey\" = EXCLUDED.\"AgentKey\", " +
-            "\"AgentVersion\" = EXCLUDED.\"AgentVersion\", \"InstructionsHash\" = EXCLUDED.\"InstructionsHash\", " +
-            "\"SessionData\" = EXCLUDED.\"SessionData\", \"ProviderConversationId\" = EXCLUDED.\"ProviderConversationId\", " +
-            "\"EncryptionKey\" = EXCLUDED.\"EncryptionKey\", \"MessageCount\" = EXCLUDED.\"MessageCount\", " +
-            "\"SizeBytes\" = EXCLUDED.\"SizeBytes\", \"LastInstanceId\" = EXCLUDED.\"LastInstanceId\", " +
-            "\"LastRunId\" = EXCLUDED.\"LastRunId\", \"UpdatedAt\" = EXCLUDED.\"UpdatedAt\", \"ExpiresAt\" = EXCLUDED.\"ExpiresAt\" " +
-            $"WHERE @expected <> '' AND {table}.xmin::text = @expected";
-
-        var affected = await context.Database.ExecuteSqlRawAsync(sql,
+        var affected = await context.Database.ExecuteSqlRawAsync(UpsertSql(SessionsTable(context)),
         [
             Param("scope", NpgsqlDbType.Varchar, write.ScopeKey),
             Param("mode", NpgsqlDbType.Smallint, (short)session.Mode),
@@ -129,11 +110,36 @@ public sealed class EfCoreAgentSessionStore(IAetherDbContextProvider<WorkflowDbC
     public async Task<int> SweepExpiredAsync(int batchSize, CancellationToken cancellationToken = default)
     {
         var context = await dbContextProvider.GetDbContextAsync(cancellationToken);
-        var table = $"\"{(context.CurrentSchemaName ?? "public").Replace("\"", "", StringComparison.Ordinal)}\".\"AgentSessions\"";
-        return await context.Database.ExecuteSqlRawAsync(
-            $"DELETE FROM {table} WHERE ctid IN (SELECT ctid FROM {table} WHERE \"ExpiresAt\" < now() LIMIT {{0}})",
-            [Math.Max(1, batchSize)], cancellationToken);
+        var now = DateTime.UtcNow;
+        return await context.AgentSessions
+            .Where(s => s.ExpiresAt < now)
+            .OrderBy(s => s.ExpiresAt)
+            .Take(Math.Max(1, batchSize))
+            .ExecuteDeleteAsync(cancellationToken);
     }
+
+    /// <summary>The schema-qualified <c>AgentSessions</c> table, quoted; a quote in the schema name is dropped.</summary>
+    private static string SessionsTable(WorkflowDbContext context) =>
+        $"\"{(context.CurrentSchemaName ?? "public").Replace("\"", "", StringComparison.Ordinal)}\".\"AgentSessions\"";
+
+    /// <summary>
+    /// The upsert statement. The guard always references @expected: an empty expected version (no row was read) never
+    /// matches, so a row created in the meantime is reported as a conflict instead of overwritten.
+    /// </summary>
+    private static string UpsertSql(string table) =>
+        $"INSERT INTO {table} (\"ScopeKey\", \"Mode\", \"Storage\", \"AgentKey\", \"AgentVersion\", \"InstructionsHash\", " +
+        "\"SessionData\", \"ProviderConversationId\", \"EncryptionKey\", \"MessageCount\", \"SizeBytes\", \"OwnerInstanceId\", " +
+        "\"LastInstanceId\", \"LastRunId\", \"UpdatedAt\", \"ExpiresAt\") " +
+        "VALUES (@scope, @mode, @storage, @agentKey, @agentVersion, @instructionsHash, @data, @conversationId, @key, " +
+        "@messageCount, @sizeBytes, @owner, @lastInstance, @lastRun, @updatedAt, @expiresAt) " +
+        "ON CONFLICT (\"ScopeKey\") DO UPDATE SET " +
+        "\"Mode\" = EXCLUDED.\"Mode\", \"Storage\" = EXCLUDED.\"Storage\", \"AgentKey\" = EXCLUDED.\"AgentKey\", " +
+        "\"AgentVersion\" = EXCLUDED.\"AgentVersion\", \"InstructionsHash\" = EXCLUDED.\"InstructionsHash\", " +
+        "\"SessionData\" = EXCLUDED.\"SessionData\", \"ProviderConversationId\" = EXCLUDED.\"ProviderConversationId\", " +
+        "\"EncryptionKey\" = EXCLUDED.\"EncryptionKey\", \"MessageCount\" = EXCLUDED.\"MessageCount\", " +
+        "\"SizeBytes\" = EXCLUDED.\"SizeBytes\", \"LastInstanceId\" = EXCLUDED.\"LastInstanceId\", " +
+        "\"LastRunId\" = EXCLUDED.\"LastRunId\", \"UpdatedAt\" = EXCLUDED.\"UpdatedAt\", \"ExpiresAt\" = EXCLUDED.\"ExpiresAt\" " +
+        $"WHERE @expected <> '' AND {table}.xmin::text = @expected";
 
     internal static byte[] Seal(byte[] plain, byte[] key, string scopeKey)
     {
