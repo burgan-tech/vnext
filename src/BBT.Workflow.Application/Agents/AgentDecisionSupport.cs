@@ -99,7 +99,7 @@ public static class AgentDecisionSupport
         var required = node["required"] as JsonArray ?? new JsonArray();
         foreach (var name in new[] { HandoffProperty, "handoffReason" })
         {
-            if (!required.Any(r => r?.GetValue<string>() == name))
+            if (required.All(r => r?.GetValue<string>() != name))
                 required.Add(name);
         }
 

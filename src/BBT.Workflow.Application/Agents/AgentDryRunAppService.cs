@@ -106,12 +106,10 @@ public sealed class AgentDryRunAppService(
 
         var roles = await callerRoleResolver.ResolveRolesAsync(input.Headers, cancellationToken);
         var callerRoles = roles.IsSuccess ? roles.Value ?? [] : [];
-        if (settings.DryRun.Roles.Count == 0 || !callerRoles.Any(r => settings.DryRun.Roles.Contains(r, StringComparer.OrdinalIgnoreCase)))
+        if (settings.DryRun.Roles.Count == 0 || callerRoles.All(r => !settings.DryRun.Roles.Contains(r, StringComparer.OrdinalIgnoreCase)))
             return Result<AgentDryRunOutput>.Fail(Error.Forbidden(WorkflowErrorCodes.AgentDryRunForbidden, "Agent dry-run is not allowed for this caller."));
 
-        Result<Agent> agentResult;
-        using (currentSchema.Change(RuntimeSysSchemaInfo.Agents))
-            agentResult = await componentCacheStore.GetAgentAsync(input.Domain, input.Key, input.Version, cancellationToken);
+        var agentResult = await GetAgentAsync(input, cancellationToken);
         if (!agentResult.IsSuccess)
             return Result<AgentDryRunOutput>.Fail(agentResult.Error);
         var agent = agentResult.Value!;
@@ -170,4 +168,11 @@ public sealed class AgentDryRunAppService(
             : result.PendingApprovals
                 .Select(a => new AgentDryRunPendingApproval(a.RequestId, a.CallId, a.ToolName, a.Arguments, a.RequiresConfirmation))
                 .ToList();
+
+    /// <summary>Loads the agent component from the <c>sys-agents</c> schema.</summary>
+    private async Task<Result<Agent>> GetAgentAsync(AgentDryRunInput input, CancellationToken cancellationToken)
+    {
+        using (currentSchema.Change(RuntimeSysSchemaInfo.Agents))
+            return await componentCacheStore.GetAgentAsync(input.Domain, input.Key, input.Version, cancellationToken);
+    }
 }
