@@ -3101,7 +3101,7 @@ public static partial class WorkflowLogs
     /// instance keeps its state and its Busy reservation is handed back, so the same call can be retried.
     /// </summary>
     [LoggerMessage(
-        EventId = 10169,
+        EventId = 10263,
         Level = LogLevel.Information,
         Message = "Transition {TransitionKey} on instance {InstanceId} was rejected without faulting: {ErrorCode}")]
     public static partial void TransitionRejectedWithoutFaulting(
@@ -3115,7 +3115,7 @@ public static partial class WorkflowLogs
     /// the instance.
     /// </summary>
     [LoggerMessage(
-        EventId = 10170,
+        EventId = 10264,
         Level = LogLevel.Information,
         Message = "Transition {TransitionKey} on instance {InstanceId} failed with {ErrorCode} and was rerouted by errorBoundary to {NextTransition}")]
     public static partial void TransitionReroutedByErrorBoundary(
