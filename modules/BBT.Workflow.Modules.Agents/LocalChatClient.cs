@@ -21,19 +21,7 @@ internal sealed class LocalChatClient(string modelName) : IChatClient
         var toolsAlreadyCalled = list.Skip(lastUser + 1).Any(m => m.Contents.OfType<FunctionResultContent>().Any());
         var functions = options?.Tools?.OfType<AIFunctionDeclaration>().ToList() ?? [];
 
-        ChatMessage reply;
-        if (!toolsAlreadyCalled && functions.Count > 0)
-        {
-            var calls = functions.Select((f, i) => (AIContent)new FunctionCallContent(
-                $"local_{i + 1}", f.Name, Synthesize(f.JsonSchema) as IDictionary<string, object?> ?? new Dictionary<string, object?>())).ToList();
-            reply = new ChatMessage(ChatRole.Assistant, calls);
-        }
-        else
-        {
-            var schema = (options?.ResponseFormat as ChatResponseFormatJson)?.Schema;
-            var text = schema is { } s ? JsonSerializer.Serialize(Synthesize(s)) : "{}";
-            reply = new ChatMessage(ChatRole.Assistant, text);
-        }
+        var reply = !toolsAlreadyCalled && functions.Count > 0 ? ToolCallReply(functions) : AnswerReply(options);
 
         var promptChars = list.Sum(m => m.Text?.Length ?? 0);
         return Task.FromResult(new ChatResponse(reply)
@@ -116,5 +104,17 @@ internal sealed class LocalChatClient(string modelName) : IChatClient
         return t.ValueKind == JsonValueKind.Array
             ? t.EnumerateArray().Select(x => x.GetString()).FirstOrDefault(x => x != "null")
             : t.GetString();
+    }
+
+    /// <summary>A reply that calls every offered tool once, with arguments synthesized from its schema.</summary>
+    private static ChatMessage ToolCallReply(IReadOnlyList<AIFunctionDeclaration> functions) =>
+        new(ChatRole.Assistant, functions.Select((f, i) => (AIContent)new FunctionCallContent(
+            $"local_{i + 1}", f.Name, Synthesize(f.JsonSchema) as IDictionary<string, object?> ?? new Dictionary<string, object?>())).ToList());
+
+    /// <summary>A final answer synthesized from the response schema, or an empty object without one.</summary>
+    private static ChatMessage AnswerReply(ChatOptions? options)
+    {
+        var schema = (options?.ResponseFormat as ChatResponseFormatJson)?.Schema;
+        return new ChatMessage(ChatRole.Assistant, schema is { } s ? JsonSerializer.Serialize(Synthesize(s)) : "{}");
     }
 }

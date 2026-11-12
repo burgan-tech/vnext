@@ -762,7 +762,7 @@ public partial class WorkflowValidator
             {
                 if (!AgentContextName().IsMatch(name))
                     result.AddError(new ValidationResult($"AiAgent state '{state.Key}': prompt.context name '{name}' must match ^[a-zA-Z0-9_-]{{1,64}}$.", [$"{agentPath}.prompt.context[{name}]"]));
-                if (string.IsNullOrWhiteSpace(path) || !AgentContextRoots.Any(root => path.Trim().StartsWith(root, StringComparison.Ordinal)))
+                if (string.IsNullOrWhiteSpace(path) || AgentContextRoots.All(root => !path.Trim().StartsWith(root, StringComparison.Ordinal)))
                     result.AddError(new ValidationResult($"AiAgent state '{state.Key}': prompt.context '{name}' must be a data., body. or instance. path.", [$"{agentPath}.prompt.context[{name}]"]));
             }
 

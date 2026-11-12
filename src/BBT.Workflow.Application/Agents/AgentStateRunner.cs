@@ -277,9 +277,9 @@ public sealed class AgentStateRunner(
         ApplyResult(run, result, recorder, audit, settings, schema, candidates, userPrompt, instructionsHash, tools);
 
         // 8. Decision.
-        string? selected;
-        AgentDecisionSource source;
-        string? reasonText;
+        string? selected = null;
+        var source = AgentDecisionSource.Rules;
+        string? reasonText = null;
         if (result.Status == AgentRunStatus.ApprovalRequested)
         {
             foreach (var held in result.PendingApprovals.Where(a => a.RequiresConfirmation))
@@ -314,8 +314,6 @@ public sealed class AgentStateRunner(
                     break;
                 }
                 default:
-                    selected = null;
-                    source = AgentDecisionSource.Rules;
                     break;
             }
         }
@@ -350,6 +348,15 @@ public sealed class AgentStateRunner(
 
         return await FinishAsync(context, run, recorder.Calls, run.Status, run.FailureReason, decisionSpec, candidates, selected,
             source, reasonText, clock, recorder, cancellationToken, written: true, team: team);
+    }
+
+    /// <summary>One provider run under the <c>AiAgent:MaxConcurrentRuns</c> bulkhead; a full bulkhead fails the run.</summary>
+    private async Task<AgentRunResult> RunLimitedAsync(AgentRunRequest request, CancellationToken cancellationToken)
+    {
+        using var slot = limiter.TryAcquire();
+        return slot is null
+            ? AgentRunResult.Failed(AgentRunStatus.Failed, $"capacity: AiAgent:MaxConcurrentRuns ({options.Value.MaxConcurrentRuns}) reached")
+            : await runtime.RunAsync(request, cancellationToken);
     }
 
     private async Task<Result<AgentHopDecision>> FinishAsync(
@@ -749,15 +756,6 @@ public sealed class AgentStateRunner(
 
         logger.AgentRunCompleted(row.Id, row.InstanceId, clock.ElapsedMilliseconds, row.Iterations, row.ToolCallCount, row.TotalTokens);
         return (row, Finish(result.Status, result.FailureReason, recorder.Calls), result.Status == AgentRunStatus.Completed ? result.Output : null);
-    }
-
-    /// <summary>One provider run under the <c>AiAgent:MaxConcurrentRuns</c> bulkhead; a full bulkhead fails the run.</summary>
-    private async Task<AgentRunResult> RunLimitedAsync(AgentRunRequest request, CancellationToken cancellationToken)
-    {
-        using var slot = limiter.TryAcquire();
-        return slot is null
-            ? AgentRunResult.Failed(AgentRunStatus.Failed, $"capacity: AiAgent:MaxConcurrentRuns ({options.Value.MaxConcurrentRuns}) reached")
-            : await runtime.RunAsync(request, cancellationToken);
     }
 
     private static string ParticipantBlock(InstanceAgentRun run, JsonElement? output)

@@ -26,7 +26,7 @@ public sealed partial class AgentComponentValidator(IOptions<AiAgentOptions>? op
     public ComponentValidationResult Validate(JsonElement attributes)
     {
         var result = new ComponentValidationResult();
-        Agent? agent;
+        Agent? agent = null;
         try
         {
             agent = attributes.Deserialize<Agent>(JsonSerializerConstants.JsonOptions);

@@ -23,7 +23,7 @@ public sealed class AgentRunRecorder(Guid runId, Guid instanceId, EffectiveAgent
     public Guid RunId => runId;
 
     /// <summary>Recorded calls in order.</summary>
-    public IReadOnlyList<InstanceAgentToolCall> Calls
+    public IReadOnlyList<InstanceAgentToolCall> Calls // skipcq: CS-P1026 — a snapshot taken under the lock; tools record calls in parallel
     {
         get
         {
@@ -39,6 +39,52 @@ public sealed class AgentRunRecorder(Guid runId, Guid instanceId, EffectiveAgent
         {
             lock (_gate)
                 return _calls.Count(c => c.Status != AgentToolCallStatus.Rejected);
+        }
+    }
+
+    /// <summary>Takes the next call sequence and reports whether the tool-call budget is already spent.</summary>
+    private (int Sequence, bool OverBudget) Reserve()
+    {
+        lock (_gate)
+            return (++_sequence, _calls.Count(c => c.Status != AgentToolCallStatus.Rejected) >= policy.MaxToolCalls);
+    }
+
+    /// <summary>Runs the body under its timeout, or rejects the call (budget spent, arguments invalid or missing).</summary>
+    private async Task<AgentToolResult> InvokeAsync(
+        bool overBudget,
+        JsonElement parameters,
+        Func<JsonElement, string?>? validateArguments,
+        AgentToolInvocation invocation,
+        int? timeoutSeconds,
+        Func<AgentToolInvocation, CancellationToken, Task<AgentToolResult>> body,
+        CancellationToken cancellationToken)
+    {
+        if (overBudget)
+        {
+            return new AgentToolResult(AgentToolCallStatus.Rejected, string.Empty,
+                $"tool call budget exhausted ({policy.MaxToolCalls}); answer with what you have");
+        }
+
+        if (validateArguments is not null && validateArguments(invocation.Arguments) is { } invalid)
+            return new AgentToolResult(AgentToolCallStatus.Rejected, string.Empty, $"invalid arguments: {invalid}");
+
+        if (validateArguments is null && MissingRequired(parameters, invocation.Arguments) is { } missing)
+            return new AgentToolResult(AgentToolCallStatus.Rejected, string.Empty, $"missing required argument '{missing}'");
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var seconds = Math.Max(1, Math.Min(timeoutSeconds ?? policy.ToolTimeoutSeconds, policy.ToolTimeoutSeconds));
+        timeout.CancelAfter(TimeSpan.FromSeconds(seconds));
+        try
+        {
+            return await body(invocation, timeout.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new AgentToolResult(AgentToolCallStatus.Timeout, string.Empty, $"tool did not answer within {seconds}s");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) // skipcq: CS-R1008 — a failing tool is an answer to the model, whatever it throws
+        {
+            return new AgentToolResult(AgentToolCallStatus.Failed, string.Empty, ex.Message);
         }
     }
 
@@ -62,49 +108,11 @@ public sealed class AgentRunRecorder(Guid runId, Guid instanceId, EffectiveAgent
             _tools[name] = (kind, bindingRef);
         return async (invocation, cancellationToken) =>
         {
-            int sequence;
-            bool overBudget;
-            lock (_gate)
-            {
-                sequence = ++_sequence;
-                overBudget = _calls.Count(c => c.Status != AgentToolCallStatus.Rejected) >= policy.MaxToolCalls;
-            }
+            var (sequence, overBudget) = Reserve();
 
             var started = Stopwatch.GetTimestamp();
             var startedAt = DateTime.UtcNow;
-            AgentToolResult result;
-
-            if (overBudget)
-            {
-                result = new AgentToolResult(AgentToolCallStatus.Rejected, string.Empty,
-                    $"tool call budget exhausted ({policy.MaxToolCalls}); answer with what you have");
-            }
-            else if (validateArguments is not null && validateArguments(invocation.Arguments) is { } invalid)
-            {
-                result = new AgentToolResult(AgentToolCallStatus.Rejected, string.Empty, $"invalid arguments: {invalid}");
-            }
-            else if (validateArguments is null && MissingRequired(parameters, invocation.Arguments) is { } missing)
-            {
-                result = new AgentToolResult(AgentToolCallStatus.Rejected, string.Empty, $"missing required argument '{missing}'");
-            }
-            else
-            {
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                var seconds = Math.Max(1, Math.Min(timeoutSeconds ?? policy.ToolTimeoutSeconds, policy.ToolTimeoutSeconds));
-                timeout.CancelAfter(TimeSpan.FromSeconds(seconds));
-                try
-                {
-                    result = await body(invocation, timeout.Token);
-                }
-                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-                {
-                    result = new AgentToolResult(AgentToolCallStatus.Timeout, string.Empty, $"tool did not answer within {seconds}s");
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    result = new AgentToolResult(AgentToolCallStatus.Failed, string.Empty, ex.Message);
-                }
-            }
+            var result = await InvokeAsync(overBudget, parameters, validateArguments, invocation, timeoutSeconds, body, cancellationToken);
 
             var max = Math.Max(1, Math.Min(resultMaxChars ?? policy.ResultMaxChars, policy.ResultMaxChars));
             var content = result.Content.Length > max ? result.Content[..max] + "…[truncated]" : result.Content;

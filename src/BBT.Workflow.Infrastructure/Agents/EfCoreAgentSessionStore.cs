@@ -45,7 +45,7 @@ public sealed class EfCoreAgentSessionStore(IAetherDbContextProvider<WorkflowDbC
             {
                 messages = Decompress(stored);
             }
-            catch (Exception ex) when (ex is InvalidDataException or ArgumentException)
+            catch (Exception ex) when (ex is InvalidDataException or ArgumentException) // skipcq: CS-R1008 — filtered to the two failures of an unreadable blob
             {
                 return new AgentSessionReadResult(null, ex.GetType().Name);
             }

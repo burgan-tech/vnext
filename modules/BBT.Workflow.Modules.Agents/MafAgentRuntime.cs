@@ -226,7 +226,7 @@ internal sealed class MafAgentRuntime(IChatClientProvider provider, IJsonSchemaV
         {
             return AgentRunResult.Failed(AgentRunStatus.Timeout, $"run exceeded {policy.TimeoutSeconds}s", (short)(retrying?.Attempts ?? 0));
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException) // skipcq: CS-R1008 — any provider failure ends the run as Failed (fallback or fault)
         {
             return AgentRunResult.Failed(AgentRunStatus.Failed, $"provider error: {Truncate(ex.Message, 300)}", (short)(retrying?.Attempts ?? 0));
         }
