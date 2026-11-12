@@ -307,10 +307,10 @@ public partial class WorkflowValidator
     /// </summary>
     private void ValidateUpdateDataTransition(Workflow workflow, WorkflowValidationResult result)
     {
-        if (workflow.UpdateData != null && workflow.UpdateData.Target != WellKnownStateKeys.Self)
+        if (workflow.UpdateData is { } updateData && updateData.Target != WellKnownStateKeys.Self)
         {
             result.AddError(new ValidationResult(
-                $"UpdateData transition must have target value of '$self'. Found: '{workflow.UpdateData.Target}'.",
+                $"UpdateData transition must have target value of '$self'. Found: '{updateData.Target}'.",
                 [$"{nameof(Workflow)}.{nameof(Workflow.UpdateData)}.{nameof(Transition.Target)}"]));
         }
     }
@@ -646,8 +646,8 @@ public partial class WorkflowValidator
             }
 
             var hasScopedViews =
-                (overrides?.States?.Values.Any(s => s.Views is { Count: > 0 }) ?? false)
-                || (overrides?.Transitions?.Values.Any(t => t.Views is { Count: > 0 }) ?? false);
+                overrides?.States?.Values.Any(s => s.Views is { Count: > 0 }) == true
+                || overrides?.Transitions?.Values.Any(t => t.Views is { Count: > 0 }) == true;
             if (hasScopedViews && subFlow.HasViewOverrides)
             {
                 result.AddError(new ValidationResult(

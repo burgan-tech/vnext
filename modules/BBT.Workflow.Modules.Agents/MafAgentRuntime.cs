@@ -33,7 +33,7 @@ internal sealed class MafAgentRuntime(IChatClientProvider provider, IJsonSchemaV
     public string Key => AgentRuntimeKeys.Maf;
 
     /// <inheritdoc />
-    public async Task<AgentRunResult> RunAsync(AgentRunRequest request, CancellationToken cancellationToken)
+    public async Task<AgentRunResult> RunAsync(AgentRunRequest request, CancellationToken cancellationToken) // skipcq: CS-R1140 — one run: agent turn, correction turns, budgets and result, in order
     {
         var policy = request.Policy;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
