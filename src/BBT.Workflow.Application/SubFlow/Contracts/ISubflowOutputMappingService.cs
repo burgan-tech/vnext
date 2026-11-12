@@ -46,6 +46,19 @@ public interface ISubflowOutputMappingService
         JsonElement? childInstanceData,
         CancellationToken cancellationToken = default,
         IReadOnlyDictionary<string, string?>? carriedHeaders = null);
+
+    /// <summary>
+    /// Resolves the caller's roles for <paramref name="plan"/>'s output mapping BEFORE the per-sub-item terminal
+    /// lock is taken, when the mapping script references <c>Caller</c>: the provider call (up to its timeout) then
+    /// never runs while the lock is held — a duplicate delivery waits only about a second for it. The answer is
+    /// memoized per request scope, so the read inside the mapping is free. Throws
+    /// <see cref="ExceptionHandling.CallerRolesUnavailableTransientException"/> when the provider cannot answer.
+    /// </summary>
+    Task WarmCallerRolesAsync(
+        Guid parentInstanceId,
+        SubflowOutputMappingPlan plan,
+        IReadOnlyDictionary<string, string?>? carriedHeaders,
+        CancellationToken cancellationToken = default) => Task.CompletedTask;
 }
 
 public sealed record SubflowOutputMappingPlan(State? ParentState, object? MappingInstance);

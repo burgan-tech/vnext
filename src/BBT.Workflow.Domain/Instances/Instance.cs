@@ -604,6 +604,36 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
     public InstanceCorrelation? Subflow =>
         ChildCorrelations.FirstOrDefault(p => !p.IsCompleted && p.SubFlowType.Equals(SubFlowType.SubFlow));
 
+    /// <summary>
+    /// Fills <see cref="ChildCorrelations"/> on a <b>no-tracking</b> aggregate from correlation rows
+    /// read by a separate query, producing exactly the shape the detail load's filtered include
+    /// (<c>ChildCorrelations.Where(c =&gt; !c.IsCompleted)</c>) would: completed rows are ignored, open
+    /// rows are added in <see cref="InstanceCorrelation"/> id order, and a row already present is not
+    /// duplicated. It exists so a read path that needs the FULL correlation set (the state function)
+    /// can read it once and derive the open subset, instead of paying a second round trip for the
+    /// include, and so the read-only load can fetch the open set without the tracked-entity
+    /// collection loader.
+    /// </summary>
+    /// <remarks>
+    /// Never call it on a change-tracked aggregate: these rows already exist in the database, and a
+    /// tracking DbContext would discover them as NEW children of a tracked root and insert them
+    /// (compare <see cref="AcceptLoadedIncidents"/>, which keeps its rows off the navigation for the
+    /// same reason). The repository's read-only finders are the only callers.
+    /// Rows keep the order the caller read them in: the filtered include this replaces had no
+    /// ordering of its own, and <c>FirstOrDefault</c> readers (<see cref="Subflow"/>, by-name
+    /// lookups) must not see a different pick than before.
+    /// </remarks>
+    public void AcceptLoadedChildCorrelations(IEnumerable<InstanceCorrelation> correlations)
+    {
+        foreach (var correlation in correlations.Where(c => !c.IsCompleted))
+        {
+            if (_childCorrelations.All(existing => existing.Id != correlation.Id))
+            {
+                _childCorrelations.Add(correlation);
+            }
+        }
+    }
+
     public Instance CreateSnapshot()
     {
         var snapshot = new Instance

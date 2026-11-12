@@ -34,7 +34,10 @@ public class CacheSetL1Tests
     [Fact]
     public async Task Second_latest_read_costs_only_the_generation_read()
     {
-        var harness = new CacheSetTestHarness();
+        // Generation-token memoization (GenerationMemoSeconds, default 5 since #920) would serve the
+        // token from process memory and hide the one L2 read this test pins; switch it off so the
+        // test measures what the L1 layer alone leaves on the wire.
+        var harness = new CacheSetTestHarness(o => o.GenerationMemoSeconds = 0);
         harness.Publish(Full);
 
         await harness.Sut.GetByVersionAsync(

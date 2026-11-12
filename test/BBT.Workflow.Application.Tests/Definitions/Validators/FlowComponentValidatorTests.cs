@@ -1,8 +1,8 @@
 using System;
+using System.Linq;
 using System.Text.Json;
 using BBT.Workflow.Definitions.Validators;
 using BBT.Workflow.Runtime;
-using Moq;
 using Shouldly;
 using Xunit;
 
@@ -13,14 +13,9 @@ namespace BBT.Workflow.Definitions.Validators;
 /// </summary>
 public class FlowComponentValidatorTests
 {
-    private readonly Mock<WorkflowValidator> _mockWorkflowValidator;
-    private readonly FlowComponentValidator _validator;
-
-    public FlowComponentValidatorTests()
-    {
-        _mockWorkflowValidator = new Mock<WorkflowValidator>();
-        _validator = new FlowComponentValidator(_mockWorkflowValidator.Object);
-    }
+    // WorkflowValidator is a sealed-in-practice concrete class with a non-virtual Validate, so it
+    // cannot be mocked; the delegation is pinned end to end against the real validator instead.
+    private readonly FlowComponentValidator _validator = new(new WorkflowValidator());
 
     [Fact]
     public void CanHandle_ShouldReturnTrue_ForSysFlows()
@@ -57,39 +52,45 @@ public class FlowComponentValidatorTests
         result.IsValid.ShouldBeFalse();
     }
 
+    private const string ValidWorkflow = """
+    {
+        "type": "F",
+        "labels": [{"label": "Test", "language": "en"}],
+        "states": [
+            {
+                "key": "review",
+                "stateType": "initial",
+                "labels": [{"label": "Review", "language": "en"}],
+                "transitions": [
+                    { "key": "approve", "target": "done", "triggerType": "manual", "labels": [{"label": "Approve", "language": "en"}] }
+                ]
+            },
+            { "key": "done", "stateType": "finish", "labels": [{"label": "Done", "language": "en"}], "transitions": [] }
+        ],
+        "startTransition": { "key": "start", "target": "review", "triggerType": "manual", "labels": [{"label": "Start", "language": "en"}] }
+    }
+    """;
+
     [Fact]
     public void Validate_ShouldDelegateToWorkflowValidator_ForValidWorkflow()
     {
-        // Arrange
-        var workflowJson = """
-        {
-            "key": "test-flow",
-            "domain": "test-domain",
-            "version": "1.0.0",
-            "flow": "sys-flows",
-            "type": "F",
-            "states": [
-                { "key": "initial", "stateType": "I" },
-                { "key": "completed", "stateType": "C" }
-            ],
-            "startTransition": {
-                "key": "start",
-                "target": "initial"
-            }
-        }
-        """;
-        var attributes = JsonDocument.Parse(workflowJson).RootElement;
+        var attributes = JsonDocument.Parse(ValidWorkflow).RootElement;
 
-        var workflowValidationResult = new WorkflowValidationResult();
-        _mockWorkflowValidator.Setup(v => v.Validate(It.IsAny<Workflow>()))
-            .Returns(workflowValidationResult);
-
-        // Act
         var result = _validator.Validate(attributes);
 
-        // Assert
-        result.IsValid.ShouldBeTrue();
-        _mockWorkflowValidator.Verify(v => v.Validate(It.IsAny<Workflow>()), Times.Once);
+        result.IsValid.ShouldBeTrue(string.Join("; ", result.ValidationErrors.Select(e => e.ErrorMessage)));
+    }
+
+    [Fact]
+    public void Validate_ShouldSurfaceWorkflowValidatorErrors_ForSemanticallyInvalidWorkflow()
+    {
+        // Deserializes cleanly; only WorkflowValidator can reject it (start transition targets no state).
+        var attributes = JsonDocument.Parse(ValidWorkflow.Replace("\"target\": \"review\"", "\"target\": \"missing\""))
+            .RootElement;
+
+        var result = _validator.Validate(attributes);
+
+        result.IsValid.ShouldBeFalse();
     }
 
     private static string WorkflowWithQueryRoles(string queryRolesJson) => $$"""

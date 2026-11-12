@@ -58,7 +58,7 @@ public sealed class InstanceSchemaFunctionCache(
 
     /// <inheritdoc />
     public string BuildKey(GetSchemaInput input, string transitionKey) =>
-        $"{SchemaKeyPrefix}{input.Domain}:{input.Workflow}:{input.Instance}:{BuildCallerHash(input.Roles, input.Headers, input.Version)}:{transitionKey}";
+        $"{SchemaKeyPrefix}{input.Domain}:{input.Workflow}:{input.Instance}:{BuildCallerHash(input.Roles, input.Headers, input.Version)}:{RequestHeaderHash.Compute(input.Headers)}:{transitionKey}";
 
     /// <inheritdoc />
     public string ComputeEtag(GetMasterInput input, InstanceDataFingerprint fingerprint) =>
@@ -78,6 +78,8 @@ public sealed class InstanceSchemaFunctionCache(
             fingerprint.EffectiveState ?? string.Empty,
             fingerprint.FlowVersion ?? string.Empty,
             BuildCallerHash(input.Roles, input.Headers, input.Version),
+            // A rule-based transition schema may be selected on any request header.
+            RequestHeaderHash.Compute(input.Headers),
             transitionKey));
 
     // Extensions play no role in the master/schema functions — the caller scope is

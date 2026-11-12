@@ -145,6 +145,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             currentUser: Substitute.For<ICurrentUser>(),
             descentLimiter: new HumanTask.HumanTaskDescentLimiter(
                 Microsoft.Extensions.Options.Options.Create(new HumanTask.HumanTaskFunctionOptions())),
+            transitionSchemaResolver: NSubstitute.Substitute.For<BBT.Workflow.Execution.Validation.ITransitionSchemaResolver>(),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 
@@ -190,6 +191,44 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
         await _instanceExtensionService.DidNotReceive().ProcessExtensionsAsync(
             Arg.Any<string[]?>(), Arg.Any<ScriptContext>(), Arg.Any<Definitions.Workflow>(),
             Arg.Any<ExtensionScope>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The production scenario the two identities exist for: a transition moved the state without
+    /// writing data, and the caller presents the ETag it got before the hop. The representation
+    /// ETag has moved, so this is NOT a 304 — the caller must receive the new extension output. The
+    /// body, however, is unchanged, so the cached payload is still served rather than rebuilt: the
+    /// correctness fix must not cost the body cache.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceDataAsync_WhenOnlyStateMovedAndCallerHoldsPreHopEtag_Returns200FromCachedBody()
+    {
+        var instance = CreateInstanceWithData(out _);
+        SetupFullPathMocks(instance);
+        EnableCache();
+        SetupFingerprint(instance.Id);
+        // Entry stamped with the data identity — untouched by the hop, so it stays valid.
+        SetupCachedEntry(out _);
+        _instanceExtensionService.ProcessExtensionsAsync(
+                Arg.Any<string[]?>(), Arg.Any<ScriptContext>(), Arg.Any<Definitions.Workflow>(),
+                Arg.Any<ExtensionScope>(), Arg.Any<CancellationToken>())
+            .Returns(Result<Dictionary<string, object>>.Ok(new Dictionary<string, object> { ["state"] = "after-hop" }));
+
+        var input = CreateInput(instance.Id.ToString());
+        input.IfNoneMatch = "\"etag-before-hop\"";
+
+        var result = await _service.GetInstanceDataAsync(input, CancellationToken.None);
+
+        // Not a 304: the state moved, so the enrichment the caller holds is stale.
+        result.IsNotModified.ShouldBeFalse();
+        result.Result.Value!.Extensions!["state"].ShouldBe("after-hop");
+        // ...but the body came from the cache, and the filtering pass was skipped.
+        result.Result.Value!.Data!.Value.GetProperty("key").GetString().ShouldBe("cached-value");
+        await _dataFunctionCache.Received(1).GetAsync(TestCacheKey, Arg.Any<CancellationToken>());
+        await _schemaFieldFilterService.DidNotReceive()
+            .ApplyAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<System.Text.Json.JsonElement?>(),
+                Arg.Any<Instance>(), Arg.Any<Authorization.AuthorizationRequestContext?>(),
+                Arg.Any<CancellationToken>());
     }
 
     /// <summary>
@@ -298,7 +337,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
         result.Result.Value!.Extensions!["state"].ShouldBe("review");
         await _dataFunctionCache.Received(1).SetAsync(
             TestCacheKey,
-            Arg.Is<Caching.DataFunctionCacheEntry>(e => e.Etag == "etag-current" && e.Data != null),
+            Arg.Is<Caching.DataFunctionCacheEntry>(e => e.Etag == "data-etag-current" && e.Data != null),
             Arg.Any<int>(),
             Arg.Any<CancellationToken>());
     }
@@ -320,7 +359,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
         result.Result.Value!.ETag.ShouldBe("\"etag-current\"");
         await _dataFunctionCache.Received(1).SetAsync(
             TestCacheKey,
-            Arg.Is<Caching.DataFunctionCacheEntry>(e => e.Etag == "etag-current"),
+            Arg.Is<Caching.DataFunctionCacheEntry>(e => e.Etag == "data-etag-current"),
             120,
             Arg.Any<CancellationToken>());
     }
@@ -341,7 +380,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             .FindByIdentifierAsReadOnlyAsync(instance.Id.ToString(), Arg.Any<CancellationToken>());
         await _dataFunctionCache.Received(1).SetAsync(
             TestCacheKey,
-            Arg.Is<Caching.DataFunctionCacheEntry>(e => e.Etag == "etag-current"),
+            Arg.Is<Caching.DataFunctionCacheEntry>(e => e.Etag == "data-etag-current"),
             Arg.Any<int>(),
             Arg.Any<CancellationToken>());
     }
@@ -409,9 +448,14 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
     {
         _dataFunctionCache.Enabled.Returns(true);
         _dataFunctionCache.BuildKey(Arg.Any<GetInstanceDataInput>()).Returns(TestCacheKey);
+        // Two identities, deliberately different values: the representation ETag drives the 304
+        // decision, the data ETag stamps and validates the cached body (see IDataFunctionCache).
         _dataFunctionCache
             .ComputeEtag(Arg.Any<GetInstanceDataInput>(), Arg.Any<InstanceDataFingerprint>())
             .Returns("etag-current");
+        _dataFunctionCache
+            .ComputeDataEtag(Arg.Any<GetInstanceDataInput>(), Arg.Any<InstanceDataFingerprint>())
+            .Returns("data-etag-current");
     }
 
     private void SetupFingerprint(Guid instanceId, string? latestDataEtag = "01JD2G4YV0EXAMPLEULID0000A") =>
@@ -419,7 +463,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             .GetDataFingerprintAsync(instanceId.ToString(), Arg.Any<CancellationToken>())
             .Returns(new InstanceDataFingerprint(instanceId, "test-key", latestDataEtag, TestVersion, "review", HasActiveSubFlow: false));
 
-    private void SetupCachedEntry(out Caching.DataFunctionCacheEntry entry, string etag = "etag-current")
+    private void SetupCachedEntry(out Caching.DataFunctionCacheEntry entry, string etag = "data-etag-current")
     {
         using var doc = System.Text.Json.JsonDocument.Parse("""{ "key": "cached-value" }""");
         entry = new Caching.DataFunctionCacheEntry

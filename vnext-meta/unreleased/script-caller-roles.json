@@ -1,0 +1,20 @@
+{
+  "releaseNote": {
+    "summary": "Selection rules, auto rules, timers and SubFlow output mappings can read the caller's resolved roles via context.Caller; provider failure fails closed (Authorization:110006).",
+    "breaking": false,
+    "docs": [
+      "https://github.com/burgan-tech/vnext/blob/master/docs/runtime/script-caller-roles.md"
+    ]
+  },
+  "features": {
+    "engine": {
+      "scriptCallerRoles": {
+        "since": "next",
+        "status": "stable",
+        "description": "ScriptContext.Caller (ICallerAccessor: HasRoleAsync, RolesAsync, IsAvailable, ResolutionFailed, RolesFromHeader) exposes the caller's role set as resolved by the configured caller-role provider (default: token claims, else the gateway role header; morph-idm: the identity service, a non-blank role header replaces its answer). Available to rule-based selection on a caller's request (transition schemas, function contract slots, state/transition views), to automatic-transition rules and timer scripts on caller-driven hops (request, async-accept job, inline auto chain; timers are computed at arming), and to SubFlow output mappings (the child settler's carried identity; resolved before the terminal lock; provider failure is transient and redelivered, never a parent fault). System hops (fired timer, SubFlow resume, continuation), task mappings, transition mappings, extensions, resource lock and event mappings: IsAvailable is false and a read throws CallerRolesUnavailableException; an automatic rule or timer that read roles while the provider failed fails the step (110006) instead of taking the DefaultAutoTransition; on function execute the accessor is closed after input-schema selection, before the cache key and tasks. Resolved lazily on the first read, at most once per request (shared with the provider's per-request memo); rules that never read roles cost no provider call. If a rule reads roles and the provider fails, the selection fails with 503 Authorization:110006 (retryable) whatever the rule returned or swallowed, and nothing is cached; rules that do not read roles are unaffected. Role selection is UX/contract selection, not authorization. PURELY ADDITIVE.",
+        "schemaPath": "scripts (C#): ScriptContext.Caller",
+        "documentation": "docs/runtime/script-caller-roles.md"
+      }
+    }
+  }
+}

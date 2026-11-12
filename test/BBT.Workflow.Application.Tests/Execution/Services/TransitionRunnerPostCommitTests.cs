@@ -9,6 +9,7 @@ using BBT.Aether.MultiSchema;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Aether.Users;
+using BBT.Workflow.Application.Tests.Telemetry;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
@@ -35,16 +36,8 @@ public sealed class TransitionRunnerPostCommitTests
     [Fact]
     public async Task RunAsync_PostCommitCoordination_IsSpannedAroundTheFreshScope()
     {
-        var collected = new List<Activity>();
-        using var listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == "BBT.Workflow.Pipeline",
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
-                ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
-        };
-        ActivitySource.AddActivityListener(listener);
-        using var root = new Activity("post-commit-coordinate-test").Start();
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
+        var root = spans.Root;
         var harness = new RunnerHarness(
             new StagePlan(
                 "pipeline",
@@ -55,7 +48,7 @@ public sealed class TransitionRunnerPostCommitTests
         var result = await harness.Runner.RunAsync(harness.CreateInput("first"));
 
         result.IsSuccess.ShouldBeTrue();
-        var span = collected.Single(a =>
+        var span = spans.Spans.Single(a =>
             a.TraceId == root.TraceId && a.DisplayName == "PostCommit.Coordinate");
         span.ParentId.ShouldBe(root.Id);
         span.GetTagItem(TelemetryConstants.TagNames.SpanCategory)
@@ -332,9 +325,8 @@ public sealed class TransitionRunnerPostCommitTests
     [Fact]
     public async Task RunAsync_HandoffToChild_WrapsParentSettlementInPostCommitSettleSpan()
     {
-        var collected = new List<Activity>();
-        using var listener = CreatePipelineListener(collected);
-        using var root = new Activity("post-commit-settle-test").Start();
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
+        var root = spans.Root;
         var harness = new RunnerHarness(new StagePlan(
             "pipeline",
             PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild));
@@ -352,7 +344,7 @@ public sealed class TransitionRunnerPostCommitTests
         var result = await harness.Runner.RunAsync(harness.CreateInput("first"));
 
         result.IsSuccess.ShouldBeTrue();
-        var settle = collected.Single(a =>
+        var settle = spans.Spans.Single(a =>
             a.TraceId == root.TraceId && a.DisplayName == "PostCommit.Settle");
         settle.ParentId.ShouldBe(root.Id);
         settle.GetTagItem(TelemetryConstants.TagNames.SpanCategory)
@@ -364,18 +356,17 @@ public sealed class TransitionRunnerPostCommitTests
         observedDuringSettle.ShouldNotBeNull();
         observedDuringSettle!.Id.ShouldBe(settle.Id);
         // Settlement follows coordination; both are siblings under the transaction.
-        var coordinate = collected.Single(a =>
+        var coordinate = spans.Spans.Single(a =>
             a.TraceId == root.TraceId && a.DisplayName == "PostCommit.Coordinate");
         settle.StartTimeUtc.ShouldBeGreaterThanOrEqualTo(coordinate.StartTimeUtc + coordinate.Duration);
-        collected.ShouldNotContain(a => a.DisplayName == "PostCommit.Fault");
+        spans.Spans.ShouldNotContain(a => a.DisplayName == "PostCommit.Fault");
     }
 
     [Fact]
     public async Task RunAsync_PostCommitFaultRequest_WrapsParentFaultInPostCommitFaultSpan()
     {
-        var collected = new List<Activity>();
-        using var listener = CreatePipelineListener(collected);
-        using var root = new Activity("post-commit-fault-test").Start();
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
+        var root = spans.Root;
         var harness = new RunnerHarness(new StagePlan(
             "pipeline",
             PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild))
@@ -398,7 +389,7 @@ public sealed class TransitionRunnerPostCommitTests
         var result = await harness.Runner.RunAsync(harness.CreateInput("first"));
 
         result.IsSuccess.ShouldBeTrue();
-        var fault = collected.Single(a =>
+        var fault = spans.Spans.Single(a =>
             a.TraceId == root.TraceId && a.DisplayName == "PostCommit.Fault");
         fault.ParentId.ShouldBe(root.Id);
         fault.GetTagItem(TelemetryConstants.TagNames.SpanCategory)
@@ -410,15 +401,14 @@ public sealed class TransitionRunnerPostCommitTests
         fault.Status.ShouldBe(ActivityStatusCode.Unset);
         observedDuringFault.ShouldNotBeNull();
         observedDuringFault!.Id.ShouldBe(fault.Id);
-        collected.ShouldNotContain(a => a.DisplayName == "PostCommit.Settle");
+        spans.Spans.ShouldNotContain(a => a.DisplayName == "PostCommit.Settle");
     }
 
     [Fact]
     public async Task RunAsync_ParentMutationFailure_MarksPostCommitSettleSpanAsError()
     {
-        var collected = new List<Activity>();
-        using var listener = CreatePipelineListener(collected);
-        using var root = new Activity("post-commit-settle-error-test").Start();
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
+        var root = spans.Root;
         var harness = new RunnerHarness(new StagePlan(
             "pipeline",
             PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild));
@@ -433,7 +423,7 @@ public sealed class TransitionRunnerPostCommitTests
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.ShouldBe(lockConflict);
-        var settle = collected.Single(a =>
+        var settle = spans.Spans.Single(a =>
             a.TraceId == root.TraceId && a.DisplayName == "PostCommit.Settle");
         settle.Status.ShouldBe(ActivityStatusCode.Error);
         settle.StatusDescription.ShouldBe(lockConflict.Message);
@@ -639,19 +629,6 @@ public sealed class TransitionRunnerPostCommitTests
         harness.CoreChainDepths.ShouldBe(Enumerable.Range(0, 51));
         harness.CoreTransitionKeys.ShouldNotContain("next-depth-51");
         harness.StageScopes.ShouldAllBe(scope => scope.IsDisposed && scope.UowDisposed);
-    }
-
-    private static ActivityListener CreatePipelineListener(List<Activity> collected)
-    {
-        var listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == "BBT.Workflow.Pipeline",
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
-                ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
-        };
-        ActivitySource.AddActivityListener(listener);
-        return listener;
     }
 
     private sealed class RunnerHarness

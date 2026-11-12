@@ -45,9 +45,14 @@ public sealed class FunctionRequestValidationService(
         if (!resolution.IsSuccess)
             return Result.Fail(resolution.Error);
 
-        // Every entry carried a rule and none matched: no input contract applies to this request.
+        // Every entry carried a rule and none matched (or every rule failed to evaluate): the function
+        // declares an input contract but this request fits none of it, so it is rejected. A function that
+        // wants to keep accepting unmatched callers ends the list with a rule-less fallback entry.
         if (resolution.Value is null)
-            return Result.Ok();
+        {
+            logger.FunctionInputSchemaNotMatched(function.Key);
+            return Result.Fail(WorkflowErrors.FunctionInputSchemaNotMatched(function.Key));
+        }
 
         var inputSchema = resolution.Value.Reference;
 

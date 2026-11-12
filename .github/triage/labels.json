@@ -36,11 +36,46 @@
   ],
   "status": [
     { "name": "ai:triaged", "color": "5319e7", "description": "Enriched by the issue-triage agent" },
-    { "name": "ai:ready", "color": "0e8a16", "description": "Maintainer-approved for the local fix agent" },
-    { "name": "ai:in-progress", "color": "fbca04", "description": "The local fix agent is working on it" },
-    { "name": "ai:needs-human", "color": "b60205", "description": "An agent stopped and needs a maintainer" },
-    { "name": "ai:pr-opened", "color": "0e8a16", "description": "The local fix agent opened a draft PR" },
+    { "name": "ai:ready", "color": "0e8a16", "description": "Maintainer-approved; the Director plans it next" },
+    { "name": "ai:replan", "color": "c5def5", "description": "Send back to the Director for a new plan" },
+    { "name": "ai:planned", "color": "1d76db", "description": "Plan and classification written; the Developer may start" },
+    { "name": "ai:developing", "color": "fbca04", "description": "The Developer is implementing it" },
+    { "name": "ai:pr-ready", "color": "0e8a16", "description": "Draft PR opened; waiting for the Quality Gate" },
+    { "name": "ai:reviewing", "color": "fbca04", "description": "The Quality Gate is reviewing the PR" },
+    { "name": "ai:changes-required", "color": "d93f0b", "description": "The Quality Gate asked for changes" },
+    { "name": "ai:fixing", "color": "fbca04", "description": "The Developer is addressing Quality Gate findings" },
+    { "name": "ai:human-approval", "color": "0e8a16", "description": "Quality Gate passed; a human reviews and merges" },
+    { "name": "ai:blocked", "color": "b60205", "description": "Stopped; a human decides. Never removed by the pipeline when set by a human" },
+    { "name": "ai:done", "color": "ededed", "description": "Merged and closed" },
     { "name": "needs-info", "color": "ededed", "description": "The reporter must add information" }
+  ],
+  "changeLevel": [
+    { "name": "ai:semver-patch", "color": "c2e0c6", "description": "Fix without a contract change" },
+    { "name": "ai:semver-minor", "color": "fef2c0", "description": "New backward-compatible capability" },
+    { "name": "ai:semver-major", "color": "f9d0c4", "description": "Breaking change; never implemented by AI" }
+  ],
+  "impact": [
+    { "name": "ai:impact-low", "color": "c2e0c6", "description": "No auth, migration, contract, core-process or companion-contract change" },
+    { "name": "ai:impact-high", "color": "f9d0c4", "description": "Touches auth, migration, contract, a core process or a companion contract" }
+  ],
+  "risk": [
+    { "name": "ai:risk-low", "color": "c2e0c6", "description": "Derived: patch with low impact" },
+    { "name": "ai:risk-medium", "color": "fef2c0", "description": "Derived: minor with low impact" },
+    { "name": "ai:risk-high", "color": "f9d0c4", "description": "Derived: high impact; council when a trigger fires" },
+    { "name": "ai:risk-critical", "color": "b60205", "description": "Derived: major; never implemented by AI" }
+  ],
+  "council": [
+    { "name": "ai:council-required", "color": "5319e7", "description": "Run the Architecture Council before development" },
+    { "name": "ai:council-approved", "color": "0e8a16", "description": "Council verdict APPROVED; development authorized, not merge" }
+  ],
+  "e2e": [
+    { "name": "e2e", "color": "0e8a16", "description": "Run PR E2E: the suites on an `E2E suites:` line, else the full set" },
+    { "name": "e2e:full", "color": "0e8a16", "description": "Run PR E2E with the full vnext-example core set" }
+  ],
+  "deprecated": [
+    { "name": "ai:in-progress", "color": "ededed", "description": "Deprecated: use ai:developing", "replacedBy": "ai:developing" },
+    { "name": "ai:pr-opened", "color": "ededed", "description": "Deprecated: use ai:pr-ready", "replacedBy": "ai:pr-ready" },
+    { "name": "ai:needs-human", "color": "ededed", "description": "Deprecated: use ai:blocked", "replacedBy": "ai:blocked" }
   ],
   "defaults": {
     "milestone": "backlog",

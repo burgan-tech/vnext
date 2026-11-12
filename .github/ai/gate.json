@@ -1,0 +1,19 @@
+{
+  "$comment": "Evidence the AI Quality Gate reads for a PR's HEAD commit (docs/governance/ai-engineering-pipeline.md §8). `checks` are check runs, `statuses` commit statuses. kind: build | tests | contract | sonar | security. skippedOk: a skipped run counts as passed (pr-contract skips drafts). A missing or running required item makes the verdict INCONCLUSIVE; a failed one blocks, except a Sonar gate whose only failed conditions are new-code coverage (COVERAGE_WARNING).",
+  "checks": [
+    { "name": "Unit Tests", "kind": "tests", "required": true },
+    { "name": "Build and analyze", "kind": "build", "required": true },
+    { "name": "pr-contract", "kind": "contract", "required": true, "skippedOk": true },
+    { "name": "SonarCloud Code Analysis", "kind": "sonar", "required": true },
+    { "name": "GitGuardian Security Checks", "kind": "security", "required": false }
+  ],
+  "statuses": [
+    { "context": "security/snyk (burgan-tech)", "kind": "security", "required": false }
+  ],
+  "sonar": {
+    "projectKey": "burgan-tech_vnext",
+    "coverageMetrics": ["new_coverage", "new_line_coverage", "new_branch_coverage", "new_lines_to_cover", "new_uncovered_lines"]
+  },
+  "maxRepairs": 3,
+  "baseBranches": ["master", "release-v*"]
+}

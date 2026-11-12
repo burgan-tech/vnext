@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Guids;
 using BBT.Aether.Results;
+using BBT.Workflow.Application.Tests.Telemetry;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline.Steps;
@@ -133,21 +134,13 @@ public class CreateTransitionRecordStepRetryTests
     [Fact]
     public async Task ExecuteAsync_PersistWork_IsOwnedByTransitionRecordPersistSpan()
     {
-        var collected = new List<Activity>();
-        using var listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == "BBT.Workflow.Pipeline",
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
-                ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
-        };
-        ActivitySource.AddActivityListener(listener);
-        using var root = new Activity("transition-record-persist-test").Start();
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
+        var root = spans.Root;
 
         var result = await _step.ExecuteAsync(CreateContext(), CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        var span = collected.Single(a =>
+        var span = spans.Spans.Single(a =>
             a.TraceId == root.TraceId && a.DisplayName == "TransitionRecord.Persist");
         span.ParentId.ShouldBe(root.Id);
         span.GetTagItem(TelemetryConstants.TagNames.SpanCategory)

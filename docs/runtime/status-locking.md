@@ -36,6 +36,19 @@ Busy at the accept, and why `updateData` takes no lock at all.
   downstream by the per-instance write funnel. Before this exemption, N parallel notifiers
   (subprocess → parent `document-ready-update`) fought over the parent's status lock and every
   loser burned an error-boundary retry backoff for a lock that protected nothing.
+- **A parked Busy continuation is claimed once per state.** Because updateData takes no lock, N
+  parallel updateData requests that find an interaction wait parked Busy (no live owner) would all
+  pass `HasLiveTransitionOwnerAsync` and all `TakeOverAsync` the same continuation — the automatic
+  chain ran N times, notifying the parent and finalizing more than once, and a late copy wrote a stale
+  `Status=B` over the settled state (measured on the contract domain: 14 of 20 contracts at
+  concurrency 10). Before the takeover, `TransitionPipeline` now runs one set-based UPDATE on
+  `Instances.ContinuationClaimedAt` (`Status='B' AND CurrentState=@state AND` no claim younger than
+  `InstanceContinuationClaim.DefaultTtl`, 60 s). The winner runs the chain and clears the claim in a
+  `finally` when the chain ends; a loser drops its continuation and logs `10182`. `ChangeStateStep`
+  persists the new state at once, so a continuation that arrives after the chain moved on fails the
+  `CurrentState` check instead of waiting out the TTL. A crashed owner's claim simply expires. A reserve
+  from Active needs no claim (`ReserveAsync` already serializes it), and the claim deliberately does not
+  stamp `ModifiedAt` — it is bookkeeping, the chain's own writes stamp it.
 - There is **no duplicate transition-record guard** downstream. Duplicate *requests* are stopped
   only by the accept-time active-job guard; duplicate *hops* by the per-hop policy checks.
 

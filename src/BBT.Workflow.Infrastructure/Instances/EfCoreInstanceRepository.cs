@@ -465,6 +465,47 @@ public sealed class EfCoreInstanceRepository(
             instanceId, InstanceStatus.Busy, InstanceStatus.Active, cancellationToken, effectiveStatus);
 
     /// <inheritdoc />
+    public async Task<bool> TryClaimContinuationAsync(
+        Guid instanceId,
+        string expectedState,
+        DateTime utcNow,
+        TimeSpan ttl,
+        CancellationToken cancellationToken = default)
+    {
+        // One statement: the row lock Postgres takes for the UPDATE is what makes two racing
+        // updateData continuations see each other — the second one re-evaluates the WHERE after the
+        // first commits and finds the claim taken (or the state already moved on).
+        // Deliberately does NOT stamp ModifiedAt (nor does the release below): the claim is internal
+        // bookkeeping, not a change to the instance. The continuation it admits stamps ModifiedAt
+        // through its own writes (docs/runtime/instance-filtering-and-queries.md § modifiedAt), and a
+        // stamp here would move the instance's "last changed" time — and its LastTouchedAt index
+        // entries — for a continuation that may then change nothing.
+        var staleBefore = utcNow - ttl;
+        var affected = await (await GetDbSetAsync())
+            .Where(i => i.Id == instanceId
+                        && i.Status == InstanceStatus.Busy
+                        && i.CurrentState == expectedState
+                        && (EF.Property<DateTime?>(i, InstanceContinuationClaim.ColumnName) == null
+                            || EF.Property<DateTime?>(i, InstanceContinuationClaim.ColumnName) < staleBefore))
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(i => EF.Property<DateTime?>(i, InstanceContinuationClaim.ColumnName), utcNow),
+                cancellationToken);
+
+        return affected == 1;
+    }
+
+    /// <inheritdoc />
+    public async Task ReleaseContinuationClaimAsync(Guid instanceId, CancellationToken cancellationToken = default)
+    {
+        await (await GetDbSetAsync())
+            .Where(i => i.Id == instanceId
+                        && EF.Property<DateTime?>(i, InstanceContinuationClaim.ColumnName) != null)
+            .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(i => EF.Property<DateTime?>(i, InstanceContinuationClaim.ColumnName), (DateTime?)null),
+                cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task SetEffectiveStatusAsync(
         Guid instanceId,
         InstanceStatus effectiveStatus,
@@ -945,6 +986,11 @@ public sealed class EfCoreInstanceRepository(
     public async Task<Instance?> FindByIdentifierAsReadOnlyAsync(string identifier,
         CancellationToken cancellationToken = default)
     {
+        if (LatestOnlyLoading)
+        {
+            return await FindByIdentifierAsReadOnlyLatestOnlyAsync(identifier, cancellationToken);
+        }
+
         var query = (await PrepareDetailedQueryAsync())
             .AsNoTracking()
             .AsSplitQuery();
@@ -968,6 +1014,104 @@ public sealed class EfCoreInstanceRepository(
             .Where(p => p.Key == identifier)
             .OrderByDescending(p => p.CreatedAt)
             .FirstOrDefaultAsync(cancellationToken));
+    }
+
+    /// <summary>
+    /// The no-tracking twin of <see cref="FindByIdentifierLatestOnlyAsync"/> — the load behind every
+    /// read endpoint (GET instance, data/view/schema/master functions). Same aggregate shape as the
+    /// split path (latest data row + open child correlations) in two commands instead of three: the
+    /// latest data row is at most one row per instance, so it joins the instance row with nothing to
+    /// multiply, and the open correlations follow as one query keyed on the instance id. The
+    /// correlations are not joined too, for the reason the tracked twin gives. The tracked
+    /// collection loader does not apply to a detached aggregate, so the rows are attached through
+    /// <see cref="Instance.AcceptLoadedChildCorrelations"/>.
+    /// </summary>
+    private async Task<Instance?> FindByIdentifierAsReadOnlyLatestOnlyAsync(
+        string identifier,
+        CancellationToken cancellationToken)
+    {
+        var instance = await FindReadOnlyRootAsync(identifier, cancellationToken);
+        if (instance is null)
+        {
+            return null;
+        }
+
+        using (PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan))
+        {
+            var instanceId = instance.Id;
+            var openCorrelations = await (await GetDbContextAsync()).Set<InstanceCorrelation>()
+                .AsNoTracking()
+                .Where(c => c.ParentInstanceId == instanceId && !c.IsCompleted)
+                .ToListAsync(cancellationToken);
+            instance.AcceptLoadedChildCorrelations(openCorrelations);
+        }
+
+        return MarkIfPartiallyLoaded(instance);
+    }
+
+    /// <inheritdoc />
+    public async Task<(Instance? Instance, List<InstanceCorrelation> AllCorrelations)>
+        FindByIdentifierAsReadOnlyWithAllCorrelationsAsync(
+            string identifier,
+            CancellationToken cancellationToken = default)
+    {
+        var instance = await FindReadOnlyRootAsync(identifier, cancellationToken);
+        if (instance is null)
+        {
+            return (null, []);
+        }
+
+        List<InstanceCorrelation> allCorrelations;
+        using (PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan))
+        {
+            // One read for both consumers: the response's full correlation set (same filter and
+            // order as IInstanceCorrelationRepository.GetByParentAsync) and the aggregate's open
+            // subset, which the detail load would otherwise fetch with a filtered include.
+            var instanceId = instance.Id;
+            allCorrelations = await (await GetDbContextAsync()).Set<InstanceCorrelation>()
+                .AsNoTracking()
+                .Where(c => c.ParentInstanceId == instanceId)
+                .OrderBy(c => c.ParentState)
+                .ThenBy(c => c.CompletedAt)
+                .ToListAsync(cancellationToken);
+        }
+
+        instance.AcceptLoadedChildCorrelations(allCorrelations);
+        return (MarkIfPartiallyLoaded(instance), allCorrelations);
+    }
+
+    /// <summary>
+    /// The no-tracking instance row with its data rows and WITHOUT the correlation include, under
+    /// the usual identifier resolution (id first, then the most recent row for the key). Latest-only
+    /// loading: one single query (the latest row joins without multiplying). Full history: the
+    /// DataList stays a split query.
+    /// </summary>
+    private async Task<Instance?> FindReadOnlyRootAsync(
+        string identifier,
+        CancellationToken cancellationToken)
+    {
+        IQueryable<Instance> query;
+        using (PipelineStepActivityHelper.StartOperationActivity(QueryPrepareSpan))
+        {
+            var root = (await base.WithDetailsAsync()).AsNoTracking();
+            query = LatestOnlyLoading
+                ? root.Include(i => i.DataList.Where(d => d.IsLatest)).AsSingleQuery()
+                : root.Include(i => i.DataList).AsSplitQuery();
+        }
+
+        using (PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan))
+        {
+            var instance = Guid.TryParse(identifier, out var instanceId)
+                ? await query.FirstOrDefaultAsync(p => p.Id == instanceId, cancellationToken)
+                : null;
+
+            // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
+            // keeps the fallback deterministic by returning the most recent instance for the key.
+            return instance ?? await query
+                .Where(p => p.Key == identifier)
+                .OrderByDescending(p => p.CreatedAt)
+                .FirstOrDefaultAsync(cancellationToken);
+        }
     }
 
     /// <inheritdoc />
@@ -1367,7 +1511,7 @@ public sealed class EfCoreInstanceRepository(
     /// <param name="version">The version to search for. Supports:
     /// <list type="bullet">
     ///     <item><description>Full version (e.g., "1.0.0-pkg.1.17.0+account"): Exact match</description></item>
-    ///     <item><description>Artifact version (e.g., "1.0.0" or "1.0.0-alpha.1"): Returns highest pkg version for that artifact</description></item>
+    ///     <item><description>Artifact version (e.g., "1.0.0" or "1.0.0-alpha.1"): Returns highest pkg version for that artifact; a stored bare artifact row is returned only when no pkg row exists (see <see cref="InstanceDataVersionComparer.FindBestMatch"/>)</description></item>
     ///     <item><description>Partial version (e.g., "1.0"): Returns highest version matching the prefix</description></item>
     /// </list>
     /// </param>

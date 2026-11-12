@@ -15,11 +15,14 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 | [AI capabilities](ai-capabilities.md) | Every AI skill, subagent, MCP server, hook and script — when to use it and how to run it. |
 | [Agent Council](agent-council/README.md) | Plan-only decision workflow, roles, session artifacts, evidence gates, and Chair approval. Decision history: [sessions/README.md](agent-council/sessions/README.md). |
 | [Code Review](code-review/README.md) | What a review of this repository checks: the four reviewer checklists, severity and verdict vocabularies, and the noise rules. Single source for the `pr-review` and `workflow-code-review` skills. |
+| [AI pipeline at a glance](governance/ai-pipeline-overview.md) | One page: the label flow diagram, which label starts which agent, step by step, modes and status. |
+| [AI engineering pipeline](governance/ai-engineering-pipeline.md) | Label-driven CI roles (Director, Council, Developer, Quality Gate) on the Cursor CLI: guard matrix, label state machine, triggers, PR evidence, e2e in CI, rollout and day-to-day use. |
 | [Release lines](governance/release-lines.md) | Parallel patch lines: upstream-first backports, the emergency exception, `latest` channel policy, vnext-meta sync, release-owner checklist. |
 | [Architecture](architecture/system-overview.md) | Runtime shape, service boundaries, dependency direction, routing. |
 | [Domain](domain/instance-data-merge-concept.md) | Instance lifecycle, data versioning, cache context, function-handler behavior. |
 | [Runtime](runtime/task-executors-and-invokers.md) | Task execution, invokers, scripting, remote runtime integration. |
 | [Contracts](contracts/api-and-service-contracts.md) | API shapes, validation, compatibility, error behavior. |
+| [Unit tests: always green](testing/unit-tests.md) | The zero-failure rule for `test/` on every PR, the required `Unit Tests` check, how to reproduce it locally, the outage-only switch. |
 | [Testing](testing/integration-testing.md) | How a runtime change is verified end to end: policy, sibling repos, local runtime, `VNEXT_BASE_URL`, scenario/index obligations, Aether local feed, Helm parity. |
 | [Observability verification](testing/observability-verification.md) | How a locally exercised change is confirmed through the MCP servers: traps, fallbacks when a server is down, OpenObserve query mechanics, the `postgres` connect timeout. |
 | Integration — [FanOutTask (Forge)](integration/forge-fanout-task-implementation.md), [Field protection (vnext-docs + Forge)](integration/field-protection-consumer-revision.md) | Implementation specs for consumer products (Forge Studio, CLI, SDKs) that build against runtime features; the handoff-document [convention](integration/README.md). |
@@ -41,6 +44,7 @@ describe the stable mental model, boundaries, failure modes, and change-safety r
 12. Read [Instance Filtering and Queries](runtime/instance-filtering-and-queries.md) before writing instance queries in mapping scripts (fluent `InstanceQuery`, operator reference, `GetInstancesTask` vs `DaprServiceTask`, migration from hand-written GraphQL filters).
 13. Read [GetInstance Task](runtime/get-instance-task.md) when a mapping needs a single instance's metadata **and** data in one call (task type `19`, local/remote response parity).
 14. Read [Script Related Instance Access](runtime/script-related-instance-access.md) before using or changing `context.Related` in mapping scripts (parent/correlation reads, unfiltered `x-roles` behavior, internal endpoint security posture).
+    Read [Caller Roles in Rule Scripts](runtime/script-caller-roles.md) before using `context.Caller` in a selection rule or wiring it to a new surface (where it is available, cost, the fail-closed outage behaviour, selection ≠ authorization).
 15. Read [View Display Modes](domain/view-display-modes.md) before changing a view's `display` declaration or how clients present views (SDI / MDI shapes, response `modes` contract).
 16. Read [Function Handler Architecture](domain/function-handler-architecture.md) § Custom Function Contract before declaring function `verbs` / input-output schemas and views, or changing verb enforcement.
 17. Read [Well-Known Transitions](domain/well-known-transitions.md) before changing `cancel` / `updateData` / `exit` behavior, what `availableTransitions` contains, or the `kind` discriminator clients switch on.

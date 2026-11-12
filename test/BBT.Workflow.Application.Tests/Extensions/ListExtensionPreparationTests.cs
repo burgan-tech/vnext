@@ -160,18 +160,11 @@ public sealed class ListExtensionPreparationTests
         var runtimeInfoProvider = Substitute.For<IRuntimeInfoProvider>();
         runtimeInfoProvider.Domain.Returns("bank");
 
-        var scopedProvider = Substitute.For<IServiceProvider>();
-        scopedProvider.GetService(typeof(IComponentCacheStore)).Returns(componentCacheStore);
-        var scope = Substitute.For<IServiceScope>();
-        scope.ServiceProvider.Returns(scopedProvider);
-        var scopeFactory = Substitute.For<IServiceScopeFactory>();
-        scopeFactory.CreateScope().Returns(scope);
         return new InstanceExtensionService(
             componentCacheStore,
             taskCoordinator,
             runtimeInfoProvider,
             Substitute.For<ICurrentSchema>(),
-            scopeFactory,
             logger ?? NullLogger<InstanceExtensionService>.Instance);
     }
 

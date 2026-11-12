@@ -10,6 +10,7 @@ using BBT.Workflow.BackgroundJobs.Payloads;
 using BBT.Workflow.BackgroundJobs.Recovery;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -119,17 +120,23 @@ public class JobTimeoutRecoveryServiceTests
     [Fact]
     public async Task FaultInstanceAsync_EmitsExactlyOneActivationSpan()
     {
+        var instanceId = Guid.NewGuid();
         var collected = new List<Activity>();
         using var listener = new ActivityListener
         {
             ShouldListenTo = source => source.Name == "BBT.Workflow.Pipeline",
             Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
                 ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
+            // The listener is process-wide and the activation span parents to its lane anchor, not
+            // the ambient span: keep only this instance's spans, added under a lock.
+            ActivityStopped = a =>
+            {
+                if (a.GetTagItem(TelemetryConstants.TagNames.InstanceId)?.ToString() != instanceId.ToString()) return;
+                lock (collected) collected.Add(a);
+            }
         };
         ActivitySource.AddActivityListener(listener);
 
-        var instanceId = Guid.NewGuid();
         var payload = CreatePayload(instanceId);
         var instance = Instance.Create(instanceId, "test_flow", "1.0.0", "key");
         instance.Busy();
@@ -146,8 +153,11 @@ public class JobTimeoutRecoveryServiceTests
 
         await CreateService().FaultInstanceAsync(payload, CancellationToken.None);
 
-        collected.Count(a => a.DisplayName.StartsWith("Instance.Activation", StringComparison.Ordinal))
-            .ShouldBe(1);
+        lock (collected)
+        {
+            collected.Count(a => a.DisplayName.StartsWith("Instance.Activation", StringComparison.Ordinal))
+                .ShouldBe(1);
+        }
     }
 
     [Fact]

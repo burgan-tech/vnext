@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.DistributedLock;
+using BBT.Workflow.Application.Tests.Telemetry;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Infrastructure.Execution.Locks;
@@ -26,29 +27,9 @@ namespace BBT.Workflow.Execution.Locks;
 /// </summary>
 public sealed class TransitionLockScopeFactoryActivityTests : IDisposable
 {
-    private readonly List<ActivityListener> _listeners = new();
-
     public void Dispose()
     {
-        foreach (var listener in _listeners)
-        {
-            listener.Dispose();
-        }
-
         Activity.Current = null;
-    }
-
-    private ActivityListener CreateListener(string sourceName, List<Activity> collected)
-    {
-        var listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == sourceName,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
-        };
-        ActivitySource.AddActivityListener(listener);
-        _listeners.Add(listener);
-        return listener;
     }
 
     private static TransitionLockScopeFactory CreateFactory(
@@ -75,8 +56,7 @@ public sealed class TransitionLockScopeFactoryActivityTests : IDisposable
     [Fact]
     public async Task AcquireAsync_WhenAcquiredOnFirstAttempt_EmitsLockAcquireSpan_Acquired()
     {
-        var collected = new List<Activity>();
-        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
 
         const string key = "vnext:bank:parent-flow:acquire-span";
         var handle = Substitute.For<IDistributedLockHandle>();
@@ -90,7 +70,7 @@ public sealed class TransitionLockScopeFactoryActivityTests : IDisposable
 
         scope.IsAcquired.ShouldBeTrue();
 
-        var span = Assert.Single(collected, a => IsSpan(a, "Lock.Acquire", key));
+        var span = Assert.Single(spans.Spans, a => IsSpan(a, "Lock.Acquire", key));
         span.GetTagItem(TelemetryConstants.TagNames.LockAcquired).ShouldBe(true);
         span.GetTagItem(TelemetryConstants.TagNames.LockLeaseSeconds).ShouldBe(42);
         span.GetTagItem(TelemetryConstants.TagNames.LockKind).ShouldBe("chain");
@@ -103,8 +83,7 @@ public sealed class TransitionLockScopeFactoryActivityTests : IDisposable
         // One AcquireAsync call retries internally (LockAcquireWait); the span wraps the whole
         // logical acquire operation — not one span per low-level TryAcquireLockAsync call — so it
         // pairs 1:1 with the eventual Lock.Release (or, on exhaustion, with no release at all).
-        var collected = new List<Activity>();
-        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
 
         const string key = "vnext:bank:parent-flow:acquire-span-exhausted";
         var lockService = Substitute.For<IDistributedLockService>();
@@ -119,7 +98,7 @@ public sealed class TransitionLockScopeFactoryActivityTests : IDisposable
 
         scope.IsAcquired.ShouldBeFalse();
 
-        var acquireSpans = collected.Where(a => IsSpan(a, "Lock.Acquire", key)).ToList();
+        var acquireSpans = spans.Spans.Where(a => IsSpan(a, "Lock.Acquire", key)).ToList();
         acquireSpans.Count.ShouldBe(1); // one span per AcquireAsync call, despite 3 internal attempts
 
         var span = acquireSpans[0];
@@ -129,7 +108,7 @@ public sealed class TransitionLockScopeFactoryActivityTests : IDisposable
         span.Status.ShouldBe(ActivityStatusCode.Unset);
 
         // No handle was ever acquired, so disposal must not emit a Lock.Release.
-        collected.Any(a => IsSpan(a, "Lock.Release", key)).ShouldBeFalse();
+        spans.Spans.Any(a => IsSpan(a, "Lock.Release", key)).ShouldBeFalse();
     }
 
     [Fact]
@@ -137,8 +116,7 @@ public sealed class TransitionLockScopeFactoryActivityTests : IDisposable
     {
         // The symmetry the controller asked for: a successful acquisition on this funnel now
         // produces exactly one Lock.Acquire and, on disposal, exactly one Lock.Release — no orphan.
-        var collected = new List<Activity>();
-        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
 
         const string key = "vnext:bank:parent-flow:acquire-release-pair";
         var handle = Substitute.For<IDistributedLockHandle>();
@@ -151,8 +129,8 @@ public sealed class TransitionLockScopeFactoryActivityTests : IDisposable
         var scope = await factory.AcquireAsync(key);
         await scope.DisposeAsync();
 
-        collected.Count(a => IsSpan(a, "Lock.Acquire", key)).ShouldBe(1);
-        var releaseSpan = Assert.Single(collected, a => IsSpan(a, "Lock.Release", key));
+        spans.Spans.Count(a => IsSpan(a, "Lock.Acquire", key)).ShouldBe(1);
+        var releaseSpan = Assert.Single(spans.Spans, a => IsSpan(a, "Lock.Release", key));
         releaseSpan.GetTagItem(TelemetryConstants.TagNames.LockKind).ShouldBe("chain");
     }
 }

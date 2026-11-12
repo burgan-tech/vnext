@@ -177,6 +177,9 @@ public static class WorkflowErrorCodes
     public const string SharedTransitionTargetMustBeSelfWhenInSubFlow = "Transition:100023";
     public const string WellKnownTransitionNotAvailableInState = "Transition:100024";
 
+    /// <summary>A rule-based transition schema was declared but no entry matched the instance.</summary>
+    public const string TransitionSchemaNotMatched = "Transition:100025";
+
     #endregion
     
     #region Execution Errors (200xxx)
@@ -253,6 +256,9 @@ public static class WorkflowErrorCodes
     /// <summary>The <c>target</c> query value is neither <c>input</c> nor <c>output</c>. Maps to HTTP 400.</summary>
     public const string FunctionContractTargetInvalid = "Function:800005";
 
+    /// <summary>A rule-based input schema was declared but no entry matched the request.</summary>
+    public const string FunctionInputSchemaNotMatched = "Function:800006";
+
     #endregion
 
     #region Authorization Errors (110xxx)
@@ -268,6 +274,15 @@ public static class WorkflowErrorCodes
 
     /// <summary>The configured caller-role provider could not resolve the caller's role set.</summary>
     public const string CallerRoleResolutionFailed = "Authorization:110004";
+
+    /// <summary>Workflow-scoped authorize was called without a supported <c>type</c> (supported: <c>instance</c>).</summary>
+    public const string AuthorizeUnsupportedType = "Authorization:110005";
+
+    /// <summary>
+    /// A rule-based selection (schema or view) read the caller's roles and the caller-role provider could
+    /// not answer, so the selection cannot be decided. Transient: the request can be retried. Maps to HTTP 503.
+    /// </summary>
+    public const string CallerRolesUnavailable = "Authorization:110006";
 
     #endregion
     

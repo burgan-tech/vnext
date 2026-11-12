@@ -15,7 +15,7 @@ namespace BBT.Workflow.Tasks.Invocation.Local;
 /// </summary>
 public sealed class LocalSoapTaskInvoker(
     IHttpClientFactory httpClientFactory,
-    ILogger<LocalSoapTaskInvoker> logger) : ILocalTaskInvoker
+    ILogger<LocalSoapTaskInvoker> logger) : ITypedLocalTaskInvoker<SoapTaskBinding>
 {
     /// <inheritdoc />
     public string TaskType => TaskTypes.Soap;
@@ -35,6 +35,19 @@ public sealed class LocalSoapTaskInvoker(
                 taskType: TaskTypes.Soap);
         }
 
+        return await InvokeAsync(taskKey, typedBinding, traceContext, cancellationToken);
+    }
+
+    /// <summary>
+    /// The typed entry point: the orchestrator's local path hands the mapped binding object straight
+    /// here, skipping the JSON round trip the <see cref="JsonElement"/> overload exists for.
+    /// </summary>
+    public async Task<TaskInvocationResult> InvokeAsync(
+        string? taskKey,
+        SoapTaskBinding typedBinding,
+        TaskTraceContext? traceContext,
+        CancellationToken cancellationToken = default)
+    {
         if (!typedBinding.ValidateSSL)
         {
             logger.LocalTaskInvocationSslValidationDisabled(taskKey, TaskTypes.Soap, typedBinding.Url);

@@ -258,6 +258,7 @@ public sealed class InstanceQueryAppServiceFilterValidationTests : IDisposable
             currentUser: Substitute.For<ICurrentUser>(),
             descentLimiter: new HumanTask.HumanTaskDescentLimiter(
                 Microsoft.Extensions.Options.Options.Create(new HumanTask.HumanTaskFunctionOptions())),
+            transitionSchemaResolver: NSubstitute.Substitute.For<BBT.Workflow.Execution.Validation.ITransitionSchemaResolver>(),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>());
     }
 }

@@ -326,3 +326,5 @@ etc/docker/data/blobs/
 
 # issue-triage workflow scratch (scripts/triage)
 .triage/
+# AI pipeline workflow scratch (scripts/ai)
+.ai/

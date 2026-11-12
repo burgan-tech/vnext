@@ -38,10 +38,25 @@ public static class PredefinedInstanceRoles
     public const string PreviousBehalfOfUser = "$PreviousBehalfOfUser";
 
     /// <summary>
+    /// Role that matches every caller, with or without roles, with or without an instance.
+    /// When this role is in a grant: any caller may perform the operation.
+    /// It is not role-bound: it is satisfied without comparing against the caller's roles.
+    /// </summary>
+    public const string Everyone = "$Everyone";
+
+    /// <summary>
+    /// Determines whether the given role is the <c>$Everyone</c> predefined role (ordinal, after trimming).
+    /// </summary>
+    /// <param name="role">Role identifier to check.</param>
+    /// <returns>True if the role is <see cref="Everyone"/>.</returns>
+    public static bool IsEveryone(string? role)
+        => role is not null && string.Equals(role.Trim(), Everyone, StringComparison.Ordinal);
+
+    /// <summary>
     /// Determines whether the given role is a predefined instance role.
     /// </summary>
     /// <param name="role">Role identifier to check.</param>
-    /// <returns>True if the role is one of the four predefined instance roles.</returns>
+    /// <returns>True if the role is one of the five predefined instance roles.</returns>
     public static bool IsPredefinedRole(string? role)
     {
         if (string.IsNullOrWhiteSpace(role))
@@ -50,6 +65,7 @@ public static class PredefinedInstanceRoles
         return string.Equals(normalized, InstanceStarter, StringComparison.Ordinal)
             || string.Equals(normalized, PreviousUser, StringComparison.Ordinal)
             || string.Equals(normalized, InstanceBehalfOfStarter, StringComparison.Ordinal)
-            || string.Equals(normalized, PreviousBehalfOfUser, StringComparison.Ordinal);
+            || string.Equals(normalized, PreviousBehalfOfUser, StringComparison.Ordinal)
+            || string.Equals(normalized, Everyone, StringComparison.Ordinal);
     }
 }

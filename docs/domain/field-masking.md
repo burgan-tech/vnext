@@ -14,6 +14,9 @@ Data-schema property keywords that control how an instance-data field is stored 
 | Hash a field | `x-encryption` `type: "hash"` | **write** — the stored value is the digest |
 | Encrypt a field | `x-encryption` `type: "encrypt"` | **write** (AES-256-GCM token in instance data) + read (decrypted for allow-listed callers; scripts open their own instance's value with `DecryptAsync`) |
 
+To hide a field from every caller, write the `x-roles` as `[{ "grant": "deny", "role": "$Everyone" }]`
+([role-grant-authorization](role-grant-authorization.md#everyone)).
+
 The read order is fixed: **`x-roles` → `x-masking` → `x-encryption`**. A property `x-roles` hides is pruned,
 and nothing else looks at it. A property carries at most one transform: `x-masking` next to an active
 `x-encryption` is rejected at publish. The ordering is structural in the writer (`InstanceDataRoleFilter.Apply`):
@@ -122,7 +125,8 @@ it transformed (fail closed):
 | role resolution failed | transformed (every rule applies, every `x-roles` field is pruned) |
 | no `roles` declared | transformed for everyone |
 
-A `deny` grant is rejected at publish. The exemption is decided with the canonical
+A `deny` grant is rejected at publish. So is `$Everyone`, which would exempt every caller; the read path
+drops it too (fail closed). The exemption is decided with the canonical
 `IRoleGrantEvaluator.IsAnyRoleAllowed` over the allow list; a caller with no roles can never satisfy a role-bound
 grant (a static role or `$role.`) — a `$role.` value resolving to `""` must not match the empty role name a
 role-less caller is evaluated with (`TransitionAuthorizationManager.IsUnprovableRoleBoundGrant`). (The same list

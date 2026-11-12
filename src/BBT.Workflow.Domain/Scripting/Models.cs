@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Scripting.Caller;
 using BBT.Workflow.Scripting.Related;
 using BBT.Workflow.Shared.Merging;
 using Microsoft.Extensions.Logging;
@@ -490,6 +491,52 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     private IRelatedInstanceAccessor _related = NullRelatedInstanceAccessor.Instance;
 
     /// <summary>
+    /// The caller's role set as the runtime resolved it (provider <c>default</c> or <c>morph-idm</c>), for
+    /// rules that select a schema or a view by role: <c>await context.Caller.HasRoleAsync("x")</c>.
+    /// Resolved on the first read only, at most once per request.
+    /// </summary>
+    /// <remarks>
+    /// Available to rule-based selection on a caller's request (transition <c>schemas</c>, function
+    /// contract slots, state/transition <c>views</c>). Elsewhere — tasks, automatic rules, timers, event
+    /// handlers — <see cref="ICallerAccessor.IsAvailable"/> is false and a read throws
+    /// <see cref="CallerRolesUnavailableException"/>. Never null.
+    /// </remarks>
+    public ICallerAccessor Caller { get; private set; } = NullCallerAccessor.Instance;
+
+    /// <summary>
+    /// Exposes <paramref name="caller"/> on this context for one evaluation and restores the previous accessor
+    /// on dispose, closing <paramref name="caller"/> when it is a <see cref="CallerAccessor"/>.
+    /// </summary>
+    /// <remarks>
+    /// For contexts shared by several scripts of one hop (the transition pipeline's cached context serves
+    /// automatic-transition rules AND the OnEntry/OnExit/OnExecute/ResourceLock task mappings): the caller is
+    /// visible to the rule being evaluated only, never to the task mappings that reuse the context.
+    /// Internal so a script cannot swap in an accessor of its own.
+    /// </remarks>
+    internal IDisposable ExposeCaller(ICallerAccessor caller)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        var previous = Caller;
+        Caller = caller;
+        return new CallerExposure(this, previous, caller);
+    }
+
+    private sealed class CallerExposure(ScriptContext owner, ICallerAccessor previous, ICallerAccessor exposed)
+        : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            (exposed as CallerAccessor)?.Close();
+            owner.Caller = previous;
+        }
+    }
+
+    /// <summary>
     /// The workflow definition that describes the structure, states, transitions, and tasks
     /// for the current workflow execution context.
     /// </summary>
@@ -840,6 +887,9 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         else
             branch.Related = Related;
 
+        // The caller is the request's, not the branch's: branches share it (and its resolution).
+        branch.Caller = Caller;
+
         return branch;
     }
 
@@ -1118,6 +1168,17 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         {
             if (related != null)
                 _context.Related = related;
+
+            return this;
+        }
+
+        /// <summary>
+        /// Sets the caller accessor. When omitted, the context uses <see cref="NullCallerAccessor"/>.
+        /// </summary>
+        public Builder SetCaller(ICallerAccessor? caller)
+        {
+            if (caller != null)
+                _context.Caller = caller;
 
             return this;
         }

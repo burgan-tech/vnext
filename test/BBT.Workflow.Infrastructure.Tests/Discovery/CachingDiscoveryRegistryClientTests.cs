@@ -323,14 +323,23 @@ public sealed class CachingDiscoveryRegistryClientTests
             {
                 ShouldListenTo = source => source.Name == "BBT.Workflow.Pipeline",
                 Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-                ActivityStopped = _collected.Add
+                // Process-wide listener: other tests' spans arrive here too, on their threads.
+                ActivityStopped = a => { lock (_collected) _collected.Add(a); }
             };
 
             ActivitySource.AddActivityListener(_listener);
         }
 
+        private Activity[] Snapshot()
+        {
+            lock (_collected)
+            {
+                return _collected.ToArray();
+            }
+        }
+
         public List<Activity> For(string domain) =>
-            _collected.Where(a => a.DisplayName == $"Discovery.Resolve/{domain}").ToList();
+            Snapshot().Where(a => a.DisplayName == $"Discovery.Resolve/{domain}").ToList();
 
         public void Dispose()
         {

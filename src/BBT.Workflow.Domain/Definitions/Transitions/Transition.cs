@@ -177,6 +177,42 @@ public sealed class Transition : IHasKey
     [JsonConverter(typeof(ViewDefinitionJsonConverter))]
     private ViewDefinition? views { get; set; }
 
+    [JsonInclude]
+    [JsonPropertyName("schemas")]
+    [JsonConverter(typeof(SchemaSelectionJsonConverter))]
+    private SchemaSelection? schemas { get; set; }
+
+    /// <summary>
+    /// Rule-based schema selection for the transition. The authored <c>schemas</c> form takes precedence;
+    /// a transition authored with only <c>schema</c> exposes it as a single rule-less (fallback) entry.
+    /// </summary>
+    [JsonIgnore]
+    public SchemaSelection? SchemaSelection
+    {
+        get
+        {
+            if (HasSchemasList)
+            {
+                return schemas;
+            }
+
+            return Schema is null ? null : SchemaSelection.CreateDefault(Schema);
+        }
+    }
+
+    /// <summary>
+    /// True when the transition declares a schema, through either <c>schema</c> or <c>schemas</c>.
+    /// </summary>
+    [JsonIgnore]
+    public bool HasSchema => HasSchemasList || Schema is not null;
+
+    /// <summary>
+    /// True when the authored <c>schemas</c> list (not the single <c>schema</c>) is what the transition
+    /// declares; used to name the offending JSON member in validation errors.
+    /// </summary>
+    [JsonIgnore]
+    internal bool HasSchemasList => schemas is { Schemas.Count: > 0 };
+
     /// <summary>
     /// View definition for the transition. Supports both old "view" and new "views" JSON formats.
     /// New format takes precedence when both are present.
@@ -286,6 +322,11 @@ public sealed class Transition : IHasKey
     public void SetSchema(IReference reference)
     {
         Schema = reference.ToReference();
+    }
+
+    public void SetSchemas(SchemaSelection selection)
+    {
+        schemas = Check.NotNull(selection, nameof(selection));
     }
 
     public void SetRule(string location, string scriptCode)

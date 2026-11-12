@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.DistributedLock;
+using BBT.Workflow.Application.Tests.Telemetry;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Infrastructure.Execution.Locks;
 using BBT.Workflow.Logging;
@@ -24,29 +25,9 @@ namespace BBT.Workflow.Execution.Locks;
 /// </summary>
 public sealed class InstanceStatusLockActivityTests : IDisposable
 {
-    private readonly List<ActivityListener> _listeners = new();
-
     public void Dispose()
     {
-        foreach (var listener in _listeners)
-        {
-            listener.Dispose();
-        }
-
         Activity.Current = null;
-    }
-
-    private ActivityListener CreateListener(string sourceName, List<Activity> collected)
-    {
-        var listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == sourceName,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
-        };
-        ActivitySource.AddActivityListener(listener);
-        _listeners.Add(listener);
-        return listener;
     }
 
     private static InstanceStatusLock CreateSut(IDistributedLockService lockService) => new(
@@ -72,8 +53,7 @@ public sealed class InstanceStatusLockActivityTests : IDisposable
     public async Task AcquireAsync_WhenContended_EmitsLockAcquireSpan_NotAcquired_WithoutErrorStatus()
     {
         const string key = "vnext:test:instance-status-lock:contended";
-        var collected = new List<Activity>();
-        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
 
         var lockService = Substitute.For<IDistributedLockService>();
         lockService.TryAcquireLockAsync(key, Arg.Any<int>(), Arg.Any<CancellationToken>())
@@ -85,7 +65,7 @@ public sealed class InstanceStatusLockActivityTests : IDisposable
 
         scope.IsAcquired.ShouldBeFalse();
 
-        var span = Assert.Single(collected, a => IsSpan(a, "Lock.Acquire", key));
+        var span = Assert.Single(spans.Spans, a => IsSpan(a, "Lock.Acquire", key));
         span.GetTagItem(TelemetryConstants.TagNames.LockAcquired).ShouldBe(false);
         span.GetTagItem(TelemetryConstants.TagNames.LockLeaseSeconds).ShouldBe(5);
         span.GetTagItem(TelemetryConstants.TagNames.LockKind).ShouldBe("status");
@@ -94,15 +74,14 @@ public sealed class InstanceStatusLockActivityTests : IDisposable
         span.Status.ShouldBe(ActivityStatusCode.Unset);
 
         // Disposing a not-acquired scope has no handle to release — no Lock.Release span.
-        collected.Any(a => IsSpan(a, "Lock.Release", key)).ShouldBeFalse();
+        spans.Spans.Any(a => IsSpan(a, "Lock.Release", key)).ShouldBeFalse();
     }
 
     [Fact]
     public async Task AcquireAsync_WhenAcquired_EmitsLockAcquireSpan_Acquired_AndReleaseSpanOnDispose()
     {
         const string key = "vnext:test:instance-status-lock:acquired";
-        var collected = new List<Activity>();
-        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
 
         var handle = Substitute.For<IDistributedLockHandle>();
         var lockService = Substitute.For<IDistributedLockService>();
@@ -114,16 +93,16 @@ public sealed class InstanceStatusLockActivityTests : IDisposable
         var scope = await sut.AcquireAsync(key);
         scope.IsAcquired.ShouldBeTrue();
 
-        var acquireSpan = Assert.Single(collected, a => IsSpan(a, "Lock.Acquire", key));
+        var acquireSpan = Assert.Single(spans.Spans, a => IsSpan(a, "Lock.Acquire", key));
         acquireSpan.GetTagItem(TelemetryConstants.TagNames.LockAcquired).ShouldBe(true);
         acquireSpan.GetTagItem(TelemetryConstants.TagNames.LockKind).ShouldBe("status");
 
         // Release span only appears once the scope is disposed.
-        collected.Any(a => IsSpan(a, "Lock.Release", key)).ShouldBeFalse();
+        spans.Spans.Any(a => IsSpan(a, "Lock.Release", key)).ShouldBeFalse();
 
         await scope.DisposeAsync();
 
-        var releaseSpan = Assert.Single(collected, a => IsSpan(a, "Lock.Release", key));
+        var releaseSpan = Assert.Single(spans.Spans, a => IsSpan(a, "Lock.Release", key));
         releaseSpan.GetTagItem(TelemetryConstants.TagNames.LockKey).ShouldBe(key);
         releaseSpan.GetTagItem(TelemetryConstants.TagNames.LockKind).ShouldBe("status");
         await handle.Received(1).DisposeAsync();

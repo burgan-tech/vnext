@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
+using BBT.Workflow.Application.Tests.Telemetry;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Logging;
@@ -24,37 +25,16 @@ namespace BBT.Workflow.Application.Tests.Execution.Transitions.Pipeline;
 [Collection(TracingDetailLevelCollection.Name)]
 public sealed class PipelineStepActivityHelperTests : IDisposable
 {
-    private readonly List<ActivityListener> _listeners = new();
-
     public void Dispose()
     {
-        foreach (var listener in _listeners)
-        {
-            listener.Dispose();
-        }
-
         Activity.Current = null;
-    }
-
-    private ActivityListener CreateListener(string sourceName, List<Activity> collected)
-    {
-        var listener = new ActivityListener
-        {
-            ShouldListenTo = source => source.Name == sourceName,
-            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
-            ActivityStopped = collected.Add
-        };
-        ActivitySource.AddActivityListener(listener);
-        _listeners.Add(listener);
-        return listener;
     }
 
     [Fact]
     public void StartStepActivity_InBusinessMode_CreatesExportableSpan()
     {
         // Arrange: DetailLevel = Business (default), listener attached
-        var collected = new List<Activity>();
-        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
         var step = new FakeStep(order: 50, name: "ChangeStateStep");
 
         // Act
@@ -65,7 +45,7 @@ public sealed class PipelineStepActivityHelperTests : IDisposable
         }
 
         // Assert
-        var span = Assert.Single(collected);
+        var span = Assert.Single(spans.Spans);
         Assert.Equal("Step.ChangeState", span.DisplayName);            // Step suffix trimmed, no '[' prefix
         Assert.False(span.DisplayName.StartsWith("["));
         Assert.Equal(50, span.GetTagItem(TelemetryConstants.TagNames.StepOrder));
@@ -78,27 +58,25 @@ public sealed class PipelineStepActivityHelperTests : IDisposable
     [Fact]
     public void SetStepOutcome_SkipTo_RecordsTargetOrder()
     {
-        var collected = new List<Activity>();
-        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
         using (var activity = PipelineStepActivityHelper.StartStepActivity(new FakeStep(30, "RunOnExecuteTasksStep")))
         {
             PipelineStepActivityHelper.SetStepOutcome(activity, StepOutcome.SkipToFinalize());
         }
 
-        Assert.Equal("skipTo:110", collected.Single().GetTagItem(TelemetryConstants.TagNames.StepOutcome));
+        Assert.Equal("skipTo:110", spans.Spans.Single().GetTagItem(TelemetryConstants.TagNames.StepOutcome));
     }
 
     [Fact]
     public void SetStepOutcome_Stop_RecordsStopTag()
     {
-        var collected = new List<Activity>();
-        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
         using (var activity = PipelineStepActivityHelper.StartStepActivity(new FakeStep(5, "HandleCancelPreflightStep")))
         {
             PipelineStepActivityHelper.SetStepOutcome(activity, StepOutcome.Stop());
         }
 
-        Assert.Equal("stop", collected.Single().GetTagItem(TelemetryConstants.TagNames.StepOutcome));
+        Assert.Equal("stop", spans.Spans.Single().GetTagItem(TelemetryConstants.TagNames.StepOutcome));
     }
 
     [Fact]
@@ -108,14 +86,13 @@ public sealed class PipelineStepActivityHelperTests : IDisposable
         // data. Clearing Recorded is the same mechanism Aether's BusinessSpanFilterProcessor uses:
         // exporters skip the span, so a transition no longer carries a dozen zero-duration spans
         // for steps that never applied.
-        var collected = new List<Activity>();
-        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
         using (var activity = PipelineStepActivityHelper.StartStepActivity(new FakeStep(25, "ResourceLockStep")))
         {
             PipelineStepActivityHelper.SetStepOutcome(activity, StepOutcome.ContinueNoWork());
         }
 
-        var span = collected.Single();
+        var span = spans.Spans.Single();
         span.Recorded.ShouldBeFalse();
     }
 
@@ -123,28 +100,26 @@ public sealed class PipelineStepActivityHelperTests : IDisposable
     public void SetStepOutcome_Continue_KeepsTheSpanRecorded()
     {
         // Guards the inverse: a step that DID work must stay exportable.
-        var collected = new List<Activity>();
-        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
         using (var activity = PipelineStepActivityHelper.StartStepActivity(new FakeStep(25, "ResourceLockStep")))
         {
             PipelineStepActivityHelper.SetStepOutcome(activity, StepOutcome.Continue());
         }
 
-        collected.Single().Recorded.ShouldBeTrue();
+        spans.Spans.Single().Recorded.ShouldBeTrue();
     }
 
     [Fact]
     public void SetStepError_RecordsErrorStatusMessageAndCode()
     {
         // Covers TransitionExecutor.ExecuteStepWithBoundaryAsync's failed-Result path.
-        var collected = new List<Activity>();
-        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
         using (var activity = PipelineStepActivityHelper.StartStepActivity(new FakeStep(20, "CreateTransitionRecordStep")))
         {
             PipelineStepActivityHelper.SetStepError(activity, "Instance:100031", "boom");
         }
 
-        var span = collected.Single();
+        var span = spans.Spans.Single();
         Assert.Equal(ActivityStatusCode.Error, span.Status);
         Assert.Equal("boom", span.StatusDescription);
         Assert.Equal("Instance:100031", span.GetTagItem("error.code"));
@@ -154,14 +129,13 @@ public sealed class PipelineStepActivityHelperTests : IDisposable
     public void SetStepError_WithException_RecordsTypeAndExceptionEvent()
     {
         // The unhandled-exception path used to keep only the message; the stack trace was lost.
-        var collected = new List<Activity>();
-        using var listener = CreateListener("BBT.Workflow.Pipeline", collected);
+        using var spans = new TraceSpanCollector("BBT.Workflow.Pipeline");
         using (var activity = PipelineStepActivityHelper.StartStepActivity(new FakeStep(30, "RunOnExecuteTasksStep")))
         {
             PipelineStepActivityHelper.SetStepError(activity, new InvalidOperationException("boom"));
         }
 
-        var span = collected.Single();
+        var span = spans.Spans.Single();
         Assert.Equal(ActivityStatusCode.Error, span.Status);
         Assert.Equal(typeof(InvalidOperationException).FullName, span.GetTagItem("error.type"));
         Assert.Contains(span.Events, e => e.Name == "exception");

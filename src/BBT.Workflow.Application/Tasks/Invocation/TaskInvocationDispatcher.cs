@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
@@ -40,12 +41,69 @@ public sealed class TaskInvocationDispatcher(
             logger.TaskInvokedLocally(task.Key, wireTaskType, decision.Reason);
 
             return await InvokeLocalWithTimeoutAsync(
-                task, wireTaskType, envelope, traceContext, localInvoker, cancellationToken);
+                task, wireTaskType,
+                static (state, ct) => state.Invoker.InvokeAsync(state.TaskKey, state.Binding, state.Trace, ct),
+                (Invoker: localInvoker, TaskKey: task.Key, envelope.Binding, Trace: traceContext),
+                cancellationToken);
         }
 
         return await remoteInvoker.InvokeAsync(
             wireTaskType, task.Key, envelope, traceContext, cancellationToken);
     }
+
+    /// <inheritdoc />
+    public async Task<Result<TaskInvocationResult>> DispatchAsync<TBinding>(
+        WorkflowTask task,
+        string wireTaskType,
+        TBinding binding,
+        TaskTraceContext traceContext,
+        CancellationToken cancellationToken = default)
+        where TBinding : class
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+
+        var decision = router.Resolve(task, wireTaskType);
+        Activity.Current?.SetTag("vnext.task.invocation.mode", decision.Mode.ToString());
+
+        if (decision.Mode == ExecutionMode.Local && localInvokers.Get(wireTaskType) is { } localInvoker)
+        {
+            logger.TaskInvokedLocally(task.Key, wireTaskType, decision.Reason);
+
+            // The in-process path takes the mapped object as-is when the invoker can; one that only
+            // speaks JsonElement gets the same element the envelope path would have built.
+            if (localInvoker is ITypedLocalTaskInvoker<TBinding> typedInvoker)
+            {
+                return await InvokeLocalWithTimeoutAsync(
+                    task, wireTaskType,
+                    static (state, ct) => state.Invoker.InvokeAsync(state.TaskKey, state.Binding, state.Trace, ct),
+                    (Invoker: typedInvoker, TaskKey: task.Key, Binding: binding, Trace: traceContext),
+                    cancellationToken);
+            }
+
+            var element = SerializeBinding(binding);
+            return await InvokeLocalWithTimeoutAsync(
+                task, wireTaskType,
+                static (state, ct) => state.Invoker.InvokeAsync(state.TaskKey, state.Binding, state.Trace, ct),
+                (Invoker: localInvoker, TaskKey: task.Key, Binding: element, Trace: traceContext),
+                cancellationToken);
+        }
+
+        // Remote: the envelope is built only here, byte-identical to what TaskBindingMapper.CreateEnvelope
+        // produces for the same binding.
+        var envelope = new TaskEnvelope
+        {
+            TaskType = wireTaskType,
+            TaskKey = task.Key,
+            Binding = SerializeBinding(binding)
+        };
+
+        return await remoteInvoker.InvokeAsync(
+            wireTaskType, task.Key, envelope, traceContext, cancellationToken);
+    }
+
+    /// <summary>The wire form of a mapped binding — the exact call <c>TaskBindingMapper.CreateEnvelope</c> makes.</summary>
+    private static JsonElement SerializeBinding(object binding) =>
+        JsonSerializer.SerializeToElement(binding, binding.GetType());
 
     /// <summary>
     /// Local-path counterpart of <c>RemoteInvokerService.InvokeAsync</c>'s per-invocation timeout
@@ -74,12 +132,11 @@ public sealed class TaskInvocationDispatcher(
     /// both shapes are real and both must map to the same two outcomes.
     /// </para>
     /// </summary>
-    private async Task<Result<TaskInvocationResult>> InvokeLocalWithTimeoutAsync(
+    private async Task<Result<TaskInvocationResult>> InvokeLocalWithTimeoutAsync<TState>(
         WorkflowTask task,
         string wireTaskType,
-        TaskEnvelope envelope,
-        TaskTraceContext traceContext,
-        ILocalTaskInvoker localInvoker,
+        Func<TState, CancellationToken, Task<TaskInvocationResult>> invoke,
+        TState state,
         CancellationToken cancellationToken)
     {
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -87,8 +144,7 @@ public sealed class TaskInvocationDispatcher(
 
         try
         {
-            var localResult = await localInvoker.InvokeAsync(
-                task.Key, envelope.Binding, traceContext, timeoutCts.Token);
+            var localResult = await invoke(state, timeoutCts.Token);
 
             // A core that swallowed the cancellation: recover the same decision the catch makes.
             if (!localResult.IsSuccess && HttpTaskInvocation.WasCancelled(ToWire(localResult)))

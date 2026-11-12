@@ -76,8 +76,9 @@ declares neither accepts every routed verb and any body, which is the pre-existi
 | `outputSchema` | Never enforced; declarative contract for clients only. |
 
 All four contract slots may be authored as a single reference **or** as rule-based entries evaluated
-in declaration order. When no entry matches, no contract applies: the body is not validated, `/info`
-reports `hasView`/`hasSchema` false, and the content routes return `404` (`Function:800004`).
+in declaration order. When no entry matches, no contract applies to a view: `/info` reports
+`hasView`/`hasSchema` false and the content routes return `404` (`Function:800004`). A rule-based
+`inputSchema` with no match rejects a request that carries a body with `400` (`Function:800006`).
 An unrecognized `target` is `400` (`Function:800005`). See
 [Function Contract Resolution](../runtime/function-contract-resolution.md).
 
@@ -153,6 +154,11 @@ may not read `data` either.
 `data` is the one asymmetry worth stating explicitly: its **content** does not descend (it serves the
 polled instance's attributes) while its **authorization** does. Authorization follows where the
 instance actually is; content follows what the client holds.
+
+Starting an instance has its own, workflow-scoped route, because there is no instance to address yet:
+`GET .../workflows/{workflow}/functions/authorize?type=instance[&version=x]` evaluates the workflow's
+`startTransition.roles` with no instance (instance-bound grants never match). The gateway gates
+`POST .../instances/start` on it — [details](../domain/authorize-function.md#starting-an-instance--typeinstance).
 
 A refusal is `403` with a body of `{"allowed": false}`. A consumer that reads only the `200` turns
 every refusal into "no answer".

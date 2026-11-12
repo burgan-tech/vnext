@@ -262,7 +262,7 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
-    public void FindData_ShouldPreferExactMatch_OverPkgVersionLookup()
+    public void FindData_ShouldPreferPkgRow_OverBareRow_ForArtifactVersion()
     {
         // Arrange
         var instance = InstanceFactory.CreateDefault();
@@ -271,12 +271,29 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0");
         instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0-pkg.1.2.0+account");
 
-        // Act - Query for exact simple version
+        // Act - Query by artifact version
         var result = instance.FindData("1.0.0");
 
-        // Assert - Should return the exact match (simple version)
+        // Assert - #1164 (77566f352): an artifact request takes the highest pkg row; the bare
+        // row orders below every pkg row and is returned only when no pkg row exists.
         Assert.NotNull(result);
-        Assert.Equal("1.0.0", result.Version);
+        Assert.Equal("1.0.0-pkg.1.2.0+account", result.Version);
+    }
+
+    [Fact]
+    public void FindData_ShouldReturnExactRow_ForFullVersion()
+    {
+        // Arrange
+        var instance = InstanceFactory.CreateDefault();
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":1}"), "1.0.0-pkg.1.1.0+account");
+        instance.SeedDataWithVersion(Guid.NewGuid(), JsonData.CreateFrom("{\"v\":2}"), "1.0.0-pkg.1.2.0+account");
+
+        // Act
+        var result = instance.FindData("1.0.0-pkg.1.1.0+account");
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal("1.0.0-pkg.1.1.0+account", result.Version);
     }
 
     [Fact]

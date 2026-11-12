@@ -137,7 +137,33 @@ public class JsonData : ValueObject
     }
 
     /// <summary>
-    /// Normalizes JSON string to ensure consistent hashing regardless of formatting
+    /// Writer for <see cref="NormalizeJson"/>: compact, relaxed escaping — the options the historical
+    /// implementation serialized its final output with.
+    /// </summary>
+    private static readonly JsonWriterOptions NormalizeWriterOptions = new()
+    {
+        Indented = false,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+
+    /// <summary>
+    /// Normalizes JSON string to ensure consistent hashing regardless of formatting.
+    /// <para>
+    /// The output feeds the PERSISTED <c>InstanceData.DataHash</c> (and the field-encryption keyed hash),
+    /// so it is byte-identical to the historical multi-pass implementation (parse → per-object
+    /// <c>OrderBy(Ordinal).ToDictionary</c> + <c>SerializeToElement</c> → final serialize), pinned by
+    /// <c>JsonDataNormalizeJsonParityTests</c> against a verbatim copy of it:
+    /// <list type="bullet">
+    /// <item>parsed with default document options (max depth 64, no comments, no trailing commas);</item>
+    /// <item>object members ordered by <see cref="StringComparer.Ordinal"/>, arrays positional;</item>
+    /// <item>leaf values written through <see cref="JsonElement.WriteTo"/> — number tokens keep their raw
+    /// text, strings and member names are re-escaped with the relaxed encoder;</item>
+    /// <item>a duplicate member name ANYWHERE (the old <c>ToDictionary</c> threw) or any parse/write failure
+    /// returns the input unchanged.</item>
+    /// </list>
+    /// One parse and one <see cref="Utf8JsonWriter"/> pass, instead of re-serializing every subtree once
+    /// per enclosing object (O(size × depth)).
+    /// </para>
     /// </summary>
     /// <param name="json">The JSON string to normalize</param>
     /// <returns>Normalized JSON string</returns>
@@ -145,60 +171,77 @@ public class JsonData : ValueObject
     {
         try
         {
-            // Parse JSON to remove formatting differences
-            var jsonElement = JsonSerializer.Deserialize<JsonElement>(json);
-            
-            // Normalize the JSON element by sorting properties recursively
-            var normalizedElement = NormalizeJsonElement(jsonElement);
-            
-            // Re-serialize with consistent options for deterministic output
-            var options = new JsonSerializerOptions
+            using var document = JsonDocument.Parse(json);
+            using var buffer = new BBT.Workflow.Canonicalization.PooledByteBufferWriter(json.Length + 16);
+            using (var writer = new Utf8JsonWriter(buffer, NormalizeWriterOptions))
             {
-                WriteIndented = false,
-                PropertyNamingPolicy = null, // Keep original property names
-                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-            };
-            
-            return JsonSerializer.Serialize(normalizedElement, options);
+                if (!TryWriteNormalized(writer, document.RootElement))
+                    return json; // duplicate member name: historical ToDictionary throw ⇒ input unchanged
+            }
+            return System.Text.Encoding.UTF8.GetString(buffer.WrittenSpan);
         }
         catch
         {
-            // If JSON parsing fails, return original string
+            // If JSON parsing (or writing) fails, return original string
             return json;
         }
     }
 
     /// <summary>
-    /// Recursively normalizes a JsonElement by sorting object properties
+    /// Writes <paramref name="element"/> with every object's members sorted ordinally. Returns false on the
+    /// first duplicate member name (the caller then returns the original input).
     /// </summary>
-    /// <param name="element">The JsonElement to normalize</param>
-    /// <returns>Normalized JsonElement</returns>
-    private static JsonElement NormalizeJsonElement(JsonElement element)
+    private static bool TryWriteNormalized(Utf8JsonWriter writer, JsonElement element)
     {
         switch (element.ValueKind)
         {
             case JsonValueKind.Object:
-                // Sort properties by name for consistent ordering
-                var sortedProperties = element.EnumerateObject()
-                    .OrderBy(prop => prop.Name, StringComparer.Ordinal)
-                    .ToDictionary(
-                        prop => prop.Name,
-                        prop => NormalizeJsonElement(prop.Value) // Recursive normalization
-                    );
-                
-                return JsonSerializer.SerializeToElement(sortedProperties);
-                
+            {
+                var count = element.GetPropertyCount();
+                var properties = System.Buffers.ArrayPool<JsonProperty>.Shared.Rent(Math.Max(count, 1));
+                var names = System.Buffers.ArrayPool<string>.Shared.Rent(Math.Max(count, 1));
+                try
+                {
+                    var n = 0;
+                    foreach (var property in element.EnumerateObject())
+                    {
+                        properties[n] = property;
+                        names[n] = property.Name;
+                        n++;
+                    }
+
+                    Array.Sort(names, properties, 0, n, StringComparer.Ordinal);
+
+                    writer.WriteStartObject();
+                    for (var i = 0; i < n; i++)
+                    {
+                        if (i > 0 && string.Equals(names[i - 1], names[i], StringComparison.Ordinal))
+                            return false;
+                        writer.WritePropertyName(names[i]);
+                        if (!TryWriteNormalized(writer, properties[i].Value))
+                            return false;
+                    }
+                    writer.WriteEndObject();
+                    return true;
+                }
+                finally
+                {
+                    System.Buffers.ArrayPool<JsonProperty>.Shared.Return(properties, clearArray: true);
+                    System.Buffers.ArrayPool<string>.Shared.Return(names, clearArray: true);
+                }
+            }
             case JsonValueKind.Array:
-                // Normalize each array element
-                var normalizedArray = element.EnumerateArray()
-                    .Select(NormalizeJsonElement)
-                    .ToArray();
-                
-                return JsonSerializer.SerializeToElement(normalizedArray);
-                
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray())
+                {
+                    if (!TryWriteNormalized(writer, item))
+                        return false;
+                }
+                writer.WriteEndArray();
+                return true;
             default:
-                // For primitive values, return as-is
-                return element;
+                element.WriteTo(writer);
+                return true;
         }
     }
 

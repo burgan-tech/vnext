@@ -1,3 +1,4 @@
+using BBT.Workflow.Scripting.Caller;
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
@@ -105,6 +106,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         builder.WithHeaders(Arg.Any<Dictionary<string, string?>?>()).Returns(builder);
         builder.WithQueryParameters(Arg.Any<Dictionary<string, string?>?>()).Returns(builder);
         builder.WithMetadata(Arg.Any<Dictionary<string, object>?>()).Returns(builder);
+        builder.WithCaller(Arg.Do<ICallerAccessor?>(c => _capturedCaller = c)).Returns(builder);
         builder.BuildAsync(Arg.Any<CancellationToken>()).Returns(scriptContext);
 
         var scriptContextFactory = Substitute.For<IScriptContextFactory>();
@@ -137,7 +139,9 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
             functionAccessPolicy: new FunctionAccessPolicy(),
             functionRequestValidationService: _functionRequestValidationService,
             functionExecutionJournal: _functionExecutionJournal,
-            currentUser: _currentUser);
+            currentUser: _currentUser,
+            callerAccessorFactory: new CallerAccessorFactory(
+                Substitute.For<ICallerRoleResolver>(), NullLogger<CallerAccessorFactory>.Instance));
     }
 
     public void Dispose()
@@ -147,6 +151,21 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
     }
 
     // ─── Domain-level endpoint (GetFunctionByKeyAsync — no instance) ────────────
+
+    private ICallerAccessor? _capturedCaller;
+
+    [Fact]
+    public async Task ByKey_CallerRolesAreClosed_BeforeTheCacheKeyAndTasks()
+    {
+        SetupFunction(TaskScope.Domain);
+
+        var result = await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain);
+
+        result.IsSuccess.ShouldBeTrue();
+        _capturedCaller.ShouldNotBeNull();
+        // Exposed to input-schema selection only: the function response cache does not vary by role.
+        _capturedCaller!.IsAvailable.ShouldBeFalse();
+    }
 
     [Fact]
     public async Task ByKey_DomainScope_Succeeds()

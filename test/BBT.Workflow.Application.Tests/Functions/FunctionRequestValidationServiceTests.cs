@@ -41,7 +41,7 @@ public sealed class FunctionRequestValidationServiceTests
         _service = new FunctionRequestValidationService(
             _schemaValidator,
             _componentCacheStore,
-            new FunctionContractResolver(_conditionService, NullLogger<FunctionContractResolver>.Instance),
+            new FunctionContractResolver(new BBT.Workflow.Contracts.ContractEntrySelector(_conditionService), NullLogger<FunctionContractResolver>.Instance),
             NullLogger<FunctionRequestValidationService>.Instance);
     }
 
@@ -173,16 +173,44 @@ public sealed class FunctionRequestValidationServiceTests
     }
 
     [Fact]
-    public async Task RuleBasedSchema_NoRuleMatches_SkipsValidationEntirely()
+    public async Task RuleBasedSchema_NoRuleMatches_RejectsRequest()
     {
         var function = CreateFunction(RuleBasedSchemas());
         SetupCondition(matches: false, thenMatches: false);
 
         var result = await _service.ValidateRequestAsync(function, ParseBody("""{"a":1}"""), Lazy());
 
-        result.IsSuccess.ShouldBeTrue();
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.FunctionInputSchemaNotMatched);
         await _componentCacheStore.DidNotReceiveWithAnyArgs()
             .GetSchemaAsync(default!, default!, default, default);
+    }
+
+    [Fact]
+    public async Task RuleBasedSchema_EveryRuleThrows_RejectsRequest()
+    {
+        var function = CreateFunction(RuleBasedSchemas());
+        _conditionService
+            .ExecuteConditionAsync(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<bool>.Fail(Error.Failure("script.boom", "compile error")));
+
+        var result = await _service.ValidateRequestAsync(function, ParseBody("""{"a":1}"""), Lazy());
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.FunctionInputSchemaNotMatched);
+        await _componentCacheStore.DidNotReceiveWithAnyArgs()
+            .GetSchemaAsync(default!, default!, default, default);
+    }
+
+    [Fact]
+    public async Task RuleBasedSchema_NoRuleMatches_BodylessRequest_IsAccepted()
+    {
+        var function = CreateFunction(RuleBasedSchemas());
+        SetupCondition(matches: false, thenMatches: false);
+
+        var result = await _service.ValidateRequestAsync(function, null, Lazy());
+
+        result.IsSuccess.ShouldBeTrue();
     }
 
     [Fact]

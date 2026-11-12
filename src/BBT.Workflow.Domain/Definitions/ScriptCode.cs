@@ -114,11 +114,11 @@ public sealed class ScriptCode : ValueObject
     /// <summary>
     /// Gets the decoded/usable inline script code content.
     /// For Base64 encoding, decodes the content. For Native encoding, returns the code as-is.
-    /// Returns empty string for Global mapping type.
+    /// Returns empty string for Global mapping type, and for Reference encoding (the body must be
+    /// resolved from the component store by the script engine, not read inline).
     /// </summary>
     /// <exception cref="InvalidOperationException">
-    /// Thrown when Base64 decoding fails, or when the encoding is Reference (the body must be resolved
-    /// from the component store by the script engine, not read inline).
+    /// Thrown when Base64 decoding fails.
     /// </exception>
     public string DecodedCode => _decodedCode ??= ComputeDecodedCode();
 
