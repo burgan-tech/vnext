@@ -1821,7 +1821,7 @@ public partial class WorkflowValidator
                 {
                     var finding = new ValidationResult(
                         $"Error boundary on state '{stateKey}' routes to transition '{rule.Transition}', which is " +
-                        $"not available from that state. Declare it on the state, or as a shared transition whose " +
+                        "not available from that state. Declare it on the state, or as a shared transition whose " +
                         $"availableIn contains '{stateKey}'.",
                         [$"{ruleContext}.{nameof(ErrorHandlerRule.Transition)}"]);
 
@@ -1843,8 +1843,8 @@ public partial class WorkflowValidator
                 {
                     result.AddWarning(new ValidationResult(
                         $"Transition '{rule.Transition}' declares a resource lock but is used as an error-boundary " +
-                        $"target. The ErrorBoundary pipeline profile skips the resource-lock step, so that lock " +
-                        $"never runs when the transition is reached this way.",
+                        "target. The ErrorBoundary pipeline profile skips the resource-lock step, so that lock " +
+                        "never runs when the transition is reached this way.",
                         [$"{ruleContext}.{nameof(ErrorHandlerRule.Transition)}"]));
                 }
             }
