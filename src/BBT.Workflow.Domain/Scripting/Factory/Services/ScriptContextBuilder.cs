@@ -41,6 +41,7 @@ internal sealed class ScriptContextBuilder(
     private Dictionary<string, object?> _outputResponse = new();
     private Dictionary<string, object> _metadata = new();
     private Dictionary<string, object> _definitions = new();
+    private Caller.ICallerAccessor? _caller;
 
     // Async data retrieval properties
     private string? _workflowDomain;
@@ -50,6 +51,12 @@ internal sealed class ScriptContextBuilder(
     private Guid? _instanceId;
     private string? _transitionKey;
     private InstanceTransition? _instanceTransition;
+
+    public IScriptContextBuilder WithCaller(Caller.ICallerAccessor? caller)
+    {
+        _caller = caller;
+        return this;
+    }
 
     public IScriptContextBuilder WithRuntime(IRuntimeInfoProvider runtimeInfoProvider)
     {
@@ -232,6 +239,8 @@ internal sealed class ScriptContextBuilder(
             builder.SetInstance(instance);
             builder.SetRelated(BuildRelatedAccessor(instance));
         }
+
+        builder.SetCaller(_caller);
         
         var scriptTransitionRequest = BuildScriptTransitionRequest();
 

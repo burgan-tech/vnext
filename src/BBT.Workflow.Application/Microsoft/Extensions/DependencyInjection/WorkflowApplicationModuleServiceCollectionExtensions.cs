@@ -176,6 +176,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         // Fallback, so a host wiring only this module still resolves it. Infrastructure registers the
         // configured provider afterwards and, being an explicit Add, wins over this.
         services.TryAddScoped<ICallerRoleResolver, DefaultCallerRoleResolver>();
+        services.AddScoped<ICallerAccessorFactory, CallerAccessorFactory>();
         services.AddScoped<IAuthorizeAppService, AuthorizeAppService>();
         services.AddSingleton<IRepresentationEtagService, RepresentationEtagService>();
         services.AddScoped<ISchemaFieldFilterService, SchemaFieldFilterService>();

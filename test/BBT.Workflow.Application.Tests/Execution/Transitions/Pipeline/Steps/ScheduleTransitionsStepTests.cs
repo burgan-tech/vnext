@@ -1,3 +1,9 @@
+using BBT.Workflow.Execution.Evaluation;
+using BBT.Workflow.Definitions.Timer;
+using System.Collections.Generic;
+using BBT.Aether.Results;
+using BBT.Workflow.Scripting.Caller;
+using BBT.Workflow.Authorization;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
@@ -38,7 +44,7 @@ public class ScheduleTransitionsStepTests
 
     private ScheduleTransitionsStep CreateStep() => new(
         _backgroundJobService,
-        _taskTimerService,
+        new CallerScopedTimerEvaluator(_taskTimerService),
         _scriptContextFactory,
         _jobRepository,
         _instanceRepository,
@@ -108,6 +114,77 @@ public class ScheduleTransitionsStepTests
         result.IsSuccess.ShouldBeTrue();
         _scriptContextFactory.ReceivedCalls().ShouldBeEmpty();
         _backgroundJobService.ReceivedCalls().ShouldBeEmpty();
+    }
+
+    // ── caller roles in timer scripts (council 2026-11-12-script-caller-roles-background, Chair override) ──
+
+    [Fact]
+    public async Task TimerScriptReadsRolesWhileProviderDown_FailsTheStepWith110006()
+    {
+        var resolver = Substitute.For<ICallerRoleResolver>();
+        resolver.ResolveRoleSetAsync(Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new CallerRoleResolution([], CallerRoleOutcome.Failed, "timeout")));
+        SetupRealScriptContext();
+        _taskTimerService.ExecuteTimerAsync(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>())
+            .Returns(async ci =>
+            {
+                var vip = false;
+                try { vip = await ci.Arg<ScriptContext>().Caller.HasRoleAsync("vip"); }
+                catch (CallerRolesUnavailableException) { /* careless timer falls back */ }
+                return Result<TimerSchedule>.Ok(TimerSchedule.FromDuration(TimeSpan.FromHours(vip ? 48 : 24)));
+            });
+
+        var result = await CreateCallerStep(resolver).ExecuteAsync(CreateContextWithScheduledTarget(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.CallerRolesUnavailable);
+        _backgroundJobService.ReceivedCalls().ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task StateEnteredBySystemHop_TimerScriptHasNoCaller_AndNoProviderCall()
+    {
+        var resolver = Substitute.For<ICallerRoleResolver>();
+        SetupRealScriptContext();
+        bool? available = null;
+        _taskTimerService.ExecuteTimerAsync(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                available = ci.Arg<ScriptContext>().Caller.IsAvailable;
+                return Result<TimerSchedule>.Fail(new Error("test.stop", "stop before arming"));
+            });
+        var context = CreateContextWithScheduledTarget();
+        context.Actor = ExecutionActor.System;
+
+        await CreateCallerStep(resolver).ExecuteAsync(context, CancellationToken.None);
+
+        available.ShouldBe(false);
+        await resolver.DidNotReceiveWithAnyArgs().ResolveRoleSetAsync(default);
+    }
+
+    private ScheduleTransitionsStep CreateCallerStep(ICallerRoleResolver resolver) => new(
+        _backgroundJobService,
+        new CallerScopedTimerEvaluator(
+            _taskTimerService, new CallerAccessorFactory(resolver, NullLogger<CallerAccessorFactory>.Instance)),
+        _scriptContextFactory,
+        _jobRepository,
+        _instanceRepository,
+        NullLogger<ScheduleTransitionsStep>.Instance,
+        _runtimeInfoProvider);
+
+    private void SetupRealScriptContext()
+    {
+        var builder = Substitute.For<IScriptContextBuilder>();
+        builder.WithWorkflow(Arg.Any<Definitions.Workflow?>()).Returns(builder);
+        builder.WithInstance(Arg.Any<Instance?>()).Returns(builder);
+        builder.WithRuntime(Arg.Any<IRuntimeInfoProvider>()).Returns(builder);
+        builder.WithTransition(Arg.Any<Transition?>()).Returns(builder);
+        builder.WithHeaders(Arg.Any<Dictionary<string, string?>?>()).Returns(builder);
+        builder.WithRouteValues(Arg.Any<Dictionary<string, object?>?>()).Returns(builder);
+        builder.WithRouteValues(Arg.Any<Dictionary<string, string?>?>()).Returns(builder);
+        builder.BuildAsync(Arg.Any<CancellationToken>())
+            .Returns(_ => new ScriptContext.Builder(NullLogger<ScriptContext>.Instance).Build());
+        _scriptContextFactory.NewBuilder(Arg.Any<IInstanceRepository>()).Returns(builder);
     }
 
     private TransitionExecutionContext CreateContextWithScheduledTarget()

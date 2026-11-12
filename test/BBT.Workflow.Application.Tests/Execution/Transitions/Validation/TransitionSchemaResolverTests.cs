@@ -1,3 +1,5 @@
+using BBT.Workflow.Scripting.Caller;
+using BBT.Workflow.Authorization;
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
@@ -35,6 +37,8 @@ public sealed class TransitionSchemaResolverTests
     private object? _capturedBody;
     private bool _queryParametersCalled;
     private Dictionary<string, string?>? _capturedHeaders;
+    private ICallerAccessor? _capturedCaller;
+    private readonly ICallerRoleResolver _roleResolver = Substitute.For<ICallerRoleResolver>();
 
     public TransitionSchemaResolverTests()
     {
@@ -44,6 +48,7 @@ public sealed class TransitionSchemaResolverTests
         _builder.WithTransition(Arg.Any<string?>()).Returns(_builder);
         _builder.WithBody(Arg.Do<object?>(b => _capturedBody = b)).Returns(_builder);
         _builder.WithHeaders(Arg.Do<Dictionary<string, string?>?>(h => _capturedHeaders = h)).Returns(_builder);
+        _builder.WithCaller(Arg.Do<ICallerAccessor?>(c => _capturedCaller = c)).Returns(_builder);
         _builder.WithQueryParameters(Arg.Any<Dictionary<string, object?>?>())
             .Returns(_ => { _queryParametersCalled = true; return _builder; });
         _builder.WithQueryParameters(Arg.Any<Dictionary<string, string?>?>())
@@ -57,6 +62,7 @@ public sealed class TransitionSchemaResolverTests
             _scriptContextFactory,
             Substitute.For<IInstanceRepository>(),
             Substitute.For<IRuntimeInfoProvider>(),
+            new CallerAccessorFactory(_roleResolver, NullLogger<CallerAccessorFactory>.Instance),
             NullLogger<TransitionSchemaResolver>.Instance);
     }
 
@@ -157,6 +163,26 @@ public sealed class TransitionSchemaResolverTests
         _capturedHeaders.ShouldNotBeNull();
         _capturedHeaders["x-tenant"].ShouldBe("acme");
         _builder.Received(1).WithTransition("t");
+    }
+
+    [Fact]
+    public async Task Context_CarriesARequestCallerAccessor_ResolvedFromTheRequestHeaders()
+    {
+        var transition = Transition($$""", "schemas": [ { "rule": {{RuleA}}, "schema": {{Ref("s1")}} } ]""");
+        Condition(true);
+        _roleResolver.ResolveRoleSetAsync(Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<CancellationToken>())
+            .Returns(new CallerRoleResolution(["morph.approver"], CallerRoleOutcome.Resolved));
+        var headers = new Dictionary<string, string?> { ["sub"] = "u1" };
+
+        var result = await _resolver.ResolveAsync(NewWorkflow(), NewInstance(), transition, headers);
+
+        result.IsSuccess.ShouldBeTrue();
+        var caller = _capturedCaller.ShouldBeOfType<CallerAccessor>();
+        caller.ResolutionStarted.ShouldBeFalse();
+        (await caller.HasRoleAsync("morph.approver")).ShouldBeTrue();
+        await _roleResolver.Received(1).ResolveRoleSetAsync(
+            Arg.Is<IReadOnlyDictionary<string, string?>?>(h => h != null && h["sub"] == "u1"),
+            Arg.Any<CancellationToken>());
     }
 
     private Task<Result<Reference?>> Resolve(Transition transition) =>

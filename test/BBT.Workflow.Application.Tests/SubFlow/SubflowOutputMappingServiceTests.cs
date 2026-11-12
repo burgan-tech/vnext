@@ -1,10 +1,13 @@
+using NSubstitute;
+using BBT.Workflow.Scripting.Caller;
+using BBT.Workflow.ExceptionHandling;
+using BBT.Workflow.Authorization;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using BBT.Aether.Guids;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -34,7 +37,6 @@ public sealed class SubflowOutputMappingServiceTests
     private readonly Mock<IScriptEngine> _scriptEngine = new();
     private readonly Mock<IScriptContextFactory> _scriptContextFactory = new();
     private readonly Mock<IRuntimeInfoProvider> _runtimeInfoProvider = new();
-    private readonly Mock<IGuidGenerator> _guidGenerator = new();
     private readonly Mock<ILogger<SubflowOutputMappingService>> _logger = new();
 
     public SubflowOutputMappingServiceTests()
@@ -248,6 +250,129 @@ public sealed class SubflowOutputMappingServiceTests
         applied["sub"].ShouldBe("u1");
     }
 
+    // ── caller roles (council 2026-11-12-script-caller-roles-background, Chair override) ──
+
+    [Fact]
+    public async Task WarmCallerRoles_MappingReadsCaller_ProviderFailed_ThrowsTransient_BeforeTheLock()
+    {
+        var resolver = FailingResolver();
+        var service = CreateCallerService(resolver);
+        var plan = new SubflowOutputMappingPlan(CallerReadingState(), new RoleReadingMapping());
+
+        await Should.ThrowAsync<CallerRolesUnavailableTransientException>(
+            service.WarmCallerRolesAsync(Guid.NewGuid(), plan, IdentityHeaders()));
+        await resolver.ReceivedWithAnyArgs(1).ResolveRoleSetAsync(default);
+    }
+
+    [Fact]
+    public async Task WarmCallerRoles_MappingNotNamingCaller_DoesNotCallTheProvider()
+    {
+        var resolver = FailingResolver();
+        var service = CreateCallerService(resolver);
+        var state = StateFactory.CreateDefault("waiting-child", StateType.SubFlow);
+        state.SetSubFlow(SubFlowType.SubFlow.Code, new Reference("child-flow", "bank", "sys-flows", "1.0.0"),
+            ScriptCode.FromNative("return data;"), viewOverrides: null);
+
+        await service.WarmCallerRolesAsync(Guid.NewGuid(), new SubflowOutputMappingPlan(state, new object()), IdentityHeaders());
+
+        await resolver.DidNotReceiveWithAnyArgs().ResolveRoleSetAsync(default);
+    }
+
+    [Fact]
+    public async Task ApplyPrepared_MappingReadsRolesWhileProviderDown_ThrowsTransient_AndPersistsNothing()
+    {
+        SetupCallerAwareBuilder();
+        var service = CreateCallerService(FailingResolver());
+        var parent = CreateParentInstance();
+        var plan = new SubflowOutputMappingPlan(CallerReadingState(), new RoleReadingMapping());
+
+        await Should.ThrowAsync<CallerRolesUnavailableTransientException>(service.ApplyPreparedAsync(
+            parent, CreateParentWorkflowWithMapping(), plan, CreateChildData(), IdentityHeaders(), CancellationToken.None));
+
+        _instanceDataWriteService.Verify(x => x.AppendAsync(
+            It.IsAny<Instance>(), It.IsAny<JsonData>(), It.IsAny<VersionStrategy>(), It.IsAny<CancellationToken>(),
+            It.IsAny<Definitions.Workflow>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ApplyPrepared_MappingSeesTheChildSettlersRoles()
+    {
+        SetupCallerAwareBuilder();
+        var resolver = Substitute.For<ICallerRoleResolver>();
+        resolver.ResolveRoleSetAsync(Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new CallerRoleResolution(["approver"], CallerRoleOutcome.Resolved)));
+        var mapping = new RoleReadingMapping();
+
+        var result = await CreateCallerService(resolver).ApplyPreparedAsync(
+            CreateParentInstance(), CreateParentWorkflowWithMapping(),
+            new SubflowOutputMappingPlan(CallerReadingState(), mapping), CreateChildData(), IdentityHeaders(),
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        mapping.SawApprover.ShouldBe(true);
+    }
+
+    private sealed class RoleReadingMapping : ISubFlowMapping
+    {
+        public bool? SawApprover { get; private set; }
+
+        public Task<ScriptResponse> InputHandler(ScriptContext context) => Task.FromResult(new ScriptResponse());
+
+        public async Task<ScriptResponse> OutputHandler(ScriptContext context)
+        {
+            try { SawApprover = await context.Caller.HasRoleAsync("approver"); }
+            catch (CallerRolesUnavailableException) { /* a careless mapping swallows it */ }
+            return new ScriptResponse { Data = new Dictionary<string, object> { ["x"] = 1 } };
+        }
+    }
+
+    private void SetupCallerAwareBuilder()
+    {
+        ICallerAccessor? caller = null;
+        var builder = new Mock<IScriptContextBuilder>();
+        builder.Setup(x => x.WithWorkflow(It.IsAny<Definitions.Workflow>())).Returns(builder.Object);
+        builder.Setup(x => x.WithInstance(It.IsAny<Instance>())).Returns(builder.Object);
+        builder.Setup(x => x.WithRuntime(It.IsAny<IRuntimeInfoProvider>())).Returns(builder.Object);
+        builder.Setup(x => x.WithBody(It.IsAny<object>())).Returns(builder.Object);
+        builder.Setup(x => x.WithHeaders(It.IsAny<Dictionary<string, string?>?>())).Returns(builder.Object);
+        builder.Setup(x => x.WithCaller(It.IsAny<ICallerAccessor?>()))
+            .Callback<ICallerAccessor?>(c => caller = c).Returns(builder.Object);
+        builder.Setup(x => x.BuildAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new ScriptContext.Builder(NullLogger<ScriptContext>.Instance).SetCaller(caller).Build());
+        _scriptContextFactory.Setup(x => x.NewBuilder(It.IsAny<IInstanceRepository>())).Returns(builder.Object);
+    }
+
+    private SubflowOutputMappingService CreateCallerService(ICallerRoleResolver resolver)
+        => new(
+            _instanceRepository.Object,
+            _instanceDataWriteService.Object,
+            _scriptEngine.Object,
+            _scriptContextFactory.Object,
+            _runtimeInfoProvider.Object,
+            _logger.Object,
+            new CarriedHeaderPolicy(
+                Options.Create(new SubFlowCarriedHeadersOptions { ExposeToOutputMapping = true }),
+                NullLogger<CarriedHeaderPolicy>.Instance),
+            new CallerAccessorFactory(resolver, NullLogger<CallerAccessorFactory>.Instance));
+
+    private static ICallerRoleResolver FailingResolver()
+    {
+        var resolver = Substitute.For<ICallerRoleResolver>();
+        resolver.ResolveRoleSetAsync(Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new CallerRoleResolution([], CallerRoleOutcome.Failed, "timeout")));
+        return resolver;
+    }
+
+    private static Dictionary<string, string?> IdentityHeaders() => new() { ["sub"] = "u1", ["act_sub"] = "u1" };
+
+    private static State CallerReadingState()
+    {
+        var state = StateFactory.CreateDefault("waiting-child", StateType.SubFlow);
+        state.SetSubFlow(SubFlowType.SubFlow.Code, new Reference("child-flow", "bank", "sys-flows", "1.0.0"),
+            ScriptCode.FromNative("await context.Caller.HasRoleAsync(\"approver\")"), viewOverrides: null);
+        return state;
+    }
+
     private SubflowOutputMappingService CreateService(ICarriedHeaderPolicy? policy = null)
         => new(
             _instanceRepository.Object,
@@ -255,7 +380,6 @@ public sealed class SubflowOutputMappingServiceTests
             _scriptEngine.Object,
             _scriptContextFactory.Object,
             _runtimeInfoProvider.Object,
-            _guidGenerator.Object,
             _logger.Object,
             policy);
 
