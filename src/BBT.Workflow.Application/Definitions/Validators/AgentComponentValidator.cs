@@ -149,6 +149,10 @@ public sealed partial class AgentComponentValidator(IOptions<AiAgentOptions>? op
                 }
 
                 break;
+
+            default:
+                // Mcp is validated above; an undefined kind is rejected at the top.
+                break;
         }
     }
 

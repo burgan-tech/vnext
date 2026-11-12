@@ -314,6 +314,7 @@ public sealed class AgentStateRunner(
                     break;
                 }
                 default:
+                    // Rules mode: the agent selects nothing; the automatic transitions' own rules decide.
                     break;
             }
         }
