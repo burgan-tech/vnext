@@ -1,0 +1,20 @@
+{
+  "releaseNote": {
+    "summary": "Selection rules can read the caller's resolved roles via context.Caller; a role-provider outage fails a role-reading selection with 503 Authorization:110006.",
+    "breaking": false,
+    "docs": [
+      "https://github.com/burgan-tech/vnext/blob/master/docs/runtime/script-caller-roles.md"
+    ]
+  },
+  "features": {
+    "engine": {
+      "scriptCallerRoles": {
+        "since": "next",
+        "status": "stable",
+        "description": "ScriptContext.Caller (ICallerAccessor: HasRoleAsync, RolesAsync, IsAvailable, ResolutionFailed, RolesFromHeader) exposes the caller's role set as resolved by the configured caller-role provider (default: token claims, else the gateway role header; morph-idm: the identity service, a non-blank role header replaces its answer). Available only to rule-based selection on a caller's request: transition schemas (write validation and functions/schema), function inputSchema/outputSchema/inputView/outputView rules, state/transition views rules. Elsewhere (tasks, lifecycle tasks, automatic rules, timers, event handlers, Execution host) IsAvailable is false and a read throws CallerRolesUnavailableException; on function execute the accessor is closed after input-schema selection, before the cache key and tasks. Resolved lazily on the first read, at most once per request (shared with the provider's per-request memo); rules that never read roles cost no provider call. If a rule reads roles and the provider fails, the selection fails with 503 Authorization:110006 (retryable) whatever the rule returned or swallowed, and nothing is cached; rules that do not read roles are unaffected. Role selection is UX/contract selection, not authorization. PURELY ADDITIVE.",
+        "schemaPath": "scripts (C#): ScriptContext.Caller",
+        "documentation": "docs/runtime/script-caller-roles.md"
+      }
+    }
+  }
+}

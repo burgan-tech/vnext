@@ -108,6 +108,9 @@ be last; `schemas` wins over `schema`; automatic and scheduled transitions may n
 
 - **Rule context:** workflow, instance, runtime, transition, `body` (the instance's latest data, `{}`
   when none) and the request headers. There are no query parameters.
+- **Caller roles:** rules can select by the caller's resolved roles through `context.Caller` (both here
+  and in function contract rules); a provider outage fails a role-reading selection with `503`
+  `Authorization:110006` instead of serving the fallback — [Caller Roles in Rule Scripts](script-caller-roles.md).
 - **Write path:** nothing declared, accept. Declared but no entry matches, `400` `Transition:100025`
   (the instance keeps its state and is not faulted).
 - **Read path:** the schema function serves the matched entry; no match is `404`

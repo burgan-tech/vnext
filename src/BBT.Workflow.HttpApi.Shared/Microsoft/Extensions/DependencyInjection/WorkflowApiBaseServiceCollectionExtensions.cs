@@ -448,6 +448,8 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             opt.Map(WorkflowErrorCodes.EncryptedValueReserved, HttpStatusCode.BadRequest);
             // x-storage file offload: binding failure is transient (503); a malformed node is the caller's error.
             opt.Map(WorkflowErrorCodes.FileStoreUnavailable, HttpStatusCode.ServiceUnavailable);
+            // Rule-based selection that read the caller's roles while the role provider was down: transient.
+            opt.Map(WorkflowErrorCodes.CallerRolesUnavailable, HttpStatusCode.ServiceUnavailable);
             opt.Map(WorkflowErrorCodes.FileReferenceInvalid, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.FileNotFound, HttpStatusCode.NotFound);
             opt.Map(WorkflowErrorCodes.FileSchemaUnavailable, HttpStatusCode.ServiceUnavailable);
