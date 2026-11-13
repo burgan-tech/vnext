@@ -49,6 +49,18 @@ public interface IRuntimeService
         where T : class, IDomainEntity, IReferenceSetter;
 
     /// <summary>
+    /// Returns the stored version strings of every active version of an entity by key, without loading or
+    /// deserializing any body. Use this to decide which version a request means, then load only that one
+    /// with <see cref="GetAsync{T}(string, string, CancellationToken)"/>.
+    /// </summary>
+    /// <typeparam name="T">The entity type; selects the schema the versions are read from</typeparam>
+    /// <param name="key">The entity key to filter by</param>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests</param>
+    /// <returns>The distinct stored version strings; empty when the key has no active version</returns>
+    Task<IReadOnlyList<string>> GetVersionsAsync<T>(string key, CancellationToken cancellationToken = default)
+        where T : class, IDomainEntity, IReferenceSetter;
+
+    /// <summary>
     /// Returns the distributed cache keys for all active entities of the specified type without
     /// loading the entity data. Used by broadcast-receiving pods to warm their in-memory cache
     /// from the distributed cache without a full DB scan.

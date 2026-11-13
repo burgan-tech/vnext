@@ -3097,6 +3097,35 @@ public static partial class WorkflowLogs
         Guid instanceId);
 
     /// <summary>
+    /// Logs when a transition is refused by a non-faulting step failure (onConflict: Reject). The
+    /// instance keeps its state and its Busy reservation is handed back, so the same call can be retried.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10263,
+        Level = LogLevel.Information,
+        Message = "Transition {TransitionKey} on instance {InstanceId} was rejected without faulting: {ErrorCode}")]
+    public static partial void TransitionRejectedWithoutFaulting(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        string? errorCode);
+
+    /// <summary>
+    /// Logs when a pipeline-step failure is rerouted by the workflow's errorBoundary instead of faulting
+    /// the instance.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10264,
+        Level = LogLevel.Information,
+        Message = "Transition {TransitionKey} on instance {InstanceId} failed with {ErrorCode} and was rerouted by errorBoundary to {NextTransition}")]
+    public static partial void TransitionReroutedByErrorBoundary(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        string? errorCode,
+        string? nextTransition);
+
+    /// <summary>
     /// Logs when a distributed resource lock TTL is successfully extended.
     /// </summary>
     [LoggerMessage(

@@ -83,8 +83,8 @@ public sealed class ComponentCacheShapeTests
 
             Cache = new FakeDistributedCacheService(time, new JsonSerializerOptions(JsonSerializerDefaults.Web));
             Backend = Substitute.For<ICacheBackend<FlowDefinition>>();
-            Backend.LoadAllByKeyAsync(Domain, FlowKey, Arg.Any<CancellationToken>())
-                .Returns(_ => Task.FromResult(Result<List<FlowDefinition>>.Ok([CreateWorkflow(withRowSecurity: true)])));
+            Backend.LoadVersionsAsync(Domain, FlowKey, Arg.Any<CancellationToken>())
+                .Returns(_ => Task.FromResult(Result<IReadOnlyList<string>>.Ok([FullVersion])));
             Backend.LoadAsync(Domain, FlowKey, Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(_ => Task.FromResult(Result<FlowDefinition>.Ok(CreateWorkflow(withRowSecurity: true))));
 
@@ -156,7 +156,7 @@ public sealed class ComponentCacheShapeTests
         // Assert
         result.IsSuccess.ShouldBeTrue();
         result.Value!.RowSecurity.ShouldNotBeNull();
-        await fixture.Backend.Received(1).LoadAllByKeyAsync(Domain, FlowKey, Arg.Any<CancellationToken>());
+        await fixture.Backend.Received(1).LoadVersionsAsync(Domain, FlowKey, Arg.Any<CancellationToken>());
     }
 
     [Fact]

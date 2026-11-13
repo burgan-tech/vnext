@@ -12,6 +12,7 @@ using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Continuations;
+using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Execution.Validation;
@@ -1767,6 +1768,187 @@ public class TransitionPipelineTests
 
     #endregion
 
+    #region Error boundary rerouting of pipeline failures
+
+    /// <summary>
+    /// A lock conflict is a "come back later", not a broken instance: ResourceLock fails at order 25,
+    /// so nothing ran and the instance never left its state. When the state's own errorBoundary names
+    /// a transition for Execution:200010, the pipeline must hop there instead of faulting — that is
+    /// what keeps a limit-management child (and the approvals its parent already collected) alive.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenResourceLockConflicts_AndTheStateBoundaryNamesATransition_ShouldRerouteWithoutFaulting()
+    {
+        // Arrange
+        var context = CreateContextWithStateBoundary(BoundaryRoutingToWaitState());
+        var rerouted = CreateTransitionExecutionContext("limit-lock-busy");
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        var pipeline = CreatePipelineWithErrorBoundary();
+
+        SetupContextFactory(context);
+        WorkflowExecutionContext? hopContext = null;
+        _mockContextFactory.CreateFromPreloaded(Arg.Any<WorkflowExecutionContext>(),
+                Arg.Any<Definitions.Workflow>(), Arg.Any<Instance>())
+            .Returns(callInfo =>
+            {
+                hopContext = callInfo.ArgAt<WorkflowExecutionContext>(0);
+                return Result<TransitionExecutionContext>.Ok(rerouted);
+            });
+
+        SetupStepsToSucceed();
+        var conflictedOnce = false;
+        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                // Only the first hop conflicts; the boundary transition itself must run clean.
+                if (conflictedOnce)
+                    return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+                conflictedOnce = true;
+                return Task.FromResult(Result<StepOutcome>.Fail(
+                    Error.Conflict(WorkflowErrorCodes.ResourceLockConflict, "Resource is already locked")));
+            });
+
+        // Act
+        var result = await pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert — rerouted, not faulted.
+        result.IsSuccess.ShouldBeTrue();
+        hopContext.ShouldNotBeNull();
+        hopContext!.TransitionKey.ShouldBe("limit-lock-busy");
+        await _mockInstanceRepository.DidNotReceive()
+            .UpdateAsync(
+                Arg.Is<Instance>(x => x.Status.Equals(InstanceStatus.Faulted)),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+
+        // ...and the reroute left a trace, so "why did this instance change course?" is answerable.
+        var incident = context.Instance.GetLoadedIncidents().ShouldHaveSingleItem();
+        incident.ErrorCode.ShouldBe(WorkflowErrorCodes.ResourceLockConflict);
+        incident.ErrorLayer.ShouldBe(ErrorLayer.Pipeline.ToString());
+    }
+
+    /// <summary>
+    /// The boundary is opt-in. A workflow that declares no rule for the conflict keeps the old
+    /// behaviour exactly: faulted instance plus a propagated failure the API maps to 409.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenResourceLockConflicts_AndNoBoundaryRuleMatches_ShouldStillFaultAndPropagate()
+    {
+        // Arrange — a boundary that only handles an unrelated code.
+        var unrelated = new ErrorBoundary(
+            [new ErrorHandlerRule { ErrorCodes = ["Task:400007"], Action = ErrorAction.Rollback, Transition = "somewhere-else" }],
+            null);
+        var context = CreateContextWithStateBoundary(unrelated);
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        var pipeline = CreatePipelineWithErrorBoundary();
+
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<StepOutcome>.Fail(
+                Error.Conflict(WorkflowErrorCodes.ResourceLockConflict, "Resource is already locked"))));
+
+        // Act
+        var result = await pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ResourceLockConflict);
+        await _mockInstanceRepository.Received(1)
+            .UpdateAsync(
+                Arg.Is<Instance>(x => x.Status.Equals(InstanceStatus.Faulted)),
+                true,
+                Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// onConflict: Reject is the "tell the caller, touch nothing" policy. The step never started, so
+    /// faulting a healthy instance over a condition the caller can simply retry would be wrong: the
+    /// failure is returned (→ 409) and the instance is left exactly as it was. It must not reach the
+    /// boundary either — rerouting a rejection would defeat the point of asking the caller to retry.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenResourceLockIsRejected_ShouldReturnFailureWithoutFaultingOrRerouting()
+    {
+        // Arrange — the boundary would match ANY code, so a reroute here would be visible.
+        var catchAll = new ErrorBoundary(
+            [new ErrorHandlerRule { ErrorCodes = ["*"], Action = ErrorAction.Rollback, Transition = "limit-lock-busy" }],
+            null);
+        var context = CreateContextWithStateBoundary(catchAll);
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        var pipeline = CreatePipelineWithErrorBoundary();
+
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<StepOutcome>.Fail(
+                Error.Conflict(WorkflowErrorCodes.ResourceLockRejected, "Resource is already locked"))));
+
+        // Act
+        var result = await pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ResourceLockRejected);
+        await _mockInstanceRepository.DidNotReceive()
+            .UpdateAsync(
+                Arg.Is<Instance>(x => x.Status.Equals(InstanceStatus.Faulted)),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>());
+        _mockContextFactory.DidNotReceive().CreateFromPreloaded(
+            Arg.Any<WorkflowExecutionContext>(), Arg.Any<Definitions.Workflow>(), Arg.Any<Instance>());
+    }
+
+    private static ErrorBoundary BoundaryRoutingToWaitState() => new(
+        [
+            new ErrorHandlerRule
+            {
+                ErrorCodes = [WorkflowErrorCodes.ResourceLockConflict],
+                Action = ErrorAction.Rollback,
+                Transition = "limit-lock-busy",
+                Priority = 10,
+            }
+        ],
+        null);
+
+    /// <summary>
+    /// Same fixture as <see cref="CreateTransitionExecutionContext"/>, except the instance is already
+    /// stamped into state1 (the boundary is looked up by the instance's CURRENT state) and that state
+    /// carries the given boundary.
+    /// </summary>
+    private TransitionExecutionContext CreateContextWithStateBoundary(ErrorBoundary boundary)
+    {
+        var context = CreateTransitionExecutionContext();
+        var state = context.Workflow.GetState("state1").Value!;
+        state.SetErrorBoundary(boundary);
+        context.Instance.ChangeState(state);
+        return context;
+    }
+
+    private TransitionPipeline CreatePipelineWithErrorBoundary()
+    {
+        return new TransitionPipeline(
+            new TransitionExecutor(_mockSteps, Substitute.For<ILogger<TransitionExecutor>>()),
+            new ContinuationDispatcher(new IContinuationStrategy[] { new InlineContinuationStrategy() }),
+            _mockBusyMarker,
+            _mockContextFactory,
+            _mockInstanceRepository,
+            _mockInstanceJobRepository,
+            _mockUowManager,
+            _mockValidationService,
+            new PipelineProfileResolver(),
+            _mockStateNotificationScheduler,
+            _mockAdmissionService,
+            _mockStatusLock,
+            _fileAdmission,
+            _clock,
+            _mockLogger,
+            errorBoundaryResolver: new ErrorBoundaryResolver(Substitute.For<ILogger<ErrorBoundaryResolver>>()));
+    }
+
+    #endregion
+
+
     #region State Notification Tests
 
     [Fact]
@@ -1920,6 +2102,118 @@ public class TransitionPipelineTests
         """;
 
         return System.Text.Json.JsonSerializer.Deserialize<State>(json, JsonSerializerConstants.JsonOptions)!;
+    }
+
+
+    /// <summary>
+    /// A rejection must hand the status back. Nothing upstream compensates a failure returned from
+    /// inside the chain, and this path deliberately does not fault — so if the chain kept the Busy it
+    /// reserved, the caller would get its 409 and the instance would rest Busy with NO owner, which has
+    /// no automatic recovery on the sync path. That wedge is the whole reason this test exists.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenResourceLockIsRejected_ShouldHandBackTheBusyReservation()
+    {
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<StepOutcome>.Fail(
+                Error.Conflict(WorkflowErrorCodes.ResourceLockRejected, "Resource is already locked"))));
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        await _mockAdmissionService.Received(1).ReserveAsync(
+            Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+        await _mockAdmissionService.Received(1).ReleaseReservationAsync(
+            Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// updateData never reserves and never settles — it is status-neutral by design. A rejection there
+    /// must not release a flip this run never took, which would free an instance somebody else owns.
+    /// (A pre-reserved run is the opposite case: the accept flipped Busy ON ITS BEHALF, so it does own
+    /// the status and the release above is correct for it.)
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenRejectedWithoutOwningTheStatus_ShouldNotReleaseAReservationItNeverTook()
+    {
+        var context = CreateTransitionExecutionContext("update-parent-data");
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.Unconditional);
+        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<StepOutcome>.Fail(
+                Error.Conflict(WorkflowErrorCodes.ResourceLockRejected, "Resource is already locked"))));
+
+        await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        await _mockAdmissionService.DidNotReceive().ReserveAsync(
+            Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+        await _mockAdmissionService.DidNotReceive().ReleaseReservationAsync(
+            Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Reject on a CHAINED hop (hop > 1). The reviewer's question on #1143: "exactly as it was" only
+    /// holds for hop 1 — by hop 2 the earlier hop has already moved the instance. It does, and that is
+    /// fine: the instance rests at a state it legitimately reached, nothing half-done is left behind,
+    /// and the Busy this run reserved is still handed back. What a caller must NOT assume is that a
+    /// retry of the same request resumes from where it started.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenRejectedOnAChainedHop_StillHandsBackTheReservationAndDoesNotFault()
+    {
+        var first = CreateTransitionExecutionContext();
+        var chained = CreateTransitionExecutionContext("auto-transition");
+        var workflowContext = CreateWorkflowExecutionContext(first);
+
+        _mockContextFactory.CreateAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<TransitionExecutionContext>.Ok(first)));
+        _mockContextFactory.CreateFromPreloaded(Arg.Any<WorkflowExecutionContext>(),
+                Arg.Any<Definitions.Workflow>(), Arg.Any<Instance>())
+            .Returns(_ => Result<TransitionExecutionContext>.Ok(chained));
+
+        // Hop 1 runs clean and hands over to an auto transition; hop 2 loses the lock race.
+        SetupStepsToSucceed();
+        var hop = 0;
+        foreach (var step in _mockSteps)
+        {
+            if (step.Order == LifecycleOrder.Auto)
+            {
+                step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                    .Returns(callInfo =>
+                    {
+                        if (++hop == 1)
+                        {
+                            callInfo.ArgAt<TransitionExecutionContext>(0).Directives.RequestNextTransition(
+                                new NextTransitionRequest("auto-transition", "auto"));
+                            return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.SkipTo(LifecycleOrder.Finalize)));
+                        }
+                        return Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue()));
+                    });
+            }
+        }
+        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo => ReferenceEquals(callInfo.ArgAt<TransitionExecutionContext>(0), chained)
+                ? Task.FromResult(Result<StepOutcome>.Fail(
+                    Error.Conflict(WorkflowErrorCodes.ResourceLockRejected, "Resource is already locked")))
+                : Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue())));
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ResourceLockRejected);
+        // Not faulted, and the reservation is handed back even though the rejection landed mid-chain.
+        await _mockInstanceRepository.DidNotReceive().UpdateAsync(
+            Arg.Is<Instance>(x => x.Status.Equals(InstanceStatus.Faulted)),
+            Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        await _mockAdmissionService.Received(1).ReleaseReservationAsync(
+            Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
     }
 
     private ITransitionStep CreateMockStep(int order)

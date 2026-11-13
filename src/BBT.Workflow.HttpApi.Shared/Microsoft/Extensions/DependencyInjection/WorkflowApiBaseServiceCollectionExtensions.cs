@@ -386,7 +386,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             BBT.Workflow.Infrastructure.Execution.Locks.IPostgreSqlDistributedLockService,
             BBT.Workflow.Infrastructure.Execution.Locks.NpgsqlDistributedLockService>();
 
-        services.AddResourceLock(lockStoreName);
+        services.AddResourceLock(configuration, lockStoreName);
         return services;
     }
 
@@ -402,8 +402,48 @@ public static class WorkflowApiBaseServiceCollectionExtensions
         return services;
     }
 
-    public static IServiceCollection AddResourceLock(this IServiceCollection services, string lockStoreName)
+    /// <summary>
+    /// Registers the transition-level resource lock store. <c>ResourceLock:Provider</c> picks the
+    /// implementation: <c>dapr</c> (the default, unchanged behaviour) or <c>postgres</c>.
+    /// <para>
+    /// The Postgres lease store is the one that can RENEW a held lock. The Dapr Redis component uses
+    /// <c>SET NX</c> and rejects a re-acquire even from the owner, so <c>Extend</c> there cannot work
+    /// while the lock is held — a protected section longer than its TTL loses the lock mid-flight.
+    /// Opt in per domain when locks must outlive a single short operation.
+    /// </para>
+    /// </summary>
+    /// <param name="configuration">Reads <c>ResourceLock:Provider</c> and, for postgres, the default connection string.</param>
+    /// <param name="lockStoreName">Dapr lock store component name, used by the default provider.</param>
+    public static IServiceCollection AddResourceLock(
+        this IServiceCollection services, IConfiguration configuration, string lockStoreName)
     {
+        var provider = configuration["ResourceLock:Provider"];
+
+        // A typo must not silently downgrade the store. "postgress" would otherwise fall through to
+        // Dapr, where Extend cannot work — the one capability the setting exists to turn on — and the
+        // only symptom would be locks quietly lost mid-flight under load.
+        if (!string.IsNullOrWhiteSpace(provider)
+            && !string.Equals(provider, "postgres", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(provider, "dapr", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Unknown ResourceLock:Provider '{provider}'. Supported values are 'dapr' (default) and 'postgres'.");
+        }
+
+        if (string.Equals(provider, "postgres", StringComparison.OrdinalIgnoreCase))
+        {
+            var connectionString = configuration.GetConnectionString("Default")
+                ?? throw new InvalidOperationException(
+                    "ConnectionStrings:Default is required when ResourceLock:Provider is 'postgres'.");
+
+            services.AddScoped<BBT.Workflow.Execution.IResourceLockService>(sp =>
+                new BBT.Workflow.Infrastructure.Execution.ResourceLock.NpgsqlResourceLockService(
+                    connectionString,
+                    sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<
+                        BBT.Workflow.Infrastructure.Execution.ResourceLock.NpgsqlResourceLockService>>()));
+            return services;
+        }
+
         services.AddScoped<BBT.Workflow.Execution.IResourceLockService>(sp =>
             new BBT.Workflow.Infrastructure.Execution.ResourceLock.DaprResourceLockService(
                 sp.GetRequiredService<Dapr.Client.DaprClient>(),
@@ -412,6 +452,14 @@ public static class WorkflowApiBaseServiceCollectionExtensions
                     BBT.Workflow.Infrastructure.Execution.ResourceLock.DaprResourceLockService>>()));
         return services;
     }
+
+    /// <summary>
+    /// Dapr-only registration, kept so a caller outside this repository still compiles. Equivalent to
+    /// the <see cref="IConfiguration"/> overload with no <c>ResourceLock:Provider</c> set.
+    /// </summary>
+    [Obsolete("Use AddResourceLock(services, configuration, lockStoreName); this overload cannot select the Postgres lease provider.")]
+    public static IServiceCollection AddResourceLock(this IServiceCollection services, string lockStoreName)
+        => services.AddResourceLock(new ConfigurationBuilder().Build(), lockStoreName);
 
     public static IServiceCollection AddEventBus(this IServiceCollection services, IConfiguration configuration)
     {
@@ -480,6 +528,7 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             // Execution errors
             opt.Map(WorkflowErrorCodes.ExecutionStepFailed, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.ResourceLockConflict, HttpStatusCode.Conflict);
+            opt.Map(WorkflowErrorCodes.ResourceLockRejected, HttpStatusCode.Conflict);
 
             // Task errors
             opt.Map(WorkflowErrorCodes.TaskContextCreation, HttpStatusCode.InternalServerError);

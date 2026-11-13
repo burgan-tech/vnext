@@ -1094,6 +1094,30 @@ public class InstanceDataVersionComparerTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
+    public void FindBestMatch_FullVersionWithoutBuildMetadata_ShouldNameTheStoredVersion()
+    {
+        // "+core" is build metadata: it takes no part in comparison, and the full-version cache key and the
+        // default-version policy already drop it. The comparer has to agree, or the same request means a
+        // version through one path and "not found" through another.
+        var versions = new List<string> { "1.0.0-pkg.1.0.99+core", "1.0.0-pkg.1.0.123+core" };
+
+        Assert.Equal("1.0.0-pkg.1.0.123+core",
+            InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0-pkg.1.0.123"));
+        Assert.Null(InstanceDataVersionComparer.FindBestMatch(versions, "1.0.0-pkg.1.0.124"));
+    }
+
+    [Fact]
+    public void FindBestMatch_FullVersionSpelledExactly_ShouldWinOverABuildMetadataSibling()
+    {
+        var versions = new List<string> { "2.1.0-pkg.1.0.168+core", "2.1.0-pkg.1.0.168+customer" };
+
+        Assert.Equal("2.1.0-pkg.1.0.168+customer",
+            InstanceDataVersionComparer.FindBestMatch(versions, "2.1.0-pkg.1.0.168+customer"));
+        Assert.Equal("2.1.0-pkg.1.0.168+core",
+            InstanceDataVersionComparer.FindBestMatch(versions, "2.1.0-pkg.1.0.168"));
+    }
+
+    [Fact]
     public void FindBestMatch_UpperCasePkgSpelling_ShouldResolveLikeLowerCase()
     {
         // Arrange - "1.0.0-PKG.0.0.49" fails the case-sensitive full-version test and parses as an

@@ -146,7 +146,7 @@ public class CacheSetVersionPolicyTests
         (await harness.Cache.GetAsync<CacheEnvelope<View>>(harness.ResolutionKey(generation, "1")))!
             .Version.ShouldBe("1.0.1");
         (await harness.Sut.GetByVersionAsync(TestDomain, TestKey, null)).Value!.Version.ShouldBe("1.0.1");
-        harness.Backend.LoadAllCallCount.ShouldBe(0);
+        harness.Backend.VersionListCallCount.ShouldBe(0);
 
         // Act - a version above the ceiling ships.
         harness.AddPublished("1.1.1");

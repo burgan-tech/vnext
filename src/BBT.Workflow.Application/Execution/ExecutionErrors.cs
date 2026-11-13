@@ -109,6 +109,19 @@ public static class ExecutionErrors
             target: resourceKey);
 
     /// <summary>
+    /// Creates an error for a lock race lost under <c>onConflict: Reject</c>. Carries a DIFFERENT code
+    /// from <see cref="ResourceLockConflict"/> so a client can tell "your instance died, start over"
+    /// from "someone else holds it right now, retry the same call".
+    /// </summary>
+    /// <param name="resourceKey">The lock key that is currently held.</param>
+    public static Error ResourceLockRejected(string resourceKey)
+        => Error.Conflict(
+            WorkflowErrorCodes.ResourceLockRejected,
+            $"Resource '{resourceKey}' is locked by another instance; the transition was rejected without "
+            + "changing this instance. Retry when the lock frees.",
+            target: resourceKey);
+
+    /// <summary>
     /// Creates an error when the keyExpression script returns a null or empty lock key.
     /// </summary>
     /// <param name="transitionKey">The transition whose keyExpression produced an empty key.</param>

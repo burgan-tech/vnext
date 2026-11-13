@@ -32,5 +32,12 @@ public class DomainConsts
         /// independent of which transition path completes the instance.
         /// </summary>
         public const string ResourceLocks = "resource.locks";
+
+        /// <summary>
+        /// When each tracked resource lock was acquired, as a JSON map of key to ISO-8601 instant.
+        /// Kept apart from <see cref="ResourceLocks"/> so the key list keeps its shape: an instance
+        /// started before this existed simply has no timestamps, and the hold-duration metric skips it.
+        /// </summary>
+        public const string ResourceLockAcquiredAt = "resource.locks.acquiredAt";
     }
 }
