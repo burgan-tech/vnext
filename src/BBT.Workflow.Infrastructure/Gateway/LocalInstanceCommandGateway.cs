@@ -1,5 +1,7 @@
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
+using BBT.Aether.Users;
+using BBT.Workflow.Authorization;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.SubFlow;
@@ -57,6 +59,7 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
             async (sp, ct) =>
             {
                 var commandService = sp.GetRequiredService<IInstanceCommandAppService>();
+                using var asChild = CallerCredentialScope.Enter(sp.GetRequiredService<ICurrentUser>(), input.Headers);
                 var unitOfWorkManager = sp.GetRequiredService<IUnitOfWorkManager>();
                 
                 await using var uow = unitOfWorkManager.Begin(new UnitOfWorkOptions

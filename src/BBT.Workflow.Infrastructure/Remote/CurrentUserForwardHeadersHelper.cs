@@ -43,6 +43,7 @@ public static class CurrentUserForwardHeadersHelper
         }
         if (inputHeaders != null)
         {
+            // AUTHORIZATION: a blank input value removes the ambient user's header and sends nothing — this is how a SubFlow mapping that blanked a credential keeps it from a cross-domain child (HttpTaskInvocation.ResolveInstanceCallCredential). Do not "skip blank" here.
             foreach (var kv in inputHeaders)
             {
                 if (isRestrictedHeader(kv.Key) || ContentHeaders.Contains(kv.Key)

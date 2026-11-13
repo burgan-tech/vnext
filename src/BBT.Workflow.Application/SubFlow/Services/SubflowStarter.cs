@@ -92,6 +92,7 @@ public sealed class SubflowStarter(
             inputMappingResult,
             subFlowConfig.HasTimeoutOverride ? subFlowConfig.Overrides!.Timeout : null,
             subFlowConfig.Overrides,
+            context?.Headers is null ? null : context.GetHeadersAsDictionary(),
             activity,
             cancellationToken);
     }
@@ -111,6 +112,7 @@ public sealed class SubflowStarter(
         ScriptResponse? inputMappingResult,
         WorkflowTimeout? timeoutOverride,
         SubFlowOverrides? overrides,
+        IReadOnlyDictionary<string, string>? callerHeaders,
         Activity? activity,
         CancellationToken cancellationToken)
     {
@@ -199,12 +201,9 @@ public sealed class SubflowStarter(
         // HTTP headers are case-insensitive. Use OrdinalIgnoreCase so a parent/root instance-id
         // supplied by the input mapping (any casing) is REPLACED by the framework-stamped value
         // below instead of producing a duplicate header entry.
-        var headers = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        if (inputMappingResult?.Headers is IDictionary<string, string?> fromMapping)
-        {
-            foreach (var kv in fromMapping)
-                headers[kv.Key] = kv.Value;
-        }
+        // Caller credential: the mapping decides, blank included — HttpTaskInvocation.ResolveInstanceCallCredential. Blank entries stay "" on purpose; the exit drops them.
+        var headers = HttpTaskInvocation.ResolveInstanceCallCredential(
+            MappingHeadersOf(inputMappingResult), callerHeaders);
 
         headers[TelemetryConstants.HeaderNames.ParentInstanceId] = parentInstance.Id.ToString();
         headers[TelemetryConstants.HeaderNames.RootInstanceId] = rootInstanceId.ToString();
@@ -247,6 +246,20 @@ public sealed class SubflowStarter(
         logger.SubFlowStarted(subFlowReference.Key, parentInstance.Id);
 
         return Result<string?>.Ok(startResult.Value?.FlowVersion);
+    }
+
+    /// <summary>The headers a mapping result carries: a string dictionary as is, an ExpandoObject by its values' text, anything else none.</summary>
+    private static Dictionary<string, string?>? MappingHeadersOf(ScriptResponse? mapping)
+    {
+        switch (mapping?.Headers)
+        {
+            case IDictionary<string, string?> strings:
+                return new Dictionary<string, string?>(strings);
+            case IDictionary<string, object?> expando:
+                return expando.ToDictionary(kv => kv.Key, kv => kv.Value?.ToString());
+            default:
+                return null;
+        }
     }
 
     /// <summary>

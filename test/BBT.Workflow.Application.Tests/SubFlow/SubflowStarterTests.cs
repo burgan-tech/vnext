@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Dynamic;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
@@ -6,10 +8,12 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.SubFlow;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Shouldly;
 using Xunit;
@@ -150,5 +154,109 @@ public class SubflowStarterTests
         captured.Instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType].ShouldBe(type);
         InstanceType.FromStartMetadata(captured.Instance.ExtraProperties)
             .ShouldBe(InstanceType.FromCode(type));
+    }
+
+    // Instance-call credential rule: the mapping decides, blank included; only an absent credential
+    // is filled from the caller's request headers.
+
+    private static ScriptContext CallerContext() =>
+        new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
+            .SetHeaders(new Dictionary<string, string> { ["sub"] = "u1", ["act_sub"] = "a1", ["role"] = "maker" })
+            .Build();
+
+    private static async Task<StartInstanceInput> StartCapturingHeadersAsync(object? mappingHeaders, ScriptContext? caller)
+    {
+        var gateway = Substitute.For<IInstanceCommandGateway>();
+        var engine = Substitute.For<IScriptEngine>();
+        var mapping = Substitute.For<ISubFlowMapping>();
+        mapping.InputHandler(Arg.Any<ScriptContext>())
+            .Returns(Task.FromResult(new ScriptResponse { Headers = mappingHeaders }));
+        engine.CompileToInstanceAsync<ISubFlowMapping>(
+                Arg.Any<ScriptCode>(), Arg.Any<ScriptSettings?>(),
+                Arg.Any<IEnumerable<Microsoft.CodeAnalysis.MetadataReference>?>(),
+                Arg.Any<IEnumerable<string>?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(mapping));
+        var starter = new SubflowStarter(gateway, new ConfigurationBuilder().Build(), engine,
+            Substitute.For<ILogger<SubflowStarter>>());
+        var workflow = WorkflowFactory.CreateDefault();
+        var parent = Instance.Create(Guid.NewGuid(), workflow.Key, workflow.Version, "parent");
+        var state = StateFactory.CreateDefault("child", StateType.SubFlow);
+        state.SetSubFlow("S", new Reference("child-flow", "remote", "sys-flows", "1.0.0"),
+            ScriptCode.FromNative("// mapping"), null);
+        var childId = Guid.NewGuid();
+        var correlation = InstanceCorrelation.Create(Guid.NewGuid(), parent.Id, state.Key,
+            childId, "S", "remote", "child-flow", "1.0.0");
+        StartInstanceInput? captured = null;
+        gateway.StartSubAsync(Arg.Do<StartInstanceInput>(i => captured = i), Arg.Any<CancellationToken>())
+            .Returns(Result<StartInstanceOutput>.Ok(new StartInstanceOutput { Id = childId, Status = InstanceStatus.Active }));
+
+        var result = await starter.StartAsync(workflow, parent, state, TransitionFactory.CreateDefault(),
+            correlation, caller!, ExecMode.Sync);
+
+        result.IsSuccess.ShouldBeTrue();
+        captured.ShouldNotBeNull();
+        return captured!;
+    }
+
+    [Fact]
+    public async Task NoMappingHeaders_CarryTheCallerCredential()
+    {
+        var input = await StartCapturingHeadersAsync(null, CallerContext());
+
+        input.Headers["sub"].ShouldBe("u1");
+        input.Headers["act_sub"].ShouldBe("a1");
+        input.Headers["role"].ShouldBe("maker");
+    }
+
+    [Fact]
+    public async Task BlankMappingCredential_IsCarriedAsAMarker()
+    {
+        var input = await StartCapturingHeadersAsync(
+            new Dictionary<string, string?> { ["sub"] = "" }, CallerContext());
+
+        input.Headers["sub"].ShouldBe("");
+        input.Headers["act_sub"].ShouldBe("a1");
+    }
+
+    [Fact]
+    public async Task MappingCredential_Wins()
+    {
+        var input = await StartCapturingHeadersAsync(
+            new Dictionary<string, string?> { ["sub"] = "other" }, CallerContext());
+
+        input.Headers["sub"].ShouldBe("other");
+    }
+
+    [Fact]
+    public async Task ExpandoMappingHeaders_AreHonoured()
+    {
+        dynamic headers = new ExpandoObject();
+        headers.sub = "";
+
+        var input = await StartCapturingHeadersAsync((object)headers, CallerContext());
+
+        input.Headers["sub"].ShouldBe("");
+    }
+
+    [Fact]
+    public async Task NoCaller_AddsNothing()
+    {
+        var input = await StartCapturingHeadersAsync(
+            new Dictionary<string, string?> { ["x-foo"] = "1" }, null);
+
+        input.Headers["x-foo"].ShouldBe("1");
+        input.Headers.ContainsKey(TelemetryConstants.HeaderNames.ParentInstanceId).ShouldBeTrue();
+        input.Headers.ContainsKey(TelemetryConstants.HeaderNames.RootInstanceId).ShouldBeTrue();
+        input.Headers.ContainsKey("sub").ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ParentAndRootIds_AreStillFrameworkStamped()
+    {
+        var input = await StartCapturingHeadersAsync(
+            new Dictionary<string, string?> { [TelemetryConstants.HeaderNames.ParentInstanceId] = "evil" }, null);
+
+        input.Headers[TelemetryConstants.HeaderNames.ParentInstanceId]
+            .ShouldBe(input.Instance.ExtraProperties[DomainConsts.MetaDataKeys.Id]!.ToString());
     }
 }
