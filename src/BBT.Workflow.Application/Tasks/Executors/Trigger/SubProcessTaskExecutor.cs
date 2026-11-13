@@ -2,6 +2,8 @@ using System.Text.Json;
 using BBT.Aether;
 using BBT.Aether.Guids;
 using BBT.Aether.Results;
+using BBT.Aether.Users;
+using BBT.Workflow.Authorization;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
 using BBT.Workflow.Execution;
@@ -30,6 +32,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
     private readonly IGuidGenerator _guidGenerator;
     private readonly IConfiguration _configuration;
     private readonly IDomainDiscoveryResolver _endpointResolver;
+    private readonly ICurrentUser _currentUser;
 
     /// <summary>
     /// Initializes a new instance of SubProcessTaskExecutor.
@@ -43,6 +46,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
         IGuidGenerator guidGenerator,
         IConfiguration configuration,
         IDomainDiscoveryResolver endpointResolver,
+        ICurrentUser currentUser,
         ILogger<SubProcessTaskExecutor> logger)
         : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
@@ -51,6 +55,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
         _guidGenerator = guidGenerator;
         _configuration = configuration;
         _endpointResolver = endpointResolver;
+        _currentUser = currentUser;
     }
 
     /// <inheritdoc />
@@ -139,7 +144,12 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
         try
         {
             var input = BuildStartInstanceInput(task, context.ScriptContext, subFlowInstanceId);
-            var result = await _instanceCommandGateway.StartAsync(input, cancellationToken);
+            // The call runs as the resolved header set's user, not as the ambient pipeline caller.
+            Result<StartInstanceOutput> result;
+            using (CallerCredentialScope.Enter(_currentUser, input.Headers))
+            {
+                result = await _instanceCommandGateway.StartAsync(input, cancellationToken);
+            }
 
             if (!result.IsSuccess)
             {
@@ -340,7 +350,8 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
             InstanceId = subFlowInstanceId,
             Callback = GetCallbackAppId(),
             ExtraProperties = BuildExtraPropertiesAsDictionary(context.ScriptContext, task),
-            Headers = Execution.HttpTaskInvocation.WithCallerCredential(binding.Headers, CallerHeadersOf(context.ScriptContext)),
+            // Caller credential: the mapping decides, blank included — HttpTaskInvocation.ResolveInstanceCallCredential. A blank value is NOT filled from the caller.
+            Headers = Execution.HttpTaskInvocation.ResolveInstanceCallCredentialJson(binding.Headers, CallerHeadersOf(context.ScriptContext)),
             BaseUrl = endpoint.BaseUrl.ToString(),
             DaprAppId = endpoint.DaprAppId,
             AcceptedStatusCodes = binding.AcceptedStatusCodes
@@ -357,7 +368,9 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
     private StartInstanceInput BuildStartInstanceInput(SubProcessTask task, ScriptContext context,
         Guid subFlowInstanceId)
     {
-        var headers = WithCallerCredential(ConvertTaskHeadersToDictionary(task.Headers), context);
+        // Caller credential: the mapping decides, blank included — HttpTaskInvocation.ResolveInstanceCallCredential. A blank value is NOT filled from the caller.
+        var headers = Execution.HttpTaskInvocation.ResolveInstanceCallCredential(
+            ConvertTaskHeadersToDictionary(task.Headers), CallerHeadersOf(context));
 
         return new StartInstanceInput(
                 domain: task.TriggerDomain,

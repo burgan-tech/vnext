@@ -58,7 +58,8 @@ public sealed class SubProcessCorrelationPinVersionTests
             Substitute.For<IScriptEngine>(), Substitute.For<IRuntimeInfoProvider>(),
             Substitute.For<IRemoteInvokerService>(), Substitute.For<IInstanceCommandGateway>(),
             repository, Substitute.For<IGuidGenerator>(), new ConfigurationBuilder().Build(),
-            Substitute.For<IDomainDiscoveryResolver>(), logger);
+            Substitute.For<IDomainDiscoveryResolver>(),
+            Substitute.For<BBT.Aether.Users.ICurrentUser>(), logger);
 
         var task = SubProcessTask.Create(JsonSerializer.SerializeToElement(new
         {

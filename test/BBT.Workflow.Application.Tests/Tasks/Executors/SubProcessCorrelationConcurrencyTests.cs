@@ -223,6 +223,7 @@ public sealed class SubProcessCorrelationConcurrencyTests
                 Substitute.For<IGuidGenerator>(),
                 new ConfigurationBuilder().Build(),
                 Substitute.For<IDomainDiscoveryResolver>(),
+                Substitute.For<BBT.Aether.Users.ICurrentUser>(),
                 logger);
 
             _task = SubProcessTask.Create(JsonSerializer.SerializeToElement(new

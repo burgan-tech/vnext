@@ -418,19 +418,4 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
     /// <summary>The caller's request headers, the source of the forwarded credential (never provider-resolved roles).</summary>
     protected static IReadOnlyDictionary<string, string>? CallerHeadersOf(ScriptContext? scriptContext) =>
         scriptContext?.Headers is null ? null : scriptContext.GetHeadersAsDictionary();
-
-    /// <summary>
-    /// <paramref name="taskHeaders"/> (the task's mapping headers, kept as they are) with the caller's credential added for
-    /// every credential header the mapping left absent or empty — for a task whose target runs in-process from the header
-    /// dictionary (a same-domain Start / SubProcess / DirectTrigger). Same rule as the remote binding headers.
-    /// </summary>
-    protected static Dictionary<string, string?> WithCallerCredential(
-        Dictionary<string, string?>? taskHeaders, ScriptContext? scriptContext)
-    {
-        var headers = taskHeaders is null
-            ? new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-            : new Dictionary<string, string?>(taskHeaders, StringComparer.OrdinalIgnoreCase);
-        Execution.HttpTaskInvocation.AppendCallerCredential(headers, CallerHeadersOf(scriptContext));
-        return headers;
-    }
 }
