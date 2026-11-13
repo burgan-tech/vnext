@@ -50,7 +50,9 @@ public sealed class DefinitionAppService(
                     return migrationResult;
             }
 
-            var instance = await instanceRepository.FindByIdentifierWithFullDataAsync(input.Key, cancellationToken)
+            // No data rows are loaded: the version-exists check reads version strings only and the new
+            // row goes through the write funnel — loading every published body here ran hosts out of memory.
+            var instance = await instanceRepository.FindByIdentifierForDataAppendAsync(input.Key, cancellationToken)
                            ?? Instance.Create(GuidGenerator.Create(), input.Flow, input.FlowVersion, input.Key);
 
             instance.AddTags(input.Tags.ToArray());
@@ -188,8 +190,8 @@ public sealed class DefinitionAppService(
         PublishInput input,
         CancellationToken cancellationToken)
     {
-        var existingInstanceData = instance.FindData(input.Version);
-        if (existingInstanceData != null)
+        var existingVersion = await instanceRepository.FindDataVersionAsync(instance.Id, input.Version, cancellationToken);
+        if (existingVersion != null)
         {
             if (input.Data?.Any() == true)
             {
@@ -265,10 +267,11 @@ public sealed class DefinitionAppService(
         PublishDataInput dataItem,
         CancellationToken cancellationToken)
     {
-        var instance = await instanceRepo.FindByIdentifierWithFullDataAsync(dataItem.Key, cancellationToken)
+        var instance = await instanceRepo.FindByIdentifierForDataAppendAsync(dataItem.Key, cancellationToken)
                        ?? Instance.Create(GuidGenerator.Create(), input.Key, input.FlowVersion, dataItem.Key);
 
-        if (instance.FindData(dataItem.Version) != null)
+        if (!instance.IsTransient
+            && await instanceRepo.FindDataVersionAsync(instance.Id, dataItem.Version, cancellationToken) != null)
         {
             Logger.LogWarning(
                 "Instance {InstanceKey} already has data version {Version}",
@@ -346,13 +349,14 @@ public sealed class DefinitionAppService(
 
         using (currentSchema.Change(input.Flow))
         {
-            var instance = await instanceRepository.FindByIdentifierWithFullDataAsync(input.Key, cancellationToken);
+            var instance = await instanceRepository.FindByIdentifierForDataAppendAsync(input.Key, cancellationToken);
             if (instance == null)
             {
                 return Result.Fail(WorkflowErrors.InstanceNotFound(input.Key));
             }
 
-            var instanceData = instance.FindData(input.Version);
+            // One body — the resolved version's — never the whole history.
+            var instanceData = await instanceRepository.FindDataByVersionAsync(instance.Id, input.Version, cancellationToken);
             if (instanceData == null)
             {
                 return Result.Fail(WorkflowErrors.InstanceDataNotFound(input.Key, input.Version));

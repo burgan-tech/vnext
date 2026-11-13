@@ -141,11 +141,41 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Loads a change-tracked instance with the full <see cref="Instance.DataList"/>.
-    /// Use for write paths that need to inspect non-latest versions
-    /// (e.g. duplicate version checks during publish).
+    /// Loads a change-tracked instance with the full <see cref="Instance.DataList"/> — every stored
+    /// version's body. Do not use it to answer "does this version exist": that materializes the whole
+    /// history (a component with hundreds of large published versions costs gigabytes). Use
+    /// <see cref="FindByIdentifierForDataAppendAsync"/> + <see cref="FindDataVersionAsync"/> instead.
     /// </summary>
     Task<Instance?> FindByIdentifierWithFullDataAsync(string? identifier,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Loads a change-tracked instance for a write path that appends an explicit data version through
+    /// the write funnel (definition publish, seed data): same identifier resolution as
+    /// <see cref="FindByIdentifierWithFullDataAsync"/> (id first, then the newest instance with the key)
+    /// and the open correlations, but NO data rows. The aggregate is marked partially loaded; resolve a
+    /// stored version with <see cref="FindDataVersionAsync"/> / <see cref="FindDataByVersionAsync"/>,
+    /// never with <see cref="Instance.FindData"/>.
+    /// </summary>
+    Task<Instance?> FindByIdentifierForDataAppendAsync(string? identifier,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Resolves <paramref name="version"/> against the stored data versions of one instance with the same
+    /// rule as <see cref="Instance.FindData"/> (<see cref="InstanceDataVersionComparer.FindBestMatch"/>:
+    /// exact for a full version, highest match for an artifact / partial version, highest for
+    /// <c>latest</c>). Reads the version strings only — no data body is loaded. Returns <c>null</c> when
+    /// nothing matches.
+    /// </summary>
+    Task<string?> FindDataVersionAsync(Guid instanceId, string? version,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The data row <see cref="Instance.FindData"/> would return for <paramref name="version"/> (resolved as in
+    /// <see cref="FindDataVersionAsync"/>; the highest <see cref="InstanceData.VersionNo"/> of that version),
+    /// loaded alone and no-tracking — one body, never the history. Returns <c>null</c> when nothing matches.
+    /// </summary>
+    Task<InstanceData?> FindDataByVersionAsync(Guid instanceId, string? version,
         CancellationToken cancellationToken = default);
 
     Task<Result<Instance>> GetActiveAsync(string identifier, CancellationToken cancellationToken = default);

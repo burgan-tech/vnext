@@ -1504,6 +1504,74 @@ public sealed class EfCoreInstanceRepository(
             .FirstOrDefaultAsync(cancellationToken);
     }
 
+    /// <inheritdoc />
+    public async Task<Instance?> FindByIdentifierForDataAppendAsync(string? identifier,
+        CancellationToken cancellationToken = default)
+    {
+        // The publish path's load: tracked (tags / ModifiedAt are saved through it) but without
+        // DataList — the version-exists check reads version strings only (FindDataVersionAsync) and the
+        // new row goes through the write funnel, which reads its own head under the row lock.
+        var dbSet = await GetDbSetAsync();
+        var query = dbSet
+            .Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted))
+            .AsSplitQuery();
+
+        if (Guid.TryParse(identifier, out var instanceId))
+        {
+            var response = await query
+                .FirstOrDefaultAsync(
+                    p => p.Id == instanceId,
+                    cancellationToken);
+            if (response != null)
+            {
+                response.MarkDataPartiallyLoaded();
+                return response;
+            }
+        }
+
+        // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
+        // keeps the fallback deterministic by returning the most recent instance for the key.
+        var byKey = await query
+            .Where(p => p.Key == identifier)
+            .OrderByDescending(p => p.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+        byKey?.MarkDataPartiallyLoaded();
+        return byKey;
+    }
+
+    /// <inheritdoc />
+    public async Task<string?> FindDataVersionAsync(Guid instanceId, string? version,
+        CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        var versions = await context.InstancesData
+            .AsNoTracking()
+            .Where(d => d.InstanceId == instanceId)
+            .Select(d => d.Version)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        return InstanceDataVersionComparer.FindBestMatch(versions, version);
+    }
+
+    /// <inheritdoc />
+    public async Task<InstanceData?> FindDataByVersionAsync(Guid instanceId, string? version,
+        CancellationToken cancellationToken = default)
+    {
+        var resolved = await FindDataVersionAsync(instanceId, version, cancellationToken);
+        if (resolved is null)
+        {
+            return null;
+        }
+
+        var context = await GetDbContextAsync();
+        return await context.InstancesData
+            .AsNoTracking()
+            .Where(d => d.InstanceId == instanceId && d.Version == resolved)
+            .OrderByDescending(d => d.VersionNo)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
     /// <summary>
     /// Finds active instance data with smart version matching.
     /// </summary>
