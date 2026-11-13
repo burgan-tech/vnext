@@ -36,7 +36,12 @@ public sealed class RuntimeCacheBackend<T>(
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var uowManager = scope.ServiceProvider.GetRequiredService<IUnitOfWorkManager>();
-        await using var uow = uowManager.Begin(new UnitOfWorkOptions
+        // Synchronous Begin on purpose, not BeginAsync: BeginAsync sets the ambient (AsyncLocal) unit of
+        // work inside its own async state machine, so the assignment never flows back here and the
+        // repository calls below would resolve the CALLER's DbContext again — the shared-context failure
+        // this detached scope exists to prevent. Begin does no async work (Aether IUnitOfWorkManager.Begin).
+        await using var uow = uowManager.Begin(new UnitOfWorkOptions // NOSONAR S6966: see above
+
         {
             Scope = UnitOfWorkScopeOption.RequiresNew,
             IsTransactional = false

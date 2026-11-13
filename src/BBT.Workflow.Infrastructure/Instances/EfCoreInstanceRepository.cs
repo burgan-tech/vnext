@@ -2427,13 +2427,16 @@ public sealed class EfCoreInstanceRepository(
         // The narrow include also lands on UX_InstancesData_Instance_IsLatest, the unique partial
         // index that exists for exactly this access.
         //
-        // No AsSplitQuery: with one data row and at most a couple of open correlations the product
-        // is already ~1, so a second round trip would buy nothing.
+        // Split: the two collection includes in one statement would repeat each instance's latest
+        // jsonb row once per open correlation. Today that product is ~1 (one data row, at most a
+        // couple of open SubFlow correlations), so this costs two extra round trips per batch rather
+        // than saving rows — the price of never letting the shape degrade into a Cartesian product.
         var instances = await dbSet
             .Where(i => instanceIds.Contains(i.Id))
             .Include(i => i.DataList.Where(d => d.IsLatest))
             .Include(i => i.ChildCorrelations
                 .Where(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow))
+            .AsSplitQuery()
             .AsNoTracking()
             .ToListAsync(cancellationToken);
 
