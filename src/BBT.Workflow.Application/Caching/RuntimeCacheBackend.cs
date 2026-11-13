@@ -77,6 +77,7 @@ public sealed class RuntimeCacheBackend<T>(
         return Result<List<T>>.Ok(filtered);
     }, cancellationToken);
 
+    /// <inheritdoc />
     public Task<Result<T>> LoadAsync(
         string domain,
         string key,
@@ -130,10 +131,12 @@ public sealed class RuntimeCacheBackend<T>(
         var runtimeInfoProvider = services.GetRequiredService<IRuntimeInfoProvider>();
 
         runtimeInfoProvider.Check(domain);
-        using var domainScope = runtimeInfoProvider.UseDomain(domain);
-
-        var versions = await runtimeService.GetVersionsAsync<T>(key, cancellationToken);
-        return Result<IReadOnlyList<string>>.Ok(versions);
+        // Read as the requested domain, which differs from the caller's for a co-hosted component.
+        using (runtimeInfoProvider.UseDomain(domain))
+        {
+            var versions = await runtimeService.GetVersionsAsync<T>(key, cancellationToken);
+            return Result<IReadOnlyList<string>>.Ok(versions);
+        }
     }, cancellationToken);
 
     /// <summary>

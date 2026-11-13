@@ -1585,6 +1585,7 @@ public sealed class EfCoreInstanceRepository(
             .ToListAsync(cancellationToken);
     }
 
+    /// <inheritdoc />
     public async Task<List<InstanceAndDataModel>> GetActiveDataListByKeyAsync(string key,
         CancellationToken cancellationToken = default)
     {

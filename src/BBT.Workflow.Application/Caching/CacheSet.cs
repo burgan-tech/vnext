@@ -459,13 +459,14 @@ public class CacheSet<T>(
         Activity? activity,
         CancellationToken cancellationToken)
     {
-        List<string> versions;
+        List<string> versions = [];
         var applyPolicy = AppliesVersionPolicy(key);
         string? pointer = null;
         try
         {
             var versionsResult = await backend.LoadVersionsAsync(domain, key, cancellationToken);
-            versions = versionsResult.IsSuccess ? [.. versionsResult.Value!] : [];
+            if (versionsResult.IsSuccess)
+                versions = [.. versionsResult.Value!];
 
             if (applyPolicy)
             {
@@ -493,8 +494,8 @@ public class CacheSet<T>(
         // relative to its transaction. Adding it makes the resolution below correct either way — and
         // because the winner is re-resolved rather than assumed, it stays correct when the published
         // version is older than something already stored.
-        if (!versions.Any(v => string.Equals(v, entity.Version, StringComparison.OrdinalIgnoreCase)))
-            versions = [.. versions, entity.Version];
+        if (!versions.Contains(entity.Version, StringComparer.OrdinalIgnoreCase))
+            versions.Add(entity.Version);
 
         // A winner other than the published entity (publishing an older patch, say) is fetched once
         // through the full-version path; the common case — the new version wins — loads nothing.

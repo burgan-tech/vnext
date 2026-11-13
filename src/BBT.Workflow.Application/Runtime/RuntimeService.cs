@@ -26,10 +26,12 @@ public sealed class RuntimeService(
 {
     private const int PageSize = 100;
 
+    /// <inheritdoc />
     public async Task<IEnumerable<T?>> GetAsync<T>(CancellationToken cancellationToken = default)
         where T : class, IDomainEntity, IReferenceSetter
         => await GetAsync<T>(since: null, cancellationToken);
 
+    /// <inheritdoc />
     public async Task<IEnumerable<T?>> GetAsync<T>(DateTime? since, CancellationToken cancellationToken = default)
         where T : class, IDomainEntity, IReferenceSetter
     {
@@ -81,6 +83,7 @@ public sealed class RuntimeService(
         }
     }
 
+    /// <inheritdoc />
     public async Task<IEnumerable<T?>> GetAsync<T>(string key, CancellationToken cancellationToken = default)
         where T : class, IDomainEntity, IReferenceSetter
     {
@@ -134,6 +137,7 @@ public sealed class RuntimeService(
         }
     }
 
+    /// <inheritdoc />
     public async Task<IEnumerable<string>> GetActiveCacheKeysAsync<T>(CancellationToken cancellationToken = default)
         where T : class, IDomainEntity, IReferenceSetter
     {
@@ -149,6 +153,7 @@ public sealed class RuntimeService(
         }
     }
 
+    /// <inheritdoc />
     public async Task<T?> GetAsync<T>(string key, string version,
         CancellationToken cancellationToken = default) where T : class, IDomainEntity, IReferenceSetter
     {

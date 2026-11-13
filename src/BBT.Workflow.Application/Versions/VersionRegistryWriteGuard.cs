@@ -47,22 +47,8 @@ public sealed class VersionRegistryWriteGuard(
         if (!DefaultVersionResolver.IsValidPointer(pointer))
             return Reject(domain, flowKey, pointer);
 
-        // Version strings only: validating a pointer never needs a body.
-        Result<IReadOnlyList<string>> published;
-        try
-        {
-            published = await backend.LoadVersionsAsync(domain, flowKey, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            // Cause stays in the log; the client gets the fixed 503 text.
-            logger.VersionRegistryReadFailed(domain, flowKey, WorkflowErrorCodes.VersionRegistryUnavailable, ex);
+        if (await LoadPublishedVersionsAsync(domain, flowKey, cancellationToken) is not { } published)
             return Result.Fail(WorkflowErrors.VersionRegistryUnavailable(domain, flowKey));
-        }
 
         if (!published.IsSuccess)
         {
@@ -77,6 +63,31 @@ public sealed class VersionRegistryWriteGuard(
         return versions.Count == 0 || resolution.Outcome == VersionResolutionOutcome.PointerInvalid
             ? Reject(domain, flowKey, pointer)
             : Result.Ok();
+    }
+
+    /// <summary>
+    /// The flow's published version strings — validating a pointer never needs a body. Null when the read
+    /// failed for a reason other than the caller's cancellation; the cause is logged and the client gets the
+    /// fixed 503 text.
+    /// </summary>
+    private async Task<Result<IReadOnlyList<string>>?> LoadPublishedVersionsAsync(
+        string domain,
+        string flowKey,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await backend.LoadVersionsAsync(domain, flowKey, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.VersionRegistryReadFailed(domain, flowKey, WorkflowErrorCodes.VersionRegistryUnavailable, ex);
+            return null;
+        }
     }
 
     private Result Reject(string domain, string flowKey, string pointer)
