@@ -375,18 +375,11 @@ public sealed class EfCoreInstanceRepository(
     public override async Task<Instance> UpdateAsync(Instance entity, bool autoSave = false,
         CancellationToken cancellationToken = default)
     {
-        var dbContext = await GetDbContextAsync();
-        var entry = dbContext.Entry(entity);
+        var context = await GetDbContextAsync();
+        var entry = context.Entry(entity);
 
-        InstanceStatus? originalStatus = null;
         if (entry.State != EntityState.Detached)
         {
-            var statusProperty = entry.Property(nameof(Instance.Status));
-            if (statusProperty.IsModified)
-            {
-                originalStatus = (InstanceStatus)statusProperty.OriginalValue!;
-            }
-
             // Type is write-once: the aggregate stamps it at creation and nothing may rewrite it.
             // Pinning the property clean keeps the column out of every UPDATE statement.
             // SetAfterSaveBehavior(Throw) would be the declarative form and is NOT usable here —
@@ -406,7 +399,7 @@ public sealed class EfCoreInstanceRepository(
         // Marking the pending rows Added first pins them; Update(root) skips already-tracked entries.
         foreach (var incident in entity.GetPendingIncidents())
         {
-            var incidentEntry = dbContext.Entry(incident);
+            var incidentEntry = context.Entry(incident);
             if (incidentEntry.State == EntityState.Detached)
                 incidentEntry.State = EntityState.Added;
         }
@@ -420,18 +413,13 @@ public sealed class EfCoreInstanceRepository(
         {
             foreach (var row in entity.DataList)
             {
-                if (dbContext.Entry(row).State == EntityState.Detached)
-                    dbContext.Attach(row);
+                if (context.Entry(row).State == EntityState.Detached)
+                    context.Attach(row);
             }
         }
 
         var result = await base.UpdateAsync(entity, autoSave, cancellationToken);
         entity.ClearPendingIncidents();
-
-        if (originalStatus != null && !originalStatus.Equals(entity.Status))
-        {
-            await HandleStatusChangeMetrics(entity, originalStatus, entity.Status);
-        }
 
         try
         {
@@ -738,8 +726,8 @@ public sealed class EfCoreInstanceRepository(
     /// </summary>
     private async Task AlignStatusBaselineAsync(Instance instance)
     {
-        var dbContext = await GetDbContextAsync();
-        var entry = dbContext.Entry(instance);
+        var context = await GetDbContextAsync();
+        var entry = context.Entry(instance);
         if (entry.State == EntityState.Detached)
         {
             return;
@@ -765,8 +753,8 @@ public sealed class EfCoreInstanceRepository(
     /// </summary>
     private async Task AlignUnfaultBaselineAsync(Instance instance)
     {
-        var dbContext = await GetDbContextAsync();
-        var entry = dbContext.Entry(instance);
+        var context = await GetDbContextAsync();
+        var entry = context.Entry(instance);
         if (entry.State == EntityState.Detached)
         {
             return;
@@ -1504,6 +1492,74 @@ public sealed class EfCoreInstanceRepository(
             .FirstOrDefaultAsync(cancellationToken);
     }
 
+    /// <inheritdoc />
+    public async Task<Instance?> FindByIdentifierForDataAppendAsync(string? identifier,
+        CancellationToken cancellationToken = default)
+    {
+        // The publish path's load: tracked (tags / ModifiedAt are saved through it) but without
+        // DataList — the version-exists check reads version strings only (FindDataVersionAsync) and the
+        // new row goes through the write funnel, which reads its own head under the row lock.
+        var dbSet = await GetDbSetAsync();
+        var query = dbSet
+            .Include(i => i.ChildCorrelations.Where(c => !c.IsCompleted))
+            .AsSplitQuery();
+
+        if (Guid.TryParse(identifier, out var instanceId))
+        {
+            var response = await query
+                .FirstOrDefaultAsync(
+                    p => p.Id == instanceId,
+                    cancellationToken);
+            if (response != null)
+            {
+                response.MarkDataPartiallyLoaded();
+                return response;
+            }
+        }
+
+        // Key is not unique across terminal/historical rows; OrderByDescending(CreatedAt)
+        // keeps the fallback deterministic by returning the most recent instance for the key.
+        var byKey = await query
+            .Where(p => p.Key == identifier)
+            .OrderByDescending(p => p.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+        byKey?.MarkDataPartiallyLoaded();
+        return byKey;
+    }
+
+    /// <inheritdoc />
+    public async Task<string?> FindDataVersionAsync(Guid instanceId, string? version,
+        CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        var versions = await context.InstancesData
+            .AsNoTracking()
+            .Where(d => d.InstanceId == instanceId)
+            .Select(d => d.Version)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        return InstanceDataVersionComparer.FindBestMatch(versions, version);
+    }
+
+    /// <inheritdoc />
+    public async Task<InstanceData?> FindDataByVersionAsync(Guid instanceId, string? version,
+        CancellationToken cancellationToken = default)
+    {
+        var resolved = await FindDataVersionAsync(instanceId, version, cancellationToken);
+        if (resolved is null)
+        {
+            return null;
+        }
+
+        var context = await GetDbContextAsync();
+        return await context.InstancesData
+            .AsNoTracking()
+            .Where(d => d.InstanceId == instanceId && d.Version == resolved)
+            .OrderByDescending(d => d.VersionNo)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
     /// <summary>
     /// Finds active instance data with smart version matching.
     /// </summary>
@@ -1856,7 +1912,7 @@ public sealed class EfCoreInstanceRepository(
             "Data",
             schema,
             includeFunc: null,
-            applyOrderBy: (q, orderBy) => InstanceOrderByApplicator.Apply((IQueryable<Instance>)q, orderBy),
+            applyOrderBy: (q, orderBy) => InstanceOrderByApplicator.Apply(q, orderBy),
             applyOrderByRaw: (ctx, sch, orderBy) =>
             {
                 if (orderBy == null) return ((WorkflowDbContext)ctx).Instances.AsQueryable();
@@ -2216,33 +2272,6 @@ public sealed class EfCoreInstanceRepository(
     }
 
 
-    /// <summary>
-    /// Handles metrics recording for instance status changes
-    /// </summary>
-    private async Task HandleStatusChangeMetrics(Instance entity, InstanceStatus oldStatus, InstanceStatus newStatus)
-    {
-        // Update status transition metrics (handles all status gauge changes)
-
-        // Record specific completion events with duration
-        if (newStatus.Equals(InstanceStatus.Completed))
-        {
-            var durationSeconds = entity.Duration?.TotalSeconds;
-        }
-
-        // Record specific error events with duration
-        if (newStatus.Equals(InstanceStatus.Faulted))
-        {
-            var durationSeconds = entity.Duration?.TotalSeconds;
-
-            // Record duration for faulted instances
-            if (durationSeconds.HasValue)
-            {
-            }
-        }
-
-        await Task.CompletedTask; // For potential future async operations
-    }
-
     /// <inheritdoc />
     public async Task<List<HumanTaskCandidate>> GetHumanTaskCandidatesAcrossFlowsAsync(
         IReadOnlyList<string> flowKeys,
@@ -2396,13 +2425,7 @@ public sealed class EfCoreInstanceRepository(
         if (string.IsNullOrEmpty(value) || value.Length > 63)
             return false;
 
-        foreach (var c in value)
-        {
-            if (!char.IsAsciiLetterOrDigit(c) && c != '_' && c != '-')
-                return false;
-        }
-
-        return true;
+        return value.All(c => char.IsAsciiLetterOrDigit(c) || c == '_' || c == '-');
     }
 
     /// <inheritdoc />
@@ -2552,10 +2575,10 @@ public sealed class EfCoreInstanceRepository(
         var context = await GetDbContextAsync();
         var result = await context.Database
             .SqlQueryRaw<InstanceDurationRaw>(
-                $"SELECT COALESCE(AVG(EXTRACT(EPOCH FROM \"Duration\") * 1000), 0) AS \"AvgMs\", " +
-                $"COALESCE(MIN(EXTRACT(EPOCH FROM \"Duration\") * 1000), 0) AS \"MinMs\", " +
-                $"COALESCE(MAX(EXTRACT(EPOCH FROM \"Duration\") * 1000), 0) AS \"MaxMs\", " +
-                $"COUNT(*) AS \"CompletedCount\" " +
+                "SELECT COALESCE(AVG(EXTRACT(EPOCH FROM \"Duration\") * 1000), 0) AS \"AvgMs\", " +
+                "COALESCE(MIN(EXTRACT(EPOCH FROM \"Duration\") * 1000), 0) AS \"MinMs\", " +
+                "COALESCE(MAX(EXTRACT(EPOCH FROM \"Duration\") * 1000), 0) AS \"MaxMs\", " +
+                "COUNT(*) AS \"CompletedCount\" " +
                 $"FROM \"{schema}\".\"Instances\" WHERE \"CompletedAt\" IS NOT NULL AND \"Duration\" IS NOT NULL")
             .FirstOrDefaultAsync(cancellationToken);
         return result is not null
