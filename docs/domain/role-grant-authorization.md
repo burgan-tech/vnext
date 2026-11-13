@@ -518,7 +518,7 @@ reads went out with no credential at all, so one task answered differently by do
 Copying a field read by a task or through `context.Related` into instance data makes it visible to callers the grants would otherwise
 have filtered or masked it from. Document it where you copy it. See [Field Masking](field-masking.md).
 
-#### Caller credential on instance calls
+### Caller credential on instance calls
 
 When the runtime calls another instance — a SubFlow start, a `SubProcess`, `Start` or `DirectTrigger` task, or a
 `GetInstance`, `GetInstances` or `GetInstanceData` task — it presents a set of credential headers: `sub`, `act_sub`,

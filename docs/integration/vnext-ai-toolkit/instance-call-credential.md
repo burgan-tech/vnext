@@ -1,6 +1,6 @@
 ---
 product: vnext-ai-toolkit
-milestone: v0.0.106
+milestone: v0.0.107
 status: pending
 ---
 
@@ -9,7 +9,7 @@ status: pending
 ## Context
 
 - vNext PR: the instance-call credential rule PR (branch `claude/subflow-subprocess-credentials-704267`)
-- Milestone: v0.0.106
+- Milestone: v0.0.107
 - Decision: product-owner decisions of 2026-11-13 (rule kept explicit in docs and code comments; no switch for the old behaviour)
 
 ## What changed in the runtime
@@ -25,6 +25,27 @@ fragment `instance-call-credential-rule.json`.
 - Mapping templates that forward `sub` / `act_sub` from the request by hand into a SubFlow input mapping or an instance task's headers no longer need to: an absent credential is filled from the caller. Drop the manual forward.
 - Teach the meaning of a blank value: to stop the caller's identity reaching the target, set the header to `""` (not omit it). Omitting it means "use the caller".
 - Note that a SubFlow input mapping's `Headers` must be a `Dictionary<string, string?>` or an `ExpandoObject`, and that the rule covers SubFlow start and the `SubProcess`, `Start`, `DirectTrigger`, `GetInstance`, `GetInstances` and `GetInstanceData` tasks only.
+
+## Contract and examples
+
+What a scaffolded mapping should and should not write (canonical statement: `docs/domain/role-grant-authorization.md#caller-credential-on-instance-calls`):
+
+| What the mapping did | What the target sees |
+|---|---|
+| Set the key to a non-blank value | The mapping's value |
+| Set the key to a blank value (`""`, whitespace, `null`) | The credential does NOT reach the target; the caller's value is NOT added |
+| Did not set the key | The caller's value (the parent hop's request header) |
+
+```csharp
+// SubFlow input mapping: blank `sub` on purpose; `role` is omitted, so the caller's role still travels.
+public async Task<ScriptResponse> InputHandler(WorkflowTask task, ScriptContext context) =>
+    new ScriptResponse
+    {
+        Headers = new Dictionary<string, string?> { ["sub"] = "" }
+    };
+```
+
+Write `["sub"] = ""` to block the identity; do not write `["sub"] = <request sub>` by hand, and do not omit the key when the identity must be blocked.
 
 ## Acceptance
 

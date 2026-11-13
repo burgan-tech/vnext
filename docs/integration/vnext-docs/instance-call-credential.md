@@ -1,6 +1,6 @@
 ---
 product: vnext-docs
-milestone: v0.0.106
+milestone: v0.0.107
 status: pending
 ---
 
@@ -9,7 +9,7 @@ status: pending
 ## Context
 
 - vNext PR: the instance-call credential rule PR (branch `claude/subflow-subprocess-credentials-704267`)
-- Milestone: v0.0.106
+- Milestone: v0.0.107
 - Decision: product-owner decisions of 2026-11-13 (rule kept explicit in docs and code comments; no switch for the old behaviour)
 
 ## What changed in the runtime
@@ -26,6 +26,25 @@ fragment `instance-call-credential-rule.json`.
 - Document the behaviour changes: a same-domain SubFlow now carries the caller's credential by default (a child state with `interaction.longPoll.roles` pauses for the caller's roles unless the parent blanks `role`); a blank credential in a trigger task's headers is no longer filled from the caller; `sub` / `act_sub` are no longer completed from Activity baggage.
 - Document the known difference: a cross-domain SubFlow start also forwards `userId`, `given_name`, `family_name`, `act_uid`, `consent_id` from the ambient user; a same-domain start does not.
 - Document that a SubFlow input mapping's `Headers` must be a `Dictionary<string, string?>` or an `ExpandoObject`, and that HTTP, SOAP, DaprService and DaprHttpEndpoint tasks keep the older fill-when-blank rule.
+
+## Contract and examples
+
+Summary of the rule (canonical statement: `docs/domain/role-grant-authorization.md#caller-credential-on-instance-calls`):
+
+| What the mapping did | What the target sees |
+|---|---|
+| Set the key to a non-blank value | The mapping's value |
+| Set the key to a blank value (`""`, whitespace, `null`) | The credential does NOT reach the target; the caller's value is NOT added |
+| Did not set the key | The caller's value (the parent hop's request header) |
+
+```csharp
+// SubFlow input mapping: blank `sub` on purpose; `role` is omitted, so the caller's role still travels.
+public async Task<ScriptResponse> InputHandler(WorkflowTask task, ScriptContext context) =>
+    new ScriptResponse
+    {
+        Headers = new Dictionary<string, string?> { ["sub"] = "" }
+    };
+```
 
 ## Acceptance
 

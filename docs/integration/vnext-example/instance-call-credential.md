@@ -1,6 +1,6 @@
 ---
 product: vnext-example
-milestone: v0.0.106
+milestone: v0.0.107
 status: pending
 ---
 
@@ -9,7 +9,7 @@ status: pending
 ## Context
 
 - vNext PR: the instance-call credential rule PR (branch `claude/subflow-subprocess-credentials-704267`)
-- Milestone: v0.0.106
+- Milestone: v0.0.107
 - Decision: product-owner decisions of 2026-11-13 (rule kept explicit in docs and code comments; no switch for the old behaviour)
 
 ## What changed in the runtime
@@ -26,6 +26,25 @@ fragment `instance-call-credential-rule.json`.
 - Assert the same-domain child row: `CreatedBy` = `act_sub`, `CreatedByBehalfOf` = `sub`.
 - Assert that a child whose parent blanked `sub` does not see the first caller's `sub` (no baggage fallback), and that a hop without a caller (timer, automatic transition) adds no credential.
 - Each scenario gets a README and a row in `TEST-SCENARIOS.md` in the same commit; extend an existing scenario before adding one.
+
+## Contract and examples
+
+Summary of the rule (canonical statement: `docs/domain/role-grant-authorization.md#caller-credential-on-instance-calls`):
+
+| What the mapping did | What the target sees |
+|---|---|
+| Set the key to a non-blank value | The mapping's value |
+| Set the key to a blank value (`""`, whitespace, `null`) | The credential does NOT reach the target; the caller's value is NOT added |
+| Did not set the key | The caller's value (the parent hop's request header) |
+
+```csharp
+// SubFlow input mapping: blank `sub` on purpose; `role` is omitted, so the caller's role still travels.
+public async Task<ScriptResponse> InputHandler(WorkflowTask task, ScriptContext context) =>
+    new ScriptResponse
+    {
+        Headers = new Dictionary<string, string?> { ["sub"] = "" }
+    };
+```
 
 ## Acceptance
 
