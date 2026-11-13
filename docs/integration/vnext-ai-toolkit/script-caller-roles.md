@@ -1,7 +1,7 @@
 ---
 product: vnext-ai-toolkit
 milestone: v0.0.105
-status: pending
+status: done
 ---
 
 # Caller roles in selection rules (`context.Caller`) — Handoff for vnext-ai-toolkit
@@ -11,6 +11,7 @@ status: pending
 - vNext PR: the script-caller-roles PR of milestone v0.0.105 (stacked on the rule-based transition schemas PR)
 - Milestone: v0.0.105
 - Decision: council `2026-11-12-script-caller-roles` (Chair APPROVE_WITH_CONDITIONS)
+- Sibling PR: https://github.com/burgan-tech/vnext-ai-toolkit/pull/33 (released in toolkit v0.0.10)
 
 ## What changed in the runtime
 
@@ -50,6 +51,20 @@ Selection by role is not authorization. Decisions: councils `2026-11-12-script-c
 ## Acceptance
 
 - A scaffolded role-based view or schema rule uses `context.Caller` and ends with a rule-less fallback.
+
+## Resolution
+
+Done in vnext-ai-toolkit v0.0.10 (burgan-tech/vnext-ai-toolkit#33):
+
+- `references/concepts/csx-contracts.md` § Caller roles documents `HasRoleAsync`, `RolesAsync`,
+  `IsAvailable`, `ResolutionFailed`, `RolesFromHeader`, the per-surface table, fail-closed `110006`, and
+  the limits (selection is not authorization, positive tests, least-privileged fallback, `$` / dynamic
+  grants and combinators not expanded).
+- `workflow-scaffold`, `view-design`, `component-function`, `authoring-vnext-components` and
+  `CLAUDE.md.tmpl` scaffold role rules with `await context.Caller.HasRoleAsync("x")` and a rule-less
+  fallback; automatic rules and timers get the `IsAvailable` guard.
+- The reviewer, the security checklist and domain-check check 21 flag `Headers.role` parsing,
+  `context.Caller` in task / transition / event mappings, and unguarded reads on System hops.
 
 ## Out of scope
 
