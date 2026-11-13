@@ -23,7 +23,8 @@ namespace BBT.Workflow.Application.Tests.Tasks.Executors;
 
 /// <summary>
 /// A same-domain GetInstance read runs as the header set its remote invoker would send cross-domain — the task's own
-/// headers, plus the pipeline caller's sub / act_sub where the task did not set them. <c>ICurrentUser</c> is AsyncLocal
+/// headers, with each credential the mapping left ABSENT filled from the caller's request headers (never from baggage);
+/// a blank credential stays blank. <c>ICurrentUser</c> is AsyncLocal
 /// and role resolution reads it before the headers, so the executor replaces it for the read and restores it afterwards.
 /// </summary>
 public sealed class TriggerTaskReadCredentialTests

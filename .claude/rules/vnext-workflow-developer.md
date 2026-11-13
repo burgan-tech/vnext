@@ -139,7 +139,7 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 - `x-masking.roles` / `x-encryption.roles` are allow-only exemption lists; `deny` is rejected at publish;
   a role-less caller never satisfies a role-bound grant (`IsUnprovableRoleBoundGrant`).
 - ONE read path: `IInstanceDataReadService` (GET, list, data function, sync response, Get* tasks). Do not
-  call the filter from a surface directly. Get* tasks read as their header set (`AppendCallerCredential`).
+  call the filter from a surface directly. Get* tasks read as their header set.
 - `InstanceData.Data` is the column as stored (tokens included). Decrypt only via
   `IInstanceDataProtector.UnprotectAsync` / `context.Instance.DecryptAsync`; never reintroduce a plaintext
   member; never write `InstancesData."Data"` outside `InstanceDataWriteService`. Prefix-driven, never schema-driven.
@@ -207,6 +207,7 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 - The `queryRoles` gate reads the instance's OWN `CurrentState`, never `EffectiveState`.
 - `transition.roles` is not enforced at execution, by design — do not "fix" it. `cancel`/`exit` are
   parent-retained. Under `morph-idm` a non-blank `role` header replaces the service's answer.
+- Instance-call credential (SubFlow start, SubProcess/Start/DirectTrigger/Get* tasks): the mapping decides, blank included; only an ABSENT credential is filled from the caller. Never read blank as "not set"; never fill from baggage (`HttpTaskInvocation.ResolveInstanceCallCredential`). Full guide: `docs/domain/role-grant-authorization.md#caller-credential-on-instance-calls`.
 - Full guide: `docs/domain/role-grant-authorization.md`, `docs/domain/authorize-function.md`.
 
 ## Sync vs Async
