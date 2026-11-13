@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Aether.Users;
+using BBT.Workflow.Authorization;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.ErrorHandling;
@@ -237,14 +238,11 @@ public abstract class TriggerTaskExecutorBase<TTask>(
 
     /// <summary>
     /// Makes <paramref name="credential"/> the current user for the read, the way the target domain's middleware would
-    /// for the same headers. Always replaces the ambient user: <c>ICurrentUser</c> is AsyncLocal and role resolution reads
-    /// it before the headers, so leaving it in place would evaluate the pipeline caller instead of the task. An empty
-    /// credential is an unauthenticated, role-less user (<c>ChangeFromHeaders</c> is a no-op for an empty set).
+    /// for the same headers. Blank credentials are removed from the dictionary in place (the same instance is the read
+    /// input's headers). See <see cref="CallerCredentialScope"/>.
     /// </summary>
-    protected static IDisposable ReadAs(ICurrentUser currentUser, IReadOnlyDictionary<string, string?> credential)
-        => credential.Count == 0
-            ? currentUser.Change(new BasicUserInfo(null))
-            : currentUser.ChangeFromHeaders(credential);
+    protected static IDisposable ReadAs(ICurrentUser currentUser, Dictionary<string, string?> credential)
+        => CallerCredentialScope.Enter(currentUser, credential);
 
     /// <summary>
     /// Converts task headers (JsonElement?) to Dictionary for local Input objects.
