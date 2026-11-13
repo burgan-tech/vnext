@@ -575,9 +575,9 @@ no caller (a timer, an automatic transition) adds no credential.
 
 **Mapping header type.** A SubFlow input mapping's `Headers` may be a string dictionary
 (`Dictionary<string, string?>`), an object dictionary (`ExpandoObject`, `Dictionary<string, object>`; values by their
-text), a JSON object (`JsonElement`), or an object with readable properties (an anonymous type such as
-`new { sub = "" }`, or a POCO). Any other non-null shape — a string, a number, a list, a JSON value that is not an
-object — fails the SubFlow start (`SubFlowInputMappingFailed`) before any child is started; it is never read as "no key
+text), a JSON object (`JsonElement`), or an anonymous object or a script-defined class with readable properties (such as
+`new { sub = "" }`). Any other non-null shape — a string, a number, a list, a tuple, a framework object, a JSON value
+that is not an object — fails the SubFlow start (`SubFlowInputMappingFailed`) before any child is started; it is never read as "no key
 set". A trigger task's `Headers` is a JSON object: a number or `true` / `false` value reads as its text, and an object
 or array value as null — so a credential key given such a value is blank and the caller's value is withheld.
 

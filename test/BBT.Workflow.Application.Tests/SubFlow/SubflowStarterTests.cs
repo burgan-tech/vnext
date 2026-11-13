@@ -260,7 +260,42 @@ public class SubflowStarterTests
         "sub=",
         42,
         new[] { "sub" },
+        (sub: "", role: ""),
+        Tuple.Create("sub", ""),
+        new KeyValuePair<string, string>("sub", ""),
+        new FieldsOnlyHeaders(),
+        new ThrowingGetterHeaders(),
+        new Uri("http://x/"),
     };
+
+    private sealed class FieldsOnlyHeaders
+    {
+#pragma warning disable CS0414, IDE1006 // the field is the point: fields are not read as headers
+        public string sub = "";
+#pragma warning restore CS0414, IDE1006
+    }
+
+    private sealed class ThrowingGetterHeaders
+    {
+        public string sub => throw new InvalidOperationException("getter fails");
+    }
+
+    private sealed class ScriptDefinedHeaders
+    {
+#pragma warning disable IDE1006 // header names are lower-case on purpose
+        public string sub { get; set; } = "";
+        public string role { get; set; } = "maker";
+#pragma warning restore IDE1006
+    }
+
+    [Fact]
+    public async Task ScriptDefinedClassMappingHeaders_AreHonoured()
+    {
+        var input = await StartCapturingHeadersAsync(new ScriptDefinedHeaders(), CallerContext());
+
+        input.Headers["sub"].ShouldBe("");
+        input.Headers["role"].ShouldBe("maker");
+    }
 
     [Theory]
     [MemberData(nameof(UnreadableHeaderShapes))]
