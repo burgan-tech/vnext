@@ -4,6 +4,7 @@
     "breaking": false,
     "docs": []
   },
+  "schemaVersion": "0.0.61",
   "features": {
     "engine": {
       "resourceLockConflictPolicy": {
