@@ -103,6 +103,6 @@ public sealed class RuntimeCacheBackendTests
         => _runtime.GetAsync<View>(Key, version, Arg.Any<CancellationToken>())
             .Returns(CacheSetTestHarness.CreateView(version));
 
-    private Task NeverLoadedEveryBody()
-        => _runtime.DidNotReceive().GetAsync<View>(Key, Arg.Any<CancellationToken>());
+    private async Task NeverLoadedEveryBody()
+        => await _runtime.DidNotReceive().GetAsync<View>(Key, Arg.Any<CancellationToken>());
 }

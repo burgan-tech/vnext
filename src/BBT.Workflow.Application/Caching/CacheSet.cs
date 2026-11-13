@@ -268,10 +268,8 @@ public class CacheSet<T>(
         // proportion to the whole publish history, and a load that ran out of it handed back a partial
         // list — whose best match is an older version, cached as the answer for a full TTL.
         var versionsResult = await backend.LoadVersionsAsync(domain, key, cancellationToken);
-        if (!versionsResult.IsSuccess || versionsResult.Value!.Count == 0)
+        if (!versionsResult.IsSuccess || versionsResult.Value is not { Count: > 0 } versions)
             return await CacheNegativeAsync(domain, key, requested, spelling, redisKey, cancellationToken);
-
-        var versions = versionsResult.Value!;
 
         // The normalized spelling is what the answer gets filed under, so it has to be what the answer
         // was computed from — otherwise a padded or differently-cased request could cache one component
@@ -465,8 +463,8 @@ public class CacheSet<T>(
         try
         {
             var versionsResult = await backend.LoadVersionsAsync(domain, key, cancellationToken);
-            if (versionsResult.IsSuccess)
-                versions = [.. versionsResult.Value!];
+            if (versionsResult.IsSuccess && versionsResult.Value is { } loaded)
+                versions = [.. loaded];
 
             if (applyPolicy)
             {
@@ -499,58 +497,75 @@ public class CacheSet<T>(
 
         // A winner other than the published entity (publishing an older patch, say) is fetched once
         // through the full-version path; the common case — the new version wins — loads nothing.
-        var winners = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase)
+        // Spellings usually share a winner, so each is read at most once; null records one that could
+        // not be read, which is not tried again.
+        var winners = new Dictionary<string, T?>(StringComparer.OrdinalIgnoreCase)
         {
             [entity.Version] = entity
         };
-        var unreadable = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var spelling in DeriveCommonSpellings(entity.Version))
         {
-            // Under the policy only a Resolved answer is warmed: a not-activated or invalid-pointer
-            // spelling is an error, and errors are never cached.
-            var bestMatch = applyPolicy
-                ? DefaultVersionResolver.Resolve(versions, pointer, spelling) is
-                    { Outcome: VersionResolutionOutcome.Resolved } resolution
-                    ? resolution.Version
-                    : null
-                : InstanceDataVersionComparer.FindBestMatch(versions, spelling);
+            var bestMatch = ResolveWarmSpelling(versions, applyPolicy, pointer, spelling);
             if (string.IsNullOrEmpty(bestMatch))
                 continue;
 
             if (!winners.TryGetValue(bestMatch, out var winner))
             {
-                // Spellings usually share a winner; one that could not be read is not tried again.
-                if (unreadable.Contains(bestMatch))
-                    continue;
-
-                try
-                {
-                    var winnerResult = await GetFullVersionAsync(domain, key, bestMatch, cancellationToken);
-                    if (!winnerResult.IsSuccess)
-                    {
-                        unreadable.Add(bestMatch);
-                        continue;
-                    }
-
-                    winner = winnerResult.Value!;
-                    winners[bestMatch] = winner;
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    // Same contract as above: this spelling resolves on demand instead.
-                    unreadable.Add(bestMatch);
-                    CacheActivityHelper.SetError(activity, ex);
-                    logger.ComponentCacheOperationFailed(ex, CacheActivityHelper.OperationWarmup, CreateFullKey(domain, key, bestMatch));
-                    continue;
-                }
+                winner = await ReadWarmWinnerAsync(domain, key, bestMatch, activity, cancellationToken);
+                winners[bestMatch] = winner;
             }
+
+            if (winner is null)
+                continue;
 
             await TryWriteAsync(
                 CreateResolutionKey(domain, key, generation, spelling),
                 CreateEnvelope(winner),
                 ResolutionEntryOptions(),
                 cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// The version a warmed spelling resolves to. Under the policy only a Resolved answer is warmed: a
+    /// not-activated or invalid-pointer spelling is an error, and errors are never cached.
+    /// </summary>
+    private static string? ResolveWarmSpelling(
+        IReadOnlyCollection<string> versions,
+        bool applyPolicy,
+        string? pointer,
+        string spelling)
+    {
+        if (!applyPolicy)
+            return InstanceDataVersionComparer.FindBestMatch(versions, spelling);
+
+        var resolution = DefaultVersionResolver.Resolve(versions, pointer, spelling);
+        return resolution.Outcome == VersionResolutionOutcome.Resolved ? resolution.Version : null;
+    }
+
+    /// <summary>
+    /// Reads a warm-up winner through the full-version path. Null when it cannot be read — that spelling
+    /// then resolves on demand, under the same contract as the rest of warming: publishing must not fail
+    /// for it.
+    /// </summary>
+    private async Task<T?> ReadWarmWinnerAsync(
+        string domain,
+        string key,
+        string version,
+        Activity? activity,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await GetFullVersionAsync(domain, key, version, cancellationToken);
+            return result.IsSuccess ? result.Value : null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            CacheActivityHelper.SetError(activity, ex);
+            logger.ComponentCacheOperationFailed(ex, CacheActivityHelper.OperationWarmup, CreateFullKey(domain, key, version));
+            return null;
         }
     }
 
