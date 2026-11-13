@@ -36,7 +36,12 @@ public sealed class RuntimeCacheBackend<T>(
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var uowManager = scope.ServiceProvider.GetRequiredService<IUnitOfWorkManager>();
-        await using var uow = uowManager.Begin(new UnitOfWorkOptions
+        // Synchronous Begin on purpose, not BeginAsync: BeginAsync sets the ambient (AsyncLocal) unit of
+        // work inside its own async state machine, so the assignment never flows back here and the
+        // repository calls below would resolve the CALLER's DbContext again — the shared-context failure
+        // this detached scope exists to prevent. Begin does no async work (Aether IUnitOfWorkManager.Begin).
+        await using var uow = uowManager.Begin(new UnitOfWorkOptions // NOSONAR S6966: see above
+
         {
             Scope = UnitOfWorkScopeOption.RequiresNew,
             IsTransactional = false
@@ -77,6 +82,7 @@ public sealed class RuntimeCacheBackend<T>(
         return Result<List<T>>.Ok(filtered);
     }, cancellationToken);
 
+    /// <inheritdoc />
     public Task<Result<T>> LoadAsync(
         string domain,
         string key,
@@ -110,36 +116,32 @@ public sealed class RuntimeCacheBackend<T>(
             return await LoadByCanonicalFullVersionAsync(runtimeService, domain, key, version!, cancellationToken);
         }
 
-        // For null/empty, artifact, or partial version → key-filtered load + smart matching
-        var all = await runtimeService.GetAsync<T>(key, cancellationToken);
-        var filtered = all
-            .Where(e => e is not null &&
-                        string.Equals(e.Domain, domain, StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        // For null/empty, artifact, or partial version → resolved in the repository from the version
+        // strings alone, then exactly one body is loaded.
+        var resolved = await runtimeService.GetAsync<T>(
+            key, version ?? InstanceDataVersionComparer.LatestKeyword, cancellationToken);
 
-        if (filtered.Count == 0)
+        return resolved is null
+            ? Result<T>.Fail(CacheErrors.ItemNotFoundInBackend<T>(domain, key, version))
+            : Result<T>.Ok(resolved);
+    }, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<Result<IReadOnlyList<string>>> LoadVersionsAsync(
+        string domain,
+        string key,
+        CancellationToken cancellationToken = default) => RunDetachedAsync(async services =>
+    {
+        var runtimeService = services.GetRequiredService<IRuntimeService>();
+        var runtimeInfoProvider = services.GetRequiredService<IRuntimeInfoProvider>();
+
+        runtimeInfoProvider.Check(domain);
+        // Read as the requested domain, which differs from the caller's for a co-hosted component.
+        using (runtimeInfoProvider.UseDomain(domain))
         {
-            return Result<T>.Fail(CacheErrors.ItemNotFoundInBackend<T>(domain, key, version));
+            var versions = await runtimeService.GetVersionsAsync<T>(key, cancellationToken);
+            return Result<IReadOnlyList<string>>.Ok(versions);
         }
-
-        // Use smart version matching
-        var versions = filtered.Select(e => e!.Version).ToList();
-        var bestMatchVersion = InstanceDataVersionComparer.FindBestMatch(versions, version);
-
-        if (string.IsNullOrEmpty(bestMatchVersion))
-        {
-            return Result<T>.Fail(CacheErrors.ItemNotFoundInBackend<T>(domain, key, version));
-        }
-
-        var matched = filtered.FirstOrDefault(e => 
-            string.Equals(e!.Version, bestMatchVersion, StringComparison.OrdinalIgnoreCase));
-
-        if (matched is null)
-        {
-            return Result<T>.Fail(CacheErrors.ItemNotFoundInBackend<T>(domain, key, version));
-        }
-
-        return Result<T>.Ok(matched);
     }, cancellationToken);
 
     /// <summary>
@@ -160,16 +162,13 @@ public sealed class RuntimeCacheBackend<T>(
     {
         var canonicalVersion = InstanceDataVersionComparer.CanonicalFullVersion(version);
 
-        var all = await runtimeService.GetAsync<T>(key, cancellationToken);
-        var matches = all
-            .Where(e => e is not null &&
-                        string.Equals(e.Domain, domain, StringComparison.OrdinalIgnoreCase) &&
-                        string.Equals(
-                            InstanceDataVersionComparer.CanonicalFullVersion(e.Version),
-                            canonicalVersion,
-                            StringComparison.OrdinalIgnoreCase))
-            .Select(e => e!)
-            .OrderBy(e => e.Version, StringComparer.Ordinal)
+        // Decided on the version strings alone; only the chosen row's body is loaded.
+        var matches = (await runtimeService.GetVersionsAsync<T>(key, cancellationToken))
+            .Where(v => string.Equals(
+                InstanceDataVersionComparer.CanonicalFullVersion(v),
+                canonicalVersion,
+                StringComparison.OrdinalIgnoreCase))
+            .OrderBy(v => v, StringComparer.Ordinal)
             .ToList();
 
         if (matches.Count == 0)
@@ -177,15 +176,19 @@ public sealed class RuntimeCacheBackend<T>(
             return Result<T>.Fail(CacheErrors.ItemNotFoundInBackend<T>(domain, key, version));
         }
 
-        var resolved = matches[0];
+        var resolvedVersion = matches[0];
 
         if (matches.Count > 1)
         {
             logger.ComponentCacheBuildMetadataAmbiguity(
-                T.ComponentTypeKey, domain, key, matches.Count, canonicalVersion, resolved.Version);
+                T.ComponentTypeKey, domain, key, matches.Count, canonicalVersion, resolvedVersion);
         }
 
-        return Result<T>.Ok(resolved);
+        var resolved = await runtimeService.GetAsync<T>(key, resolvedVersion, cancellationToken);
+
+        return resolved is null
+            ? Result<T>.Fail(CacheErrors.ItemNotFoundInBackend<T>(domain, key, version))
+            : Result<T>.Ok(resolved);
     }
 }
 

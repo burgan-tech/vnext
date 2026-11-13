@@ -59,7 +59,7 @@ public class VersionRegistryWriteGuardTests
         var result = await _guard.ValidateAsync(Domain, Flow, Parse(json), CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        await _backend.DidNotReceiveWithAnyArgs().LoadAllByKeyAsync(default!, default!, default);
+        await _backend.DidNotReceiveWithAnyArgs().LoadVersionsAsync(default!, default!, default);
     }
 
     [Fact]
@@ -77,11 +77,11 @@ public class VersionRegistryWriteGuardTests
     [InlineData(false)]
     public async Task Validate_ShouldReject_WhenFlowNotPublished(bool backendFails)
     {
-        _backend.LoadAllByKeyAsync(Domain, "not-a-flow", Arg.Any<CancellationToken>())
+        _backend.LoadVersionsAsync(Domain, "not-a-flow", Arg.Any<CancellationToken>())
             .Returns(backendFails
-                ? Result<List<Definitions.Workflow>>.Fail(
+                ? Result<IReadOnlyList<string>>.Fail(
                     BBT.Aether.Results.Error.NotFound(WorkflowErrorCodes.CacheItemNotFound, "missing"))
-                : Result<List<Definitions.Workflow>>.Ok([]));
+                : Result<IReadOnlyList<string>>.Ok([]));
 
         var result = await _guard.ValidateAsync(
             Domain, "not-a-flow", Parse("""{"type":"Flow","defaultVersion":"2"}"""), CancellationToken.None);
@@ -97,7 +97,7 @@ public class VersionRegistryWriteGuardTests
             Domain, Flow, Parse("""{"type":"Flow","defaultVersion":null,"reason":"reset"}"""), CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        await _backend.DidNotReceiveWithAnyArgs().LoadAllByKeyAsync(default!, default!, default);
+        await _backend.DidNotReceiveWithAnyArgs().LoadVersionsAsync(default!, default!, default);
     }
 
     [Theory]
@@ -149,8 +149,8 @@ public class VersionRegistryWriteGuardTests
     [Fact]
     public async Task Validate_ShouldReturnUnavailable_WhenBackendThrows()
     {
-        _backend.LoadAllByKeyAsync(Domain, "boom", Arg.Any<CancellationToken>())
-            .Returns<Task<Result<List<Definitions.Workflow>>>>(_ => throw new InvalidOperationException("redis down"));
+        _backend.LoadVersionsAsync(Domain, "boom", Arg.Any<CancellationToken>())
+            .Returns<Task<Result<IReadOnlyList<string>>>>(_ => throw new InvalidOperationException("redis down"));
 
         var result = await _guard.ValidateAsync(
             Domain, "boom", Parse("""{"defaultVersion":"2"}"""), CancellationToken.None);
@@ -164,8 +164,8 @@ public class VersionRegistryWriteGuardTests
     {
         using var cts = new CancellationTokenSource();
         cts.Cancel();
-        _backend.LoadAllByKeyAsync(Domain, "boom", Arg.Any<CancellationToken>())
-            .Returns<Task<Result<List<Definitions.Workflow>>>>(_ => throw new OperationCanceledException(cts.Token));
+        _backend.LoadVersionsAsync(Domain, "boom", Arg.Any<CancellationToken>())
+            .Returns<Task<Result<IReadOnlyList<string>>>>(_ => throw new OperationCanceledException(cts.Token));
 
         await Should.ThrowAsync<OperationCanceledException>(() => _guard.ValidateAsync(
             Domain, "boom", Parse("""{"defaultVersion":"2"}"""), cts.Token));
@@ -174,8 +174,8 @@ public class VersionRegistryWriteGuardTests
     [Fact]
     public async Task Validate_ShouldPropagate_BackendReadFailure()
     {
-        _backend.LoadAllByKeyAsync(Domain, "boom", Arg.Any<CancellationToken>())
-            .Returns(Result<List<Definitions.Workflow>>.Fail(
+        _backend.LoadVersionsAsync(Domain, "boom", Arg.Any<CancellationToken>())
+            .Returns(Result<IReadOnlyList<string>>.Fail(
                 BBT.Aether.Results.Error.Transient("Cache:999", "db down")));
 
         var result = await _guard.ValidateAsync(
@@ -302,14 +302,9 @@ public class VersionRegistryWriteGuardTests
 
     private void Publish(params string[] versions)
     {
-        var list = versions.Select(v =>
-        {
-            var wf = Definitions.Workflow.Create();
-            wf.SetReference(new Reference(Flow, Domain, "sys-flows", v));
-            return wf;
-        }).ToList();
-        _backend.LoadAllByKeyAsync(Domain, Flow, Arg.Any<CancellationToken>())
-            .Returns(Result<List<Definitions.Workflow>>.Ok(list));
+        var list = versions.ToList();
+        _backend.LoadVersionsAsync(Domain, Flow, Arg.Any<CancellationToken>())
+            .Returns(Result<IReadOnlyList<string>>.Ok(list));
     }
 
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement.Clone();

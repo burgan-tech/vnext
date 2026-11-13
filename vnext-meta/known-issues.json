@@ -470,6 +470,16 @@
       "affectedVersions": ">=0.0.102",
       "fixedIn": null,
       "description": "Carried headers use a denylist: a credential in a header whose name contains none of authorization, cookie, token, secret or session (for example x-api-key, password) is carried to the outbox, the broker and the parent unless listed in Workflow:SubFlow:CarriedHeaders:AdditionalDenied, which matches exact names only."
+    },
+    {
+      "id": "floating-version-resolution-loads-every-version",
+      "affectedVersions": ">=0.0.45",
+      "severity": "error",
+      "component": "runtime",
+      "path": "version (artifact, partial, major-only, latest or empty)",
+      "title": "A component requested with a floating version (\"1.0.0\", \"1.0\", \"1\", \"latest\" or none) was resolved, on every cache miss and on every publish, by loading and deserializing the stored body of every published version of that component. A component with a long publish history (hundreds of versions of a large flow) exhausted memory; RuntimeService swallowed the OutOfMemoryException row by row, so the newest versions dropped out of the list, an older version won, and that answer was cached under the resolution key for up to an hour on every pod. Starts landed on old versions with no error, and under sustained pressure the host crashed. A full version written without its build metadata (\"1.0.0-pkg.1.0.123\" for a stored \"1.0.0-pkg.1.0.123+core\") took the same load-everything path on a cache miss.",
+      "workaround": "Reference the full version (\"1.0.0-pkg.1.0.123+core\") from consuming flows, and raise the orchestration memory limit. The release that fixes it chooses the version from the version strings alone and loads only the winning body, fails the request instead of shortening the list when a row cannot be read for any reason other than malformed JSON, and moves the cache shape to s3 so resolutions written by older pods are not read.",
+      "fixedIn": null
     }
   ]
 }

@@ -1520,40 +1520,16 @@ public sealed class EfCoreInstanceRepository(
     public async Task<InstanceAndDataModel?> FindActiveDataAsync(string key, string version,
         CancellationToken cancellationToken = default)
     {
-        var context = await GetDbContextAsync();
-
         // If full version → exact match
         if (InstanceDataVersionComparer.IsFullVersion(version))
-        {
-            return await context.Instances
-                .Where(i => i.Status == InstanceStatus.Active && i.Key == key)
-                .Join(context.InstancesData,
-                    i => i.Id,
-                    d => d.InstanceId,
-                    (i, d) => new { Instance = i, Data = d })
-                .Where(x => x.Data.Version == version)
-                .Select(x => new InstanceAndDataModel
-                {
-                    Instance = x.Instance,
-                    InstanceData = x.Data
-                })
-                .AsNoTracking()
-                .FirstOrDefaultAsync(cancellationToken);
-        }
+            return await FindActiveDataByExactVersionAsync(key, version, cancellationToken);
 
         // For artifact or partial version → two-phase resolution: SQL narrows, the canonical
         // comparer decides. Phase 1 projects only the version strings (no jsonb payloads —
         // under the full-merge model every historical payload is a complete state copy, so
         // materializing all candidates was the real cost). Phase 2 fetches exactly the one
         // winning row. FindBestMatch stays the single source of truth for version semantics.
-        var candidateVersions = await context.Instances
-            .Where(i => i.Status == InstanceStatus.Active && i.Key == key)
-            .Join(context.InstancesData,
-                i => i.Id,
-                d => d.InstanceId,
-                (i, d) => d.Version)
-            .AsNoTracking()
-            .ToListAsync(cancellationToken);
+        var candidateVersions = await GetActiveVersionsByKeyAsync(key, cancellationToken);
 
         if (candidateVersions.Count == 0)
             return null;
@@ -1563,13 +1539,27 @@ public sealed class EfCoreInstanceRepository(
         if (string.IsNullOrEmpty(bestMatchVersion))
             return null;
 
+        return await FindActiveDataByExactVersionAsync(key, bestMatchVersion, cancellationToken);
+    }
+
+    /// <summary>
+    /// Loads the one active data row of <paramref name="key"/> stored under exactly
+    /// <paramref name="version"/>. Several rows can share a version string (each version line has its own
+    /// <c>VersionNo</c> sequence), so the highest ordinal wins — the most recent write of that version,
+    /// chosen the same way on every call.
+    /// </summary>
+    private async Task<InstanceAndDataModel?> FindActiveDataByExactVersionAsync(string key, string version,
+        CancellationToken cancellationToken)
+    {
+        var context = await GetDbContextAsync();
         return await context.Instances
             .Where(i => i.Status == InstanceStatus.Active && i.Key == key)
             .Join(context.InstancesData,
                 i => i.Id,
                 d => d.InstanceId,
                 (i, d) => new { Instance = i, Data = d })
-            .Where(x => x.Data.Version == bestMatchVersion)
+            .Where(x => x.Data.Version == version)
+            .OrderByDescending(x => x.Data.VersionNo)
             .Select(x => new InstanceAndDataModel
             {
                 Instance = x.Instance,
@@ -1579,6 +1569,23 @@ public sealed class EfCoreInstanceRepository(
             .FirstOrDefaultAsync(cancellationToken);
     }
 
+    /// <inheritdoc />
+    public async Task<List<string>> GetActiveVersionsByKeyAsync(string key,
+        CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        return await context.Instances
+            .Where(i => i.Status == InstanceStatus.Active && i.Key == key)
+            .Join(context.InstancesData,
+                i => i.Id,
+                d => d.InstanceId,
+                (i, d) => d.Version)
+            .Distinct()
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<List<InstanceAndDataModel>> GetActiveDataListByKeyAsync(string key,
         CancellationToken cancellationToken = default)
     {
@@ -2420,13 +2427,16 @@ public sealed class EfCoreInstanceRepository(
         // The narrow include also lands on UX_InstancesData_Instance_IsLatest, the unique partial
         // index that exists for exactly this access.
         //
-        // No AsSplitQuery: with one data row and at most a couple of open correlations the product
-        // is already ~1, so a second round trip would buy nothing.
+        // Split: the two collection includes in one statement would repeat each instance's latest
+        // jsonb row once per open correlation. Today that product is ~1 (one data row, at most a
+        // couple of open SubFlow correlations), so this costs two extra round trips per batch rather
+        // than saving rows — the price of never letting the shape degrade into a Cartesian product.
         var instances = await dbSet
             .Where(i => instanceIds.Contains(i.Id))
             .Include(i => i.DataList.Where(d => d.IsLatest))
             .Include(i => i.ChildCorrelations
                 .Where(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow))
+            .AsSplitQuery()
             .AsNoTracking()
             .ToListAsync(cancellationToken);
 

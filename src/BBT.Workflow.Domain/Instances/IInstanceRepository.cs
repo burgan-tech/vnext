@@ -163,6 +163,15 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns the version strings of every active data row of <paramref name="key"/>, as stored (build
+    /// metadata included). Only the version column is read — no payload is materialized — so the cost does
+    /// not grow with the size of the stored bodies. Resolve the version a request means from this list,
+    /// then load that one row with <see cref="FindActiveDataAsync"/>.
+    /// </summary>
+    Task<List<string>> GetActiveVersionsByKeyAsync(string key,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the latest committed data row of the newest instance with <paramref name="key"/>, whatever
     /// that instance's status (Active, Busy, Faulted, Passive, Completed), or null when no instance has the
     /// key or it has no data. One row is selected in SQL — the data history is never loaded.
