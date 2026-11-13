@@ -369,12 +369,13 @@ public static class HttpTaskInvocation
 
     /// <summary>
     /// The header set a task presents to its target, as a dictionary: the binding's headers without the reserved
-    /// trace/correlation headers and without Content-Type, plus the caller's credential (<c>sub</c>, <c>act_sub</c>,
-    /// <c>position</c>, <c>client_id</c>, <c>role</c>) for every credential header the binding did not set — a value the
-    /// binding sets (non-empty) always wins. Credential values come from <paramref name="callerHeaders"/>, the caller's own request
-    /// headers; <c>sub</c> / <c>act_sub</c> fall back to Activity baggage. <c>role</c> is forwarded only as the caller SENT
-    /// it: roles a provider resolved for the caller (morph-idm get-roles) are not in these headers and are never carried —
-    /// the target resolves them itself from the forwarded credential. Used for a GetInstance / GetInstances /
+    /// trace/correlation headers and without Content-Type, with the credential (<c>sub</c>, <c>act_sub</c>,
+    /// <c>position</c>, <c>client_id</c>, <c>role</c>) resolved by <see cref="ResolveInstanceCallCredential"/>: a
+    /// credential the binding set — blank or null included — is the binding's decision and stays as it is, an absent one
+    /// is filled from <paramref name="callerHeaders"/>, the caller's own request headers (Activity baggage is not a
+    /// source). <c>role</c> is forwarded only as the caller SENT it: roles a provider resolved for the caller (morph-idm
+    /// get-roles) are not in these headers and are never carried — the target resolves them itself from the forwarded
+    /// credential. A null-valued non-credential header is dropped. Used for a GetInstance / GetInstances /
     /// GetInstanceData read, in-process (as the read's current user) and cross-domain (as the request's headers) alike.
     /// Keys are case-insensitive.
     /// </summary>
@@ -382,20 +383,22 @@ public static class HttpTaskInvocation
         IReadOnlyDictionary<string, string?>? bindingHeaders,
         IReadOnlyDictionary<string, string>? callerHeaders = null)
     {
-        var headers = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        var filtered = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         if (bindingHeaders is not null)
         {
             foreach (var (name, value) in bindingHeaders)
             {
-                if (value is null || IsReservedTraceHeader(name) ||
+                if (IsReservedTraceHeader(name) ||
                     string.Equals(name, "Content-Type", StringComparison.OrdinalIgnoreCase))
                     continue;
-                headers[name] = value;
+                // A null credential is still "the binding set it" (blank); only a non-credential null is dropped.
+                if (value is null && !IsCredentialHeader(name))
+                    continue;
+                filtered[name] = value;
             }
         }
 
-        AppendCallerCredential(headers, callerHeaders);
-        return headers;
+        return ResolveInstanceCallCredential(filtered, callerHeaders);
     }
 
     /// <summary>
@@ -466,6 +469,110 @@ public static class HttpTaskInvocation
 
         return AppendCallerCredential(headers, callerHeaders) ? JsonSerializer.Serialize(headers) : headersJson;
     }
+
+    /// <summary>
+    /// The header set the runtime presents when it calls another instance: a SubFlow start, and the SubProcess, Start,
+    /// DirectTrigger, GetInstance, GetInstances and GetInstanceData tasks — same-domain and cross-domain alike.
+    /// <para>
+    /// AUTHORIZATION RULE — the mapping decides, the caller is only the default:
+    /// a credential header (<c>sub</c>, <c>act_sub</c>, <c>position</c>, <c>client_id</c>, <c>role</c>) the mapping SET,
+    /// with any value, is the mapping's decision. A blank value (empty, whitespace or null) means "make this call
+    /// WITHOUT this credential": the header is not sent and the caller's value is NOT filled in. A credential header the
+    /// mapping did NOT set is filled from the caller's request headers.
+    /// </para>
+    /// <para>
+    /// A flow author blanks a credential on purpose, to stop the caller's identity reaching the target. So "blank" must
+    /// never be read as "not set" here — that would hand the target an identity the author withheld. Blank entries stay
+    /// in the result as <c>""</c> and are dropped only at the exit (<c>CallerCredentialScope</c> in-process,
+    /// <see cref="DropBlankCredentialHeaders"/> on a task's outbound request, the header merge of a cross-domain SubFlow
+    /// start): the marker has to survive that far, because some exits fill a MISSING <c>sub</c> / <c>act_sub</c> themselves.
+    /// </para>
+    /// <para>
+    /// Activity baggage is deliberately not a source: a child whose parent blanked <c>sub</c> must not pick the first
+    /// caller's <c>sub</c> back up from the trace on its own calls. HTTP, SOAP and Dapr tasks keep the older
+    /// fill-when-blank rule (<see cref="AppendCallerCredential"/>). Full guide:
+    /// docs/domain/role-grant-authorization.md#caller-credential-on-instance-calls.
+    /// </para>
+    /// </summary>
+    public static Dictionary<string, string?> ResolveInstanceCallCredential(
+        IReadOnlyDictionary<string, string?>? mappingHeaders,
+        IReadOnlyDictionary<string, string>? callerHeaders)
+    {
+        var result = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        if (mappingHeaders is not null)
+        {
+            foreach (var (name, value) in mappingHeaders)
+                result[name] = value;
+        }
+
+        foreach (var name in CredentialHeaders)
+        {
+            if (result.TryGetValue(name, out var mapped))
+            {
+                // The mapping set it: its decision stands. Re-key under the canonical name; blank becomes "".
+                result.Remove(name);
+                result[name] = string.IsNullOrWhiteSpace(mapped) ? string.Empty : mapped;
+                continue;
+            }
+
+            var value = CallerValue(callerHeaders, name);
+            var safe = name is SubHeader or ActSubHeader ? IsSafeIdentityClaim(value) : IsSafeHeaderValue(value);
+            if (safe)
+                result[name] = value;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// The binding's header definition (JSON object) resolved by <see cref="ResolveInstanceCallCredential"/>. Blank
+    /// credentials stay in the JSON as <c>""</c> markers so a later exit can honour them. A definition that is not a JSON
+    /// object of strings is returned unchanged; an empty result is <c>null</c>.
+    /// </summary>
+    public static string? ResolveInstanceCallCredentialJson(string? headersJson, IReadOnlyDictionary<string, string>? callerHeaders)
+    {
+        Dictionary<string, string?>? parsed = null;
+        if (!string.IsNullOrWhiteSpace(headersJson))
+        {
+            try
+            {
+                parsed = JsonSerializer.Deserialize<Dictionary<string, string?>>(headersJson);
+            }
+            catch (JsonException)
+            {
+                return headersJson;
+            }
+
+            if (parsed is null)
+                return headersJson;
+        }
+
+        var resolved = ResolveInstanceCallCredential(parsed, callerHeaders);
+        return resolved.Count == 0 ? null : JsonSerializer.Serialize(resolved);
+    }
+
+    /// <summary>Removes the credential keys whose value is blank (empty, whitespace or null); nothing else is touched.</summary>
+    public static void RemoveBlankCredentials(IDictionary<string, string?> headers)
+    {
+        foreach (var name in CredentialHeaders)
+        {
+            if (headers.TryGetValue(name, out var value) && string.IsNullOrWhiteSpace(value))
+                headers.Remove(name);
+        }
+    }
+
+    /// <summary>Removes the credential headers whose value is blank from <paramref name="request"/>; nothing else is touched.</summary>
+    public static void DropBlankCredentialHeaders(HttpRequestMessage request)
+    {
+        foreach (var name in CredentialHeaders)
+        {
+            if (request.Headers.Contains(name) && !HasNonEmptyHeader(request, name))
+                request.Headers.Remove(name);
+        }
+    }
+
+    private static bool IsCredentialHeader(string name) =>
+        CredentialHeaders.Any(c => string.Equals(c, name, StringComparison.OrdinalIgnoreCase));
 
     private static string? CallerValue(IReadOnlyDictionary<string, string>? callerHeaders, string name)
     {

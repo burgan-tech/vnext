@@ -122,7 +122,8 @@ public sealed class TaskReadCredentialHeadersTests
         request.Headers.Contains("traceparent").ShouldBeFalse();
 
         var local = HttpTaskInvocation.BuildOutgoingHeaders(
-            new Dictionary<string, string?> { ["role"] = "morph-idm.maker", ["traceparent"] = "00-x" });
+            new Dictionary<string, string?> { ["role"] = "morph-idm.maker", ["traceparent"] = "00-x" },
+            new Dictionary<string, string> { ["sub"] = "caller" });
         local["role"].ShouldBe("morph-idm.maker");
         local["sub"].ShouldBe("caller");
     }
@@ -160,18 +161,18 @@ public sealed class TaskReadCredentialHeadersTests
             .ShouldBe("not json");
     }
 
-    /// <summary>A credential header the mapping left EMPTY counts as not set: the request's value fills it.</summary>
+    /// <summary>A credential header the mapping set BLANK is the mapping's decision: the request's value does not fill it.</summary>
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
-    public void AnEmptyMappingValue_IsFilledFromTheRequest(string empty)
+    public void ABlankMappingValue_IsKept_NotFilledFromTheRequest(string empty)
     {
         var headers = HttpTaskInvocation.BuildOutgoingHeaders(
             new Dictionary<string, string?> { ["Role"] = empty, ["position"] = empty },
             new Dictionary<string, string> { ["role"] = "morph-idm.maker", ["position"] = "HQ" });
 
-        headers["role"].ShouldBe("morph-idm.maker");
-        headers["position"].ShouldBe("HQ");
+        headers["role"].ShouldBe("");
+        headers["position"].ShouldBe("");
         headers.Keys.Count(k => string.Equals(k, "role", System.StringComparison.OrdinalIgnoreCase)).ShouldBe(1);
     }
 
