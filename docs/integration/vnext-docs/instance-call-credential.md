@@ -23,9 +23,9 @@ fragment `instance-call-credential-rule.json`.
 ## What this product must do
 
 - Update the authorization and SubFlow pages to describe the rule and link the runtime's canonical section; state the rule once, do not copy the table into several pages.
-- Document the behaviour changes: a same-domain SubFlow now carries the caller's credential by default (a child state with `interaction.longPoll.roles` pauses for the caller's roles unless the parent blanks `role`); a blank credential in a trigger task's headers is no longer filled from the caller; `sub` / `act_sub` are no longer completed from Activity baggage.
+- Document the behaviour changes: a same-domain SubFlow now carries the caller's credential by default (a child state with `interaction.longPoll.roles` pauses for the caller's roles unless the parent blanks what the caller-role provider resolves them from: `role` under the default provider, also the identity headers under `morph-idm`); a blank credential in a trigger task's headers is no longer filled from the caller; `sub` / `act_sub` are no longer completed from Activity baggage.
 - Document the known difference: a cross-domain SubFlow start also forwards `userId`, `given_name`, `family_name`, `act_uid`, `consent_id` from the ambient user; a same-domain start does not.
-- Document that a SubFlow input mapping's `Headers` must be a `Dictionary<string, string?>` or an `ExpandoObject`, and that HTTP, SOAP, DaprService and DaprHttpEndpoint tasks keep the older fill-when-blank rule.
+- Document that a SubFlow input mapping's `Headers` may be a string dictionary, an object dictionary (`ExpandoObject`), a JSON object, or an object with readable properties (an anonymous type such as `new { sub = "" }`) — any other non-null shape fails the SubFlow start — and that HTTP, SOAP, DaprService and DaprHttpEndpoint tasks keep the older fill-when-blank rule.
 
 ## Contract and examples
 

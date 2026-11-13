@@ -16,7 +16,7 @@ When this page and the engine disagree, the engine wins:
 | Read path (one service for every guarded surface) | `src/BBT.Workflow.Application/Instances/InstanceDataReadService.cs` |
 | Exposure pass (`x-roles` → `x-masking` → `x-encryption`) | `src/BBT.Workflow.Application/Authorization/SchemaFieldFilterService.cs`, `InstanceDataRoleFilter.cs` |
 | Script decryption | `Instance.DecryptAsync` (`src/BBT.Workflow.Domain/Instances/Instance.cs`) |
-| Task credential rule | `HttpTaskInvocation.AppendCallerCredential` (`src/BBT.Workflow.Execution/Invokers/HttpTaskInvocation.cs`), `docs/runtime/correlation-and-tracing.md` |
+| Task credential rule | HTTP / SOAP / Dapr: `HttpTaskInvocation.AppendCallerCredential`; instance calls: `HttpTaskInvocation.ResolveInstanceCallCredential` (`src/BBT.Workflow.Execution.Abstractions/HttpTaskInvocation.cs`); `docs/runtime/correlation-and-tracing.md`, [Caller credential on instance calls](../domain/role-grant-authorization.md#caller-credential-on-instance-calls) |
 | Keyword vocabulary | vnext-schema `vocabularies/view-vocab.json` (`x-masking`, `x-encryption`, `roleGrant`) |
 | Machine-readable facts | `vnext-meta/features.json` (`engine.fieldMasking`, `engine.fieldEncryption`), `security-policy.json`, `migrations.json`, `known-issues.json` |
 
@@ -33,7 +33,7 @@ When this page and the engine disagree, the engine wins:
 | Sync start/transition response | `x-roles` only | all three keywords |
 | `GetInstance` / `GetInstances` / `GetInstanceData` tasks | read as the system (`SystemRead`), unfiltered | evaluated **as the credential the task presents** (see §6); `SystemRead` is removed |
 | Instance data in scripts | plaintext | an `encrypt` field is its **token**; `await context.Instance.DecryptAsync(path, ct)` opens the instance's own value |
-| Credential on outbound tasks | `sub` / `act_sub` only, and only on some task types | `sub`, `act_sub`, `position`, `client_id`, `role` on **every** task type, wherever the mapping leaves them absent or empty |
+| Credential on outbound tasks | `sub` / `act_sub` only, and only on some task types | `sub`, `act_sub`, `position`, `client_id`, `role` on **every** task type: HTTP / SOAP / Dapr wherever the mapping leaves them absent or empty; the instance calls (SubFlow start, SubProcess, Start, DirectTrigger, Get*) by [their own rule](../domain/role-grant-authorization.md#caller-credential-on-instance-calls) |
 
 Two of these are **behaviour changes for existing clients** and need a release-note line:
 - GET and list now hide and mask fields that they used to return in full.
@@ -213,7 +213,7 @@ TR = `docs/…`, EN = `i18n/en/docusaurus-plugin-content-docs/current/…`.
 | `components/mappings.md` (TR + EN) | In the ScriptContext section: `Instance.Data` holds tokens for `encrypt` fields; add `DecryptAsync` (§5) |
 | `components/tasks/get-instance.md`, `get-instances.md`, `trigger.md`, `index.md` (TR + EN) | The task applies the three keywords for its credential; credential rule (§6). The EN index still says GetInstanceData "detail page in a later phase" |
 | `components/tasks/http.md`, `soap.md`, `dapr-service.md`, `dapr-http-endpoint.md` (EN partial) | Credential-forwarding rule next to the headers config (§6) |
-| `how-to/observability.md` (TR; section missing in EN) | "Reserved headers" lists only `sub` / `act_sub`; add `position`, `client_id`, `role` and the empty-means-absent rule |
+| `how-to/observability.md` (TR; section missing in EN) | "Reserved headers" lists only `sub` / `act_sub`; add `position`, `client_id`, `role` and the empty-means-absent rule for HTTP / SOAP / Dapr tasks (instance calls follow [their own rule](../domain/role-grant-authorization.md#caller-credential-on-instance-calls)) |
 | `components/functions/built-in.md` (TR + EN) | Data function: masking and encryption besides `x-roles` |
 | `api-reference/rest-api.md` (TR only) | GET instance / list: fields are filtered, masked and encrypted per caller (§4) |
 | `tools/forge-usage.md` (TR + EN) | Schema Designer: list `x-masking` and `x-encryption` once Forge supports them |

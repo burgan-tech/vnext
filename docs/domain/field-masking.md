@@ -40,9 +40,9 @@ still decided per instance.
 
 **Trigger-task credential.** A `GetInstance` / `GetInstances` / `GetInstanceData` task is evaluated as the header set it
 presents to its target (`HttpTaskInvocation.BuildOutgoingHeaders`): the task's mapping headers without the reserved
-trace/correlation headers, plus the request's **credential** — `sub`, `act_sub`, `position`, `client_id` and `role` —
-for every one of them the mapping left absent or empty (a non-empty mapping value always wins). Nothing else of the caller
-travels. The same rule applies to every outbound task type (see
+trace/correlation headers, with the **credential** — `sub`, `act_sub`, `position`, `client_id` and `role` — resolved
+by the instance-call rule: [Caller credential on instance calls](role-grant-authorization.md#caller-credential-on-instance-calls).
+Nothing else of the caller travels. HTTP, SOAP and Dapr tasks carry the credential by an older rule (see
 [Correlation and tracing](../runtime/correlation-and-tracing.md)).
 - `role` travels only as the caller **sent** it (its request header). Roles a provider resolved for the caller (morph-idm
   get-roles) are never carried; the target resolves them itself from the forwarded `sub` / `act_sub` / `client_id` /
@@ -343,10 +343,10 @@ The implementation rules the developer quick-reference card points at, kept here
   under its row lock (`InstanceSecretStore.GetOrCreateAsync`), cached in a private in-process L1 and **never in
   Redis**. Entry points preload (`IInstanceSecretPreloader`); an open without one loads the secret through EF in an
   isolated scope + unit of work (`ExecuteInIsolatedUnitOfWorkAsync`) — never Npgsql directly, never the caller's context.
-- **Get* trigger tasks read as the header set they present** — mapping headers + the request's credential
-  (`sub`, `act_sub`, `position`, `client_id`, `role`) for each one the mapping left absent or EMPTY; a non-empty mapping
-  value wins (`HttpTaskInvocation.AppendCallerCredential`, the one rule EVERY outbound task type uses — see
-  `docs/runtime/correlation-and-tracing.md`). The values come from the REQUEST headers, so a morph-idm-resolved role is
+- **Get* trigger tasks read as the header set they present** — mapping headers + the credential (`sub`, `act_sub`,
+  `position`, `client_id`, `role`) resolved by the instance-call rule (`HttpTaskInvocation.ResolveInstanceCallCredential`;
+  [Caller credential on instance calls](role-grant-authorization.md#caller-credential-on-instance-calls)); HTTP, SOAP and
+  Dapr tasks keep the older `AppendCallerCredential` rule. The values come from the REQUEST headers, so a morph-idm-resolved role is
   never carried. One set for both paths: cross-domain it is the remote binding's `Headers`
   (`SerializeReadCredential`); same-domain the executor reads under `ICurrentUser.Change(...)` from it (`ReadAs`), ALWAYS
   — `ChangeFromHeaders` is a no-op for an empty set and `ICurrentUser` (AsyncLocal) wins over headers. `SystemRead` is

@@ -19,17 +19,19 @@ field or header for another meaning:
 | `X-Workflow-Instance-Id` / `workflow.instance.id` | **Vendor-neutral instance identity** for dependencies that are not part of vNext (the vNext-internal axis is `vnext.instance.id`) | Baggage + outbound header via `ApplyTrustedCorrelationHeaders`; `X-Workflow` response header carries the same id for clients |
 
 **Every outbound task carries the request's credential.** The credential is `sub`, `act_sub`, `position`, `client_id`
-and `role`. Rule, per header: if the request carries it and the task's mapping left it absent or **empty**, it is sent;
-if the mapping sets a non-empty value, the mapping wins. Applied on the orchestrator side
-(`HttpTaskInvocation.AppendCallerCredential` / `WithCallerCredential`, via `TaskExecutorBase.WithCallerCredential`) for
-HTTP, SOAP, DaprService, DaprHttpEndpoint (whose binding carries the set in its optional `Headers`), and
-GetInstance / GetInstances / GetInstanceData / Start / SubProcess / DirectTrigger — both as the remote binding's headers
-and as the header dictionary of a same-domain, in-process call — so the target sees the same set wherever the task runs. The values come from the caller's **request headers**:
+and `role`. For **HTTP, SOAP, DaprService and DaprHttpEndpoint** tasks (DaprHttpEndpoint carries the set in its binding's
+optional `Headers`) the rule, per header, is: if the request carries it and the task's mapping left it absent or
+**empty**, it is sent; if the mapping sets a non-empty value, the mapping wins. Applied on the orchestrator side
+(`HttpTaskInvocation.AppendCallerCredential` / `WithCallerCredential`, via
+`TaskExecutorBase.WithCallerCredential(TaskEnvelope, …)` and `TaskBindingCredentials`). The seven calls that reach
+another instance — a SubFlow start and the SubProcess, Start, DirectTrigger, GetInstance, GetInstances and
+GetInstanceData tasks — follow their own rule instead, the same in-process and cross-domain:
+[Caller credential on instance calls](../domain/role-grant-authorization.md#caller-credential-on-instance-calls). The values come from the caller's **request headers**:
 `role` travels only as the caller sent it, and a role a provider resolved for the caller (morph-idm get-roles) is never
 carried — the target resolves roles itself from the forwarded credential. `sub` / `act_sub` are validated by
 `TelemetryConstants.TryNormalizeIdentityClaim`, the other three by a bounded no-control-character check (no header
-injection). Independently, `sub` / `act_sub` still ride in `TaskTraceContext.Sub/ActSub` and are **fill-if-absent** at send
-time (`ApplyTrustedCorrelationHeaders`).
+injection). Independently, for HTTP, SOAP and Dapr tasks `sub` / `act_sub` still ride in `TaskTraceContext.Sub/ActSub`
+and are **fill-if-absent** at send time (`ApplyTrustedCorrelationHeaders`).
 
 The instance id (`vnext.instance.id`) remains the business-level axis on every span and log scope,
 on both the write path (`TransitionExecutor.BuildLogScope`) and the read/function path
