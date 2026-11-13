@@ -332,6 +332,9 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
 
         InvokerHelpers.AddBindingHeaders(request, binding.Headers);
         InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
+        // Last on purpose: the blank marker must still be on the request when the trusted stamp runs (it fills only an ABSENT sub / act_sub),
+        // and must be gone before the request leaves. See HttpTaskInvocation.ResolveInstanceCallCredential.
+        InvokerHelpers.DropBlankCredentialHeaders(request);
         return request;
     }
 
@@ -362,6 +365,9 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
 
         InvokerHelpers.AddBindingHeaders(request, binding.Headers);
         InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
+        // Last on purpose: the blank marker must still be on the request when the trusted stamp runs (it fills only an ABSENT sub / act_sub),
+        // and must be gone before the request leaves. See HttpTaskInvocation.ResolveInstanceCallCredential.
+        InvokerHelpers.DropBlankCredentialHeaders(request);
         return request;
     }
 

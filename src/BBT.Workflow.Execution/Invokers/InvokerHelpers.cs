@@ -67,6 +67,15 @@ internal static class InvokerHelpers
     }
 
     /// <summary>
+    /// Removes the credential headers (sub, act_sub, position, client_id, role) whose value is blank from an outbound
+    /// request. Delegates to <see cref="HttpTaskInvocation.DropBlankCredentialHeaders"/>. Call it LAST: a blank value the
+    /// binding set is a marker for "make this call without this credential", and it must still be on the request while
+    /// <see cref="ApplyTrustedCorrelationHeaders"/> runs, because that stamp fills only an ABSENT sub / act_sub.
+    /// </summary>
+    public static void DropBlankCredentialHeaders(HttpRequestMessage request) =>
+        HttpTaskInvocation.DropBlankCredentialHeaders(request);
+
+    /// <summary>
     /// Attempts to parse JSON content. Returns the original content if parsing fails.
     /// Used for TriggerTask (e.g. GetInstances / GetInstanceData) response body parsing.
     /// </summary>
