@@ -37,12 +37,19 @@ What a scaffolded mapping should and should not write (canonical statement: `doc
 | Did not set the key | The caller's value (the parent hop's request header) |
 
 ```csharp
-// SubFlow input mapping: blank `sub` on purpose; `role` is omitted, so the caller's role still travels.
-public async Task<ScriptResponse> InputHandler(WorkflowTask task, ScriptContext context) =>
-    new ScriptResponse
-    {
-        Headers = new Dictionary<string, string?> { ["sub"] = "" }
-    };
+// Excerpt: only InputHandler is shown.
+public class StartChildWithoutCallerSub : ScriptBase, ISubFlowMapping
+{
+    // `sub` is blank on purpose: the child starts without it and the caller's value is not added.
+    // `role` is not in the dictionary, so the caller's role is filled in.
+    public Task<ScriptResponse> InputHandler(ScriptContext context) =>
+        Task.FromResult(new ScriptResponse
+        {
+            Headers = new Dictionary<string, string?> { ["sub"] = "" }
+        });
+
+    // OutputHandler ... omitted
+}
 ```
 
 Write `["sub"] = ""` to block the identity; do not write `["sub"] = <request sub>` by hand, and do not omit the key when the identity must be blocked.
