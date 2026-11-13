@@ -19,10 +19,16 @@ namespace BBT.Workflow.Caching;
 /// absence is harmless need no bump. A bump costs one cold load per component per pod; the old entries expire
 /// on their own TTL. Generation tokens (<c>:gen</c>) are opaque and stay shared across shapes.
 /// </para>
-/// <para>History: no segment — before row security; <c>s2</c> — <c>Workflow.RowSecurity</c> (row security, vnext#1107).</para>
+/// <para>
+/// A bump is also how a release retires entries an older release wrote <i>wrongly</i>: the old pods keep
+/// their keys until they are gone, and the new pods never read them.
+/// </para>
+/// <para>History: no segment — before row security; <c>s2</c> — <c>Workflow.RowSecurity</c> (row security, vnext#1107);
+/// <c>s3</c> — resolution entries written from a version list that ran out of memory part-way (an older version
+/// cached as the answer for a floating request) are left behind.</para>
 /// </remarks>
 public static class ComponentCacheShape
 {
     /// <summary>The current shape segment, written between the component key and the entry kind.</summary>
-    public const string Version = "s2";
+    public const string Version = "s3";
 }

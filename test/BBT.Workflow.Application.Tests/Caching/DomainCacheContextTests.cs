@@ -100,11 +100,15 @@ public class DomainCacheContextTests
         policy.GetDefaultVersionAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
             .Returns(BBT.Aether.Results.Result<string?>.Ok("1.0.0"));
         var workflowBackend = Substitute.For<ICacheBackend<Definitions.Workflow>>();
-        workflowBackend.LoadAllByKeyAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
-            .Returns(BBT.Aether.Results.Result<System.Collections.Generic.List<Definitions.Workflow>>.Ok([Flow("some-flow")]));
+        workflowBackend.LoadVersionsAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+            .Returns(BBT.Aether.Results.Result<System.Collections.Generic.IReadOnlyList<string>>.Ok(["1.0.0"]));
+        workflowBackend.LoadAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<System.Threading.CancellationToken>())
+            .Returns(BBT.Aether.Results.Result<Definitions.Workflow>.Ok(Flow("some-flow")));
         var taskBackend = Substitute.For<ICacheBackend<WorkflowTask>>();
-        taskBackend.LoadAllByKeyAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
-            .Returns(BBT.Aether.Results.Result<System.Collections.Generic.List<WorkflowTask>>.Ok([TaskItem("some-task")]));
+        taskBackend.LoadVersionsAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<System.Threading.CancellationToken>())
+            .Returns(BBT.Aether.Results.Result<System.Collections.Generic.IReadOnlyList<string>>.Ok(["1.0.0"]));
+        taskBackend.LoadAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<System.Threading.CancellationToken>())
+            .Returns(BBT.Aether.Results.Result<WorkflowTask>.Ok(TaskItem("some-task")));
 
         var cache = new FakeDistributedCacheService(TimeProvider.System);
         var optionsAccessor = Options.Create(new ComponentCacheOptions());

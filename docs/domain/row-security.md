@@ -365,8 +365,8 @@ The rule set travels inside the cached `Workflow` component, and that cache is s
 runtime that predates row security has no `rowSecurity` member; if it re-writes a flow's cache entry, the
 member is dropped, and a row-security runtime reading that entry would treat the flow as not opted in and
 serve every row. To prevent this, component cache keys carry a shape segment
-(`ComponentCacheShape.Version`, `s2` since row security: `{component}:{domain}:{key}:s2:full:…` and
-`…:s2:res:…`). During a rolling upgrade or a rollback, pods of different shape versions therefore use
+(`ComponentCacheShape.Version`, introduced as `s2` for row security and `s3` since 0.0.106:
+`{component}:{domain}:{key}:{shape}:full:…` and `…:{shape}:res:…`). During a rolling upgrade or a rollback, pods of different shape versions therefore use
 **disjoint** cache keys and each loads the definition from the database in its own shape; no cache flush
 is needed. Generation tokens stay shared, so a publish on either version still invalidates the resolution entries of both (full-version entries are immutable bodies).
 
@@ -376,7 +376,7 @@ opted-in flow, from its own entries or straight from the database — see [Rollb
 **Do not force re-publish the same version during a rollout.** Full-version entries are immutable bodies
 kept for `ComponentCache:FullVersionTtlSeconds` (default 1800 s) and are not invalidated by a generation bump.
 While pods of both releases run, force re-publishing an **unchanged version number** (for example to add
-`rowSecurity` to it) can leave a stale `s2` full body served until it expires. Publish a new version
+`rowSecurity` to it) can leave a stale full body served until it expires. Publish a new version
 instead, or wait for the TTL.
 
 **morph-idm.** With `CallerRoleProvider:Provider = morph-idm`, `CallerRoleProvider:MorphIdm:BaseUrl` and

@@ -132,37 +132,57 @@ public sealed class CacheSetTestHarness
     public sealed class FakeCacheBackend : ICacheBackend<View>
     {
         private int _loadAllCallCount;
+        private int _versionListCallCount;
 
         public List<View> Versions { get; set; } = [];
 
+        /// <summary>Body-loading reads of every version. The cache must never need one.</summary>
         public int LoadAllCallCount => Volatile.Read(ref _loadAllCallCount);
 
+        /// <summary>Version-list reads — the backend query a resolution miss or a publish warm-up costs.</summary>
+        public int VersionListCallCount => Volatile.Read(ref _versionListCallCount);
+
+        /// <summary>Single-version body loads.</summary>
         public int LoadCallCount { get; private set; }
 
-        /// <summary>Blocks each load until released, to construct concurrent-miss scenarios.</summary>
+        /// <summary>Versions whose single-version body load throws, as an unreadable row would.</summary>
+        public HashSet<string> UnreadableVersions { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Blocks each version-list read until released, to construct concurrent-miss scenarios.</summary>
         public TaskCompletionSource? Gate { get; set; }
 
-        /// <summary>When true, loads throw — used to prove behaviour that must not depend on warming.</summary>
-        public bool FailLoadAll { get; set; }
+        /// <summary>When true, version-list reads throw — used to prove behaviour that must not depend on warming.</summary>
+        public bool FailVersionList { get; set; }
 
-        public async Task<Result<List<View>>> LoadAllByKeyAsync(
+        public Task<Result<List<View>>> LoadAllByKeyAsync(
             string domain,
             string key,
             CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref _loadAllCallCount);
 
-            if (FailLoadAll)
+            return Task.FromResult(Result<List<View>>.Ok(Matching(domain, key).ToList()));
+        }
+
+        public async Task<Result<IReadOnlyList<string>>> LoadVersionsAsync(
+            string domain,
+            string key,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _versionListCallCount);
+
+            if (FailVersionList)
                 throw new InvalidOperationException("Simulated backend load failure.");
 
             if (Gate is not null)
                 await Gate.Task;
 
-            return Result<List<View>>.Ok(Versions
-                .Where(v => string.Equals(v.Domain, domain, StringComparison.OrdinalIgnoreCase) &&
-                            string.Equals(v.Key, key, StringComparison.OrdinalIgnoreCase))
-                .ToList());
+            return Result<IReadOnlyList<string>>.Ok(Matching(domain, key).Select(v => v.Version).ToList());
         }
+
+        private IEnumerable<View> Matching(string domain, string key) => Versions
+            .Where(v => string.Equals(v.Domain, domain, StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(v.Key, key, StringComparison.OrdinalIgnoreCase));
 
         public Task<Result<View>> LoadAsync(
             string domain,
@@ -171,6 +191,9 @@ public sealed class CacheSetTestHarness
             CancellationToken cancellationToken = default)
         {
             LoadCallCount++;
+
+            if (version is not null && UnreadableVersions.Contains(version))
+                throw new InvalidOperationException($"Simulated unreadable row: {version}.");
 
             var match = Versions.FirstOrDefault(v =>
                 string.Equals(v.Version, version, StringComparison.OrdinalIgnoreCase));
@@ -183,6 +206,7 @@ public sealed class CacheSetTestHarness
         public void ResetCounts()
         {
             Interlocked.Exchange(ref _loadAllCallCount, 0);
+            Interlocked.Exchange(ref _versionListCallCount, 0);
             LoadCallCount = 0;
         }
     }

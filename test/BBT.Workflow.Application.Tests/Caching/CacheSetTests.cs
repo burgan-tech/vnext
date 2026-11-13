@@ -57,9 +57,9 @@ public class CacheSetTests
 
         // Act
         harness.AddPublished(V160);
-        harness.Backend.FailLoadAll = true;
+        harness.Backend.FailVersionList = true;
         var publishResult = await harness.Sut.SetAsync(CreateView(V160));
-        harness.Backend.FailLoadAll = false;
+        harness.Backend.FailVersionList = false;
 
         // Assert
         publishResult.IsSuccess.ShouldBeTrue("a failed warm must not fail the publish");
@@ -181,7 +181,7 @@ public class CacheSetTests
 
         harness.Backend.ResetCounts();
         (await harness.Sut.GetByVersionAsync(TestDomain, TestKey, packageAliasRequest)).IsSuccess.ShouldBeTrue();
-        harness.Backend.LoadAllCallCount.ShouldBe(0, "the alias resolution should be cached");
+        harness.Backend.VersionListCallCount.ShouldBe(0, "the alias resolution should be cached");
 
         // Act
         harness.AddPublished(V160);
@@ -190,7 +190,7 @@ public class CacheSetTests
         await harness.Sut.GetByVersionAsync(TestDomain, TestKey, packageAliasRequest);
 
         // Assert - the previously cached alias answer is unreachable, so it was re-resolved.
-        harness.Backend.LoadAllCallCount.ShouldBe(1);
+        harness.Backend.VersionListCallCount.ShouldBe(1);
     }
 
     [Fact]
@@ -208,7 +208,7 @@ public class CacheSetTests
 
         // Assert - a fresh token means nothing cached under the old one is consulted.
         (await harness.Sut.GetByVersionAsync(TestDomain, TestKey, "1")).Value!.Version.ShouldBe(V160);
-        harness.Backend.LoadAllCallCount.ShouldBe(1);
+        harness.Backend.VersionListCallCount.ShouldBe(1);
     }
 
     [Fact]
@@ -313,7 +313,7 @@ public class CacheSetTests
         // Assert - publishing pre-resolves these, so a deploy does not hand the first request of each a
         // full version-list load.
         results.ShouldAllBe(r => r.IsSuccess);
-        harness.Backend.LoadAllCallCount.ShouldBe(0);
+        harness.Backend.VersionListCallCount.ShouldBe(0);
     }
 
     [Fact]
@@ -330,7 +330,7 @@ public class CacheSetTests
         await harness.Sut.GetByVersionAsync(TestDomain, TestKey, "1");
 
         // Assert - resolution entries are not on a refresh treadmill; only a publish invalidates them.
-        harness.Backend.LoadAllCallCount.ShouldBe(0);
+        harness.Backend.VersionListCallCount.ShouldBe(0);
     }
 
     [Fact]
@@ -349,14 +349,14 @@ public class CacheSetTests
             .Select(_ => harness.Sut.GetByVersionAsync(TestDomain, TestKey, "1"))
             .ToArray();
 
-        harness.Backend.LoadAllCallCount.ShouldBe(1);
+        harness.Backend.VersionListCallCount.ShouldBe(1);
         harness.Backend.Gate.SetResult();
         var results = await Task.WhenAll(reads);
 
         // Assert
         results.ShouldAllBe(r => r.IsSuccess);
         results.ShouldAllBe(r => r.Value!.Version == V160);
-        harness.Backend.LoadAllCallCount.ShouldBe(1);
+        harness.Backend.VersionListCallCount.ShouldBe(1);
     }
 
     // ────────────────────────────────────────────────────────────────────
@@ -378,7 +378,7 @@ public class CacheSetTests
         // answer computed from a list that is missing it.
         var result = await harness.Sut.GetByVersionAsync(TestDomain, TestKey, "latest");
         result.Value!.Version.ShouldBe(V160);
-        harness.Backend.LoadAllCallCount.ShouldBe(0);
+        harness.Backend.VersionListCallCount.ShouldBe(0);
     }
 
     [Fact]
@@ -411,14 +411,14 @@ public class CacheSetTests
 
         // Act
         var first = await harness.Sut.GetByVersionAsync(TestDomain, TestKey, "9");
-        var loadsAfterFirst = harness.Backend.LoadAllCallCount;
+        var loadsAfterFirst = harness.Backend.VersionListCallCount;
         var second = await harness.Sut.GetByVersionAsync(TestDomain, TestKey, "9");
 
         // Assert
         first.IsSuccess.ShouldBeFalse();
         second.IsSuccess.ShouldBeFalse();
         loadsAfterFirst.ShouldBe(1);
-        harness.Backend.LoadAllCallCount.ShouldBe(1, "the negative answer should be served from cache");
+        harness.Backend.VersionListCallCount.ShouldBe(1, "the negative answer should be served from cache");
     }
 
     [Fact]
@@ -508,7 +508,7 @@ public class CacheSetTests
 
         // Assert - equivalent requests must not produce independently staleable entries.
         harness.ResolutionSpellingsInCache().ShouldBe(["latest"]);
-        harness.Backend.LoadAllCallCount.ShouldBe(1);
+        harness.Backend.VersionListCallCount.ShouldBe(1);
     }
 
     [Fact]
