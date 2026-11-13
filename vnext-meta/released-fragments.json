@@ -1,4 +1,8 @@
 {
+  "0.0.106": {
+    "floating-version-lean-resolution": "92a02a6151c89b814fe3905cc9713b95b548001c507589adb270bf3ba81e69de",
+    "resource-lock-conflict-routing": "469dfdcb242c60182d92e79b4bd9f22085e4b3d982cffa854737259d0535a8ee"
+  },
   "0.0.105": {
     "artifact-version-prefers-pkg-row": "9a4a7a2fdc29a3d88c2c1fb0d1aa5b6f29cecede7522c24bc774ceff5dd079b9",
     "data-function-etag-covers-state": "f74b0360b099f9eb16f909e0b8761b4803c920070230c4af71d273e7fe8bfbea",
