@@ -257,9 +257,10 @@ public sealed class GetInstanceRemoteInvoker : ITaskInvoker<GetInstanceBinding>
         // The task's own credential, the same header set as every other task invoker: the target domain exposes
         // the data (x-roles, x-masking, x-encryption) for this caller — a same-domain read evaluates the same set.
         InvokerHelpers.AddBindingHeaders(request, binding.Headers);
-        InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
-        // Last on purpose: the blank marker must still be on the request when the trusted stamp runs (it fills only an ABSENT sub / act_sub),
-        // and must be gone before the request leaves. See HttpTaskInvocation.ResolveInstanceCallCredential.
+        InvokerHelpers.ApplyTrustedCorrelationHeaders(request, fillIdentity: false);
+        // The orchestrator resolved the credential (HttpTaskInvocation.ResolveInstanceCallCredential); this host adds no
+        // identity, and blank credential markers are removed before the request leaves. The orchestrator still keeps the
+        // marker in the binding because an OLDER execution host fills an absent sub / act_sub from the trace.
         InvokerHelpers.DropBlankCredentialHeaders(request);
         return request;
     }
@@ -284,9 +285,10 @@ public sealed class GetInstanceRemoteInvoker : ITaskInvoker<GetInstanceBinding>
         // The task's own credential, the same header set as every other task invoker: the target domain exposes
         // the data (x-roles, x-masking, x-encryption) for this caller — a same-domain read evaluates the same set.
         InvokerHelpers.AddBindingHeaders(request, binding.Headers);
-        InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
-        // Last on purpose: the blank marker must still be on the request when the trusted stamp runs (it fills only an ABSENT sub / act_sub),
-        // and must be gone before the request leaves. See HttpTaskInvocation.ResolveInstanceCallCredential.
+        InvokerHelpers.ApplyTrustedCorrelationHeaders(request, fillIdentity: false);
+        // The orchestrator resolved the credential (HttpTaskInvocation.ResolveInstanceCallCredential); this host adds no
+        // identity, and blank credential markers are removed before the request leaves. The orchestrator still keeps the
+        // marker in the binding because an OLDER execution host fills an absent sub / act_sub from the trace.
         InvokerHelpers.DropBlankCredentialHeaders(request);
         return request;
     }

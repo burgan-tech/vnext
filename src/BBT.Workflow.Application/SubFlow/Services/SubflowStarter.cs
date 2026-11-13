@@ -202,8 +202,15 @@ public sealed class SubflowStarter(
         // supplied by the input mapping (any casing) is REPLACED by the framework-stamped value
         // below instead of producing a duplicate header entry.
         // Caller credential: the mapping decides, blank included — HttpTaskInvocation.ResolveInstanceCallCredential. Blank entries stay "" on purpose; the exit drops them.
-        var headers = HttpTaskInvocation.ResolveInstanceCallCredential(
-            MappingHeadersOf(inputMappingResult), callerHeaders);
+        var mappingHeaders = MappingHeadersOf(inputMappingResult, subFlowReference.Key);
+        if (!mappingHeaders.IsSuccess)
+        {
+            // Fail closed before any child is started: unreadable headers must not read as "no headers".
+            SubFlowActivityHelper.SetError(activity, mappingHeaders.Error.Message ?? mappingHeaders.Error.Code);
+            return Result<string?>.Fail(mappingHeaders.Error);
+        }
+
+        var headers = HttpTaskInvocation.ResolveInstanceCallCredential(mappingHeaders.Value, callerHeaders);
 
         headers[TelemetryConstants.HeaderNames.ParentInstanceId] = parentInstance.Id.ToString();
         headers[TelemetryConstants.HeaderNames.RootInstanceId] = rootInstanceId.ToString();
@@ -248,19 +255,59 @@ public sealed class SubflowStarter(
         return Result<string?>.Ok(startResult.Value?.FlowVersion);
     }
 
-    /// <summary>The headers a mapping result carries: a string dictionary as is, an ExpandoObject by its values' text, anything else none.</summary>
-    private static Dictionary<string, string?>? MappingHeadersOf(ScriptResponse? mapping)
+    /// <summary>The <c>Headers</c> shapes a SubFlow input mapping may return, named in the start failure.</summary>
+    private const string AcceptedHeaderShapes =
+        "a string dictionary, an object dictionary (ExpandoObject), a JSON object, or an object with readable properties";
+
+    /// <summary>
+    /// The headers a mapping result carries, read from every readable shape: a string dictionary as is; an object
+    /// dictionary (ExpandoObject, <c>Dictionary&lt;string, object&gt;</c>) by its values' text; a JSON object
+    /// (<see cref="HttpTaskInvocation.ReadHeaderObject"/>); any other object that is neither a scalar nor a sequence by its
+    /// public readable instance properties (anonymous type, POCO). <c>null</c> headers are "no headers" (<c>Ok(null)</c>).
+    /// Anything else — a string, a number, a list, a JSON value that is not an object — is unreadable and FAILS: reading it
+    /// as "no headers" would refill a credential the author meant to withhold (fail closed).
+    /// </summary>
+    private static Result<Dictionary<string, string?>?> MappingHeadersOf(ScriptResponse? mapping, string subFlowKey)
     {
-        switch (mapping?.Headers)
+        object? headers = mapping?.Headers;
+        switch (headers)
         {
+            case null:
+                return Result<Dictionary<string, string?>?>.Ok(null);
             case IDictionary<string, string?> strings:
-                return new Dictionary<string, string?>(strings);
-            case IDictionary<string, object?> expando:
-                return expando.ToDictionary(kv => kv.Key, kv => kv.Value?.ToString());
+                return Result<Dictionary<string, string?>?>.Ok(new Dictionary<string, string?>(strings));
+            case IDictionary<string, object?> objects:
+                return Result<Dictionary<string, string?>?>.Ok(
+                    objects.ToDictionary(kv => kv.Key, kv => kv.Value?.ToString()));
+            case JsonElement element when element.ValueKind == JsonValueKind.Object:
+                return Result<Dictionary<string, string?>?>.Ok(HttpTaskInvocation.ReadHeaderObject(element));
+            case JsonElement:
+            case string:
+            case System.Collections.IEnumerable:
+                break;
             default:
-                return null;
+                if (!IsScalar(headers.GetType()))
+                {
+                    return Result<Dictionary<string, string?>?>.Ok(headers.GetType()
+                        .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+                        .Where(p => p.CanRead && p.GetIndexParameters().Length == 0)
+                        .ToDictionary(p => p.Name, p => p.GetValue(headers)?.ToString()));
+                }
+
+                break;
         }
+
+        return Result<Dictionary<string, string?>?>.Fail(WorkflowErrors.SubFlowInputMappingFailed(
+            subFlowKey,
+            $"The input mapping returned Headers of type '{headers.GetType().Name}', which cannot be read as headers. " +
+            $"Accepted shapes: {AcceptedHeaderShapes}."));
     }
+
+    /// <summary>Whether <paramref name="type"/> is a single value (primitive, enum, decimal, date/time, Guid), not a header set.</summary>
+    private static bool IsScalar(Type type) =>
+        type.IsPrimitive || type.IsEnum || type == typeof(decimal) || type == typeof(DateTime)
+        || type == typeof(DateTimeOffset) || type == typeof(TimeSpan) || type == typeof(Guid)
+        || type == typeof(DateOnly) || type == typeof(TimeOnly);
 
     /// <summary>
     /// Handles input mapping for SubFlow/SubProcess by compiling and executing the mapping script.

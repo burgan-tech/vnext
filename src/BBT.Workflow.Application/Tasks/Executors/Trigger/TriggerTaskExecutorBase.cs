@@ -227,7 +227,8 @@ public abstract class TriggerTaskExecutorBase<TTask>(
         {
             try
             {
-                bindingHeaders = JsonSerializer.Deserialize<Dictionary<string, string?>>(bindingHeadersJson);
+                using var document = JsonDocument.Parse(bindingHeadersJson);
+                bindingHeaders = HttpTaskInvocation.ReadHeaderObject(document.RootElement);
             }
             catch (JsonException)
             {
@@ -248,23 +249,11 @@ public abstract class TriggerTaskExecutorBase<TTask>(
         => CallerCredentialScope.Enter(currentUser, credential);
 
     /// <summary>
-    /// Converts task headers (JsonElement?) to Dictionary for local Input objects.
+    /// Converts task headers (JsonElement?) to Dictionary for local Input objects, through
+    /// <see cref="HttpTaskInvocation.ReadHeaderObject"/>: one non-string value no longer discards the whole set (a blanked
+    /// credential included). Not a JSON object → null.
     /// </summary>
     protected static Dictionary<string, string?>? ConvertTaskHeadersToDictionary(JsonElement? taskHeaders)
-    {
-        if (!taskHeaders.HasValue || taskHeaders.Value.ValueKind != JsonValueKind.Object)
-        {
-            return null;
-        }
-
-        try
-        {
-            return taskHeaders.Value.Deserialize<Dictionary<string, string?>>();
-        }
-        catch
-        {
-            return null;
-        }
-    }
+        => taskHeaders.HasValue ? HttpTaskInvocation.ReadHeaderObject(taskHeaders.Value) : null;
 }
 

@@ -21,9 +21,11 @@ using Xunit;
 namespace BBT.Workflow.Application.Tests.Tasks.Executors;
 
 /// <summary>
-/// Every outbound task type carries the request's credential (sub, act_sub, position, client_id, role) for each credential
-/// header its mapping left absent or empty; a non-empty mapping value wins. Pinned here for the task types that run through
-/// a header dictionary (Start, in-process), a binding the task does not author (DaprHttpEndpoint) and the SOAP envelope.
+/// Every outbound task type carries the request's credential (sub, act_sub, position, client_id, role) by default; a
+/// non-empty mapping value wins. Two rules apply. The in-process Start task follows the instance-call rule
+/// (HttpTaskInvocation.ResolveInstanceCallCredential): only a credential the mapping left ABSENT is filled from the caller,
+/// a blank one is withheld. The DaprHttpEndpoint and SOAP rows keep the older rule (HttpTaskInvocation.AppendCallerCredential):
+/// a credential left absent OR empty is filled from the caller.
 /// </summary>
 public sealed class TaskCallerCredentialCoverageTests
 {

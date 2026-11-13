@@ -166,6 +166,16 @@ public class SubflowStarterTests
 
     private static async Task<StartInstanceInput> StartCapturingHeadersAsync(object? mappingHeaders, ScriptContext? caller)
     {
+        var (result, _, captured) = await StartWithMappingHeadersAsync(mappingHeaders, caller);
+
+        result.IsSuccess.ShouldBeTrue();
+        captured.ShouldNotBeNull();
+        return captured!;
+    }
+
+    private static async Task<(Result<string?> Result, IInstanceCommandGateway Gateway, StartInstanceInput? Captured)>
+        StartWithMappingHeadersAsync(object? mappingHeaders, ScriptContext? caller)
+    {
         var gateway = Substitute.For<IInstanceCommandGateway>();
         var engine = Substitute.For<IScriptEngine>();
         var mapping = Substitute.For<ISubFlowMapping>();
@@ -193,9 +203,7 @@ public class SubflowStarterTests
         var result = await starter.StartAsync(workflow, parent, state, TransitionFactory.CreateDefault(),
             correlation, caller!, ExecMode.Sync);
 
-        result.IsSuccess.ShouldBeTrue();
-        captured.ShouldNotBeNull();
-        return captured!;
+        return (result, gateway, captured);
     }
 
     [Fact]
@@ -236,6 +244,32 @@ public class SubflowStarterTests
         var input = await StartCapturingHeadersAsync((object)headers, CallerContext());
 
         input.Headers["sub"].ShouldBe("");
+    }
+
+    [Fact]
+    public async Task AnonymousObjectMappingHeaders_AreHonoured()
+    {
+        var input = await StartCapturingHeadersAsync(new { sub = "" }, CallerContext());
+
+        input.Headers["sub"].ShouldBe("");
+        input.Headers["act_sub"].ShouldBe("a1");
+    }
+
+    public static TheoryData<object> UnreadableHeaderShapes => new()
+    {
+        "sub=",
+        42,
+        new[] { "sub" },
+    };
+
+    [Theory]
+    [MemberData(nameof(UnreadableHeaderShapes))]
+    public async Task UnreadableMappingHeaders_FailTheStart_AndStartNoChild(object mappingHeaders)
+    {
+        var (result, gateway, _) = await StartWithMappingHeadersAsync(mappingHeaders, CallerContext());
+
+        result.IsSuccess.ShouldBeFalse();
+        await gateway.DidNotReceive().StartSubAsync(Arg.Any<StartInstanceInput>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]

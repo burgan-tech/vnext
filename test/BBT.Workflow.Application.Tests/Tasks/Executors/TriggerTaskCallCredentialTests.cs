@@ -74,6 +74,20 @@ public sealed class TriggerTaskCallCredentialTests
     [InlineData(Kind.Start)]
     [InlineData(Kind.SubProcess)]
     [InlineData(Kind.DirectTrigger)]
+    public async Task Local_NonStringTaskHeaderValue_DoesNotDiscardTheBlankCredential(Kind kind)
+    {
+        var seen = await RunAsync(kind, remote: false, taskHeaders: """{ "sub": "", "n": 5 }""");
+
+        seen.LocalHeaders.ShouldNotBeNull();
+        seen.LocalHeaders!.Keys.ShouldNotContain("sub");
+        seen.LocalHeaders["act_sub"].ShouldBe("a1");
+        seen.LocalHeaders["n"].ShouldBe("5");
+    }
+
+    [Theory]
+    [InlineData(Kind.Start)]
+    [InlineData(Kind.SubProcess)]
+    [InlineData(Kind.DirectTrigger)]
     public async Task Local_RunsAsTheResolvedUser(Kind kind)
     {
         var currentUser = new BBT.Aether.Users.CurrentUser(AsyncLocalCurrentUserAccessor.Instance);

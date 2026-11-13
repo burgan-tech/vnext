@@ -288,7 +288,38 @@ public sealed class TriggerTaskReadCredentialTests
         return observed;
     }
 
-    private async Task<Dictionary<string, string?>> RunCrossDomain(string kind, Dictionary<string, string?> taskHeaders)
+    /// <summary>A read task whose <c>headers</c> is authored as raw JSON (so values need not be strings).</summary>
+    private static WorkflowTask ReadTaskWithRawHeaders(string kind, string domain, string headersJson)
+    {
+        switch (kind)
+        {
+            case "GetInstance":
+            {
+                var t = GetInstanceTask.Create(
+                    $$"""{ "key": "get-instance", "type": "18", "domain": "{{domain}}", "flow": "test-flow", "instanceId": "{{Guid.NewGuid()}}", "headers": {{headersJson}} }"""
+                        .ToJsonElement());
+                t.SetReference(new Reference("get-instance", domain, "sys-tasks", "1.0.0"));
+                return t;
+            }
+            case "GetInstances":
+            {
+                var t = GetInstancesTask.Create(
+                    $$"""{ "key": "get-instances", "type": "15", "domain": "{{domain}}", "flow": "test-flow", "page": 1, "pageSize": 10, "headers": {{headersJson}} }"""
+                        .ToJsonElement());
+                t.SetReference(new Reference("get-instances", domain, "sys-tasks", "1.0.0"));
+                return t;
+            }
+            default:
+                return GetInstanceDataTask.Create(
+                    $$"""{ "key": "get-data", "type": "19", "domain": "{{domain}}", "flow": "test-flow", "instanceId": "{{Guid.NewGuid()}}", "headers": {{headersJson}} }"""
+                        .ToJsonElement());
+        }
+    }
+
+    private Task<Dictionary<string, string?>> RunCrossDomain(string kind, Dictionary<string, string?> taskHeaders)
+        => RunCrossDomain(kind, ReadTask(kind, "other-domain", taskHeaders));
+
+    private async Task<Dictionary<string, string?>> RunCrossDomain(string kind, WorkflowTask task)
     {
         var runtime = Substitute.For<IRuntimeInfoProvider>();
         runtime.Domain.Returns(LocalDomain);
@@ -306,7 +337,7 @@ public sealed class TriggerTaskReadCredentialTests
             });
         var gateway = Substitute.For<IInstanceQueryGateway>();
         var engine = Substitute.For<IScriptEngine>();
-        var context = Context(ReadTask(kind, "other-domain", taskHeaders), RuleCaller);
+        var context = Context(task, RuleCaller);
 
         switch (kind)
         {
@@ -363,6 +394,18 @@ public sealed class TriggerTaskReadCredentialTests
         headers["sub"].ShouldBe("");
         headers["act_sub"].ShouldBe("a1");
         headers["role"].ShouldBe("maker");
+    }
+
+    [Theory]
+    [MemberData(nameof(ReadTasks))]
+    public async Task ACrossDomainRead_WithANonStringHeaderValue_KeepsTheBlankMarker(string kind)
+    {
+        var headers = await RunCrossDomain(kind,
+            ReadTaskWithRawHeaders(kind, "other-domain", """{ "sub": "", "n": 5 }"""));
+
+        headers.ShouldContainKey("sub");
+        headers["sub"].ShouldBe("");
+        headers["act_sub"].ShouldBe("a1");
     }
 
     private (GetInstanceTaskExecutor Executor, Func<Observed?> Observed) Create()

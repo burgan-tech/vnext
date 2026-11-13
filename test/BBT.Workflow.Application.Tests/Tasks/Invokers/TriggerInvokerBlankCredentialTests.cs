@@ -19,8 +19,9 @@ namespace BBT.Workflow.Tasks.Invokers;
 
 /// <summary>
 /// A credential the task's header mapping set — blank included — is the mapping's decision: the remote trigger invokers
-/// neither refill it from the trusted stamp nor send it empty. Only an ABSENT sub / act_sub is stamped. Every invoker is
-/// driven through both of its request builders (Dapr service invocation and plain HTTP).
+/// neither refill it nor send it empty. The credential was resolved by the orchestrator, so the Execution host adds no
+/// identity from the trace either — not even for an ABSENT sub / act_sub. Every invoker is driven through both of its
+/// request builders (Dapr service invocation and plain HTTP).
 /// </summary>
 public sealed class TriggerInvokerBlankCredentialTests
 {
@@ -57,7 +58,7 @@ public sealed class TriggerInvokerBlankCredentialTests
 
     [Theory]
     [MemberData(nameof(StampedInvokers))]
-    public async Task AbsentSub_IsStillFilledByTheTrustedStamp(string invoker, bool useDapr)
+    public async Task AbsentSub_IsNotFilledByTheExecutionHost(string invoker, bool useDapr)
     {
         var handler = new CapturingHandler();
 
@@ -66,8 +67,9 @@ public sealed class TriggerInvokerBlankCredentialTests
         activity.SetBaggage("act.sub", "caller-actor");
         await Send(invoker, useDapr, handler, """{ "position": "HQ" }""");
 
-        handler.Values("sub").ShouldBe(["caller"]);
-        handler.Values("act_sub").ShouldBe(["caller-actor"]);
+        // The orchestrator resolved the credential; the Execution host adds no identity from the trace.
+        handler.Contains("sub").ShouldBeFalse();
+        handler.Contains("act_sub").ShouldBeFalse();
         handler.Values("position").ShouldBe(["HQ"]);
     }
 

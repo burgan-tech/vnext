@@ -112,6 +112,28 @@ public class InstanceCallCredentialTests
         => HttpTaskInvocation.ResolveInstanceCallCredentialJson("[1,2]", Caller).ShouldBe("[1,2]");
 
     [Fact]
+    public void Json_NonStringValue_DoesNotDiscardTheBlankMarker()
+    {
+        var json = HttpTaskInvocation.ResolveInstanceCallCredentialJson(
+            "{\"sub\":\"\",\"n\":5,\"flag\":true,\"obj\":{\"a\":1}}", Caller)!;
+        var headers = JsonSerializer.Deserialize<Dictionary<string, string?>>(json)!;
+
+        headers["sub"].ShouldBe(string.Empty);
+        headers["n"].ShouldBe("5");
+        headers["flag"].ShouldBe("true");
+        headers.GetValueOrDefault("obj").ShouldBeNull();
+        headers["act_sub"].ShouldBe("a1");
+    }
+
+    [Fact]
+    public void ReadHeaderObject_NonObjectElement_ReturnsNull()
+    {
+        using var document = JsonDocument.Parse("[\"sub\"]");
+
+        HttpTaskInvocation.ReadHeaderObject(document.RootElement).ShouldBeNull();
+    }
+
+    [Fact]
     public void DropBlankCredentialHeaders_RemovesBlankCredentialsOnly()
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, "http://target/");

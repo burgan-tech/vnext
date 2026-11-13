@@ -34,9 +34,13 @@ internal static class InvokerHelpers
     /// <see cref="HttpTaskInvocation.ApplyTrustedCorrelationHeaders"/> — the single
     /// implementation shared with the Orchestrator's in-process HTTP task — see it for the
     /// precedence rules (workflow context authoritative, sub/act_sub fill-if-absent).
+    /// <paramref name="fillIdentity"/> <c>false</c> skips the sub/act_sub fill: the instance-call invokers
+    /// (DirectTrigger, GetInstance, GetInstances, GetInstanceData) pass it because the orchestrator already
+    /// resolved their credential (<see cref="HttpTaskInvocation.ResolveInstanceCallCredential"/>) and this
+    /// host must not add identity from the trace. The default <c>true</c> is the HTTP / SOAP / Dapr behaviour.
     /// </summary>
-    public static void ApplyTrustedCorrelationHeaders(HttpRequestMessage request) =>
-        HttpTaskInvocation.ApplyTrustedCorrelationHeaders(request);
+    public static void ApplyTrustedCorrelationHeaders(HttpRequestMessage request, bool fillIdentity = true) =>
+        HttpTaskInvocation.ApplyTrustedCorrelationHeaders(request, fillIdentity: fillIdentity);
 
     /// <summary>
     /// Fills <c>X-Request-Id</c> from the ambient request id when the binding left it absent or
@@ -50,8 +54,9 @@ internal static class InvokerHelpers
     /// <summary>
     /// Copies a task binding's header definition (JSON object) onto an outbound request, skipping the reserved
     /// trace/correlation headers (<see cref="IsReservedTraceHeader"/>). Call
-    /// <see cref="ApplyTrustedCorrelationHeaders"/> afterwards so sub / act_sub are filled only where the binding did not
-    /// set them.
+    /// <see cref="ApplyTrustedCorrelationHeaders"/> afterwards (with <c>fillIdentity: false</c> for an instance call,
+    /// whose credential the orchestrator already resolved; otherwise sub / act_sub are filled only where the binding did
+    /// not set them).
     /// </summary>
     public static void AddBindingHeaders(HttpRequestMessage request, string? headersJson)
     {
@@ -68,9 +73,9 @@ internal static class InvokerHelpers
 
     /// <summary>
     /// Removes the credential headers (sub, act_sub, position, client_id, role) whose value is blank from an outbound
-    /// request. Delegates to <see cref="HttpTaskInvocation.DropBlankCredentialHeaders"/>. Call it LAST: a blank value the
-    /// binding set is a marker for "make this call without this credential", and it must still be on the request while
-    /// <see cref="ApplyTrustedCorrelationHeaders"/> runs, because that stamp fills only an ABSENT sub / act_sub.
+    /// request. Delegates to <see cref="HttpTaskInvocation.DropBlankCredentialHeaders"/>. A blank value the binding set is
+    /// a marker for "make this call without this credential"; call this LAST, after every header has been added, so the
+    /// request never leaves with a blank credential.
     /// </summary>
     public static void DropBlankCredentialHeaders(HttpRequestMessage request) =>
         HttpTaskInvocation.DropBlankCredentialHeaders(request);

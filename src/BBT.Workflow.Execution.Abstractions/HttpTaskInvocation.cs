@@ -262,7 +262,12 @@ public static class HttpTaskInvocation
     /// <item><b>Identity claims</b> (sub, act_sub) are fill-if-absent: they are token-derived
     /// claims the platform provides as a DEFAULT — a developer who set them explicitly in the
     /// task binding's input mapping keeps their value; only when the binding did not set them
-    /// are they filled from the gateway token.</item>
+    /// are they filled from the gateway token. With <paramref name="fillIdentity"/> <c>false</c>
+    /// this fill is skipped entirely: the Execution host's DirectTrigger and GetInstance /
+    /// GetInstances / GetInstanceData invokers pass it, because for those instance calls the
+    /// orchestrator is the single resolver of the credential
+    /// (<see cref="ResolveInstanceCallCredential"/>) and the caller's value never comes from
+    /// Activity baggage. The default <c>true</c> keeps HTTP, SOAP and Dapr tasks as they were.</item>
     /// <item><b>X-Request-Id</b> is fill-if-absent too: a non-empty value from the binding's
     /// input mapping wins; when the binding left it absent or empty, vNext's own request id (the
     /// originating request's <c>X-Request-Id</c>, as the correlation provider holds it) is sent
@@ -276,7 +281,8 @@ public static class HttpTaskInvocation
     /// spans are created from <see cref="System.Diagnostics.ActivityContext"/>, which severs the
     /// managed parent chain that in-process baggage lookups walk.
     /// </summary>
-    public static void ApplyTrustedCorrelationHeaders(HttpRequestMessage request, TaskTraceContext? trusted = null)
+    public static void ApplyTrustedCorrelationHeaders(
+        HttpRequestMessage request, TaskTraceContext? trusted = null, bool fillIdentity = true)
     {
         request.Headers.Remove(WorkflowInstanceHeader);
         request.Headers.Remove(CorrelationHeader);
@@ -301,7 +307,7 @@ public static class HttpTaskInvocation
             request.Headers.TryAddWithoutValidation(CorrelationHeader, correlationId.ToString("N"));
         }
 
-        if (!request.Headers.NonValidated.Contains(SubHeader))
+        if (fillIdentity && !request.Headers.NonValidated.Contains(SubHeader))
         {
             var subject = !string.IsNullOrEmpty(trusted?.Sub)
                 ? trusted!.Sub
@@ -312,7 +318,7 @@ public static class HttpTaskInvocation
             }
         }
 
-        if (!request.Headers.NonValidated.Contains(ActSubHeader))
+        if (fillIdentity && !request.Headers.NonValidated.Contains(ActSubHeader))
         {
             var actSub = !string.IsNullOrEmpty(trusted?.ActSub)
                 ? trusted!.ActSub
@@ -485,7 +491,9 @@ public static class HttpTaskInvocation
     /// never be read as "not set" here — that would hand the target an identity the author withheld. Blank entries stay
     /// in the result as <c>""</c> and are dropped only at the exit (<c>CallerCredentialScope</c> in-process,
     /// <see cref="DropBlankCredentialHeaders"/> on a task's outbound request, the header merge of a cross-domain SubFlow
-    /// start): the marker has to survive that far, because some exits fill a MISSING <c>sub</c> / <c>act_sub</c> themselves.
+    /// start): the marker has to survive that far, because some exits fill a MISSING <c>sub</c> / <c>act_sub</c> themselves
+    /// — the cross-domain SubFlow header merge from the ambient user, and an older Execution host that still stamps an
+    /// absent <c>sub</c> / <c>act_sub</c> from the trace on a task's request.
     /// </para>
     /// <para>
     /// Activity baggage is deliberately not a source: a child whose parent blanked <c>sub</c> must not pick the first
@@ -526,8 +534,9 @@ public static class HttpTaskInvocation
 
     /// <summary>
     /// The binding's header definition (JSON object) resolved by <see cref="ResolveInstanceCallCredential"/>. Blank
-    /// credentials stay in the JSON as <c>""</c> markers so a later exit can honour them. A definition that is not a JSON
-    /// object of strings is returned unchanged; an empty result is <c>null</c>.
+    /// credentials stay in the JSON as <c>""</c> markers so a later exit can honour them. The definition is read by
+    /// <see cref="ReadHeaderObject"/>, so a non-string value does not discard the set; text that does not parse, or is not
+    /// a JSON object, is returned unchanged; an empty result is <c>null</c>.
     /// </summary>
     public static string? ResolveInstanceCallCredentialJson(string? headersJson, IReadOnlyDictionary<string, string>? callerHeaders)
     {
@@ -536,7 +545,8 @@ public static class HttpTaskInvocation
         {
             try
             {
-                parsed = JsonSerializer.Deserialize<Dictionary<string, string?>>(headersJson);
+                using var document = JsonDocument.Parse(headersJson);
+                parsed = ReadHeaderObject(document.RootElement);
             }
             catch (JsonException)
             {
@@ -549,6 +559,32 @@ public static class HttpTaskInvocation
 
         var resolved = ResolveInstanceCallCredential(parsed, callerHeaders);
         return resolved.Count == 0 ? null : JsonSerializer.Serialize(resolved);
+    }
+
+    /// <summary>
+    /// Reads a header definition (a JSON object) as a case-insensitive dictionary without discarding it over one
+    /// non-string value: a string is its value, <c>null</c> stays null, a number / <c>true</c> / <c>false</c> is its JSON
+    /// text, and a nested object or array becomes null. Returns <c>null</c> when <paramref name="element"/> is not a JSON
+    /// object. For the instance-call tasks this is fail-closed: a credential key whose value is an object or array reads as
+    /// null, i.e. blank, so the caller's value is withheld (<see cref="ResolveInstanceCallCredential"/>), never refilled.
+    /// </summary>
+    public static Dictionary<string, string?>? ReadHeaderObject(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var result = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var property in element.EnumerateObject())
+        {
+            result[property.Name] = property.Value.ValueKind switch
+            {
+                JsonValueKind.String => property.Value.GetString(),
+                JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False => property.Value.GetRawText(),
+                _ => null,
+            };
+        }
+
+        return result;
     }
 
     /// <summary>Removes the credential keys whose value is blank (empty, whitespace or null); nothing else is touched.</summary>

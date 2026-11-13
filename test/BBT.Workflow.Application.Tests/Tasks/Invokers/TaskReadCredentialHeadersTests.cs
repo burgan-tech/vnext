@@ -106,26 +106,47 @@ public sealed class TaskReadCredentialHeadersTests
     public void BuildOutgoingHeaders_WithNoBindingAndNoCaller_IsEmpty()
         => HttpTaskInvocation.BuildOutgoingHeaders(null).ShouldBeEmpty();
 
-    /// <summary>The cross-domain Get* request carries the task's headers; the caller's sub fills in only when absent.</summary>
+    /// <summary>
+    /// The cross-domain Get* request carries exactly the credential the orchestrator resolved into the binding: the
+    /// Execution host stamps the trace context with <c>fillIdentity: false</c>, so no <c>sub</c> / <c>act_sub</c> comes
+    /// from baggage — the same credential set a local read built from the same inputs runs as.
+    /// </summary>
     [Fact]
     public void AddBindingHeaders_ThenTrustedStamp_MatchesTheLocalSet()
     {
         using var activity = new Activity("test").Start();
         activity.SetBaggage("sub", "caller");
+        activity.SetBaggage("act.sub", "caller-actor");
         using var request = new HttpRequestMessage(HttpMethod.Get, "http://target/instances/1");
 
         InvokerHelpers.AddBindingHeaders(request, """{ "role": "morph-idm.maker", "traceparent": "00-x" }""");
-        InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
+        InvokerHelpers.ApplyTrustedCorrelationHeaders(request, fillIdentity: false);
 
         request.Headers.GetValues("role").Single().ShouldBe("morph-idm.maker");
-        request.Headers.GetValues("sub").Single().ShouldBe("caller");
+        request.Headers.Contains("sub").ShouldBeFalse();
+        request.Headers.Contains("act_sub").ShouldBeFalse();
         request.Headers.Contains("traceparent").ShouldBeFalse();
 
         var local = HttpTaskInvocation.BuildOutgoingHeaders(
-            new Dictionary<string, string?> { ["role"] = "morph-idm.maker", ["traceparent"] = "00-x" },
-            new Dictionary<string, string> { ["sub"] = "caller" });
+            new Dictionary<string, string?> { ["role"] = "morph-idm.maker", ["traceparent"] = "00-x" });
+        local.Keys.ShouldBe(["role"]);
         local["role"].ShouldBe("morph-idm.maker");
-        local["sub"].ShouldBe("caller");
+    }
+
+    /// <summary>The default stamp (HTTP / SOAP / Dapr tasks) still fills an absent sub / act_sub from baggage.</summary>
+    [Fact]
+    public void TrustedStamp_ByDefault_StillFillsAnAbsentSubFromBaggage()
+    {
+        using var activity = new Activity("test").Start();
+        activity.SetBaggage("sub", "caller");
+        activity.SetBaggage("act.sub", "caller-actor");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "http://target/instances/1");
+
+        InvokerHelpers.AddBindingHeaders(request, """{ "role": "morph-idm.maker" }""");
+        InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
+
+        request.Headers.GetValues("sub").Single().ShouldBe("caller");
+        request.Headers.GetValues("act_sub").Single().ShouldBe("caller-actor");
     }
 
     // ── HTTP / DaprService task bindings: credential added, nothing else touched ──
