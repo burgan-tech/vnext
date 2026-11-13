@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Text.Json;
 using System.Collections.Generic;
 using System.Threading;
@@ -198,6 +199,171 @@ public sealed class TriggerTaskReadCredentialTests
         predicate.ShouldNotContain("alice-actor");
     }
 
+    // ---- The blank-credential rule, pinned on all three instance-read tasks ---------------------------------------------
+
+    private static readonly Dictionary<string, string> RuleCaller = new()
+    {
+        ["sub"] = "u1", ["act_sub"] = "a1", ["role"] = "maker"
+    };
+
+    public static TheoryData<string> ReadTasks => new() { "GetInstance", "GetInstances", "GetInstanceData" };
+
+    private static WorkflowTask ReadTask(string kind, string domain, Dictionary<string, string?> headers)
+    {
+        switch (kind)
+        {
+            case "GetInstance":
+            {
+                var t = WorkflowTaskFactory.CreateGetInstanceTask(domain: domain);
+                t.SetHeaders(headers);
+                return t;
+            }
+            case "GetInstances":
+            {
+                var t = WorkflowTaskFactory.CreateGetInstancesTask(domain: domain);
+                t.SetHeaders(headers);
+                return t;
+            }
+            default:
+            {
+                var config = JsonDocument.Parse(
+                    $$"""{ "key": "get-data", "type": "19", "domain": "{{domain}}", "flow": "test-flow", "instanceId": "{{Guid.NewGuid()}}" }""")
+                    .RootElement.Clone();
+                var t = GetInstanceDataTask.Create(config);
+                t.SetHeaders(headers);
+                return t;
+            }
+        }
+    }
+
+    private async Task<Observed?> RunLocal(string kind, Dictionary<string, string?> taskHeaders)
+    {
+        Observed? observed = null;
+        void Capture() => observed = new Observed(_currentUser.Roles, _currentUser.UserName, _currentUser.ActorUserName,
+            _currentUser.IsAuthenticated);
+        var gateway = Substitute.For<IInstanceQueryGateway>();
+        gateway.GetInstanceAsync(Arg.Any<GetInstanceInput>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            Capture();
+            return ConditionalResult<GetInstanceOutput>.Success(new GetInstanceOutput());
+        });
+        gateway.GetInstanceDataAsync(Arg.Any<GetInstanceDataInput>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            Capture();
+            return ConditionalResult<GetInstanceDataOutput>.Success(new GetInstanceDataOutput());
+        });
+        gateway.GetInstanceListAsync(Arg.Any<GetInstanceListInput>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            Capture();
+            return Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Ok(new InstanceListWithGroupsResponse<GetInstanceOutput>());
+        });
+        var runtime = Substitute.For<IRuntimeInfoProvider>();
+        runtime.Domain.Returns(LocalDomain);
+        var remote = Substitute.For<IRemoteInvokerService>();
+        var resolver = Substitute.For<IDomainDiscoveryResolver>();
+        var task = ReadTask(kind, LocalDomain, taskHeaders);
+        var context = Context(task, RuleCaller);
+        var engine = Substitute.For<IScriptEngine>();
+
+        using (AmbientAuditor())
+        {
+            switch (kind)
+            {
+                case "GetInstance":
+                    await new GetInstanceTaskExecutor(engine, runtime, remote, gateway, resolver, _currentUser,
+                        NullLogger<GetInstanceTaskExecutor>.Instance).ExecuteAsync(context, CancellationToken.None);
+                    break;
+                case "GetInstances":
+                    await new GetInstancesTaskExecutor(engine, runtime, remote, gateway, resolver, _currentUser,
+                        NullLogger<GetInstancesTaskExecutor>.Instance).ExecuteAsync(context, CancellationToken.None);
+                    break;
+                default:
+                    await new GetInstanceDataTaskExecutor(engine, runtime, remote, gateway, resolver, _currentUser,
+                        NullLogger<GetInstanceDataTaskExecutor>.Instance).ExecuteAsync(context, CancellationToken.None);
+                    break;
+            }
+        }
+
+        return observed;
+    }
+
+    private async Task<Dictionary<string, string?>> RunCrossDomain(string kind, Dictionary<string, string?> taskHeaders)
+    {
+        var runtime = Substitute.For<IRuntimeInfoProvider>();
+        runtime.Domain.Returns(LocalDomain);
+        var resolver = Substitute.For<IDomainDiscoveryResolver>();
+        resolver.GetEndpointAsync(Arg.Any<string>(), Arg.Any<EndpointKind>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Ok(new DiscoveryEndpoint(EndpointKind.Url, new Uri("https://other-domain.local"), null)));
+        TaskEnvelope? sent = null;
+        var remote = Substitute.For<IRemoteInvokerService>();
+        remote.InvokeAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<TaskEnvelope>(),
+                Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                sent = call.ArgAt<TaskEnvelope>(2);
+                return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(data: null, statusCode: 200, taskType: "18"));
+            });
+        var gateway = Substitute.For<IInstanceQueryGateway>();
+        var engine = Substitute.For<IScriptEngine>();
+        var context = Context(ReadTask(kind, "other-domain", taskHeaders), RuleCaller);
+
+        switch (kind)
+        {
+            case "GetInstance":
+                await new GetInstanceTaskExecutor(engine, runtime, remote, gateway, resolver, _currentUser,
+                    NullLogger<GetInstanceTaskExecutor>.Instance).ExecuteAsync(context, CancellationToken.None);
+                break;
+            case "GetInstances":
+                await new GetInstancesTaskExecutor(engine, runtime, remote, gateway, resolver, _currentUser,
+                    NullLogger<GetInstancesTaskExecutor>.Instance).ExecuteAsync(context, CancellationToken.None);
+                break;
+            default:
+                await new GetInstanceDataTaskExecutor(engine, runtime, remote, gateway, resolver, _currentUser,
+                    NullLogger<GetInstanceDataTaskExecutor>.Instance).ExecuteAsync(context, CancellationToken.None);
+                break;
+        }
+
+        sent.ShouldNotBeNull();
+        var headersJson = sent.Binding.EnumerateObject()
+            .First(p => string.Equals(p.Name, "headers", StringComparison.OrdinalIgnoreCase)).Value.GetString();
+        return JsonSerializer.Deserialize<Dictionary<string, string?>>(headersJson!)!;
+    }
+
+    [Theory]
+    [MemberData(nameof(ReadTasks))]
+    public async Task ALocalRead_WithABlankSub_ReadsWithoutThatCredential(string kind)
+    {
+        var observed = await RunLocal(kind, new Dictionary<string, string?> { ["sub"] = "" });
+
+        observed.ShouldNotBeNull();
+        observed.UserName.ShouldBeNull();
+        observed.ActorUserName.ShouldBe("a1");
+        observed.Roles.ShouldBe(["maker"]);
+    }
+
+    [Theory]
+    [MemberData(nameof(ReadTasks))]
+    public async Task ALocalRead_WithABlankRole_ReadsRoleLess(string kind)
+    {
+        var observed = await RunLocal(kind, new Dictionary<string, string?> { ["role"] = "" });
+
+        observed.ShouldNotBeNull();
+        observed.Roles.ShouldBeNull();
+        observed.UserName.ShouldBe("u1");
+    }
+
+    [Theory]
+    [MemberData(nameof(ReadTasks))]
+    public async Task ACrossDomainRead_KeepsTheBlankAsAMarker(string kind)
+    {
+        var headers = await RunCrossDomain(kind, new Dictionary<string, string?> { ["sub"] = "" });
+
+        headers.ShouldContainKey("sub");
+        headers["sub"].ShouldBe("");
+        headers["act_sub"].ShouldBe("a1");
+        headers["role"].ShouldBe("maker");
+    }
+
     private (GetInstanceTaskExecutor Executor, Func<Observed?> Observed) Create()
     {
         Observed? observed = null;
@@ -217,7 +383,7 @@ public sealed class TriggerTaskReadCredentialTests
         return (executor, () => observed);
     }
 
-    private static TaskExecutorContext Context(GetInstanceTask task, Dictionary<string, string>? callerHeaders = null)
+    private static TaskExecutorContext Context(WorkflowTask task, Dictionary<string, string>? callerHeaders = null)
     {
         var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
         var scriptContext = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)

@@ -201,11 +201,12 @@ public abstract class TriggerTaskExecutorBase<TTask>(
 
     /// <summary>
     /// The credential an instance read (GetInstance / GetInstances / GetInstanceData) runs as, same-domain and cross-domain
-    /// alike: the task's own headers, plus the caller's <c>sub</c>, <c>act_sub</c>, <c>position</c>, <c>client_id</c> and
-    /// <c>role</c> where the task did not set them (<see cref="HttpTaskInvocation.BuildOutgoingHeaders"/>). The caller's
-    /// values come from its request headers, so a role a provider resolved for it (morph-idm) is never carried — the target
-    /// resolves roles from the forwarded credential itself. The read's x-roles, x-masking and x-encryption are evaluated for
-    /// this caller.
+    /// alike, resolved by <see cref="HttpTaskInvocation.ResolveInstanceCallCredential"/>: a credential (<c>sub</c>,
+    /// <c>act_sub</c>, <c>position</c>, <c>client_id</c>, <c>role</c>) the task's header mapping set — blank included — is the
+    /// mapping's decision and is kept as-is; only an absent credential is filled from the caller's request headers. A blank
+    /// credential stays in the result as <c>""</c> (a marker) and is dropped only at the exit. The caller's values come from
+    /// its request headers, so a role a provider resolved for it (morph-idm) is never carried — the target resolves roles
+    /// from the forwarded credential itself. The read's x-roles, x-masking and x-encryption are evaluated for this caller.
     /// </summary>
     protected static Dictionary<string, string?> BuildReadCredential(JsonElement? taskHeaders, ScriptContext? scriptContext)
         => HttpTaskInvocation.BuildOutgoingHeaders(
@@ -213,9 +214,11 @@ public abstract class TriggerTaskExecutorBase<TTask>(
             scriptContext?.Headers is null ? null : scriptContext.GetHeadersAsDictionary());
 
     /// <summary>
-    /// The same credential as <see cref="BuildReadCredential"/>, serialized as the remote binding's <c>Headers</c>: the
-    /// Execution host copies these onto the cross-domain request, so the target domain evaluates the same caller a
-    /// same-domain read would.
+    /// The same credential as <see cref="BuildReadCredential"/> (rule:
+    /// <see cref="HttpTaskInvocation.ResolveInstanceCallCredential"/>), serialized as the remote binding's <c>Headers</c>:
+    /// the Execution host copies these onto the cross-domain request, so the target domain evaluates the same caller a
+    /// same-domain read would. A blank credential stays in the JSON as <c>""</c>; the remote invoker drops it when it
+    /// builds the request.
     /// </summary>
     protected static string SerializeReadCredential(string? bindingHeadersJson, ScriptContext? scriptContext)
     {
