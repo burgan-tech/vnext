@@ -86,6 +86,10 @@ public sealed class DefinitionAppService(
         }
     }
 
+    /// <summary>
+    /// Validates the component's attributes for its type and, for a flow that declares <c>rowSecurity</c>,
+    /// runs the schema-aware row-security check. Warnings are logged; any error fails the publish.
+    /// </summary>
     private async Task<Result> ValidateComponentAsync(PublishInput input, CancellationToken cancellationToken)
     {
         var validationResult = componentValidatorProcessor.Validate(input.Flow, input.Attributes);
@@ -180,6 +184,12 @@ public sealed class DefinitionAppService(
         return Result.Ok();
     }
 
+    /// <summary>
+    /// Publishes a new version onto an already stored component. An existing version (resolved from the
+    /// stored version strings, never the bodies) answers <see cref="WorkflowErrors.WorkflowVersionConflict"/>
+    /// and writes nothing except the seed data it carries; otherwise the version is validated, appended
+    /// through the write funnel and cast into the cache.
+    /// </summary>
     private async Task<Result> HandleExistingInstanceAsync(
         Instance instance,
         PublishInput input,
@@ -255,6 +265,10 @@ public sealed class DefinitionAppService(
         }
     }
 
+    /// <summary>
+    /// Writes one seed-data item: skipped when its version is already stored, otherwise validated, tagged
+    /// and appended through the write funnel on the child scope's context, then cast into the cache.
+    /// </summary>
     private async Task<Result> ProcessDataItemAsync(
         IInstanceRepository instanceRepo,
         IInstanceDataWriteService dataWriter,
@@ -303,6 +317,10 @@ public sealed class DefinitionAppService(
         return Result.Ok();
     }
 
+    /// <summary>
+    /// Validates a seed-data item against its component type when a validator exists for that type;
+    /// a type without a validator passes. Warnings are logged; any error fails the publish.
+    /// </summary>
     private Result ValidateSeedData(string componentType, PublishDataInput dataItem)
     {
         if (!componentValidatorProcessor.TryValidate(componentType, dataItem.Attributes, out var validationResult))

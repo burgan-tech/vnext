@@ -230,7 +230,7 @@ public sealed class EfCoreInstanceRepository(
         Guid correlationId,
         CancellationToken cancellationToken = default)
     {
-        using var activity = PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan);
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
         var dbSet = await GetDbSetAsync();
         var instance = await dbSet
             .Include(i => i.DataList.Where(d => d.IsLatest))
@@ -845,7 +845,7 @@ public sealed class EfCoreInstanceRepository(
 
         var query = (await PrepareDetailedQueryAsync())
             .AsSplitQuery();
-        using var activity = PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan);
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
 
         if (Guid.TryParse(identifier, out var instanceId))
         {
@@ -932,7 +932,7 @@ public sealed class EfCoreInstanceRepository(
     {
         var query = (await PrepareDetailedQueryAsync())
             .AsSplitQuery();
-        using var activity = PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan);
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
 
         // Only non-terminal instances occupy a key (Active or Busy). Terminal rows
         // (Completed/Faulted/Passive) are ignored. OrderByDescending(CreatedAt) keeps the
@@ -982,7 +982,7 @@ public sealed class EfCoreInstanceRepository(
         var query = (await PrepareDetailedQueryAsync())
             .AsNoTracking()
             .AsSplitQuery();
-        using var activity = PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan);
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
 
         if (Guid.TryParse(identifier, out var instanceId))
         {
@@ -2568,10 +2568,10 @@ public sealed class EfCoreInstanceRepository(
         var context = await GetDbContextAsync();
         var result = await context.Database
             .SqlQueryRaw<InstanceDurationRaw>(
-                $"SELECT COALESCE(AVG(EXTRACT(EPOCH FROM \"Duration\") * 1000), 0) AS \"AvgMs\", " +
-                $"COALESCE(MIN(EXTRACT(EPOCH FROM \"Duration\") * 1000), 0) AS \"MinMs\", " +
-                $"COALESCE(MAX(EXTRACT(EPOCH FROM \"Duration\") * 1000), 0) AS \"MaxMs\", " +
-                $"COUNT(*) AS \"CompletedCount\" " +
+                "SELECT COALESCE(AVG(EXTRACT(EPOCH FROM \"Duration\") * 1000), 0) AS \"AvgMs\", " +
+                "COALESCE(MIN(EXTRACT(EPOCH FROM \"Duration\") * 1000), 0) AS \"MinMs\", " +
+                "COALESCE(MAX(EXTRACT(EPOCH FROM \"Duration\") * 1000), 0) AS \"MaxMs\", " +
+                "COUNT(*) AS \"CompletedCount\" " +
                 $"FROM \"{schema}\".\"Instances\" WHERE \"CompletedAt\" IS NOT NULL AND \"Duration\" IS NOT NULL")
             .FirstOrDefaultAsync(cancellationToken);
         return result is not null
