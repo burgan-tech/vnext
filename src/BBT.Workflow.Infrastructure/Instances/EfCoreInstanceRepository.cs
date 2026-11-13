@@ -230,7 +230,7 @@ public sealed class EfCoreInstanceRepository(
         Guid correlationId,
         CancellationToken cancellationToken = default)
     {
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
+        using var activity = PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan);
         var dbSet = await GetDbSetAsync();
         var instance = await dbSet
             .Include(i => i.DataList.Where(d => d.IsLatest))
@@ -375,18 +375,11 @@ public sealed class EfCoreInstanceRepository(
     public override async Task<Instance> UpdateAsync(Instance entity, bool autoSave = false,
         CancellationToken cancellationToken = default)
     {
-        var dbContext = await GetDbContextAsync();
-        var entry = dbContext.Entry(entity);
+        var context = await GetDbContextAsync();
+        var entry = context.Entry(entity);
 
-        InstanceStatus? originalStatus = null;
         if (entry.State != EntityState.Detached)
         {
-            var statusProperty = entry.Property(nameof(Instance.Status));
-            if (statusProperty.IsModified)
-            {
-                originalStatus = (InstanceStatus)statusProperty.OriginalValue!;
-            }
-
             // Type is write-once: the aggregate stamps it at creation and nothing may rewrite it.
             // Pinning the property clean keeps the column out of every UPDATE statement.
             // SetAfterSaveBehavior(Throw) would be the declarative form and is NOT usable here —
@@ -406,7 +399,7 @@ public sealed class EfCoreInstanceRepository(
         // Marking the pending rows Added first pins them; Update(root) skips already-tracked entries.
         foreach (var incident in entity.GetPendingIncidents())
         {
-            var incidentEntry = dbContext.Entry(incident);
+            var incidentEntry = context.Entry(incident);
             if (incidentEntry.State == EntityState.Detached)
                 incidentEntry.State = EntityState.Added;
         }
@@ -420,18 +413,13 @@ public sealed class EfCoreInstanceRepository(
         {
             foreach (var row in entity.DataList)
             {
-                if (dbContext.Entry(row).State == EntityState.Detached)
-                    dbContext.Attach(row);
+                if (context.Entry(row).State == EntityState.Detached)
+                    context.Attach(row);
             }
         }
 
         var result = await base.UpdateAsync(entity, autoSave, cancellationToken);
         entity.ClearPendingIncidents();
-
-        if (originalStatus != null && !originalStatus.Equals(entity.Status))
-        {
-            await HandleStatusChangeMetrics(entity, originalStatus, entity.Status);
-        }
 
         try
         {
@@ -738,8 +726,8 @@ public sealed class EfCoreInstanceRepository(
     /// </summary>
     private async Task AlignStatusBaselineAsync(Instance instance)
     {
-        var dbContext = await GetDbContextAsync();
-        var entry = dbContext.Entry(instance);
+        var context = await GetDbContextAsync();
+        var entry = context.Entry(instance);
         if (entry.State == EntityState.Detached)
         {
             return;
@@ -765,8 +753,8 @@ public sealed class EfCoreInstanceRepository(
     /// </summary>
     private async Task AlignUnfaultBaselineAsync(Instance instance)
     {
-        var dbContext = await GetDbContextAsync();
-        var entry = dbContext.Entry(instance);
+        var context = await GetDbContextAsync();
+        var entry = context.Entry(instance);
         if (entry.State == EntityState.Detached)
         {
             return;
@@ -857,7 +845,7 @@ public sealed class EfCoreInstanceRepository(
 
         var query = (await PrepareDetailedQueryAsync())
             .AsSplitQuery();
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
+        using var activity = PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan);
 
         if (Guid.TryParse(identifier, out var instanceId))
         {
@@ -944,7 +932,7 @@ public sealed class EfCoreInstanceRepository(
     {
         var query = (await PrepareDetailedQueryAsync())
             .AsSplitQuery();
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
+        using var activity = PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan);
 
         // Only non-terminal instances occupy a key (Active or Busy). Terminal rows
         // (Completed/Faulted/Passive) are ignored. OrderByDescending(CreatedAt) keeps the
@@ -994,7 +982,7 @@ public sealed class EfCoreInstanceRepository(
         var query = (await PrepareDetailedQueryAsync())
             .AsNoTracking()
             .AsSplitQuery();
-        using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Query.Execute");
+        using var activity = PipelineStepActivityHelper.StartOperationActivity(QueryExecuteSpan);
 
         if (Guid.TryParse(identifier, out var instanceId))
         {
@@ -1917,7 +1905,7 @@ public sealed class EfCoreInstanceRepository(
             "Data",
             schema,
             includeFunc: null,
-            applyOrderBy: (q, orderBy) => InstanceOrderByApplicator.Apply((IQueryable<Instance>)q, orderBy),
+            applyOrderBy: (q, orderBy) => InstanceOrderByApplicator.Apply(q, orderBy),
             applyOrderByRaw: (ctx, sch, orderBy) =>
             {
                 if (orderBy == null) return ((WorkflowDbContext)ctx).Instances.AsQueryable();
@@ -2277,33 +2265,6 @@ public sealed class EfCoreInstanceRepository(
     }
 
 
-    /// <summary>
-    /// Handles metrics recording for instance status changes
-    /// </summary>
-    private async Task HandleStatusChangeMetrics(Instance entity, InstanceStatus oldStatus, InstanceStatus newStatus)
-    {
-        // Update status transition metrics (handles all status gauge changes)
-
-        // Record specific completion events with duration
-        if (newStatus.Equals(InstanceStatus.Completed))
-        {
-            var durationSeconds = entity.Duration?.TotalSeconds;
-        }
-
-        // Record specific error events with duration
-        if (newStatus.Equals(InstanceStatus.Faulted))
-        {
-            var durationSeconds = entity.Duration?.TotalSeconds;
-
-            // Record duration for faulted instances
-            if (durationSeconds.HasValue)
-            {
-            }
-        }
-
-        await Task.CompletedTask; // For potential future async operations
-    }
-
     /// <inheritdoc />
     public async Task<List<HumanTaskCandidate>> GetHumanTaskCandidatesAcrossFlowsAsync(
         IReadOnlyList<string> flowKeys,
@@ -2457,13 +2418,7 @@ public sealed class EfCoreInstanceRepository(
         if (string.IsNullOrEmpty(value) || value.Length > 63)
             return false;
 
-        foreach (var c in value)
-        {
-            if (!char.IsAsciiLetterOrDigit(c) && c != '_' && c != '-')
-                return false;
-        }
-
-        return true;
+        return value.All(c => char.IsAsciiLetterOrDigit(c) || c == '_' || c == '-');
     }
 
     /// <inheritdoc />
@@ -2488,13 +2443,16 @@ public sealed class EfCoreInstanceRepository(
         // The narrow include also lands on UX_InstancesData_Instance_IsLatest, the unique partial
         // index that exists for exactly this access.
         //
-        // No AsSplitQuery: with one data row and at most a couple of open correlations the product
-        // is already ~1, so a second round trip would buy nothing.
+        // Split: the two collection includes in one statement would repeat each instance's latest
+        // jsonb row once per open correlation. Today that product is ~1 (one data row, at most a
+        // couple of open SubFlow correlations), so this costs two extra round trips per batch rather
+        // than saving rows — the price of never letting the shape degrade into a Cartesian product.
         var instances = await dbSet
             .Where(i => instanceIds.Contains(i.Id))
             .Include(i => i.DataList.Where(d => d.IsLatest))
             .Include(i => i.ChildCorrelations
                 .Where(c => !c.IsCompleted && c.SubFlowType == SubFlowType.SubFlow))
+            .AsSplitQuery()
             .AsNoTracking()
             .ToListAsync(cancellationToken);
 

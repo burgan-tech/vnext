@@ -103,11 +103,6 @@ public sealed class DefinitionAppService(
 
         if (!validationResult.IsValid)
         {
-            foreach (var error in validationResult.ValidationErrors)
-            {
-                var memberName = error.MemberNames.FirstOrDefault() ?? "unknown";
-            }
-
             return Result.Fail(
                 Error.Validation(
                     WorkflowErrorCodes.InvalidWorkflow,
@@ -325,11 +320,6 @@ public sealed class DefinitionAppService(
 
         if (!validationResult.IsValid)
         {
-            foreach (var error in validationResult.ValidationErrors)
-            {
-                var memberName = error.MemberNames.FirstOrDefault() ?? "unknown";
-            }
-
             return Result.Fail(
                 Error.Validation(
                     WorkflowErrorCodes.InvalidWorkflow,
