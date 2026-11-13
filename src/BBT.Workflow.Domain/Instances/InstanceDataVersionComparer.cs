@@ -460,7 +460,8 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
     /// Matching logic:
     /// <list type="number">
     ///     <item><description>If requestedVersion is null/empty or "latest" → returns the latest version</description></item>
-    ///     <item><description>If requestedVersion is a full version → exact match only</description></item>
+    ///     <item><description>If requestedVersion is a full version → that version only: the exact spelling, else the
+    ///     stored version with the same canonical form (build metadata ignored, see <see cref="FindFullVersionMatch"/>)</description></item>
     ///     <item><description>If requestedVersion is an artifact version → finds highest pkg version for that artifact. A stored bare
     ///     artifact row (e.g. "1.0.0") never shadows a package-stamped row of the same artifact: it is returned only when no
     ///     "-pkg." row exists for it. If no artifact match, falls back to package version matching</description></item>
@@ -483,9 +484,13 @@ public partial class InstanceDataVersionComparer : IComparer<InstanceData>
                 .FirstOrDefault();
         }
 
-        // 2. If requestedVersion is a full version → exact match only, otherwise not found
+        // 2. If requestedVersion is a full version → that exact version, otherwise not found. The spelling as
+        //    given wins first (so "+customer" still selects "+customer" beside a "+core" sibling); otherwise
+        //    build metadata (+domain) does not take part: "1.0.0-pkg.1.0.123" names the stored
+        //    "1.0.0-pkg.1.0.123+core", exactly as the full-version cache key already treats it.
         if (IsFullVersion(requestedVersion))
-            return FindExactMatch(versionList, requestedVersion);
+            return FindExactMatch(versionList, requestedVersion)
+                   ?? FindFullVersionMatch(versionList, requestedVersion);
 
         // 3. If requestedVersion is an artifact version → find highest pkg version,
         //    falling back to package-version-only match if no artifact match is found.

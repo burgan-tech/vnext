@@ -110,36 +110,30 @@ public sealed class RuntimeCacheBackend<T>(
             return await LoadByCanonicalFullVersionAsync(runtimeService, domain, key, version!, cancellationToken);
         }
 
-        // For null/empty, artifact, or partial version → key-filtered load + smart matching
-        var all = await runtimeService.GetAsync<T>(key, cancellationToken);
-        var filtered = all
-            .Where(e => e is not null &&
-                        string.Equals(e.Domain, domain, StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        // For null/empty, artifact, or partial version → resolved in the repository from the version
+        // strings alone, then exactly one body is loaded.
+        var resolved = await runtimeService.GetAsync<T>(
+            key, version ?? InstanceDataVersionComparer.LatestKeyword, cancellationToken);
 
-        if (filtered.Count == 0)
-        {
-            return Result<T>.Fail(CacheErrors.ItemNotFoundInBackend<T>(domain, key, version));
-        }
+        return resolved is null
+            ? Result<T>.Fail(CacheErrors.ItemNotFoundInBackend<T>(domain, key, version))
+            : Result<T>.Ok(resolved);
+    }, cancellationToken);
 
-        // Use smart version matching
-        var versions = filtered.Select(e => e!.Version).ToList();
-        var bestMatchVersion = InstanceDataVersionComparer.FindBestMatch(versions, version);
+    /// <inheritdoc />
+    public Task<Result<IReadOnlyList<string>>> LoadVersionsAsync(
+        string domain,
+        string key,
+        CancellationToken cancellationToken = default) => RunDetachedAsync(async services =>
+    {
+        var runtimeService = services.GetRequiredService<IRuntimeService>();
+        var runtimeInfoProvider = services.GetRequiredService<IRuntimeInfoProvider>();
 
-        if (string.IsNullOrEmpty(bestMatchVersion))
-        {
-            return Result<T>.Fail(CacheErrors.ItemNotFoundInBackend<T>(domain, key, version));
-        }
+        runtimeInfoProvider.Check(domain);
+        using var domainScope = runtimeInfoProvider.UseDomain(domain);
 
-        var matched = filtered.FirstOrDefault(e => 
-            string.Equals(e!.Version, bestMatchVersion, StringComparison.OrdinalIgnoreCase));
-
-        if (matched is null)
-        {
-            return Result<T>.Fail(CacheErrors.ItemNotFoundInBackend<T>(domain, key, version));
-        }
-
-        return Result<T>.Ok(matched);
+        var versions = await runtimeService.GetVersionsAsync<T>(key, cancellationToken);
+        return Result<IReadOnlyList<string>>.Ok(versions);
     }, cancellationToken);
 
     /// <summary>
@@ -160,16 +154,13 @@ public sealed class RuntimeCacheBackend<T>(
     {
         var canonicalVersion = InstanceDataVersionComparer.CanonicalFullVersion(version);
 
-        var all = await runtimeService.GetAsync<T>(key, cancellationToken);
-        var matches = all
-            .Where(e => e is not null &&
-                        string.Equals(e.Domain, domain, StringComparison.OrdinalIgnoreCase) &&
-                        string.Equals(
-                            InstanceDataVersionComparer.CanonicalFullVersion(e.Version),
-                            canonicalVersion,
-                            StringComparison.OrdinalIgnoreCase))
-            .Select(e => e!)
-            .OrderBy(e => e.Version, StringComparer.Ordinal)
+        // Decided on the version strings alone; only the chosen row's body is loaded.
+        var matches = (await runtimeService.GetVersionsAsync<T>(key, cancellationToken))
+            .Where(v => string.Equals(
+                InstanceDataVersionComparer.CanonicalFullVersion(v),
+                canonicalVersion,
+                StringComparison.OrdinalIgnoreCase))
+            .OrderBy(v => v, StringComparer.Ordinal)
             .ToList();
 
         if (matches.Count == 0)
@@ -177,15 +168,19 @@ public sealed class RuntimeCacheBackend<T>(
             return Result<T>.Fail(CacheErrors.ItemNotFoundInBackend<T>(domain, key, version));
         }
 
-        var resolved = matches[0];
+        var resolvedVersion = matches[0];
 
         if (matches.Count > 1)
         {
             logger.ComponentCacheBuildMetadataAmbiguity(
-                T.ComponentTypeKey, domain, key, matches.Count, canonicalVersion, resolved.Version);
+                T.ComponentTypeKey, domain, key, matches.Count, canonicalVersion, resolvedVersion);
         }
 
-        return Result<T>.Ok(resolved);
+        var resolved = await runtimeService.GetAsync<T>(key, resolvedVersion, cancellationToken);
+
+        return resolved is null
+            ? Result<T>.Fail(CacheErrors.ItemNotFoundInBackend<T>(domain, key, version))
+            : Result<T>.Ok(resolved);
     }
 }
 

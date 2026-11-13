@@ -47,10 +47,11 @@ public sealed class VersionRegistryWriteGuard(
         if (!DefaultVersionResolver.IsValidPointer(pointer))
             return Reject(domain, flowKey, pointer);
 
-        Result<List<Definitions.Workflow>> published;
+        // Version strings only: validating a pointer never needs a body.
+        Result<IReadOnlyList<string>> published;
         try
         {
-            published = await backend.LoadAllByKeyAsync(domain, flowKey, cancellationToken);
+            published = await backend.LoadVersionsAsync(domain, flowKey, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -71,7 +72,7 @@ public sealed class VersionRegistryWriteGuard(
                 : Result.Fail(published.Error);
         }
 
-        var versions = published.Value!.Select(w => w.Version).ToList();
+        var versions = published.Value!;
         var resolution = DefaultVersionResolver.Resolve(versions, pointer, requested: null);
         return versions.Count == 0 || resolution.Outcome == VersionResolutionOutcome.PointerInvalid
             ? Reject(domain, flowKey, pointer)

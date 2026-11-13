@@ -7,6 +7,16 @@ using Microsoft.Extensions.Options;
 
 namespace BBT.Workflow.Runtime;
 
+/// <summary>
+/// Reads published components (stored as instances of the component schemas) and turns them into domain
+/// entities.
+/// </summary>
+/// <remarks>
+/// Only a malformed row (<see cref="JsonException"/>) is skipped, and logged. Any other failure — above all
+/// <see cref="OutOfMemoryException"/> — propagates: skipping a row the process could not afford to load
+/// returns a silently incomplete list, and a version resolved from that list is a wrong answer, not a
+/// degraded one.
+/// </remarks>
 public sealed class RuntimeService(
     IInstanceRepository instanceRepository,
     ICurrentSchema currentSchema,
@@ -61,10 +71,6 @@ public sealed class RuntimeService(
                     {
                         logger.InstanceDeserializationFailed(ex, schemaName, item.Instance.Key, item.InstanceData.Version);
                     }
-                    catch (Exception ex)
-                    {
-                        logger.InstanceDeserializationFailed(ex, schemaName, item.Instance.Key, item.InstanceData.Version);
-                    }
                 }
 
                 skip += PageSize;
@@ -109,13 +115,22 @@ public sealed class RuntimeService(
                 {
                     logger.InstanceDeserializationFailed(ex, schemaName, item.Instance.Key, item.InstanceData.Version);
                 }
-                catch (Exception ex)
-                {
-                    logger.InstanceDeserializationFailed(ex, schemaName, item.Instance.Key, item.InstanceData.Version);
-                }
             }
 
             return result.Where(f => f != null);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<string>> GetVersionsAsync<T>(string key, CancellationToken cancellationToken = default)
+        where T : class, IDomainEntity, IReferenceSetter
+    {
+        var schemaName = runtimeOptions.Value.GetSchemaNameByType(typeof(T));
+        var schemaInfo = runtimeOptions.Value.Schemas[schemaName];
+
+        using (currentSchema.Change(schemaInfo.Schema))
+        {
+            return await instanceRepository.GetActiveVersionsByKeyAsync(key, cancellationToken);
         }
     }
 
@@ -166,11 +181,6 @@ public sealed class RuntimeService(
                 return flow;
             }
             catch (JsonException ex)
-            {
-                logger.InstanceDeserializationFailed(ex, schemaName, key, version);
-                return null;
-            }
-            catch (Exception ex)
             {
                 logger.InstanceDeserializationFailed(ex, schemaName, key, version);
                 return null;

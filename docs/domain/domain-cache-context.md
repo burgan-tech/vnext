@@ -53,16 +53,29 @@ Read path:
 4. The in-process L1 cache is checked for that key; a hit returns without touching Dapr/Redis.
    For resolution keys the answer is exactly as fresh as L2 because the generation token — read
    from L2 on every call — is part of the key.
-5. On L1 miss, Redis is checked; on Redis miss, the backend loads all published versions and
-   resolves the best match (concurrent misses for the same key share one load).
-6. Loaded definitions are written back to Redis and L1 for future reads.
+5. On L1 miss, Redis is checked. On Redis miss, the backend reads the **version strings only**
+   (`ICacheBackend<T>.LoadVersionsAsync`: one projection query, no bodies), the winner is chosen from
+   that list (flow default-version policy or `FindBestMatch`), and only the winner's body is fetched —
+   through the full-version path, so it comes from L1 or Redis when a publish or an earlier read
+   already cached it, else from exactly one row. Concurrent misses for the same key share one
+   resolution per pod.
+6. Loaded definitions are written back to Redis and L1 for future reads: the winner under its full
+   key, the answer under the resolution key.
+
+The resolution never loads every published body. A component with a long publish history used to be
+resolved by deserializing all of its versions on every miss and every publish; when that ran out of
+memory the failing rows were skipped, an older version won, and the wrong answer was cached for the
+resolution TTL. Now a body that cannot be read for any reason other than malformed JSON fails the
+request, and nothing is cached for it.
 
 Write path:
 
 1. Definition publishing/cast handlers call `SetAsync`.
 2. `CacheSet<T>` writes the immutable full-version body, bumps the component's generation token
    (making every cached resolution unreachable cluster-wide), and re-warms the common request
-   spellings under the new generation.
+   spellings (`latest`, the artifact version, `MAJOR.MINOR`, `MAJOR`) under the new generation. The
+   warm-up decides from the version strings too; the published entity is in hand, so it reads no body
+   unless an older patch was published and a newer version wins, which is then read once.
 3. Other pods can read the new definition from the shared distributed cache immediately; their
    L1 entries under the old generation stop being reachable the moment they fetch the new token.
 
@@ -86,14 +99,16 @@ Key strategy:
 | Resolution | `{component}:{domain}:{key}:{shape}:res:{generation}:{spelling}` | Answer to a version request (`latest`, `1`, `1.2`); invalidated wholesale by a generation bump. |
 | Generation | `{component}:{domain}:{key}:gen` | Small token; bumped on publish/invalidate. |
 
-`{shape}` is `ComponentCacheShape.Version` (currently `s2`), one constant for every component type. It
+`{shape}` is `ComponentCacheShape.Version` (currently `s3`), one constant for every component type. It
 exists because the cache is shared by every pod: during a rolling upgrade or a rollback, a pod whose entity
 type lacks a member re-writes the entry without it (System.Text.Json drops unknown members), and a newer pod
 would read the member as absent. With the segment, pods of different shapes use disjoint keys and each loads
 from the database in its own shape. **Bump it** when a cached component type gains a member whose absence is
 unsafe — a security filter or an authorization rule, anything where "missing" means "wider" (`s2` was
 introduced for `Workflow.RowSecurity`, see [Row security](row-security.md#deployment--cache-shape)). Purely
-additive members whose absence is harmless need no bump. A bump costs one cold load per component per pod;
+additive members whose absence is harmless need no bump. A bump is also how a release retires entries an
+older release wrote wrongly: `s3` leaves behind resolutions cached from a version list that ran out of memory
+part-way. A bump costs one cold load per component per pod;
 old-shape entries expire on their TTL. The generation token carries no shape and stays shared, so a publish
 on either release invalidates the resolution entries of both.
 
@@ -111,8 +126,11 @@ Version resolution:
 - Null, empty, or `latest` resolves to the latest definition, or to the flow's default version when the
   `sys-version-registry` holds a pointer for it (Workflows set only; see
   [Flow Default Version](../runtime/flow-default-version.md)).
-- Full versions resolve exact package/build versions.
-- Artifact versions resolve the best matching full version for that artifact.
+- Full versions resolve that version only. Build metadata does not take part: `1.0.0-pkg.1.0.123` reads
+  the same full key as, and loads the stored, `1.0.0-pkg.1.0.123+core`; an exactly spelled `+suffix` wins
+  over a sibling with another suffix.
+- Artifact versions (`1.0.0`) resolve the highest package version of that artifact; `1.0` and `1` the
+  highest artifact in that range, then its highest package version.
 
 ## Failure Modes
 

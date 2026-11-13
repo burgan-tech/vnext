@@ -1,0 +1,12 @@
+{
+  "releaseNote": {
+    "summary": "Floating component versions (1.0.0, 1.0, 1, latest) resolve from version names and load one body, so long publish histories no longer run out of memory or start an old version.",
+    "breaking": false,
+    "docs": []
+  },
+  "fixes": {
+    "knownIssues": [
+      "floating-version-resolution-loads-every-version"
+    ]
+  }
+}
