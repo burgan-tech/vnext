@@ -264,11 +264,12 @@ public class CacheSet<T>(
         Activity? activity,
         CancellationToken cancellationToken)
     {
-        var allResult = await backend.LoadAllByKeyAsync(domain, key, cancellationToken);
-        if (!allResult.IsSuccess || allResult.Value!.Count == 0)
+        // The decision needs the version strings only. Loading every body to make it cost memory in
+        // proportion to the whole publish history, and a load that ran out of it handed back a partial
+        // list — whose best match is an older version, cached as the answer for a full TTL.
+        var versionsResult = await backend.LoadVersionsAsync(domain, key, cancellationToken);
+        if (!versionsResult.IsSuccess || versionsResult.Value is not { Count: > 0 } versions)
             return await CacheNegativeAsync(domain, key, requested, spelling, redisKey, cancellationToken);
-
-        var allVersions = allResult.Value!;
 
         // The normalized spelling is what the answer gets filed under, so it has to be what the answer
         // was computed from — otherwise a padded or differently-cased request could cache one component
@@ -282,7 +283,7 @@ public class CacheSet<T>(
             // a negative entry: none of them means "no such version", and each clears on its own — a
             // registry recovering, or a pointer move, which bumps the generation anyway.
             var policyResult = await ResolveByPolicyAsync(
-                domain, key, requested, spelling, allVersions.Select(e => e.Version).ToList(), activity, cancellationToken);
+                domain, key, requested, spelling, versions, activity, cancellationToken);
             if (!policyResult.IsSuccess)
                 return Result<T>.Fail(policyResult.Error);
 
@@ -290,33 +291,26 @@ public class CacheSet<T>(
         }
         else
         {
-            bestMatch = InstanceDataVersionComparer.FindBestMatch(
-                allVersions.Select(e => e.Version), spelling);
+            bestMatch = InstanceDataVersionComparer.FindBestMatch(versions, spelling);
         }
 
         if (string.IsNullOrEmpty(bestMatch))
             return await CacheNegativeAsync(domain, key, requested, spelling, redisKey, cancellationToken);
 
-        var matched = allVersions.FirstOrDefault(e =>
-            string.Equals(e.Version, bestMatch, StringComparison.OrdinalIgnoreCase));
+        // The winner's body through the full-version path: L1, then L2 (a publish has usually written it
+        // there already), then exactly one row — which that path also caches under its full key. A failure
+        // here (the row vanished in between, or could not be read) is returned without caching anything:
+        // answering with another version instead would be the stale answer this path exists to avoid.
+        var matchedResult = await GetFullVersionAsync(domain, key, bestMatch, cancellationToken);
+        if (!matchedResult.IsSuccess)
+            return matchedResult;
 
-        if (matched is null)
-            return await CacheNegativeAsync(domain, key, requested, spelling, redisKey, cancellationToken);
-
-        var envelope = CreateEnvelope(matched);
+        var matched = matchedResult.Value!;
 
         // Only the spelling that was asked for. Writing the other spellings here would be guessing at
         // resolutions nobody requested, and one of those guesses being wrong is how a resolution cache
         // goes stale in the first place.
-        await TryWriteAsync(redisKey, envelope, ResolutionEntryOptions(), cancellationToken);
-
-        // The body is immutable and was loaded anyway, so a pinned read of this exact version can reuse
-        // it instead of going back to the database.
-        await TryWriteAsync(
-            CreateFullKey(domain, key, matched.Version),
-            envelope,
-            FullEntryOptions(),
-            cancellationToken);
+        await TryWriteAsync(redisKey, CreateEnvelope(matched), ResolutionEntryOptions(), cancellationToken);
 
         logger.ComponentCacheResolvedFromBackend(ComponentKeyName, domain, key, spelling, matched.Version);
 
@@ -463,13 +457,14 @@ public class CacheSet<T>(
         Activity? activity,
         CancellationToken cancellationToken)
     {
-        List<T> candidates;
+        List<string> versions = [];
         var applyPolicy = AppliesVersionPolicy(key);
         string? pointer = null;
         try
         {
-            var allResult = await backend.LoadAllByKeyAsync(domain, key, cancellationToken);
-            candidates = allResult.IsSuccess ? allResult.Value! : [];
+            var versionsResult = await backend.LoadVersionsAsync(domain, key, cancellationToken);
+            if (versionsResult.IsSuccess && versionsResult.Value is { } loaded)
+                versions = [.. loaded];
 
             if (applyPolicy)
             {
@@ -497,26 +492,30 @@ public class CacheSet<T>(
         // relative to its transaction. Adding it makes the resolution below correct either way — and
         // because the winner is re-resolved rather than assumed, it stays correct when the published
         // version is older than something already stored.
-        if (!candidates.Any(e => string.Equals(e.Version, entity.Version, StringComparison.OrdinalIgnoreCase)))
-            candidates = [.. candidates, entity];
+        if (!versions.Contains(entity.Version, StringComparer.OrdinalIgnoreCase))
+            versions.Add(entity.Version);
 
-        var versions = candidates.Select(e => e.Version).ToList();
+        // A winner other than the published entity (publishing an older patch, say) is fetched once
+        // through the full-version path; the common case — the new version wins — loads nothing.
+        // Spellings usually share a winner, so each is read at most once; null records one that could
+        // not be read, which is not tried again.
+        var winners = new Dictionary<string, T?>(StringComparer.OrdinalIgnoreCase)
+        {
+            [entity.Version] = entity
+        };
 
         foreach (var spelling in DeriveCommonSpellings(entity.Version))
         {
-            // Under the policy only a Resolved answer is warmed: a not-activated or invalid-pointer
-            // spelling is an error, and errors are never cached.
-            var bestMatch = applyPolicy
-                ? DefaultVersionResolver.Resolve(versions, pointer, spelling) is
-                    { Outcome: VersionResolutionOutcome.Resolved } resolution
-                    ? resolution.Version
-                    : null
-                : InstanceDataVersionComparer.FindBestMatch(versions, spelling);
+            var bestMatch = ResolveWarmSpelling(versions, applyPolicy, pointer, spelling);
             if (string.IsNullOrEmpty(bestMatch))
                 continue;
 
-            var winner = candidates.FirstOrDefault(e =>
-                string.Equals(e.Version, bestMatch, StringComparison.OrdinalIgnoreCase));
+            if (!winners.TryGetValue(bestMatch, out var winner))
+            {
+                winner = await ReadWarmWinnerAsync(domain, key, bestMatch, activity, cancellationToken);
+                winners[bestMatch] = winner;
+            }
+
             if (winner is null)
                 continue;
 
@@ -525,6 +524,48 @@ public class CacheSet<T>(
                 CreateEnvelope(winner),
                 ResolutionEntryOptions(),
                 cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// The version a warmed spelling resolves to. Under the policy only a Resolved answer is warmed: a
+    /// not-activated or invalid-pointer spelling is an error, and errors are never cached.
+    /// </summary>
+    private static string? ResolveWarmSpelling(
+        IReadOnlyCollection<string> versions,
+        bool applyPolicy,
+        string? pointer,
+        string spelling)
+    {
+        if (!applyPolicy)
+            return InstanceDataVersionComparer.FindBestMatch(versions, spelling);
+
+        var resolution = DefaultVersionResolver.Resolve(versions, pointer, spelling);
+        return resolution.Outcome == VersionResolutionOutcome.Resolved ? resolution.Version : null;
+    }
+
+    /// <summary>
+    /// Reads a warm-up winner through the full-version path. Null when it cannot be read — that spelling
+    /// then resolves on demand, under the same contract as the rest of warming: publishing must not fail
+    /// for it.
+    /// </summary>
+    private async Task<T?> ReadWarmWinnerAsync(
+        string domain,
+        string key,
+        string version,
+        Activity? activity,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await GetFullVersionAsync(domain, key, version, cancellationToken);
+            return result.IsSuccess ? result.Value : null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            CacheActivityHelper.SetError(activity, ex);
+            logger.ComponentCacheOperationFailed(ex, CacheActivityHelper.OperationWarmup, CreateFullKey(domain, key, version));
+            return null;
         }
     }
 

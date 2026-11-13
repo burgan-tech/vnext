@@ -50,7 +50,9 @@ public sealed class DefinitionAppService(
                     return migrationResult;
             }
 
-            var instance = await instanceRepository.FindByIdentifierWithFullDataAsync(input.Key, cancellationToken)
+            // No data rows are loaded: the version-exists check reads version strings only and the new
+            // row goes through the write funnel — loading every published body here ran hosts out of memory.
+            var instance = await instanceRepository.FindByIdentifierForDataAppendAsync(input.Key, cancellationToken)
                            ?? Instance.Create(GuidGenerator.Create(), input.Flow, input.FlowVersion, input.Key);
 
             instance.AddTags(input.Tags.ToArray());
@@ -84,6 +86,10 @@ public sealed class DefinitionAppService(
         }
     }
 
+    /// <summary>
+    /// Validates the component's attributes for its type and, for a flow that declares <c>rowSecurity</c>,
+    /// runs the schema-aware row-security check. Warnings are logged; any error fails the publish.
+    /// </summary>
     private async Task<Result> ValidateComponentAsync(PublishInput input, CancellationToken cancellationToken)
     {
         var validationResult = componentValidatorProcessor.Validate(input.Flow, input.Attributes);
@@ -101,11 +107,6 @@ public sealed class DefinitionAppService(
 
         if (!validationResult.IsValid)
         {
-            foreach (var error in validationResult.ValidationErrors)
-            {
-                var memberName = error.MemberNames.FirstOrDefault() ?? "unknown";
-            }
-
             return Result.Fail(
                 Error.Validation(
                     WorkflowErrorCodes.InvalidWorkflow,
@@ -183,13 +184,19 @@ public sealed class DefinitionAppService(
         return Result.Ok();
     }
 
+    /// <summary>
+    /// Publishes a new version onto an already stored component. An existing version (resolved from the
+    /// stored version strings, never the bodies) answers <see cref="WorkflowErrors.WorkflowVersionConflict"/>
+    /// and writes nothing except the seed data it carries; otherwise the version is validated, appended
+    /// through the write funnel and cast into the cache.
+    /// </summary>
     private async Task<Result> HandleExistingInstanceAsync(
         Instance instance,
         PublishInput input,
         CancellationToken cancellationToken)
     {
-        var existingInstanceData = instance.FindData(input.Version);
-        if (existingInstanceData != null)
+        var existingVersion = await instanceRepository.FindDataVersionAsync(instance.Id, input.Version, cancellationToken);
+        if (existingVersion != null)
         {
             if (input.Data?.Any() == true)
             {
@@ -258,6 +265,10 @@ public sealed class DefinitionAppService(
         }
     }
 
+    /// <summary>
+    /// Writes one seed-data item: skipped when its version is already stored, otherwise validated, tagged
+    /// and appended through the write funnel on the child scope's context, then cast into the cache.
+    /// </summary>
     private async Task<Result> ProcessDataItemAsync(
         IInstanceRepository instanceRepo,
         IInstanceDataWriteService dataWriter,
@@ -265,10 +276,11 @@ public sealed class DefinitionAppService(
         PublishDataInput dataItem,
         CancellationToken cancellationToken)
     {
-        var instance = await instanceRepo.FindByIdentifierWithFullDataAsync(dataItem.Key, cancellationToken)
+        var instance = await instanceRepo.FindByIdentifierForDataAppendAsync(dataItem.Key, cancellationToken)
                        ?? Instance.Create(GuidGenerator.Create(), input.Key, input.FlowVersion, dataItem.Key);
 
-        if (instance.FindData(dataItem.Version) != null)
+        if (!instance.IsTransient
+            && await instanceRepo.FindDataVersionAsync(instance.Id, dataItem.Version, cancellationToken) != null)
         {
             Logger.LogWarning(
                 "Instance {InstanceKey} already has data version {Version}",
@@ -305,6 +317,10 @@ public sealed class DefinitionAppService(
         return Result.Ok();
     }
 
+    /// <summary>
+    /// Validates a seed-data item against its component type when a validator exists for that type;
+    /// a type without a validator passes. Warnings are logged; any error fails the publish.
+    /// </summary>
     private Result ValidateSeedData(string componentType, PublishDataInput dataItem)
     {
         if (!componentValidatorProcessor.TryValidate(componentType, dataItem.Attributes, out var validationResult))
@@ -322,11 +338,6 @@ public sealed class DefinitionAppService(
 
         if (!validationResult.IsValid)
         {
-            foreach (var error in validationResult.ValidationErrors)
-            {
-                var memberName = error.MemberNames.FirstOrDefault() ?? "unknown";
-            }
-
             return Result.Fail(
                 Error.Validation(
                     WorkflowErrorCodes.InvalidWorkflow,
@@ -346,13 +357,14 @@ public sealed class DefinitionAppService(
 
         using (currentSchema.Change(input.Flow))
         {
-            var instance = await instanceRepository.FindByIdentifierWithFullDataAsync(input.Key, cancellationToken);
+            var instance = await instanceRepository.FindByIdentifierForDataAppendAsync(input.Key, cancellationToken);
             if (instance == null)
             {
                 return Result.Fail(WorkflowErrors.InstanceNotFound(input.Key));
             }
 
-            var instanceData = instance.FindData(input.Version);
+            // One body — the resolved version's — never the whole history.
+            var instanceData = await instanceRepository.FindDataByVersionAsync(instance.Id, input.Version, cancellationToken);
             if (instanceData == null)
             {
                 return Result.Fail(WorkflowErrors.InstanceDataNotFound(input.Key, input.Version));
