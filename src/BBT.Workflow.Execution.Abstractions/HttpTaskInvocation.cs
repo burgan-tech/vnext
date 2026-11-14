@@ -128,55 +128,11 @@ public static class HttpTaskInvocation
         string? taskKey = null)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
-        var prepareActivity = StartPrepareActivity(taskType, taskKey);
 
         try
         {
-            var clientName = binding.ValidateSSL
-                ? WorkflowHttpClientNames.Default
-                : WorkflowHttpClientNames.NoSslValidation;
-            var httpClient = createClient(clientName);
-            httpClient.Timeout = TimeSpan.FromSeconds(binding.TimeoutSeconds);
+            var (httpClient, request) = PrepareRequest(createClient, binding, taskType, traceContext, taskKey);
 
-            var request = new HttpRequestMessage(
-                new HttpMethod(binding.Method),
-                binding.Url);
-
-            // Add headers. Content-Type is a content header in .NET, not a request header, so it is
-            // captured here and applied to request.Content below instead of request.Headers.
-            string? headerContentType = null;
-            if (!string.IsNullOrEmpty(binding.Headers))
-            {
-                var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(binding.Headers);
-                if (headers != null)
-                {
-                    foreach (var header in headers)
-                    {
-                        if (string.Equals(header.Key, "Content-Type", StringComparison.OrdinalIgnoreCase))
-                        {
-                            headerContentType = header.Value;
-                            continue;
-                        }
-
-                        if (IsReservedTraceHeader(header.Key))
-                            continue;
-
-                        request.Headers.TryAddWithoutValidation(header.Key, header.Value);
-                    }
-                }
-            }
-
-            ApplyTrustedCorrelationHeaders(request, traceContext);
-
-            // Add body for non-GET requests. Resolution: explicit ContentType → Content-Type header → json.
-            if (request.Method != HttpMethod.Get && !string.IsNullOrEmpty(binding.Body))
-            {
-                var contentType = HttpContentType.Resolve(binding.ContentType, headerContentType);
-                request.Content = new StringContent(binding.Body, Encoding.UTF8);
-                request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(contentType);
-            }
-
-            prepareActivity?.Dispose();
             var response = await httpClient.SendAsync(request, cancellationToken);
 
             var responseHeaders = MergeHeaders(response.Headers, response.Content.Headers);
@@ -217,7 +173,6 @@ public static class HttpTaskInvocation
         }
         catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
-            prepareActivity?.Dispose();
             return TaskInvocationResult.Failure(
                 error: "HTTP request was cancelled",
                 executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
@@ -232,7 +187,6 @@ public static class HttpTaskInvocation
         }
         catch (Exception ex)
         {
-            prepareActivity?.Dispose();
             return TaskInvocationResult.Failure(
                 error: ex.Message,
                 executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
@@ -262,7 +216,12 @@ public static class HttpTaskInvocation
     /// <item><b>Identity claims</b> (sub, act_sub) are fill-if-absent: they are token-derived
     /// claims the platform provides as a DEFAULT — a developer who set them explicitly in the
     /// task binding's input mapping keeps their value; only when the binding did not set them
-    /// are they filled from the gateway token.</item>
+    /// are they filled from the gateway token. With <paramref name="fillIdentity"/> <c>false</c>
+    /// this fill is skipped entirely: the Execution host's DirectTrigger and GetInstance /
+    /// GetInstances / GetInstanceData invokers pass it, because for those instance calls the
+    /// orchestrator is the single resolver of the credential
+    /// (<see cref="ResolveInstanceCallCredential"/>) and the caller's value never comes from
+    /// Activity baggage. The default <c>true</c> keeps HTTP, SOAP and Dapr tasks as they were.</item>
     /// <item><b>X-Request-Id</b> is fill-if-absent too: a non-empty value from the binding's
     /// input mapping wins; when the binding left it absent or empty, vNext's own request id (the
     /// originating request's <c>X-Request-Id</c>, as the correlation provider holds it) is sent
@@ -276,7 +235,8 @@ public static class HttpTaskInvocation
     /// spans are created from <see cref="System.Diagnostics.ActivityContext"/>, which severs the
     /// managed parent chain that in-process baggage lookups walk.
     /// </summary>
-    public static void ApplyTrustedCorrelationHeaders(HttpRequestMessage request, TaskTraceContext? trusted = null)
+    public static void ApplyTrustedCorrelationHeaders(
+        HttpRequestMessage request, TaskTraceContext? trusted = null, bool fillIdentity = true)
     {
         request.Headers.Remove(WorkflowInstanceHeader);
         request.Headers.Remove(CorrelationHeader);
@@ -293,7 +253,7 @@ public static class HttpTaskInvocation
         }
 
         var correlation = !string.IsNullOrEmpty(trusted?.CorrelationId)
-            ? trusted!.CorrelationId
+            ? trusted.CorrelationId
             : Activity.Current?.GetBaggageItem(CorrelationBaggage);
         if (Guid.TryParseExact(correlation, "N", out var correlationId)
             && correlationId != Guid.Empty)
@@ -301,29 +261,32 @@ public static class HttpTaskInvocation
             request.Headers.TryAddWithoutValidation(CorrelationHeader, correlationId.ToString("N"));
         }
 
-        if (!request.Headers.NonValidated.Contains(SubHeader))
+        if (fillIdentity)
         {
-            var subject = !string.IsNullOrEmpty(trusted?.Sub)
-                ? trusted!.Sub
-                : Activity.Current?.GetBaggageItem(SubBaggage);
-            if (IsSafeIdentityClaim(subject))
-            {
-                request.Headers.TryAddWithoutValidation(SubHeader, subject);
-            }
-        }
-
-        if (!request.Headers.NonValidated.Contains(ActSubHeader))
-        {
-            var actSub = !string.IsNullOrEmpty(trusted?.ActSub)
-                ? trusted!.ActSub
-                : Activity.Current?.GetBaggageItem(ActSubBaggage);
-            if (IsSafeIdentityClaim(actSub))
-            {
-                request.Headers.TryAddWithoutValidation(ActSubHeader, actSub);
-            }
+            FillIdentityIfAbsent(request, SubHeader, trusted?.Sub, SubBaggage);
+            FillIdentityIfAbsent(request, ActSubHeader, trusted?.ActSub, ActSubBaggage);
         }
 
         ApplyRequestId(request, trusted);
+    }
+
+    /// <summary>
+    /// Adds an identity claim header only when the request does not already carry it — an empty-valued header counts
+    /// as carried, which is how a blank credential marker stops the fill. The trusted context wins over ambient baggage.
+    /// </summary>
+    private static void FillIdentityIfAbsent(
+        HttpRequestMessage request, string header, string? trustedValue, string baggageKey)
+    {
+        if (request.Headers.NonValidated.Contains(header))
+            return;
+
+        var value = !string.IsNullOrEmpty(trustedValue)
+            ? trustedValue
+            : Activity.Current?.GetBaggageItem(baggageKey);
+        if (IsSafeIdentityClaim(value))
+        {
+            request.Headers.TryAddWithoutValidation(header, value);
+        }
     }
 
     /// <summary>
@@ -341,7 +304,7 @@ public static class HttpTaskInvocation
             return;
 
         var requestId = !string.IsNullOrEmpty(trusted?.RequestId)
-            ? trusted!.RequestId
+            ? trusted.RequestId
             : Activity.Current?.GetBaggageItem(RequestIdBaggage);
         if (IsSafeHeaderValue(requestId))
         {
@@ -369,12 +332,13 @@ public static class HttpTaskInvocation
 
     /// <summary>
     /// The header set a task presents to its target, as a dictionary: the binding's headers without the reserved
-    /// trace/correlation headers and without Content-Type, plus the caller's credential (<c>sub</c>, <c>act_sub</c>,
-    /// <c>position</c>, <c>client_id</c>, <c>role</c>) for every credential header the binding did not set — a value the
-    /// binding sets (non-empty) always wins. Credential values come from <paramref name="callerHeaders"/>, the caller's own request
-    /// headers; <c>sub</c> / <c>act_sub</c> fall back to Activity baggage. <c>role</c> is forwarded only as the caller SENT
-    /// it: roles a provider resolved for the caller (morph-idm get-roles) are not in these headers and are never carried —
-    /// the target resolves them itself from the forwarded credential. Used for a GetInstance / GetInstances /
+    /// trace/correlation headers and without Content-Type, with the credential (<c>sub</c>, <c>act_sub</c>,
+    /// <c>position</c>, <c>client_id</c>, <c>role</c>) resolved by <see cref="ResolveInstanceCallCredential"/>: a
+    /// credential the binding set — blank or null included — is the binding's decision and stays as it is, an absent one
+    /// is filled from <paramref name="callerHeaders"/>, the caller's own request headers (Activity baggage is not a
+    /// source). <c>role</c> is forwarded only as the caller SENT it: roles a provider resolved for the caller (morph-idm
+    /// get-roles) are not in these headers and are never carried — the target resolves them itself from the forwarded
+    /// credential. A null-valued non-credential header is dropped. Used for a GetInstance / GetInstances /
     /// GetInstanceData read, in-process (as the read's current user) and cross-domain (as the request's headers) alike.
     /// Keys are case-insensitive.
     /// </summary>
@@ -382,20 +346,22 @@ public static class HttpTaskInvocation
         IReadOnlyDictionary<string, string?>? bindingHeaders,
         IReadOnlyDictionary<string, string>? callerHeaders = null)
     {
-        var headers = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        var filtered = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         if (bindingHeaders is not null)
         {
             foreach (var (name, value) in bindingHeaders)
             {
-                if (value is null || IsReservedTraceHeader(name) ||
+                if (IsReservedTraceHeader(name) ||
                     string.Equals(name, "Content-Type", StringComparison.OrdinalIgnoreCase))
                     continue;
-                headers[name] = value;
+                // A null credential is still "the binding set it" (blank); only a non-credential null is dropped.
+                if (value is null && !IsCredentialHeader(name))
+                    continue;
+                filtered[name] = value;
             }
         }
 
-        AppendCallerCredential(headers, callerHeaders);
-        return headers;
+        return ResolveInstanceCallCredential(filtered, callerHeaders);
     }
 
     /// <summary>
@@ -467,6 +433,140 @@ public static class HttpTaskInvocation
         return AppendCallerCredential(headers, callerHeaders) ? JsonSerializer.Serialize(headers) : headersJson;
     }
 
+    /// <summary>
+    /// The header set the runtime presents when it calls another instance: a SubFlow start, and the SubProcess, Start,
+    /// DirectTrigger, GetInstance, GetInstances and GetInstanceData tasks — same-domain and cross-domain alike.
+    /// <para>
+    /// AUTHORIZATION RULE — the mapping decides, the caller is only the default:
+    /// a credential header (<c>sub</c>, <c>act_sub</c>, <c>position</c>, <c>client_id</c>, <c>role</c>) the mapping SET,
+    /// with any value, is the mapping's decision. A blank value (empty, whitespace or null) means "make this call
+    /// WITHOUT this credential": the header is not sent and the caller's value is NOT filled in. A credential header the
+    /// mapping did NOT set is filled from the caller's request headers.
+    /// </para>
+    /// <para>
+    /// A flow author blanks a credential on purpose, to stop the caller's identity reaching the target. So "blank" must
+    /// never be read as "not set" here — that would hand the target an identity the author withheld. Blank entries stay
+    /// in the result as <c>""</c> and are dropped only at the exit (<c>CallerCredentialScope</c> in-process,
+    /// <see cref="DropBlankCredentialHeaders"/> on a task's outbound request, the header merge of a cross-domain SubFlow
+    /// start): the marker has to survive that far, because some exits fill a MISSING <c>sub</c> / <c>act_sub</c> themselves
+    /// — the cross-domain SubFlow header merge from the ambient user, and an older Execution host that still stamps an
+    /// absent <c>sub</c> / <c>act_sub</c> from the trace on a task's request.
+    /// </para>
+    /// <para>
+    /// Activity baggage is deliberately not a source: a child whose parent blanked <c>sub</c> must not pick the first
+    /// caller's <c>sub</c> back up from the trace on its own calls. HTTP, SOAP and Dapr tasks keep the older
+    /// fill-when-blank rule (<see cref="AppendCallerCredential"/>). Full guide:
+    /// docs/domain/role-grant-authorization.md#caller-credential-on-instance-calls.
+    /// </para>
+    /// </summary>
+    public static Dictionary<string, string?> ResolveInstanceCallCredential(
+        IReadOnlyDictionary<string, string?>? mappingHeaders,
+        IReadOnlyDictionary<string, string>? callerHeaders)
+    {
+        var result = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        if (mappingHeaders is not null)
+        {
+            foreach (var (name, value) in mappingHeaders)
+                result[name] = value;
+        }
+
+        foreach (var name in CredentialHeaders)
+        {
+            if (result.TryGetValue(name, out var mapped))
+            {
+                // The mapping set it: its decision stands. Re-key under the canonical name; blank becomes "".
+                result.Remove(name);
+                result[name] = string.IsNullOrWhiteSpace(mapped) ? string.Empty : mapped;
+                continue;
+            }
+
+            var value = CallerValue(callerHeaders, name);
+            var safe = name is SubHeader or ActSubHeader ? IsSafeIdentityClaim(value) : IsSafeHeaderValue(value);
+            if (safe)
+                result[name] = value;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// The binding's header definition (JSON object) resolved by <see cref="ResolveInstanceCallCredential"/>. Blank
+    /// credentials stay in the JSON as <c>""</c> markers so a later exit can honour them. The definition is read by
+    /// <see cref="ReadHeaderObject"/>, so a non-string value does not discard the set; text that does not parse, or is not
+    /// a JSON object, is returned unchanged; an empty result is <c>null</c>.
+    /// </summary>
+    public static string? ResolveInstanceCallCredentialJson(string? headersJson, IReadOnlyDictionary<string, string>? callerHeaders)
+    {
+        Dictionary<string, string?>? parsed = null;
+        if (!string.IsNullOrWhiteSpace(headersJson))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(headersJson);
+                parsed = ReadHeaderObject(document.RootElement);
+            }
+            catch (JsonException)
+            {
+                return headersJson;
+            }
+
+            if (parsed is null)
+                return headersJson;
+        }
+
+        var resolved = ResolveInstanceCallCredential(parsed, callerHeaders);
+        return resolved.Count == 0 ? null : JsonSerializer.Serialize(resolved);
+    }
+
+    /// <summary>
+    /// Reads a header definition (a JSON object) as a case-insensitive dictionary without discarding it over one
+    /// non-string value: a string is its value, <c>null</c> stays null, a number / <c>true</c> / <c>false</c> is its JSON
+    /// text, and a nested object or array becomes null. Returns <c>null</c> when <paramref name="element"/> is not a JSON
+    /// object. For the instance-call tasks this is fail-closed: a credential key whose value is an object or array reads as
+    /// null, i.e. blank, so the caller's value is withheld (<see cref="ResolveInstanceCallCredential"/>), never refilled.
+    /// </summary>
+    public static Dictionary<string, string?>? ReadHeaderObject(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var result = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var property in element.EnumerateObject())
+        {
+            result[property.Name] = property.Value.ValueKind switch
+            {
+                JsonValueKind.String => property.Value.GetString(),
+                JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False => property.Value.GetRawText(),
+                _ => null,
+            };
+        }
+
+        return result;
+    }
+
+    /// <summary>Removes the credential keys whose value is blank (empty, whitespace or null); nothing else is touched.</summary>
+    public static void RemoveBlankCredentials(IDictionary<string, string?> headers)
+    {
+        foreach (var name in CredentialHeaders)
+        {
+            if (headers.TryGetValue(name, out var value) && string.IsNullOrWhiteSpace(value))
+                headers.Remove(name);
+        }
+    }
+
+    /// <summary>Removes the credential headers whose value is blank from <paramref name="request"/>; nothing else is touched.</summary>
+    public static void DropBlankCredentialHeaders(HttpRequestMessage request)
+    {
+        foreach (var name in CredentialHeaders.Where(
+                     name => request.Headers.Contains(name) && !HasNonEmptyHeader(request, name)))
+        {
+            request.Headers.Remove(name);
+        }
+    }
+
+    private static bool IsCredentialHeader(string name) =>
+        CredentialHeaders.Any(c => string.Equals(c, name, StringComparison.OrdinalIgnoreCase));
+
     private static string? CallerValue(IReadOnlyDictionary<string, string>? callerHeaders, string name)
     {
         if (callerHeaders is null)
@@ -479,17 +579,69 @@ public static class HttpTaskInvocation
         return null;
     }
 
+    private static (HttpClient Client, HttpRequestMessage Request) PrepareRequest(
+        Func<string, HttpClient> createClient,
+        HttpTaskBinding binding,
+        string taskType,
+        TaskTraceContext? traceContext,
+        string? taskKey)
+    {
+        using (StartPrepareActivity(taskType, taskKey))
+        {
+            var clientName = binding.ValidateSSL
+                ? WorkflowHttpClientNames.Default
+                : WorkflowHttpClientNames.NoSslValidation;
+            var httpClient = createClient(clientName);
+            httpClient.Timeout = TimeSpan.FromSeconds(binding.TimeoutSeconds);
+
+            var request = new HttpRequestMessage(
+                new HttpMethod(binding.Method),
+                binding.Url);
+
+            // Add headers. Content-Type is a content header in .NET, not a request header, so it is
+            // captured here and applied to request.Content below instead of request.Headers.
+            string? headerContentType = null;
+            if (!string.IsNullOrEmpty(binding.Headers))
+            {
+                var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(binding.Headers);
+                if (headers != null)
+                {
+                    foreach (var header in headers)
+                    {
+                        if (string.Equals(header.Key, "Content-Type", StringComparison.OrdinalIgnoreCase))
+                        {
+                            headerContentType = header.Value;
+                            continue;
+                        }
+
+                        if (IsReservedTraceHeader(header.Key))
+                            continue;
+
+                        request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                    }
+                }
+            }
+
+            ApplyTrustedCorrelationHeaders(request, traceContext);
+
+            // Add body for non-GET requests. Resolution: explicit ContentType → Content-Type header → json.
+            if (request.Method != HttpMethod.Get && !string.IsNullOrEmpty(binding.Body))
+            {
+                var contentType = HttpContentType.Resolve(binding.ContentType, headerContentType);
+                request.Content = new StringContent(binding.Body, Encoding.UTF8);
+                request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(contentType);
+            }
+
+            return (httpClient, request);
+        }
+    }
+
     /// <summary>A header value that can be carried as is: present, bounded, no control characters (no header injection).</summary>
     private static bool IsSafeHeaderValue(string? value)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 1024)
             return false;
-        foreach (var character in value)
-        {
-            if (char.IsControl(character))
-                return false;
-        }
-        return true;
+        return value.All(character => !char.IsControl(character));
     }
 
     private static bool IsSafeIdentityClaim(string? value)
@@ -499,15 +651,7 @@ public static class HttpTaskInvocation
             return false;
         }
 
-        foreach (var character in value)
-        {
-            if (!char.IsAsciiLetterOrDigit(character) && character is not '_' and not '-')
-            {
-                return false;
-            }
-        }
-
-        return true;
+        return value.All(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '-');
     }
 
     /// <summary>

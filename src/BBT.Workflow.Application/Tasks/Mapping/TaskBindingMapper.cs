@@ -99,6 +99,9 @@ public static class TaskBindingMapper
         Domain = task.TriggerDomain,
         Workflow = task.TriggerFlow,
         Version = task.TriggerVersion,
+        // The remote binding is all the Execution host sees: a key left out here is dropped without an
+        // error and a cross-domain Start creates a keyless instance.
+        Key = task.TriggerKey,
         Body = task.Body,
         Tags = task.TriggerTags,
         Sync = task.TriggerSync,

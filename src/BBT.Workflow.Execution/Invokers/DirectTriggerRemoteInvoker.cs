@@ -26,6 +26,8 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<DirectTriggerRemoteInvoker> _logger;
     private readonly ITaskMetrics _metrics;
+    private const string FailureOutcome = "failure";
+
     private readonly string _orchestrationAppId;
     private readonly TriggerRetryOptions _retryOptions;
     private readonly ResiliencePipeline<HttpResponseMessage> _retryPipeline;
@@ -135,17 +137,14 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
         CancellationToken cancellationToken)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
-        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
-            var appId = binding.DaprAppId ?? _orchestrationAppId;
-
             // Request build happens per retry attempt inside the pipeline below (a fresh
             // HttpRequestMessage per attempt), so "prep" here covers only what precedes the
-            // first attempt; dispose before entering the pipeline for uniformity with the other
+            // first attempt; it ends before entering the pipeline for uniformity with the other
             // invokers rather than trying to instrument each retry individually.
-            prepareActivity?.Dispose();
+            var appId = PrepareDaprAppId(taskKey, binding);
             var response = await _retryPipeline.ExecuteAsync(
                 async token =>
                 {
@@ -158,7 +157,6 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning(
                 "DirectTrigger Dapr invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}/{InstanceId}/{TransitionKey}",
@@ -172,8 +170,7 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
         }
         catch (Exception ex)
         {
-            prepareActivity?.Dispose();
-            _metrics.RecordTaskExecution(TaskType, "failure");
+            _metrics.RecordTaskExecution(TaskType, FailureOutcome);
             _logger.LogError(ex,
                 "DirectTrigger Dapr invocation failed for task {TaskKey}: {Domain}/{Workflow}/{InstanceId}/{TransitionKey}",
                 taskKey, binding.Domain, binding.Workflow, binding.Identifier, binding.TransitionName);
@@ -192,17 +189,14 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
         CancellationToken cancellationToken)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
-        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
-            var httpClient = CreateHttpClient(binding, taskKey);
-
             // Request build happens per retry attempt inside the pipeline below (a fresh
             // HttpRequestMessage per attempt), so "prep" here covers only what precedes the
-            // first attempt; dispose before entering the pipeline for uniformity with the other
+            // first attempt; it ends before entering the pipeline for uniformity with the other
             // invokers rather than trying to instrument each retry individually.
-            prepareActivity?.Dispose();
+            var httpClient = PrepareHttpClient(taskKey, binding);
             var response = await _retryPipeline.ExecuteAsync(
                 async token =>
                 {
@@ -215,7 +209,6 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning(
                 "DirectTrigger HTTP invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}/{InstanceId}/{TransitionKey}",
@@ -229,8 +222,7 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
         }
         catch (HttpRequestException ex)
         {
-            prepareActivity?.Dispose();
-            _metrics.RecordTaskExecution(TaskType, "failure");
+            _metrics.RecordTaskExecution(TaskType, FailureOutcome);
             _logger.LogError(ex,
                 "DirectTrigger HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}/{InstanceId}/{TransitionKey}",
                 taskKey, binding.Domain, binding.Workflow, binding.Identifier, binding.TransitionName);
@@ -243,8 +235,7 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
         }
         catch (Exception ex)
         {
-            prepareActivity?.Dispose();
-            _metrics.RecordTaskExecution(TaskType, "failure");
+            _metrics.RecordTaskExecution(TaskType, FailureOutcome);
             _logger.LogError(ex,
                 "DirectTrigger HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}/{InstanceId}/{TransitionKey}",
                 taskKey, binding.Domain, binding.Workflow, binding.Identifier, binding.TransitionName);
@@ -273,7 +264,7 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
             ? CreateMetadata(binding)
             : CreateMetadata(binding, statusCode: (int)response.StatusCode);
 
-        _metrics.RecordTaskExecution(TaskType, isSuccess ? "success" : "failure");
+        _metrics.RecordTaskExecution(TaskType, isSuccess ? "success" : FailureOutcome);
 
         return isSuccess
             ? TaskInvocationResult.Success(
@@ -309,7 +300,23 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
         return path;
     }
 
-    private HttpRequestMessage CreateDaprRequest(DirectTriggerBinding binding, string appId)
+    private string PrepareDaprAppId(string? taskKey, DirectTriggerBinding binding)
+    {
+        using (InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty))
+        {
+            return binding.DaprAppId ?? _orchestrationAppId;
+        }
+    }
+
+    private HttpClient PrepareHttpClient(string? taskKey, DirectTriggerBinding binding)
+    {
+        using (InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty))
+        {
+            return CreateHttpClient(binding, taskKey);
+        }
+    }
+
+    private static HttpRequestMessage CreateDaprRequest(DirectTriggerBinding binding, string appId)
     {
         var path = BuildPath(binding);
 
@@ -331,11 +338,15 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
             "application/json");
 
         InvokerHelpers.AddBindingHeaders(request, binding.Headers);
-        InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
+        InvokerHelpers.ApplyTrustedCorrelationHeaders(request, fillIdentity: false);
+        // The orchestrator resolved the credential (HttpTaskInvocation.ResolveInstanceCallCredential); this host adds no
+        // identity, and blank credential markers are removed before the request leaves. The orchestrator still keeps the
+        // marker in the binding because an OLDER execution host fills an absent sub / act_sub from the trace.
+        InvokerHelpers.DropBlankCredentialHeaders(request);
         return request;
     }
 
-    private HttpRequestMessage CreateHttpRequest(DirectTriggerBinding binding)
+    private static HttpRequestMessage CreateHttpRequest(DirectTriggerBinding binding)
     {
         var path = BuildPath(binding);
 
@@ -361,7 +372,11 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
         };
 
         InvokerHelpers.AddBindingHeaders(request, binding.Headers);
-        InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
+        InvokerHelpers.ApplyTrustedCorrelationHeaders(request, fillIdentity: false);
+        // The orchestrator resolved the credential (HttpTaskInvocation.ResolveInstanceCallCredential); this host adds no
+        // identity, and blank credential markers are removed before the request leaves. The orchestrator still keeps the
+        // marker in the binding because an OLDER execution host fills an absent sub / act_sub from the trace.
+        InvokerHelpers.DropBlankCredentialHeaders(request);
         return request;
     }
 

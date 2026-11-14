@@ -19,6 +19,8 @@ public sealed class GetInstanceDataRemoteInvoker : ITaskInvoker<GetInstanceDataB
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<GetInstanceDataRemoteInvoker> _logger;
     private readonly ITaskMetrics _metrics;
+    private const string FailureOutcome = "failure";
+
     private readonly string _orchestrationAppId;
 
     public GetInstanceDataRemoteInvoker(
@@ -83,21 +85,17 @@ public sealed class GetInstanceDataRemoteInvoker : ITaskInvoker<GetInstanceDataB
         CancellationToken cancellationToken)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
-        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
-            var appId = binding.DaprAppId ?? _orchestrationAppId;
-            var request = CreateDaprRequest(binding, appId);
+            var request = PrepareDaprRequest(taskKey, binding);
 
-            prepareActivity?.Dispose();
             using var response = await _daprInvocation.SendAsync(request, cancellationToken);
 
             return await ProcessResponseAsync(binding, response, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, cancellationToken);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning("GetInstanceData Dapr invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
                 taskKey, binding.Domain, binding.Workflow, binding.Instance);
@@ -110,8 +108,7 @@ public sealed class GetInstanceDataRemoteInvoker : ITaskInvoker<GetInstanceDataB
         }
         catch (Exception ex)
         {
-            prepareActivity?.Dispose();
-            _metrics.RecordTaskExecution(TaskType, "failure");
+            _metrics.RecordTaskExecution(TaskType, FailureOutcome);
             _logger.LogError(ex, "GetInstanceData Dapr invocation failed for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
                 taskKey, binding.Domain, binding.Workflow, binding.Instance);
 
@@ -129,21 +126,17 @@ public sealed class GetInstanceDataRemoteInvoker : ITaskInvoker<GetInstanceDataB
         CancellationToken cancellationToken)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
-        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
-            var httpClient = CreateHttpClient(binding, taskKey);
-            var request = CreateHttpRequest(binding);
+            var (httpClient, request) = PrepareHttpRequest(taskKey, binding);
 
-            prepareActivity?.Dispose();
             using var response = await httpClient.SendAsync(request, cancellationToken);
 
             return await ProcessResponseAsync(binding, response, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, cancellationToken);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning("GetInstanceData HTTP invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
                 taskKey, binding.Domain, binding.Workflow, binding.Instance);
@@ -156,8 +149,7 @@ public sealed class GetInstanceDataRemoteInvoker : ITaskInvoker<GetInstanceDataB
         }
         catch (HttpRequestException ex)
         {
-            prepareActivity?.Dispose();
-            _metrics.RecordTaskExecution(TaskType, "failure");
+            _metrics.RecordTaskExecution(TaskType, FailureOutcome);
             _logger.LogError(ex, "GetInstanceData HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
                 taskKey, binding.Domain, binding.Workflow, binding.Instance);
 
@@ -169,8 +161,7 @@ public sealed class GetInstanceDataRemoteInvoker : ITaskInvoker<GetInstanceDataB
         }
         catch (Exception ex)
         {
-            prepareActivity?.Dispose();
-            _metrics.RecordTaskExecution(TaskType, "failure");
+            _metrics.RecordTaskExecution(TaskType, FailureOutcome);
             _logger.LogError(ex, "GetInstanceData HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
                 taskKey, binding.Domain, binding.Workflow, binding.Instance);
 
@@ -195,7 +186,7 @@ public sealed class GetInstanceDataRemoteInvoker : ITaskInvoker<GetInstanceDataB
         var isSuccess = response.IsSuccessStatusCode
             || AcceptedStatusCodeMatcher.IsAccepted((int)response.StatusCode, binding.AcceptedStatusCodes);
 
-        _metrics.RecordTaskExecution(TaskType, isSuccess ? "success" : "failure");
+        _metrics.RecordTaskExecution(TaskType, isSuccess ? "success" : FailureOutcome);
 
         return isSuccess
             ? TaskInvocationResult.Success(
@@ -230,7 +221,26 @@ public sealed class GetInstanceDataRemoteInvoker : ITaskInvoker<GetInstanceDataB
         return path;
     }
 
-    private HttpRequestMessage CreateDaprRequest(GetInstanceDataBinding binding, string appId)
+    private HttpRequestMessage PrepareDaprRequest(string? taskKey, GetInstanceDataBinding binding)
+    {
+        using (InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty))
+        {
+            var appId = binding.DaprAppId ?? _orchestrationAppId;
+            return CreateDaprRequest(binding, appId);
+        }
+    }
+
+    private (HttpClient Client, HttpRequestMessage Request) PrepareHttpRequest(string? taskKey, GetInstanceDataBinding binding)
+    {
+        using (InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty))
+        {
+            var httpClient = CreateHttpClient(binding, taskKey);
+            var request = CreateHttpRequest(binding);
+            return (httpClient, request);
+        }
+    }
+
+    private static HttpRequestMessage CreateDaprRequest(GetInstanceDataBinding binding, string appId)
     {
         var path = BuildPath(binding);
 
@@ -247,11 +257,15 @@ public sealed class GetInstanceDataRemoteInvoker : ITaskInvoker<GetInstanceDataB
         // The task's own credential, the same header set as every other task invoker: the target domain exposes
         // the data (x-roles, x-masking, x-encryption) for this caller — a same-domain read evaluates the same set.
         InvokerHelpers.AddBindingHeaders(request, binding.Headers);
-        InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
+        InvokerHelpers.ApplyTrustedCorrelationHeaders(request, fillIdentity: false);
+        // The orchestrator resolved the credential (HttpTaskInvocation.ResolveInstanceCallCredential); this host adds no
+        // identity, and blank credential markers are removed before the request leaves. The orchestrator still keeps the
+        // marker in the binding because an OLDER execution host fills an absent sub / act_sub from the trace.
+        InvokerHelpers.DropBlankCredentialHeaders(request);
         return request;
     }
 
-    private HttpRequestMessage CreateHttpRequest(GetInstanceDataBinding binding)
+    private static HttpRequestMessage CreateHttpRequest(GetInstanceDataBinding binding)
     {
         var path = BuildPath(binding);
 
@@ -271,7 +285,11 @@ public sealed class GetInstanceDataRemoteInvoker : ITaskInvoker<GetInstanceDataB
         // The task's own credential, the same header set as every other task invoker: the target domain exposes
         // the data (x-roles, x-masking, x-encryption) for this caller — a same-domain read evaluates the same set.
         InvokerHelpers.AddBindingHeaders(request, binding.Headers);
-        InvokerHelpers.ApplyTrustedCorrelationHeaders(request);
+        InvokerHelpers.ApplyTrustedCorrelationHeaders(request, fillIdentity: false);
+        // The orchestrator resolved the credential (HttpTaskInvocation.ResolveInstanceCallCredential); this host adds no
+        // identity, and blank credential markers are removed before the request leaves. The orchestrator still keeps the
+        // marker in the binding because an OLDER execution host fills an absent sub / act_sub from the trace.
+        InvokerHelpers.DropBlankCredentialHeaders(request);
         return request;
     }
 

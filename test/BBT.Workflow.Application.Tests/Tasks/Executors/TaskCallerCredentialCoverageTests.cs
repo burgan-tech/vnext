@@ -21,9 +21,11 @@ using Xunit;
 namespace BBT.Workflow.Application.Tests.Tasks.Executors;
 
 /// <summary>
-/// Every outbound task type carries the request's credential (sub, act_sub, position, client_id, role) for each credential
-/// header its mapping left absent or empty; a non-empty mapping value wins. Pinned here for the task types that run through
-/// a header dictionary (Start, in-process), a binding the task does not author (DaprHttpEndpoint) and the SOAP envelope.
+/// Every outbound task type carries the request's credential (sub, act_sub, position, client_id, role) by default; a
+/// non-empty mapping value wins. Two rules apply. The in-process Start task follows the instance-call rule
+/// (HttpTaskInvocation.ResolveInstanceCallCredential): only a credential the mapping left ABSENT is filled from the caller,
+/// a blank one is withheld. The DaprHttpEndpoint and SOAP rows keep the older rule (HttpTaskInvocation.AppendCallerCredential):
+/// a credential left absent OR empty is filled from the caller.
 /// </summary>
 public sealed class TaskCallerCredentialCoverageTests
 {
@@ -62,12 +64,19 @@ public sealed class TaskCallerCredentialCoverageTests
         runtime.Domain.Returns("test-domain");
         var executor = new StartTriggerTaskExecutor(Substitute.For<IScriptEngine>(), runtime,
             Substitute.For<IRemoteInvokerService>(), gateway, Substitute.For<IDomainDiscoveryResolver>(),
-            NullLogger<StartTriggerTaskExecutor>.Instance);
+            Substitute.For<BBT.Aether.Users.ICurrentUser>(), NullLogger<StartTriggerTaskExecutor>.Instance);
 
         await executor.ExecuteAsync(Context(task), CancellationToken.None);
 
         sent.ShouldNotBeNull();
-        ShouldCarryTheCaller(sent!.Headers!, expectedRole: "svc.starter"); // empty "position" filled, role kept
+        // A same-domain call follows the instance-call rule: the mapping's blank "position" is the mapping's decision (not
+        // sent, not filled from the caller), the mapping's role wins, absent credentials are filled from the caller.
+        sent!.Headers.Keys.ShouldNotContain("position");
+        sent.Headers["sub"].ShouldBe("alice");
+        sent.Headers["act_sub"].ShouldBe("alice-actor");
+        sent.Headers["client_id"].ShouldBe("web-client");
+        sent.Headers["role"].ShouldBe("svc.starter");
+        sent.Headers.Keys.ShouldNotContain("x-device-id");
         sent.TrustedPayload.ShouldBeTrue(); // the task body is flow-authored, not a client payload
     }
 

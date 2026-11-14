@@ -20,6 +20,8 @@ public sealed class StartTriggerRemoteInvoker : ITaskInvoker<StartTriggerBinding
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<StartTriggerRemoteInvoker> _logger;
     private readonly ITaskMetrics _metrics;
+    private const string FailureOutcome = "failure";
+
     private readonly string _orchestrationAppId;
 
     public StartTriggerRemoteInvoker(
@@ -84,21 +86,17 @@ public sealed class StartTriggerRemoteInvoker : ITaskInvoker<StartTriggerBinding
         CancellationToken cancellationToken)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
-        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
-            var appId = binding.DaprAppId ?? _orchestrationAppId;
-            var request = CreateDaprRequest(binding, appId);
+            var request = PrepareDaprRequest(taskKey, binding);
 
-            prepareActivity?.Dispose();
             using var response = await _daprInvocation.SendAsync(request, cancellationToken);
 
             return await ProcessResponseAsync(binding, response, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, cancellationToken);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning("StartTrigger Dapr invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
@@ -111,8 +109,7 @@ public sealed class StartTriggerRemoteInvoker : ITaskInvoker<StartTriggerBinding
         }
         catch (Exception ex)
         {
-            prepareActivity?.Dispose();
-            _metrics.RecordTaskExecution(TaskType, "failure");
+            _metrics.RecordTaskExecution(TaskType, FailureOutcome);
             _logger.LogError(ex, "StartTrigger Dapr invocation failed for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
 
@@ -130,21 +127,17 @@ public sealed class StartTriggerRemoteInvoker : ITaskInvoker<StartTriggerBinding
         CancellationToken cancellationToken)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
-        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
-            var httpClient = CreateHttpClient(binding, taskKey);
-            var request = CreateHttpRequest(binding);
+            var (httpClient, request) = PrepareHttpRequest(taskKey, binding);
 
-            prepareActivity?.Dispose();
             using var response = await httpClient.SendAsync(request, cancellationToken);
 
             return await ProcessResponseAsync(binding, response, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, cancellationToken);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning("StartTrigger HTTP invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
@@ -157,8 +150,7 @@ public sealed class StartTriggerRemoteInvoker : ITaskInvoker<StartTriggerBinding
         }
         catch (HttpRequestException ex)
         {
-            prepareActivity?.Dispose();
-            _metrics.RecordTaskExecution(TaskType, "failure");
+            _metrics.RecordTaskExecution(TaskType, FailureOutcome);
             _logger.LogError(ex, "StartTrigger HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
 
@@ -170,8 +162,7 @@ public sealed class StartTriggerRemoteInvoker : ITaskInvoker<StartTriggerBinding
         }
         catch (Exception ex)
         {
-            prepareActivity?.Dispose();
-            _metrics.RecordTaskExecution(TaskType, "failure");
+            _metrics.RecordTaskExecution(TaskType, FailureOutcome);
             _logger.LogError(ex, "StartTrigger HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
 
@@ -196,7 +187,7 @@ public sealed class StartTriggerRemoteInvoker : ITaskInvoker<StartTriggerBinding
         var isSuccess = response.IsSuccessStatusCode
             || AcceptedStatusCodeMatcher.IsAccepted((int)response.StatusCode, binding.AcceptedStatusCodes);
 
-        _metrics.RecordTaskExecution(TaskType, isSuccess ? "success" : "failure");
+        _metrics.RecordTaskExecution(TaskType, isSuccess ? "success" : FailureOutcome);
 
         return isSuccess
             ? TaskInvocationResult.Success(
@@ -234,7 +225,26 @@ public sealed class StartTriggerRemoteInvoker : ITaskInvoker<StartTriggerBinding
         return path;
     }
 
-    private HttpRequestMessage CreateDaprRequest(StartTriggerBinding binding, string appId)
+    private HttpRequestMessage PrepareDaprRequest(string? taskKey, StartTriggerBinding binding)
+    {
+        using (InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty))
+        {
+            var appId = binding.DaprAppId ?? _orchestrationAppId;
+            return CreateDaprRequest(binding, appId);
+        }
+    }
+
+    private (HttpClient Client, HttpRequestMessage Request) PrepareHttpRequest(string? taskKey, StartTriggerBinding binding)
+    {
+        using (InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty))
+        {
+            var httpClient = CreateHttpClient(binding, taskKey);
+            var request = CreateHttpRequest(binding);
+            return (httpClient, request);
+        }
+    }
+
+    private static HttpRequestMessage CreateDaprRequest(StartTriggerBinding binding, string appId)
     {
         var path = BuildPath(binding);
 
@@ -257,10 +267,12 @@ public sealed class StartTriggerRemoteInvoker : ITaskInvoker<StartTriggerBinding
 
         AddHeaders(request, binding.Headers);
         InvokerHelpers.ApplyRequestId(request);
+        // Blank credential markers are removed before the request leaves. See HttpTaskInvocation.ResolveInstanceCallCredential.
+        InvokerHelpers.DropBlankCredentialHeaders(request);
         return request;
     }
 
-    private HttpRequestMessage CreateHttpRequest(StartTriggerBinding binding)
+    private static HttpRequestMessage CreateHttpRequest(StartTriggerBinding binding)
     {
         var path = BuildPath(binding);
 
@@ -287,6 +299,8 @@ public sealed class StartTriggerRemoteInvoker : ITaskInvoker<StartTriggerBinding
 
         AddHeaders(request, binding.Headers);
         InvokerHelpers.ApplyRequestId(request);
+        // Blank credential markers are removed before the request leaves. See HttpTaskInvocation.ResolveInstanceCallCredential.
+        InvokerHelpers.DropBlankCredentialHeaders(request);
         return request;
     }
 

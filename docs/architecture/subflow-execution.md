@@ -21,6 +21,12 @@ does not wait through future human input or external events.
 
 ## Start Flow
 
+The credential headers a child is started with (`sub`, `act_sub`, `position`, `client_id`, `role`) follow one rule,
+shared by the SubFlow start and by the `SubProcess`, `Start` and `DirectTrigger` tasks: the input mapping decides, a
+blank value included, and only an absent credential is filled from the caller. The rule, its scope and the identity a
+same-domain child is stamped with are in
+[Caller credential on instance calls](../domain/role-grant-authorization.md#caller-credential-on-instance-calls).
+
 1. `HandleSubFlowStep` creates the correlation and queues `StartSubflowJob` as post-commit work.
 2. `TransitionRunner` commits and disposes the parent stage.
 3. `StartSubflowJobHandler` reloads the parent through `FindForSubflowStartAsync`, builds the mapping

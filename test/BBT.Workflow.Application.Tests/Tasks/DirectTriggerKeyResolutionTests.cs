@@ -84,7 +84,7 @@ public sealed class DirectTriggerKeyResolutionTests
             .ReturnsForAnyArgs(Result<TransitionOutput>.Ok(new TransitionOutput()));
         var executor = new DirectTriggerTaskExecutor(Substitute.For<IScriptEngine>(), runtime,
             Substitute.For<IRemoteInvokerService>(), _commandGateway, _idResolver,
-            Substitute.For<IDomainDiscoveryResolver>(), factory, NullLogger<DirectTriggerTaskExecutor>.Instance);
+            Substitute.For<IDomainDiscoveryResolver>(), factory, Substitute.For<BBT.Aether.Users.ICurrentUser>(), NullLogger<DirectTriggerTaskExecutor>.Instance);
 
         var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
         var scriptContext = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)

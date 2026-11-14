@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BBT.Aether.Results;
+using BBT.Aether.Users;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
 using BBT.Workflow.Execution;
@@ -28,6 +29,7 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
     private readonly IInstanceIdResolver _instanceIdResolver;
     private readonly IDomainDiscoveryResolver _endpointResolver;
     private readonly ResiliencePipeline<Result<TransitionOutput>> _retryPipeline;
+    private readonly ICurrentUser _currentUser;
 
     /// <summary>
     /// Initializes a new instance of DirectTriggerTaskExecutor.
@@ -40,12 +42,14 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
         IInstanceIdResolver instanceIdResolver,
         IDomainDiscoveryResolver endpointResolver,
         IResultResiliencePipelineFactory resilienceFactory,
+        ICurrentUser currentUser,
         ILogger<DirectTriggerTaskExecutor> logger)
         : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
         _instanceCommandGateway = instanceCommandGateway;
         _instanceIdResolver = instanceIdResolver;
         _endpointResolver = endpointResolver;
+        _currentUser = currentUser;
         _retryPipeline = resilienceFactory.CreatePipeline<TransitionOutput>(
             operationName: "DirectTrigger.ExecuteLocal");
     }
@@ -130,7 +134,9 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
                 taskType: TaskType.ToString()));
         }
         
-        var headers = WithCallerCredential(ConvertTaskHeadersToDictionary(task.Headers), context.ScriptContext);
+        // Caller credential: the mapping decides, blank included — HttpTaskInvocation.ResolveInstanceCallCredential. A blank value is NOT filled from the caller.
+        var headers = Execution.HttpTaskInvocation.ResolveInstanceCallCredential(
+            ConvertTaskHeadersToDictionary(task.Headers), CallerHeadersOf(context.ScriptContext));
         
         var transitionData = task.Body.HasValue
             ? new TransitionDataInput(task.Body)
@@ -187,11 +193,15 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
     {
         try
         {
-            var result = await _instanceCommandGateway.TransitionAsync(
-                instanceId,
-                task.TransitionName,
-                input,
-                cancellationToken);
+            // The call runs as the resolved header set's user, not as the ambient pipeline caller.
+            var result = await RunAsResolvedUserAsync(
+                _currentUser,
+                input.Headers,
+                () => _instanceCommandGateway.TransitionAsync(
+                    instanceId,
+                    task.TransitionName,
+                    input,
+                    cancellationToken));
 
             if (!result.IsSuccess)
             {
@@ -344,7 +354,8 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
             UseDapr = binding.UseDapr,
             ValidateSSL = binding.ValidateSSL,
             TimeoutSeconds = binding.TimeoutSeconds,
-            Headers = Execution.HttpTaskInvocation.WithCallerCredential(binding.Headers, CallerHeadersOf(context.ScriptContext)),
+            // Caller credential: the mapping decides, blank included — HttpTaskInvocation.ResolveInstanceCallCredential. A blank value is NOT filled from the caller.
+            Headers = Execution.HttpTaskInvocation.ResolveInstanceCallCredentialJson(binding.Headers, CallerHeadersOf(context.ScriptContext)),
             BaseUrl = endpoint.BaseUrl.ToString(),
             DaprAppId = endpoint.DaprAppId,
             AcceptedStatusCodes = binding.AcceptedStatusCodes

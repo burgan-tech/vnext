@@ -1,5 +1,7 @@
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
+using BBT.Aether.Users;
+using BBT.Workflow.Authorization;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.SubFlow;
@@ -58,15 +60,20 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
             {
                 var commandService = sp.GetRequiredService<IInstanceCommandAppService>();
                 var unitOfWorkManager = sp.GetRequiredService<IUnitOfWorkManager>();
-                
-                await using var uow = unitOfWorkManager.Begin(new UnitOfWorkOptions
-                {
-                    Scope = UnitOfWorkScopeOption.RequiresNew
-                });
 
-                var result = await commandService.StartAsync(input, ct);
-                await uow.CommitAsync(ct);
-                return result;
+                // The child is created as the user its resolved header set describes, not as the ambient
+                // pipeline caller — see CallerCredentialScope.
+                using (CallerCredentialScope.Enter(sp.GetRequiredService<ICurrentUser>(), input.Headers))
+                {
+                    await using var uow = unitOfWorkManager.Begin(new UnitOfWorkOptions
+                    {
+                        Scope = UnitOfWorkScopeOption.RequiresNew
+                    });
+
+                    var result = await commandService.StartAsync(input, ct);
+                    await uow.CommitAsync(ct);
+                    return result;
+                }
             }, cancellationToken);
     }
 

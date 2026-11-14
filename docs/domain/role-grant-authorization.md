@@ -504,11 +504,11 @@ role-resolution strategy, not a boundary.
 ### Trigger-task reads and system-identity reads
 
 - The instance-read trigger tasks — `GetInstanceData`, `GetInstance`, `GetInstances` — read as the header set they
-  present: the task's mapping headers plus the pipeline caller's credential — `sub`, `act_sub`, `position`, `client_id`,
-  `role` — wherever the mapping did not set them. `x-roles`, `x-masking` and `x-encryption` apply to that caller, the
-  same way for a same-domain read (under `ICurrentUser.Change`) and a cross-domain one (headers on the request). `role`
-  travels only as the caller sent it: a role morph-idm resolved is never carried — the target resolves it again from the
-  forwarded credential.
+  present: the task's mapping headers plus the pipeline caller's credential, by the rule in
+  [Caller credential on instance calls](#caller-credential-on-instance-calls). `x-roles`, `x-masking` and
+  `x-encryption` apply to that caller, the same way for a same-domain read (under `ICurrentUser.Change`) and a
+  cross-domain one (headers on the request). `role` travels only as the caller sent it: a role morph-idm resolved is
+  never carried — the target resolves it again from the forwarded credential.
 - Related-instance access from scripts (`context.Related`) still runs as the system and skips `queryRoles`,
   `x-roles` and `x-masking` — see [Related Instance Access](../runtime/script-related-instance-access.md).
 
@@ -517,6 +517,72 @@ reads went out with no credential at all, so one task answered differently by do
 
 Copying a field read by a task or through `context.Related` into instance data makes it visible to callers the grants would otherwise
 have filtered or masked it from. Document it where you copy it. See [Field Masking](field-masking.md).
+
+### Caller credential on instance calls
+
+When the runtime calls another instance — a SubFlow start, a `SubProcess`, `Start` or `DirectTrigger` task, or a
+`GetInstance`, `GetInstances` or `GetInstanceData` task — it presents a set of credential headers: `sub`, `act_sub`,
+`position`, `client_id` and `role`. The flow author's mapping and the caller's request both have a say, and one rule
+settles it, per header:
+
+| What the mapping did | What the target sees |
+|---|---|
+| Set the key to a non-blank value | The mapping's value |
+| Set the key to a blank value (`""`, whitespace, `null`) | The credential does NOT reach the target; the caller's value is NOT added |
+| Did not set the key | The caller's value (the parent hop's request header) |
+
+**Why.** A flow author blanks a credential on purpose, to stop the caller's identity reaching the target. Blank is a
+deliberate authorization decision, never "not set". Reading it as "not set" would refill the very identity the author
+removed.
+
+**Scope.** The rule is `HttpTaskInvocation.ResolveInstanceCallCredential`
+(`src/BBT.Workflow.Execution.Abstractions/HttpTaskInvocation.cs`). All seven calls apply it, same-domain and
+cross-domain, with the same outcome:
+
+| Call | Where the mapping's headers come from | Same-domain exit | Cross-domain exit |
+|---|---|---|---|
+| SubFlow start (`S`) | `ISubFlowMapping.InputHandler` → `ScriptResponse.Headers` | `CallerCredentialScope` in `LocalInstanceCommandGateway.StartSubAsync` | `CurrentUserForwardHeadersHelper.MergeIntoRequest` — a blank input value removes the ambient user's header and sends nothing |
+| `SubProcessTask`, `StartTask`, `DirectTriggerTask` | the task's `Headers` | `CallerCredentialScope` around the executor's in-process gateway call | the remote invoker: `InvokerHelpers.DropBlankCredentialHeaders`, last step of the request builder |
+| `GetInstanceTask`, `GetInstancesTask`, `GetInstanceDataTask` | the task's `Headers` | `ReadAs` → `CallerCredentialScope` | the remote invoker: `InvokerHelpers.DropBlankCredentialHeaders`, last step of the request builder |
+
+The orchestrator is the single resolver of the credential. On the cross-domain task path the Execution host adds no
+identity of its own: the DirectTrigger and GetInstance* invokers stamp the trace context with
+`ApplyTrustedCorrelationHeaders(…, fillIdentity: false)`, so an absent `sub` / `act_sub` is not filled from the trace.
+
+A blank credential stays in the resolved header set as `""` (a marker) and is dropped only at the exit. It has to
+survive that far because two exits fill a MISSING `sub` / `act_sub` themselves, and the marker is what stops them: the
+cross-domain SubFlow header merge (from the ambient user) and an older Execution host, which still stamps an absent
+`sub` / `act_sub` from the trace on a task's request.
+
+**Reach of a blank.** A blank applies to the header set of that one call. Requests that later reach the target
+directly carry their own requester's identity: a transition on the parent that is proxied to an active SubFlow child
+(`SubflowProxyService`) forwards the requester's headers, not the start mapping's. In the other direction, a child that
+settles in the hop that started it hands its terminal event the headers of that start call — without the blanked
+credential — and with `ApplyToResume` on (the default) those are the headers of the parent's resume
+([Carried headers on sub-item terminal events](../runtime/event-publish-modes.md#carried-headers-on-sub-item-terminal-events)).
+
+**Same-domain identity.** An in-process call runs as the user its resolved header set describes, never as the ambient
+pipeline caller. For a SubFlow, SubProcess or StartTask child that means the child row is stamped from that header set:
+`CreatedBy` = `act_sub`, `CreatedByBehalfOf` = `sub` — the same as a cross-domain child.
+
+**Caller source.** The caller's value comes only from the hop's request headers. Activity baggage is not a source for
+these calls: a child whose parent blanked `sub` must not pick the first caller's `sub` back up from the trace. A hop with
+no caller (a timer, an automatic transition) adds no credential.
+
+**Known difference.** A cross-domain SubFlow start still also forwards, from the ambient user, `userId`, `given_name`,
+`family_name`, `act_uid` and `consent_id`; a same-domain start does not. This is kept on purpose (product-owner decision
+2026-11-13).
+
+**Mapping header type.** A SubFlow input mapping's `Headers` may be a string dictionary
+(`Dictionary<string, string?>`), an object dictionary / `ExpandoObject` (`Dictionary<string, object>`; values by their
+text), or a JSON object (`JsonElement`); any other shape — an anonymous object or a script-defined class included —
+fails the SubFlow start (`SubFlowInputMappingFailed`) before any child is started; it is never read as "no key set". A trigger task's `Headers` is a JSON object: a number or `true` / `false` value reads as its text, and an object
+or array value as null — so a credential key given such a value is blank and the caller's value is withheld.
+
+**Not covered.** HTTP, SOAP, DaprService and DaprHttpEndpoint tasks keep the older rule: a blank credential in their
+mapping is filled from the caller (`AppendCallerCredential`).
+
+There is no configuration switch for the previous behaviour (product-owner decision 2026-11-13).
 
 ## Definition-time validation of dynamic grants
 

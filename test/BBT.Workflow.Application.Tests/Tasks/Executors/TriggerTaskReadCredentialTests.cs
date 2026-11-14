@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Text.Json;
 using System.Collections.Generic;
 using System.Threading;
@@ -22,7 +23,8 @@ namespace BBT.Workflow.Application.Tests.Tasks.Executors;
 
 /// <summary>
 /// A same-domain GetInstance read runs as the header set its remote invoker would send cross-domain — the task's own
-/// headers, plus the pipeline caller's sub / act_sub where the task did not set them. <c>ICurrentUser</c> is AsyncLocal
+/// headers, with each credential the mapping left ABSENT filled from the caller's request headers (never from baggage);
+/// a blank credential stays blank. <c>ICurrentUser</c> is AsyncLocal
 /// and role resolution reads it before the headers, so the executor replaces it for the read and restores it afterwards.
 /// </summary>
 public sealed class TriggerTaskReadCredentialTests
@@ -198,6 +200,214 @@ public sealed class TriggerTaskReadCredentialTests
         predicate.ShouldNotContain("alice-actor");
     }
 
+    // ---- The blank-credential rule, pinned on all three instance-read tasks ---------------------------------------------
+
+    private static readonly Dictionary<string, string> RuleCaller = new()
+    {
+        ["sub"] = "u1", ["act_sub"] = "a1", ["role"] = "maker"
+    };
+
+    public static TheoryData<string> ReadTasks => new() { "GetInstance", "GetInstances", "GetInstanceData" };
+
+    private static WorkflowTask ReadTask(string kind, string domain, Dictionary<string, string?> headers)
+    {
+        switch (kind)
+        {
+            case "GetInstance":
+            {
+                var t = WorkflowTaskFactory.CreateGetInstanceTask(domain: domain);
+                t.SetHeaders(headers);
+                return t;
+            }
+            case "GetInstances":
+            {
+                var t = WorkflowTaskFactory.CreateGetInstancesTask(domain: domain);
+                t.SetHeaders(headers);
+                return t;
+            }
+            default:
+            {
+                var config = JsonDocument.Parse(
+                    $$"""{ "key": "get-data", "type": "19", "domain": "{{domain}}", "flow": "test-flow", "instanceId": "{{Guid.NewGuid()}}" }""")
+                    .RootElement.Clone();
+                var t = GetInstanceDataTask.Create(config);
+                t.SetHeaders(headers);
+                return t;
+            }
+        }
+    }
+
+    private async Task<Observed?> RunLocal(string kind, Dictionary<string, string?> taskHeaders)
+    {
+        Observed? observed = null;
+        void Capture() => observed = new Observed(_currentUser.Roles, _currentUser.UserName, _currentUser.ActorUserName,
+            _currentUser.IsAuthenticated);
+        var gateway = Substitute.For<IInstanceQueryGateway>();
+        gateway.GetInstanceAsync(Arg.Any<GetInstanceInput>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            Capture();
+            return ConditionalResult<GetInstanceOutput>.Success(new GetInstanceOutput());
+        });
+        gateway.GetInstanceDataAsync(Arg.Any<GetInstanceDataInput>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            Capture();
+            return ConditionalResult<GetInstanceDataOutput>.Success(new GetInstanceDataOutput());
+        });
+        gateway.GetInstanceListAsync(Arg.Any<GetInstanceListInput>(), Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            Capture();
+            return Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Ok(new InstanceListWithGroupsResponse<GetInstanceOutput>());
+        });
+        var runtime = Substitute.For<IRuntimeInfoProvider>();
+        runtime.Domain.Returns(LocalDomain);
+        var remote = Substitute.For<IRemoteInvokerService>();
+        var resolver = Substitute.For<IDomainDiscoveryResolver>();
+        var task = ReadTask(kind, LocalDomain, taskHeaders);
+        var context = Context(task, RuleCaller);
+        var engine = Substitute.For<IScriptEngine>();
+
+        using (AmbientAuditor())
+        {
+            switch (kind)
+            {
+                case "GetInstance":
+                    await new GetInstanceTaskExecutor(engine, runtime, remote, gateway, resolver, _currentUser,
+                        NullLogger<GetInstanceTaskExecutor>.Instance).ExecuteAsync(context, CancellationToken.None);
+                    break;
+                case "GetInstances":
+                    await new GetInstancesTaskExecutor(engine, runtime, remote, gateway, resolver, _currentUser,
+                        NullLogger<GetInstancesTaskExecutor>.Instance).ExecuteAsync(context, CancellationToken.None);
+                    break;
+                default:
+                    await new GetInstanceDataTaskExecutor(engine, runtime, remote, gateway, resolver, _currentUser,
+                        NullLogger<GetInstanceDataTaskExecutor>.Instance).ExecuteAsync(context, CancellationToken.None);
+                    break;
+            }
+        }
+
+        return observed;
+    }
+
+    /// <summary>A read task whose <c>headers</c> is authored as raw JSON (so values need not be strings).</summary>
+    private static WorkflowTask ReadTaskWithRawHeaders(string kind, string domain, string headersJson)
+    {
+        switch (kind)
+        {
+            case "GetInstance":
+            {
+                var t = GetInstanceTask.Create(
+                    $$"""{ "key": "get-instance", "type": "18", "domain": "{{domain}}", "flow": "test-flow", "instanceId": "{{Guid.NewGuid()}}", "headers": {{headersJson}} }"""
+                        .ToJsonElement());
+                t.SetReference(new Reference("get-instance", domain, "sys-tasks", "1.0.0"));
+                return t;
+            }
+            case "GetInstances":
+            {
+                var t = GetInstancesTask.Create(
+                    $$"""{ "key": "get-instances", "type": "15", "domain": "{{domain}}", "flow": "test-flow", "page": 1, "pageSize": 10, "headers": {{headersJson}} }"""
+                        .ToJsonElement());
+                t.SetReference(new Reference("get-instances", domain, "sys-tasks", "1.0.0"));
+                return t;
+            }
+            default:
+                return GetInstanceDataTask.Create(
+                    $$"""{ "key": "get-data", "type": "19", "domain": "{{domain}}", "flow": "test-flow", "instanceId": "{{Guid.NewGuid()}}", "headers": {{headersJson}} }"""
+                        .ToJsonElement());
+        }
+    }
+
+    private Task<Dictionary<string, string?>> RunCrossDomain(string kind, Dictionary<string, string?> taskHeaders)
+        => RunCrossDomain(kind, ReadTask(kind, "other-domain", taskHeaders));
+
+    private async Task<Dictionary<string, string?>> RunCrossDomain(string kind, WorkflowTask task)
+    {
+        var runtime = Substitute.For<IRuntimeInfoProvider>();
+        runtime.Domain.Returns(LocalDomain);
+        var resolver = Substitute.For<IDomainDiscoveryResolver>();
+        resolver.GetEndpointAsync(Arg.Any<string>(), Arg.Any<EndpointKind>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Ok(new DiscoveryEndpoint(EndpointKind.Url, new Uri("https://other-domain.local"), null)));
+        TaskEnvelope? sent = null;
+        var remote = Substitute.For<IRemoteInvokerService>();
+        remote.InvokeAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<TaskEnvelope>(),
+                Arg.Any<TaskTraceContext>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                sent = call.ArgAt<TaskEnvelope>(2);
+                return Result<TaskInvocationResult>.Ok(TaskInvocationResult.Success(data: null, statusCode: 200, taskType: "18"));
+            });
+        var gateway = Substitute.For<IInstanceQueryGateway>();
+        var engine = Substitute.For<IScriptEngine>();
+        var context = Context(task, RuleCaller);
+
+        switch (kind)
+        {
+            case "GetInstance":
+                await new GetInstanceTaskExecutor(engine, runtime, remote, gateway, resolver, _currentUser,
+                    NullLogger<GetInstanceTaskExecutor>.Instance).ExecuteAsync(context, CancellationToken.None);
+                break;
+            case "GetInstances":
+                await new GetInstancesTaskExecutor(engine, runtime, remote, gateway, resolver, _currentUser,
+                    NullLogger<GetInstancesTaskExecutor>.Instance).ExecuteAsync(context, CancellationToken.None);
+                break;
+            default:
+                await new GetInstanceDataTaskExecutor(engine, runtime, remote, gateway, resolver, _currentUser,
+                    NullLogger<GetInstanceDataTaskExecutor>.Instance).ExecuteAsync(context, CancellationToken.None);
+                break;
+        }
+
+        sent.ShouldNotBeNull();
+        var headersJson = sent.Binding.EnumerateObject()
+            .First(p => string.Equals(p.Name, "headers", StringComparison.OrdinalIgnoreCase)).Value.GetString();
+        return JsonSerializer.Deserialize<Dictionary<string, string?>>(headersJson!)!;
+    }
+
+    [Theory]
+    [MemberData(nameof(ReadTasks))]
+    public async Task ALocalRead_WithABlankSub_ReadsWithoutThatCredential(string kind)
+    {
+        var observed = await RunLocal(kind, new Dictionary<string, string?> { ["sub"] = "" });
+
+        observed.ShouldNotBeNull();
+        observed.UserName.ShouldBeNull();
+        observed.ActorUserName.ShouldBe("a1");
+        observed.Roles.ShouldBe(["maker"]);
+    }
+
+    [Theory]
+    [MemberData(nameof(ReadTasks))]
+    public async Task ALocalRead_WithABlankRole_ReadsRoleLess(string kind)
+    {
+        var observed = await RunLocal(kind, new Dictionary<string, string?> { ["role"] = "" });
+
+        observed.ShouldNotBeNull();
+        observed.Roles.ShouldBeNull();
+        observed.UserName.ShouldBe("u1");
+    }
+
+    [Theory]
+    [MemberData(nameof(ReadTasks))]
+    public async Task ACrossDomainRead_KeepsTheBlankAsAMarker(string kind)
+    {
+        var headers = await RunCrossDomain(kind, new Dictionary<string, string?> { ["sub"] = "" });
+
+        headers.ShouldContainKey("sub");
+        headers["sub"].ShouldBe("");
+        headers["act_sub"].ShouldBe("a1");
+        headers["role"].ShouldBe("maker");
+    }
+
+    [Theory]
+    [MemberData(nameof(ReadTasks))]
+    public async Task ACrossDomainRead_WithANonStringHeaderValue_KeepsTheBlankMarker(string kind)
+    {
+        var headers = await RunCrossDomain(kind,
+            ReadTaskWithRawHeaders(kind, "other-domain", """{ "sub": "", "n": 5 }"""));
+
+        headers.ShouldContainKey("sub");
+        headers["sub"].ShouldBe("");
+        headers["act_sub"].ShouldBe("a1");
+    }
+
     private (GetInstanceTaskExecutor Executor, Func<Observed?> Observed) Create()
     {
         Observed? observed = null;
@@ -217,7 +427,7 @@ public sealed class TriggerTaskReadCredentialTests
         return (executor, () => observed);
     }
 
-    private static TaskExecutorContext Context(GetInstanceTask task, Dictionary<string, string>? callerHeaders = null)
+    private static TaskExecutorContext Context(WorkflowTask task, Dictionary<string, string>? callerHeaders = null)
     {
         var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
         var scriptContext = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)

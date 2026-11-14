@@ -234,10 +234,20 @@ through `Instance.ResolveEffectiveLongPoll` — never `State.LongPollFallbackTim
 
 **Roles on a runtime-started child are the consumer's responsibility.** The arm step decides
 ownership from the headers of the request that entered the state. A SubFlow child started by the
-runtime receives only the headers its parent's input mapping supplies, so a child state with
-`interaction.longPoll.roles` pauses only if that mapping forwards the caller's role headers. This is
-deliberate: which caller owns a child's pause is a business decision of the consuming parent, and
-the runtime does not carry or infer caller roles across the subflow start on its own.
+runtime receives the caller's credential by default, so a child state with
+`interaction.longPoll.roles` pauses for that caller's roles, resolved by the configured caller-role
+provider from the headers the child was started with. A parent that does not want the pause withholds
+what that provider resolves roles from, by blanking it in its input mapping (an empty value, not an
+absent key):
+- **Default provider:** the roles are the `role` header, so blanking `role` withholds them.
+- **`morph-idm`:** a non-blank `role` header still decides, but without one the roles are fetched from
+  morph-idm for the carried identity (`act_sub`, `sub`, `position`). Blanking `role` alone therefore
+  only hands the decision to morph-idm; to withhold the caller's roles, also blank the identity
+  headers — a child with neither `act_sub` nor `client_id` is not looked up and has an empty role set.
+
+This is deliberate: which caller owns a child's pause is a business decision of the consuming parent.
+The rule for blank and absent credentials:
+[Caller credential on instance calls](role-grant-authorization.md#caller-credential-on-instance-calls).
 
 ## Fallback deadline on the job row
 

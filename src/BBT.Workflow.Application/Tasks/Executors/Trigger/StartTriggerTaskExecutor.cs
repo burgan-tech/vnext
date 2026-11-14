@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BBT.Aether.Results;
+using BBT.Aether.Users;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
 using BBT.Workflow.Execution;
@@ -23,6 +24,7 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
 {
     private readonly IInstanceCommandGateway _instanceCommandGateway;
     private readonly IDomainDiscoveryResolver _endpointResolver;
+    private readonly ICurrentUser _currentUser;
 
     /// <summary>
     /// Initializes a new instance of StartTriggerTaskExecutor.
@@ -33,11 +35,13 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
         IRemoteInvokerService remoteInvoker,
         IInstanceCommandGateway instanceCommandGateway,
         IDomainDiscoveryResolver endpointResolver,
+        ICurrentUser currentUser,
         ILogger<StartTriggerTaskExecutor> logger)
         : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
     {
         _instanceCommandGateway = instanceCommandGateway;
         _endpointResolver = endpointResolver;
+        _currentUser = currentUser;
     }
 
     /// <inheritdoc />
@@ -80,7 +84,11 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
         try
         {
             var input = BuildStartInstanceInput(task, context);
-            var result = await _instanceCommandGateway.StartAsync(input, cancellationToken);
+            // The call runs as the resolved header set's user, not as the ambient pipeline caller.
+            var result = await RunAsResolvedUserAsync(
+                _currentUser,
+                input.Headers,
+                () => _instanceCommandGateway.StartAsync(input, cancellationToken));
 
             if (!result.IsSuccess)
             {
@@ -214,7 +222,8 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
             UseDapr = binding.UseDapr,
             ValidateSSL = binding.ValidateSSL,
             TimeoutSeconds = binding.TimeoutSeconds,
-            Headers = Execution.HttpTaskInvocation.WithCallerCredential(binding.Headers, CallerHeadersOf(context.ScriptContext)),
+            // Caller credential: the mapping decides, blank included — HttpTaskInvocation.ResolveInstanceCallCredential. A blank value is NOT filled from the caller.
+            Headers = Execution.HttpTaskInvocation.ResolveInstanceCallCredentialJson(binding.Headers, CallerHeadersOf(context.ScriptContext)),
             BaseUrl = endpoint.BaseUrl.ToString(),
             DaprAppId = endpoint.DaprAppId,
             AcceptedStatusCodes = binding.AcceptedStatusCodes
@@ -230,7 +239,9 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
 
     private StartInstanceInput BuildStartInstanceInput(StartTask task, TaskExecutorContext context)
     {
-        var headers = WithCallerCredential(ConvertTaskHeadersToDictionary(task.Headers), context.ScriptContext);
+        // Caller credential: the mapping decides, blank included — HttpTaskInvocation.ResolveInstanceCallCredential. A blank value is NOT filled from the caller.
+        var headers = Execution.HttpTaskInvocation.ResolveInstanceCallCredential(
+            ConvertTaskHeadersToDictionary(task.Headers), CallerHeadersOf(context.ScriptContext));
 
         return new StartInstanceInput(
             domain: task.TriggerDomain,
