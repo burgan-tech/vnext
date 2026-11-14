@@ -247,9 +247,11 @@ public class SubflowStarterTests
     }
 
     [Fact]
-    public async Task AnonymousObjectMappingHeaders_AreHonoured()
+    public async Task JsonObjectMappingHeaders_AreHonoured()
     {
-        var input = await StartCapturingHeadersAsync(new { sub = "" }, CallerContext());
+        using var document = System.Text.Json.JsonDocument.Parse("""{"sub":""}""");
+
+        var input = await StartCapturingHeadersAsync(document.RootElement.Clone(), CallerContext());
 
         input.Headers["sub"].ShouldBe("");
         input.Headers["act_sub"].ShouldBe("a1");
@@ -257,6 +259,8 @@ public class SubflowStarterTests
 
     public static TheoryData<object> UnreadableHeaderShapes => new()
     {
+        new { sub = "" },
+        new ScriptDefinedHeaders(),
         "sub=",
         42,
         new[] { "sub" },
@@ -286,15 +290,6 @@ public class SubflowStarterTests
         public string sub { get; set; } = "";
         public string role { get; set; } = "maker";
 #pragma warning restore IDE1006
-    }
-
-    [Fact]
-    public async Task ScriptDefinedClassMappingHeaders_AreHonoured()
-    {
-        var input = await StartCapturingHeadersAsync(new ScriptDefinedHeaders(), CallerContext());
-
-        input.Headers["sub"].ShouldBe("");
-        input.Headers["role"].ShouldBe("maker");
     }
 
     [Theory]

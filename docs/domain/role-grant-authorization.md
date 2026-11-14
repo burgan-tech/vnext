@@ -574,11 +574,9 @@ no caller (a timer, an automatic transition) adds no credential.
 2026-11-13).
 
 **Mapping header type.** A SubFlow input mapping's `Headers` may be a string dictionary
-(`Dictionary<string, string?>`), an object dictionary (`ExpandoObject`, `Dictionary<string, object>`; values by their
-text), a JSON object (`JsonElement`), or an anonymous object or a script-defined class with readable properties (such as
-`new { sub = "" }`). Any other non-null shape — a string, a number, a list, a tuple, a framework object, a JSON value
-that is not an object — fails the SubFlow start (`SubFlowInputMappingFailed`) before any child is started; it is never read as "no key
-set". A trigger task's `Headers` is a JSON object: a number or `true` / `false` value reads as its text, and an object
+(`Dictionary<string, string?>`), an object dictionary / `ExpandoObject` (`Dictionary<string, object>`; values by their
+text), or a JSON object (`JsonElement`); any other shape — an anonymous object or a script-defined class included —
+fails the SubFlow start (`SubFlowInputMappingFailed`) before any child is started; it is never read as "no key set". A trigger task's `Headers` is a JSON object: a number or `true` / `false` value reads as its text, and an object
 or array value as null — so a credential key given such a value is blank and the caller's value is withheld.
 
 **Not covered.** HTTP, SOAP, DaprService and DaprHttpEndpoint tasks keep the older rule: a blank credential in their

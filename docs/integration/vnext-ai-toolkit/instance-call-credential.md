@@ -24,7 +24,7 @@ fragment `instance-call-credential-rule.json`.
 
 - Mapping templates that forward `sub` / `act_sub` from the request by hand into a SubFlow input mapping or an instance task's headers no longer need to: an absent credential is filled from the caller. Drop the manual forward.
 - Teach the meaning of a blank value: to stop the caller's identity reaching the target, set the header to `""` (not omit it). Omitting it means "use the caller".
-- Note that a SubFlow input mapping's `Headers` may be a string dictionary, an object dictionary (`ExpandoObject`), a JSON object, or an anonymous object or a script-defined class with readable properties (such as `new { sub = "" }`) — any other non-null shape, tuples and framework objects included, fails the SubFlow start — and that the rule covers SubFlow start and the `SubProcess`, `Start`, `DirectTrigger`, `GetInstance`, `GetInstances` and `GetInstanceData` tasks only.
+- Note that a SubFlow input mapping's `Headers` may be a string dictionary, an object dictionary / `ExpandoObject`, or a JSON object — any other shape, an anonymous object or a script-defined class included, fails the SubFlow start — and that the rule covers SubFlow start and the `SubProcess`, `Start`, `DirectTrigger`, `GetInstance`, `GetInstances` and `GetInstanceData` tasks only.
 
 ## Contract and examples
 

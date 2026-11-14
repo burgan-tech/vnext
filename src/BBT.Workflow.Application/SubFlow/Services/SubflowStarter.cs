@@ -257,16 +257,14 @@ public sealed class SubflowStarter(
 
     /// <summary>The <c>Headers</c> shapes a SubFlow input mapping may return, named in the start failure.</summary>
     private const string AcceptedHeaderShapes =
-        "a string dictionary, an object dictionary (ExpandoObject), a JSON object, or an anonymous object or a script-defined class with readable properties";
+        "a string dictionary, an object dictionary / ExpandoObject, or a JSON object; use a dictionary or an ExpandoObject";
 
     /// <summary>
-    /// The headers a mapping result carries, read from every readable shape: a string dictionary as is; an object
-    /// dictionary (ExpandoObject, <c>Dictionary&lt;string, object&gt;</c>) by its values' text; a JSON object
-    /// (<see cref="HttpTaskInvocation.ReadHeaderObject"/>); an anonymous object or a script-defined class by its public
-    /// readable instance properties (<see cref="TryReadProperties"/>). <c>null</c> headers are "no headers" (<c>Ok(null)</c>).
-    /// Anything else — a string, a number, a list, a tuple, a framework object, a JSON value that is not an object — is
-    /// unreadable and FAILS: reading it
-    /// as "no headers" would refill a credential the author meant to withhold (fail closed).
+    /// The headers a mapping result carries. Exactly three shapes are read: a string dictionary as is; an object
+    /// dictionary / <c>ExpandoObject</c> by its values' text; a JSON object
+    /// (<see cref="HttpTaskInvocation.ReadHeaderObject"/>). <c>null</c> headers are "no headers" (<c>Ok(null)</c>). Any
+    /// other shape — an anonymous object or a script-defined class included — FAILS the SubFlow start: reading it as
+    /// "no headers" would refill a credential the author meant to withhold (fail closed).
     /// </summary>
     private static Result<Dictionary<string, string?>?> MappingHeadersOf(ScriptResponse? mapping, string subFlowKey)
     {
@@ -282,70 +280,13 @@ public sealed class SubflowStarter(
                     objects.ToDictionary(kv => kv.Key, kv => kv.Value?.ToString()));
             case JsonElement element when element.ValueKind == JsonValueKind.Object:
                 return Result<Dictionary<string, string?>?>.Ok(HttpTaskInvocation.ReadHeaderObject(element));
-            case JsonElement:
-            case string:
-            case System.Collections.IEnumerable:
-                break;
             default:
-                if (TryReadProperties(headers) is { } properties)
-                    return Result<Dictionary<string, string?>?>.Ok(properties);
-
-                break;
+                return Result<Dictionary<string, string?>?>.Fail(WorkflowErrors.SubFlowInputMappingFailed(
+                    subFlowKey,
+                    $"The input mapping returned Headers of type '{headers.GetType().Name}', which cannot be read as headers. " +
+                    $"Accepted shapes: {AcceptedHeaderShapes}."));
         }
-
-        return Result<Dictionary<string, string?>?>.Fail(WorkflowErrors.SubFlowInputMappingFailed(
-            subFlowKey,
-            $"The input mapping returned Headers of type '{headers.GetType().Name}', which cannot be read as headers. " +
-            $"Accepted shapes: {AcceptedHeaderShapes}."));
     }
-
-    /// <summary>
-    /// The public readable properties of an anonymous object or a script-defined class, or <c>null</c> when
-    /// <paramref name="headers"/> is not one — fail closed on anything not positively recognised: a scalar, a tuple
-    /// (<c>ITuple</c>), a framework type (namespace <c>System*</c> / <c>Microsoft*</c>: <c>KeyValuePair</c>, <c>Uri</c>,
-    /// <c>BigInteger</c>…), a dynamic object, an object with no readable property (public fields only), a throwing getter,
-    /// or two properties whose names differ only by case (or a hidden base property).
-    /// </summary>
-    private static Dictionary<string, string?>? TryReadProperties(object headers)
-    {
-        var type = headers.GetType();
-        if (IsScalar(type)
-            || headers is System.Runtime.CompilerServices.ITuple
-            || headers is System.Dynamic.IDynamicMetaObjectProvider
-            || type.Namespace is { } ns && (ns.StartsWith("System", StringComparison.Ordinal)
-                                            || ns.StartsWith("Microsoft", StringComparison.Ordinal)))
-            return null;
-
-        var properties = type
-            .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
-            .Where(p => p.CanRead && p.GetIndexParameters().Length == 0)
-            .ToList();
-        if (properties.Count == 0)
-            return null;
-
-        var result = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        try
-        {
-            foreach (var property in properties)
-            {
-                if (!result.TryAdd(property.Name, property.GetValue(headers)?.ToString()))
-                    return null;
-            }
-        }
-        catch (Exception)
-        {
-            // A throwing getter (or ToString) is an unreadable shape, not an exception out of the start.
-            return null;
-        }
-
-        return result;
-    }
-
-    /// <summary>Whether <paramref name="type"/> is a single value (primitive, enum, decimal, date/time, Guid), not a header set.</summary>
-    private static bool IsScalar(Type type) =>
-        type.IsPrimitive || type.IsEnum || type == typeof(decimal) || type == typeof(DateTime)
-        || type == typeof(DateTimeOffset) || type == typeof(TimeSpan) || type == typeof(Guid)
-        || type == typeof(DateOnly) || type == typeof(TimeOnly);
 
     /// <summary>
     /// Handles input mapping for SubFlow/SubProcess by compiling and executing the mapping script.
