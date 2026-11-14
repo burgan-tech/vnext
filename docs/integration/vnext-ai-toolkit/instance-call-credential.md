@@ -8,7 +8,7 @@ status: pending
 
 ## Context
 
-- vNext PR: the instance-call credential rule PR (branch `claude/subflow-subprocess-credentials-704267`)
+- vNext PR: burgan-tech/vnext#1310 (branch `claude/subflow-subprocess-credentials-704267`)
 - Milestone: v0.0.107
 - Decision: product-owner decisions of 2026-11-13 (rule kept explicit in docs and code comments; no switch for the old behaviour)
 
