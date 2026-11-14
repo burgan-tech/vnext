@@ -249,6 +249,23 @@ public abstract class TriggerTaskExecutorBase<TTask>(
         => CallerCredentialScope.Enter(currentUser, credential);
 
     /// <summary>
+    /// Runs an in-process instance call (start, sub-process start, direct trigger) as the user its resolved
+    /// <paramref name="headers"/> describe, and restores the ambient pipeline caller before returning — so the
+    /// task's own result handling runs as the pipeline caller again. Blank credentials are removed from the
+    /// dictionary in place (the same instance is the call input's headers). See <see cref="CallerCredentialScope"/>.
+    /// </summary>
+    protected static async Task<T> RunAsResolvedUserAsync<T>(
+        ICurrentUser currentUser,
+        Dictionary<string, string?> headers,
+        Func<Task<T>> call)
+    {
+        using (CallerCredentialScope.Enter(currentUser, headers))
+        {
+            return await call();
+        }
+    }
+
+    /// <summary>
     /// Converts task headers (JsonElement?) to Dictionary for local Input objects, through
     /// <see cref="HttpTaskInvocation.ReadHeaderObject"/>: one non-string value no longer discards the whole set (a blanked
     /// credential included). Not a JSON object → null.

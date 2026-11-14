@@ -59,17 +59,21 @@ public sealed class LocalInstanceCommandGateway : IInstanceCommandGateway
             async (sp, ct) =>
             {
                 var commandService = sp.GetRequiredService<IInstanceCommandAppService>();
-                using var asChild = CallerCredentialScope.Enter(sp.GetRequiredService<ICurrentUser>(), input.Headers);
                 var unitOfWorkManager = sp.GetRequiredService<IUnitOfWorkManager>();
-                
-                await using var uow = unitOfWorkManager.Begin(new UnitOfWorkOptions
-                {
-                    Scope = UnitOfWorkScopeOption.RequiresNew
-                });
 
-                var result = await commandService.StartAsync(input, ct);
-                await uow.CommitAsync(ct);
-                return result;
+                // The child is created as the user its resolved header set describes, not as the ambient
+                // pipeline caller — see CallerCredentialScope.
+                using (CallerCredentialScope.Enter(sp.GetRequiredService<ICurrentUser>(), input.Headers))
+                {
+                    await using var uow = unitOfWorkManager.Begin(new UnitOfWorkOptions
+                    {
+                        Scope = UnitOfWorkScopeOption.RequiresNew
+                    });
+
+                    var result = await commandService.StartAsync(input, ct);
+                    await uow.CommitAsync(ct);
+                    return result;
+                }
             }, cancellationToken);
     }
 

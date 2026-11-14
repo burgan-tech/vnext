@@ -1,7 +1,6 @@
 using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Aether.Users;
-using BBT.Workflow.Authorization;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
 using BBT.Workflow.Execution;
@@ -195,15 +194,14 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
         try
         {
             // The call runs as the resolved header set's user, not as the ambient pipeline caller.
-            Result<TransitionOutput> result;
-            using (CallerCredentialScope.Enter(_currentUser, input.Headers))
-            {
-                result = await _instanceCommandGateway.TransitionAsync(
+            var result = await RunAsResolvedUserAsync(
+                _currentUser,
+                input.Headers,
+                () => _instanceCommandGateway.TransitionAsync(
                     instanceId,
                     task.TransitionName,
                     input,
-                    cancellationToken);
-            }
+                    cancellationToken));
 
             if (!result.IsSuccess)
             {

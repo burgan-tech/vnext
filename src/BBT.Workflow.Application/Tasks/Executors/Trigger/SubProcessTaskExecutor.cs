@@ -3,7 +3,6 @@ using BBT.Aether;
 using BBT.Aether.Guids;
 using BBT.Aether.Results;
 using BBT.Aether.Users;
-using BBT.Workflow.Authorization;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
 using BBT.Workflow.Execution;
@@ -145,11 +144,10 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
         {
             var input = BuildStartInstanceInput(task, context.ScriptContext, subFlowInstanceId);
             // The call runs as the resolved header set's user, not as the ambient pipeline caller.
-            Result<StartInstanceOutput> result;
-            using (CallerCredentialScope.Enter(_currentUser, input.Headers))
-            {
-                result = await _instanceCommandGateway.StartAsync(input, cancellationToken);
-            }
+            var result = await RunAsResolvedUserAsync(
+                _currentUser,
+                input.Headers,
+                () => _instanceCommandGateway.StartAsync(input, cancellationToken));
 
             if (!result.IsSuccess)
             {
