@@ -471,6 +471,58 @@ public class InstanceColumnFilterTests
                 "Key", "invalidop", "value", ref parameterIndex));
     }
 
+    [Theory]
+    [InlineData("eq", "=")]
+    [InlineData("ne", "!=")]
+    public void BuildCondition_IdEqNe_ShouldBindUuidParameter(string op, string sqlOp)
+    {
+        var parameterIndex = 0;
+        var id = Guid.NewGuid();
+
+        var (condition, parameters) = InstanceColumnConditionBuilder.BuildCondition(
+            "Id", op, id.ToString(), ref parameterIndex);
+
+        condition.ShouldBe($"s.\"Id\" {sqlOp} {{0}}");
+        parameters.Count.ShouldBe(1);
+        parameters[0].NpgsqlDbType.ShouldBe(NpgsqlTypes.NpgsqlDbType.Uuid);
+        parameters[0].Value.ShouldBe(id);
+    }
+
+    [Theory]
+    [InlineData("in", "IN")]
+    [InlineData("nin", "NOT IN")]
+    public void BuildCondition_IdInNin_ShouldBindEachElementAsUuid(string op, string sqlOp)
+    {
+        var parameterIndex = 0;
+        var a = Guid.NewGuid();
+        var b = Guid.NewGuid();
+
+        var (condition, parameters) = InstanceColumnConditionBuilder.BuildCondition(
+            "Id", op, $"{a},{b}", ref parameterIndex);
+
+        condition.ShouldBe($"s.\"Id\" {sqlOp} ({{0}}, {{1}})");
+        parameters.Count.ShouldBe(2);
+        parameters.ShouldAllBe(p => p.NpgsqlDbType == NpgsqlTypes.NpgsqlDbType.Uuid);
+        parameters[0].Value.ShouldBe(a);
+        parameters[1].Value.ShouldBe(b);
+    }
+
+    [Theory]
+    [InlineData("eq", "not-a-guid")]
+    [InlineData("in", "not-a-guid")]
+    [InlineData("gt", "00000000-0000-0000-0000-000000000001")]
+    [InlineData("between", "00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000002")]
+    [InlineData("like", "abc")]
+    [InlineData("startswith", "abc")]
+    [InlineData("endswith", "abc")]
+    public void BuildCondition_IdInvalidValueOrUnsupportedOperator_ShouldThrowArgumentException(string op, string value)
+    {
+        var parameterIndex = 0;
+
+        Should.Throw<ArgumentException>(() =>
+            InstanceColumnConditionBuilder.BuildCondition("Id", op, value, ref parameterIndex));
+    }
+
     [Fact]
     public void BuildCondition_ComparisonOnBoolean_ShouldThrow()
     {
