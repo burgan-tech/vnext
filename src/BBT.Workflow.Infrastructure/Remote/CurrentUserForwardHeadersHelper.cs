@@ -75,8 +75,6 @@ public static class CurrentUserForwardHeadersHelper
     private static bool IsAsciiSafe(string? value)
     {
         if (value is null) return true;
-        foreach (var c in value)
-            if (c > 127) return false;
-        return true;
+        return value.All(c => c <= 127);
     }
 }

@@ -19,6 +19,8 @@ public sealed class GetInstanceRemoteInvoker : ITaskInvoker<GetInstanceBinding>
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<GetInstanceRemoteInvoker> _logger;
     private readonly ITaskMetrics _metrics;
+    private const string FailureOutcome = "failure";
+
     private readonly string _orchestrationAppId;
 
     public GetInstanceRemoteInvoker(
@@ -83,21 +85,17 @@ public sealed class GetInstanceRemoteInvoker : ITaskInvoker<GetInstanceBinding>
         CancellationToken cancellationToken)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
-        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
-            var appId = binding.DaprAppId ?? _orchestrationAppId;
-            var request = CreateDaprRequest(binding, appId);
+            var request = PrepareDaprRequest(taskKey, binding);
 
-            prepareActivity?.Dispose();
             using var response = await _daprInvocation.SendAsync(request, cancellationToken);
 
             return await ProcessResponseAsync(binding, response, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, cancellationToken);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning("GetInstance Dapr invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
                 taskKey, binding.Domain, binding.Workflow, binding.Instance);
@@ -110,8 +108,7 @@ public sealed class GetInstanceRemoteInvoker : ITaskInvoker<GetInstanceBinding>
         }
         catch (Exception ex)
         {
-            prepareActivity?.Dispose();
-            _metrics.RecordTaskExecution(TaskType, "failure");
+            _metrics.RecordTaskExecution(TaskType, FailureOutcome);
             _logger.LogError(ex, "GetInstance Dapr invocation failed for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
                 taskKey, binding.Domain, binding.Workflow, binding.Instance);
 
@@ -129,21 +126,17 @@ public sealed class GetInstanceRemoteInvoker : ITaskInvoker<GetInstanceBinding>
         CancellationToken cancellationToken)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
-        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
-            var httpClient = CreateHttpClient(binding, taskKey);
-            var request = CreateHttpRequest(binding);
+            var (httpClient, request) = PrepareHttpRequest(taskKey, binding);
 
-            prepareActivity?.Dispose();
             using var response = await httpClient.SendAsync(request, cancellationToken);
 
             return await ProcessResponseAsync(binding, response, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, cancellationToken);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning("GetInstance HTTP invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
                 taskKey, binding.Domain, binding.Workflow, binding.Instance);
@@ -156,8 +149,7 @@ public sealed class GetInstanceRemoteInvoker : ITaskInvoker<GetInstanceBinding>
         }
         catch (HttpRequestException ex)
         {
-            prepareActivity?.Dispose();
-            _metrics.RecordTaskExecution(TaskType, "failure");
+            _metrics.RecordTaskExecution(TaskType, FailureOutcome);
             _logger.LogError(ex, "GetInstance HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
                 taskKey, binding.Domain, binding.Workflow, binding.Instance);
 
@@ -169,8 +161,7 @@ public sealed class GetInstanceRemoteInvoker : ITaskInvoker<GetInstanceBinding>
         }
         catch (Exception ex)
         {
-            prepareActivity?.Dispose();
-            _metrics.RecordTaskExecution(TaskType, "failure");
+            _metrics.RecordTaskExecution(TaskType, FailureOutcome);
             _logger.LogError(ex, "GetInstance HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}/{Instance}",
                 taskKey, binding.Domain, binding.Workflow, binding.Instance);
 
@@ -195,7 +186,7 @@ public sealed class GetInstanceRemoteInvoker : ITaskInvoker<GetInstanceBinding>
         var isSuccess = response.IsSuccessStatusCode
             || AcceptedStatusCodeMatcher.IsAccepted((int)response.StatusCode, binding.AcceptedStatusCodes);
 
-        _metrics.RecordTaskExecution(TaskType, isSuccess ? "success" : "failure");
+        _metrics.RecordTaskExecution(TaskType, isSuccess ? "success" : FailureOutcome);
 
         return isSuccess
             ? TaskInvocationResult.Success(
@@ -240,7 +231,22 @@ public sealed class GetInstanceRemoteInvoker : ITaskInvoker<GetInstanceBinding>
         return path;
     }
 
-    private HttpRequestMessage CreateDaprRequest(GetInstanceBinding binding, string appId)
+    private HttpRequestMessage PrepareDaprRequest(string? taskKey, GetInstanceBinding binding)
+    {
+        using var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
+        var appId = binding.DaprAppId ?? _orchestrationAppId;
+        return CreateDaprRequest(binding, appId);
+    }
+
+    private (HttpClient Client, HttpRequestMessage Request) PrepareHttpRequest(string? taskKey, GetInstanceBinding binding)
+    {
+        using var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
+        var httpClient = CreateHttpClient(binding, taskKey);
+        var request = CreateHttpRequest(binding);
+        return (httpClient, request);
+    }
+
+    private static HttpRequestMessage CreateDaprRequest(GetInstanceBinding binding, string appId)
     {
         var path = BuildPath(binding);
 
@@ -265,7 +271,7 @@ public sealed class GetInstanceRemoteInvoker : ITaskInvoker<GetInstanceBinding>
         return request;
     }
 
-    private HttpRequestMessage CreateHttpRequest(GetInstanceBinding binding)
+    private static HttpRequestMessage CreateHttpRequest(GetInstanceBinding binding)
     {
         var path = BuildPath(binding);
 

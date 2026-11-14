@@ -128,55 +128,11 @@ public static class HttpTaskInvocation
         string? taskKey = null)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
-        var prepareActivity = StartPrepareActivity(taskType, taskKey);
 
         try
         {
-            var clientName = binding.ValidateSSL
-                ? WorkflowHttpClientNames.Default
-                : WorkflowHttpClientNames.NoSslValidation;
-            var httpClient = createClient(clientName);
-            httpClient.Timeout = TimeSpan.FromSeconds(binding.TimeoutSeconds);
+            var (httpClient, request) = PrepareRequest(createClient, binding, taskType, traceContext, taskKey);
 
-            var request = new HttpRequestMessage(
-                new HttpMethod(binding.Method),
-                binding.Url);
-
-            // Add headers. Content-Type is a content header in .NET, not a request header, so it is
-            // captured here and applied to request.Content below instead of request.Headers.
-            string? headerContentType = null;
-            if (!string.IsNullOrEmpty(binding.Headers))
-            {
-                var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(binding.Headers);
-                if (headers != null)
-                {
-                    foreach (var header in headers)
-                    {
-                        if (string.Equals(header.Key, "Content-Type", StringComparison.OrdinalIgnoreCase))
-                        {
-                            headerContentType = header.Value;
-                            continue;
-                        }
-
-                        if (IsReservedTraceHeader(header.Key))
-                            continue;
-
-                        request.Headers.TryAddWithoutValidation(header.Key, header.Value);
-                    }
-                }
-            }
-
-            ApplyTrustedCorrelationHeaders(request, traceContext);
-
-            // Add body for non-GET requests. Resolution: explicit ContentType → Content-Type header → json.
-            if (request.Method != HttpMethod.Get && !string.IsNullOrEmpty(binding.Body))
-            {
-                var contentType = HttpContentType.Resolve(binding.ContentType, headerContentType);
-                request.Content = new StringContent(binding.Body, Encoding.UTF8);
-                request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(contentType);
-            }
-
-            prepareActivity?.Dispose();
             var response = await httpClient.SendAsync(request, cancellationToken);
 
             var responseHeaders = MergeHeaders(response.Headers, response.Content.Headers);
@@ -217,7 +173,6 @@ public static class HttpTaskInvocation
         }
         catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
-            prepareActivity?.Dispose();
             return TaskInvocationResult.Failure(
                 error: "HTTP request was cancelled",
                 executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
@@ -232,7 +187,6 @@ public static class HttpTaskInvocation
         }
         catch (Exception ex)
         {
-            prepareActivity?.Dispose();
             return TaskInvocationResult.Failure(
                 error: ex.Message,
                 executionDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
@@ -299,7 +253,7 @@ public static class HttpTaskInvocation
         }
 
         var correlation = !string.IsNullOrEmpty(trusted?.CorrelationId)
-            ? trusted!.CorrelationId
+            ? trusted.CorrelationId
             : Activity.Current?.GetBaggageItem(CorrelationBaggage);
         if (Guid.TryParseExact(correlation, "N", out var correlationId)
             && correlationId != Guid.Empty)
@@ -350,7 +304,7 @@ public static class HttpTaskInvocation
             return;
 
         var requestId = !string.IsNullOrEmpty(trusted?.RequestId)
-            ? trusted!.RequestId
+            ? trusted.RequestId
             : Activity.Current?.GetBaggageItem(RequestIdBaggage);
         if (IsSafeHeaderValue(requestId))
         {
@@ -625,17 +579,68 @@ public static class HttpTaskInvocation
         return null;
     }
 
+    private static (HttpClient Client, HttpRequestMessage Request) PrepareRequest(
+        Func<string, HttpClient> createClient,
+        HttpTaskBinding binding,
+        string taskType,
+        TaskTraceContext? traceContext,
+        string? taskKey)
+    {
+        using var prepareActivity = StartPrepareActivity(taskType, taskKey);
+
+        var clientName = binding.ValidateSSL
+            ? WorkflowHttpClientNames.Default
+            : WorkflowHttpClientNames.NoSslValidation;
+        var httpClient = createClient(clientName);
+        httpClient.Timeout = TimeSpan.FromSeconds(binding.TimeoutSeconds);
+
+        var request = new HttpRequestMessage(
+            new HttpMethod(binding.Method),
+            binding.Url);
+
+        // Add headers. Content-Type is a content header in .NET, not a request header, so it is
+        // captured here and applied to request.Content below instead of request.Headers.
+        string? headerContentType = null;
+        if (!string.IsNullOrEmpty(binding.Headers))
+        {
+            var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(binding.Headers);
+            if (headers != null)
+            {
+                foreach (var header in headers)
+                {
+                    if (string.Equals(header.Key, "Content-Type", StringComparison.OrdinalIgnoreCase))
+                    {
+                        headerContentType = header.Value;
+                        continue;
+                    }
+
+                    if (IsReservedTraceHeader(header.Key))
+                        continue;
+
+                    request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                }
+            }
+        }
+
+        ApplyTrustedCorrelationHeaders(request, traceContext);
+
+        // Add body for non-GET requests. Resolution: explicit ContentType → Content-Type header → json.
+        if (request.Method != HttpMethod.Get && !string.IsNullOrEmpty(binding.Body))
+        {
+            var contentType = HttpContentType.Resolve(binding.ContentType, headerContentType);
+            request.Content = new StringContent(binding.Body, Encoding.UTF8);
+            request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(contentType);
+        }
+
+        return (httpClient, request);
+    }
+
     /// <summary>A header value that can be carried as is: present, bounded, no control characters (no header injection).</summary>
     private static bool IsSafeHeaderValue(string? value)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 1024)
             return false;
-        foreach (var character in value)
-        {
-            if (char.IsControl(character))
-                return false;
-        }
-        return true;
+        return value.All(character => !char.IsControl(character));
     }
 
     private static bool IsSafeIdentityClaim(string? value)
@@ -645,15 +650,7 @@ public static class HttpTaskInvocation
             return false;
         }
 
-        foreach (var character in value)
-        {
-            if (!char.IsAsciiLetterOrDigit(character) && character is not '_' and not '-')
-            {
-                return false;
-            }
-        }
-
-        return true;
+        return value.All(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '-');
     }
 
     /// <summary>

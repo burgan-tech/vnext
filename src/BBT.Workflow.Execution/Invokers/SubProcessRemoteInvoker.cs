@@ -22,6 +22,8 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<SubProcessRemoteInvoker> _logger;
     private readonly ITaskMetrics _metrics;
+    private const string FailureOutcome = "failure";
+
     private readonly string _orchestrationAppId;
 
     public SubProcessRemoteInvoker(
@@ -86,21 +88,17 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
         CancellationToken cancellationToken)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
-        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
-            var appId = binding.DaprAppId ?? _orchestrationAppId;
-            var request = CreateDaprRequest(binding, appId);
+            var request = PrepareDaprRequest(taskKey, binding);
 
-            prepareActivity?.Dispose();
             using var response = await _daprInvocation.SendAsync(request, cancellationToken);
 
             return await ProcessResponseAsync(binding, response, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, cancellationToken);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning("SubProcess Dapr invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
@@ -113,8 +111,7 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
         }
         catch (Exception ex)
         {
-            prepareActivity?.Dispose();
-            _metrics.RecordTaskExecution(TaskType, "failure");
+            _metrics.RecordTaskExecution(TaskType, FailureOutcome);
             _logger.LogError(ex, "SubProcess Dapr invocation failed for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
 
@@ -132,21 +129,17 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
         CancellationToken cancellationToken)
     {
         var startTimestamp = Stopwatch.GetTimestamp();
-        var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
 
         try
         {
-            var httpClient = CreateHttpClient(binding, taskKey);
-            var request = CreateHttpRequest(binding);
+            var (httpClient, request) = PrepareHttpRequest(taskKey, binding);
 
-            prepareActivity?.Dispose();
             using var response = await httpClient.SendAsync(request, cancellationToken);
 
             return await ProcessResponseAsync(binding, response, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds, cancellationToken);
         }
         catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            prepareActivity?.Dispose();
             _metrics.RecordTaskExecution(TaskType, "cancelled");
             _logger.LogWarning("SubProcess HTTP invocation was cancelled for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
@@ -159,8 +152,7 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
         }
         catch (HttpRequestException ex)
         {
-            prepareActivity?.Dispose();
-            _metrics.RecordTaskExecution(TaskType, "failure");
+            _metrics.RecordTaskExecution(TaskType, FailureOutcome);
             _logger.LogError(ex, "SubProcess HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
 
@@ -172,8 +164,7 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
         }
         catch (Exception ex)
         {
-            prepareActivity?.Dispose();
-            _metrics.RecordTaskExecution(TaskType, "failure");
+            _metrics.RecordTaskExecution(TaskType, FailureOutcome);
             _logger.LogError(ex, "SubProcess HTTP invocation failed for task {TaskKey}: {Domain}/{Workflow}",
                 taskKey, binding.Domain, binding.Workflow);
 
@@ -203,7 +194,7 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
         if (isSuccess && TryReadFlowVersion(content) is { } flowVersion)
             metadata[SubProcessMetadataKeys.ResolvedFlowVersion] = flowVersion;
 
-        _metrics.RecordTaskExecution(TaskType, isSuccess ? "success" : "failure");
+        _metrics.RecordTaskExecution(TaskType, isSuccess ? "success" : FailureOutcome);
 
         return isSuccess
             ? TaskInvocationResult.Success(
@@ -279,7 +270,22 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
         };
     }
 
-    private HttpRequestMessage CreateDaprRequest(SubProcessBinding binding, string appId)
+    private HttpRequestMessage PrepareDaprRequest(string? taskKey, SubProcessBinding binding)
+    {
+        using var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
+        var appId = binding.DaprAppId ?? _orchestrationAppId;
+        return CreateDaprRequest(binding, appId);
+    }
+
+    private (HttpClient Client, HttpRequestMessage Request) PrepareHttpRequest(string? taskKey, SubProcessBinding binding)
+    {
+        using var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
+        var httpClient = CreateHttpClient(binding, taskKey);
+        var request = CreateHttpRequest(binding);
+        return (httpClient, request);
+    }
+
+    private static HttpRequestMessage CreateDaprRequest(SubProcessBinding binding, string appId)
     {
         var path = BuildPath(binding);
         var requestBody = CreateRequestBody(binding);
@@ -301,7 +307,7 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
         return request;
     }
 
-    private HttpRequestMessage CreateHttpRequest(SubProcessBinding binding)
+    private static HttpRequestMessage CreateHttpRequest(SubProcessBinding binding)
     {
         var path = BuildPath(binding);
 
