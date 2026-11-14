@@ -196,7 +196,7 @@ public sealed class StartTask : WorkflowTask
             TriggerSync = triggerSyncElement.GetBoolean();
         
         if (config.TryGetProperty("version", out var triggerVersionElement))
-            TriggerVersion = triggerFlowElement.GetString() ?? string.Empty;
+            TriggerVersion = triggerVersionElement.GetString() ?? string.Empty;
 
         if (config.TryGetProperty("key", out var triggerKeyElement))
             TriggerKey = triggerKeyElement.GetString() ?? string.Empty;
