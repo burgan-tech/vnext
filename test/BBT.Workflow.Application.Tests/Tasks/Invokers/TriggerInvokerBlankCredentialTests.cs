@@ -28,9 +28,9 @@ public sealed class TriggerInvokerBlankCredentialTests
     private const string DaprAppId = "partner-orchestration";
     private const string BaseUrl = "https://partner.local";
 
-    public static IEnumerable<object[]> AllInvokers() => Matrix(Invokers);
+    public static TheoryData<string, bool> AllInvokers() => Matrix(Invokers);
 
-    public static IEnumerable<object[]> StampedInvokers() =>
+    public static TheoryData<string, bool> StampedInvokers() =>
         Matrix(Invokers.Where(i => i != nameof(StartTriggerRemoteInvoker) && i != nameof(SubProcessRemoteInvoker)));
 
     private static readonly string[] Invokers =
@@ -39,8 +39,17 @@ public sealed class TriggerInvokerBlankCredentialTests
         nameof(GetInstanceRemoteInvoker), nameof(GetInstancesRemoteInvoker), nameof(GetInstanceDataRemoteInvoker),
     ];
 
-    private static IEnumerable<object[]> Matrix(IEnumerable<string> invokers) =>
-        invokers.SelectMany(i => new[] { new object[] { i, true }, new object[] { i, false } });
+    private static TheoryData<string, bool> Matrix(IEnumerable<string> invokers)
+    {
+        var rows = new TheoryData<string, bool>();
+        foreach (var invoker in invokers)
+        {
+            rows.Add(invoker, true);
+            rows.Add(invoker, false);
+        }
+
+        return rows;
+    }
 
     [Theory]
     [MemberData(nameof(AllInvokers))]

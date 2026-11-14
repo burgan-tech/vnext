@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using BBT.Workflow.Remote;
 using Shouldly;
@@ -23,6 +24,6 @@ public class CurrentUserForwardHeadersHelperCredentialTests
             new Dictionary<string, string?> { ["sub"] = "" });
 
         request.Headers.Contains("sub").ShouldBeFalse();
-        request.Headers.GetValues("act_sub").ShouldBe(new[] { "ambient-actor" });
+        request.Headers.GetValues("act_sub").Single().ShouldBe("ambient-actor");
     }
 }

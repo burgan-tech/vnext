@@ -307,29 +307,32 @@ public static class HttpTaskInvocation
             request.Headers.TryAddWithoutValidation(CorrelationHeader, correlationId.ToString("N"));
         }
 
-        if (fillIdentity && !request.Headers.NonValidated.Contains(SubHeader))
+        if (fillIdentity)
         {
-            var subject = !string.IsNullOrEmpty(trusted?.Sub)
-                ? trusted!.Sub
-                : Activity.Current?.GetBaggageItem(SubBaggage);
-            if (IsSafeIdentityClaim(subject))
-            {
-                request.Headers.TryAddWithoutValidation(SubHeader, subject);
-            }
-        }
-
-        if (fillIdentity && !request.Headers.NonValidated.Contains(ActSubHeader))
-        {
-            var actSub = !string.IsNullOrEmpty(trusted?.ActSub)
-                ? trusted!.ActSub
-                : Activity.Current?.GetBaggageItem(ActSubBaggage);
-            if (IsSafeIdentityClaim(actSub))
-            {
-                request.Headers.TryAddWithoutValidation(ActSubHeader, actSub);
-            }
+            FillIdentityIfAbsent(request, SubHeader, trusted?.Sub, SubBaggage);
+            FillIdentityIfAbsent(request, ActSubHeader, trusted?.ActSub, ActSubBaggage);
         }
 
         ApplyRequestId(request, trusted);
+    }
+
+    /// <summary>
+    /// Adds an identity claim header only when the request does not already carry it — an empty-valued header counts
+    /// as carried, which is how a blank credential marker stops the fill. The trusted context wins over ambient baggage.
+    /// </summary>
+    private static void FillIdentityIfAbsent(
+        HttpRequestMessage request, string header, string? trustedValue, string baggageKey)
+    {
+        if (request.Headers.NonValidated.Contains(header))
+            return;
+
+        var value = !string.IsNullOrEmpty(trustedValue)
+            ? trustedValue
+            : Activity.Current?.GetBaggageItem(baggageKey);
+        if (IsSafeIdentityClaim(value))
+        {
+            request.Headers.TryAddWithoutValidation(header, value);
+        }
     }
 
     /// <summary>
@@ -600,10 +603,10 @@ public static class HttpTaskInvocation
     /// <summary>Removes the credential headers whose value is blank from <paramref name="request"/>; nothing else is touched.</summary>
     public static void DropBlankCredentialHeaders(HttpRequestMessage request)
     {
-        foreach (var name in CredentialHeaders)
+        foreach (var name in CredentialHeaders.Where(
+                     name => request.Headers.Contains(name) && !HasNonEmptyHeader(request, name)))
         {
-            if (request.Headers.Contains(name) && !HasNonEmptyHeader(request, name))
-                request.Headers.Remove(name);
+            request.Headers.Remove(name);
         }
     }
 
