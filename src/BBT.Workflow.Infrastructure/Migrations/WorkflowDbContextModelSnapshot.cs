@@ -179,6 +179,342 @@ namespace BBT.Workflow.Migrations
                     b.ToTable("InstanceSecrets", "public");
                 });
 
+            modelBuilder.Entity("BBT.Workflow.Instances.Agents.AgentSession", b =>
+                {
+                    b.Property<string>("ScopeKey")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("AgentKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("AgentVersion")
+                        .IsRequired()
+                        .HasMaxLength(180)
+                        .HasColumnType("character varying(180)");
+
+                    b.Property<byte[]>("EncryptionKey")
+                        .HasColumnType("bytea");
+
+                    b.Property<DateTime?>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("InstructionsHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<Guid>("LastInstanceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("LastRunId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("MessageCount")
+                        .HasColumnType("integer");
+
+                    b.Property<short>("Mode")
+                        .HasColumnType("smallint");
+
+                    b.Property<Guid?>("OwnerInstanceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ProviderConversationId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<uint>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.Property<byte[]>("SessionData")
+                        .HasColumnType("bytea");
+
+                    b.Property<int>("SizeBytes")
+                        .HasColumnType("integer");
+
+                    b.Property<short>("Storage")
+                        .HasColumnType("smallint");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("ScopeKey");
+
+                    b.HasIndex("ExpiresAt")
+                        .HasDatabaseName("IX_AgentSessions_ExpiresAt")
+                        .HasFilter("\"ExpiresAt\" IS NOT NULL");
+
+                    b.HasIndex("OwnerInstanceId")
+                        .HasDatabaseName("IX_AgentSessions_OwnerInstanceId");
+
+                    b.ToTable("AgentSessions", "public");
+                });
+
+            modelBuilder.Entity("BBT.Workflow.Instances.Agents.InstanceAgentDecision", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Candidates")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("InstanceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsFallback")
+                        .HasColumnType("boolean");
+
+                    b.Property<short>("Mode")
+                        .HasColumnType("smallint");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("SelectedTransition")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<short>("Source")
+                        .HasColumnType("smallint");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InstanceId")
+                        .HasDatabaseName("IX_InstanceAgentDecisions_InstanceId");
+
+                    b.HasIndex("RunId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_InstanceAgentDecisions_RunId");
+
+                    b.ToTable("InstanceAgentDecisions", "public");
+                });
+
+            modelBuilder.Entity("BBT.Workflow.Instances.Agents.InstanceAgentRun", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AgentDomain")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("AgentKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("AgentVersion")
+                        .IsRequired()
+                        .HasMaxLength(180)
+                        .HasColumnType("character varying(180)");
+
+                    b.Property<short>("Attempts")
+                        .HasColumnType("smallint");
+
+                    b.Property<int>("CompletionTokens")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long>("DurationMs")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("EntryNo")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ExecutionKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character(64)")
+                        .IsFixedLength();
+
+                    b.Property<string>("FailureReason")
+                        .HasMaxLength(400)
+                        .HasColumnType("character varying(400)");
+
+                    b.Property<string>("FinishReason")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateTime?>("FinishedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("InstanceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Iterations")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Model")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<int>("PromptTokens")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ProviderKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("ProviderResponseId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("Request")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("Response")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("RuntimeKey")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<bool>("SessionResumed")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("SessionScopeKey")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<short>("Status")
+                        .HasColumnType("smallint");
+
+                    b.Property<int>("ToolCallCount")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TotalTokens")
+                        .HasColumnType("integer");
+
+                    b.Property<byte[]>("Transcript")
+                        .HasColumnType("bytea");
+
+                    b.Property<Guid?>("TransitionId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ExecutionKey")
+                        .IsUnique()
+                        .HasDatabaseName("UX_InstanceAgentRuns_ExecutionKey");
+
+                    b.HasIndex("InstanceId", "StartedAt")
+                        .IsDescending(false, true)
+                        .HasDatabaseName("IX_InstanceAgentRuns_Instance_StartedAt");
+
+                    NpgsqlIndexBuilderExtensions.IncludeProperties(b.HasIndex("InstanceId", "StartedAt"), new[] { "State", "Status", "AgentKey", "TotalTokens" });
+
+                    b.ToTable("InstanceAgentRuns", "public");
+                });
+
+            modelBuilder.Entity("BBT.Workflow.Instances.Agents.InstanceAgentToolCall", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Arguments")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("BindingRef")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<string>("CallId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<long>("DurationMs")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Error")
+                        .HasMaxLength(400)
+                        .HasColumnType("character varying(400)");
+
+                    b.Property<DateTime?>("FinishedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character(64)")
+                        .IsFixedLength();
+
+                    b.Property<Guid>("InstanceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("InstanceTaskId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Iteration")
+                        .HasColumnType("integer");
+
+                    b.Property<short>("Kind")
+                        .HasColumnType("smallint");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<bool>("RequiresApproval")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Result")
+                        .HasColumnType("jsonb");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Sequence")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<short>("Status")
+                        .HasColumnType("smallint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("InstanceId")
+                        .HasDatabaseName("IX_InstanceAgentToolCalls_InstanceId");
+
+                    b.HasIndex("RunId", "Sequence")
+                        .HasDatabaseName("IX_InstanceAgentToolCalls_Run_Sequence");
+
+                    b.ToTable("InstanceAgentToolCalls", "public");
+                });
+
             modelBuilder.Entity("BBT.Workflow.Instances.Instance", b =>
                 {
                     b.Property<Guid>("Id")
@@ -859,6 +1195,41 @@ namespace BBT.Workflow.Migrations
                     b.HasOne("BBT.Workflow.Instances.Instance", null)
                         .WithMany()
                         .HasForeignKey("InstanceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("BBT.Workflow.Instances.Agents.AgentSession", b =>
+                {
+                    b.HasOne("BBT.Workflow.Instances.Instance", null)
+                        .WithMany()
+                        .HasForeignKey("OwnerInstanceId")
+                        .OnDelete(DeleteBehavior.Cascade);
+                });
+
+            modelBuilder.Entity("BBT.Workflow.Instances.Agents.InstanceAgentDecision", b =>
+                {
+                    b.HasOne("BBT.Workflow.Instances.Agents.InstanceAgentRun", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("BBT.Workflow.Instances.Agents.InstanceAgentRun", b =>
+                {
+                    b.HasOne("BBT.Workflow.Instances.Instance", null)
+                        .WithMany()
+                        .HasForeignKey("InstanceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("BBT.Workflow.Instances.Agents.InstanceAgentToolCall", b =>
+                {
+                    b.HasOne("BBT.Workflow.Instances.Agents.InstanceAgentRun", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

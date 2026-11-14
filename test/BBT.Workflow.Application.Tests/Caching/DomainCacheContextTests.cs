@@ -28,6 +28,7 @@ public class DomainCacheContextTests
         Substitute.For<ICacheBackend<View>>(),
         Substitute.For<ICacheBackend<Extension>>(),
         Substitute.For<ICacheBackend<Mapping>>(),
+        Substitute.For<ICacheBackend<Agent>>(),
         Substitute.For<IComponentGenerationProvider>(),
         Options.Create(new ComponentCacheOptions()),
         TimeProvider.System,
@@ -45,6 +46,7 @@ public class DomainCacheContextTests
         _context.Set(View.ComponentTypeKey).ShouldBeSameAs(_context.Views);
         _context.Set(Extension.ComponentTypeKey).ShouldBeSameAs(_context.Extensions);
         _context.Set(Mapping.ComponentTypeKey).ShouldBeSameAs(_context.Mappings);
+        _context.Set(Agent.ComponentTypeKey).ShouldBeSameAs(_context.Agents);
     }
 
     [Fact]
@@ -119,6 +121,7 @@ public class DomainCacheContextTests
             Substitute.For<ICacheBackend<View>>(),
             Substitute.For<ICacheBackend<Extension>>(),
             Substitute.For<ICacheBackend<Mapping>>(),
+            Substitute.For<ICacheBackend<Agent>>(),
             new ComponentGenerationProvider(
                 cache,
                 new BBT.Aether.Guids.SequentialGuidGenerator(),

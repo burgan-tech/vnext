@@ -37,7 +37,8 @@ public class SchemaValidator : ISchemaValidator
         "sys_schemas",
         "sys_tasks",
         "sys_views",
-        "sys_mappings"
+        "sys_mappings",
+        "sys_agents"
     };
 
     // Valid table names whitelist

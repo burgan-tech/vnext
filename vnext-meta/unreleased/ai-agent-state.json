@@ -1,0 +1,26 @@
+{
+  "releaseNote": {
+    "summary": "AI agent states (stateType 6) run a reusable sys-agents component with inline tools and pick the next automatic transition; new MCP task type 24; agent-runs system function.",
+    "breaking": false,
+    "docs": []
+  },
+  "features": {
+    "engine": {
+      "aiAgentState": {
+        "since": "next",
+        "status": "experimental",
+        "description": "stateType 6 (AiAgent) with an 'agent' block: agent (sys-agents ref), prompt (template with {{ data.* }} or IAgentPromptMapping), output.path, memory override, tools.exclude, decision {mode model|rules|script, fallback (required), exclude, hints, hintsMapping, mapping, onExhausted}, policy (narrows only). Runs at pipeline order 65 (not on updateData); the decision is consumed by the automatic-transition step of the same hop. Rule-less automatic transitions of the state are the candidates; without an in-hop decision they never fire. The structured output and a $agent summary are merged under output.path in one data write. sys-agents component: provider (AiAgent:Providers profile name), instructions, inline tools (kind 1 task, 2 script dynamicExpresso|C#, 3 mcp), memory {mode none|state|flow|key, storage local|provider, maxMessages, retentionDays, resetOn}, output.schema, policy, audit. Journal tables InstanceAgentRuns, InstanceAgentToolCalls, InstanceAgentDecisions, AgentSessions (encrypted)."
+      },
+      "mcpTask": {
+        "since": "next",
+        "status": "experimental",
+        "description": "Task type 24 (Mcp): calls an MCP server over streamable HTTP from the orchestration host. config: endpoint (host must be in Mcp:AllowedHosts), operation callTool|listTools|readResource|listResources|getPrompt|listPrompts, tool|uri|prompt, arguments, auth {header, scheme, secretRef}, headers {name: {secretRef}} (plain-text values rejected), timeoutSeconds (1..120). Input/output follow IMapping."
+      },
+      "agentRunsFunction": {
+        "since": "next",
+        "status": "experimental",
+        "description": "Instance system function 'agent-runs': agent runs newest first with the decision (metadata only; prompts, outputs, tool payloads, transcripts and sessions are never served). ?runId= returns one run with its tool calls; ?state=, ?skip=, ?take= page the list. POST {domain}/definitions/agents/{key}/dry-run runs an agent once with stub tools for the roles in AiAgent:DryRun:Roles."
+      }
+    }
+  }
+}

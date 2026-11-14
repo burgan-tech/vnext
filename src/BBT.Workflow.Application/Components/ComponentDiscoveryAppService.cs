@@ -82,6 +82,8 @@ public sealed class ComponentDiscoveryAppService(
                 .Map(c => ToDetail(token, domain, key, c.Version, c)),
             ComponentType.Mappings => (await componentCacheStore.GetMappingAsync(domain, key, version, cancellationToken))
                 .Map(c => ToDetail(token, domain, key, c.Version, c)),
+            ComponentType.Agents => (await componentCacheStore.GetAgentAsync(domain, key, version, cancellationToken))
+                .Map(c => ToDetail(token, domain, key, c.Version, c)),
             _ => Result<ComponentDetailDto>.Fail(Error.Validation("validation", $"Unsupported component type '{type}'."))
         };
     }
@@ -118,6 +120,7 @@ public sealed class ComponentDiscoveryAppService(
         ComponentType.Extensions => await ListSummariesAsync<Extension>(domain, type, cancellationToken),
         ComponentType.Schemas => await ListSummariesAsync<SchemaDefinition>(domain, type, cancellationToken),
         ComponentType.Mappings => await ListSummariesAsync<Mapping>(domain, type, cancellationToken),
+        ComponentType.Agents => await ListSummariesAsync<Agent>(domain, type, cancellationToken),
         _ => []
     };
 

@@ -65,6 +65,13 @@ public sealed class ComponentCacheStore(
     }
 
     /// <inheritdoc />
+    public async Task<Result<Agent>> GetAgentAsync(string domain, string key, string? version,
+        CancellationToken cancellationToken = default)
+    {
+        return await cacheContext.Agents.GetByVersionAsync(domain, key, version, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<Result<IEnumerable<Extension>>> GetAllExtensionsAsync(
         string domain,
         CancellationToken cancellationToken = default)

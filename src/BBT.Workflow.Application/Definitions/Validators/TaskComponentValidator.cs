@@ -9,7 +9,8 @@ namespace BBT.Workflow.Definitions.Validators;
 /// Validates workflow task components (sys-tasks).
 /// Ensures task definitions are properly structured and contain required fields.
 /// </summary>
-public sealed partial class TaskComponentValidator : IComponentValidator
+public sealed partial class TaskComponentValidator(
+    Microsoft.Extensions.Options.IOptions<BBT.Workflow.Tasks.Executors.McpOptions>? mcpOptions = null) : IComponentValidator
 {
     /// <inheritdoc />
     public bool CanHandle(string componentType) => componentType == RuntimeSysSchemaInfo.Tasks;
@@ -64,6 +65,11 @@ public sealed partial class TaskComponentValidator : IComponentValidator
                 ValidatePythonTask(python, result);
             }
 
+            if (task is McpTask mcp)
+            {
+                ValidateMcpTask(mcp, result);
+            }
+
             return result;
         }
         catch (JsonException ex)
@@ -102,6 +108,46 @@ public sealed partial class TaskComponentValidator : IComponentValidator
                 $"Python task input exceeds the {PythonTask.MaxInputBytes}-byte limit.",
                 $"{nameof(PythonTask)}.{nameof(PythonTask.Input)}");
         }
+    }
+
+    /// <summary>
+    /// MCP task (type 24, issue #1105): HTTP transport only, an allowed absolute endpoint, a known
+    /// operation, and no credential authored as plain text.
+    /// </summary>
+    private void ValidateMcpTask(McpTask task, ComponentValidationResult result)
+    {
+        const string prefix = nameof(McpTask);
+
+        if (!string.Equals(task.Transport, McpTransports.Http, StringComparison.OrdinalIgnoreCase))
+            result.AddError("MCP task transport must be 'http'.", $"{prefix}.{nameof(McpTask.Transport)}");
+
+        var allowedHosts = mcpOptions?.Value.AllowedHosts ?? [];
+        if (!Uri.TryCreate(task.Endpoint, UriKind.Absolute, out _))
+        {
+            result.AddError("MCP task requires an absolute http(s) 'endpoint'.", $"{prefix}.{nameof(McpTask.Endpoint)}");
+        }
+        else if (!BBT.Workflow.Tasks.Executors.McpOptions.IsHostAllowed(task.Endpoint, allowedHosts, out var host))
+        {
+            result.AddError($"MCP task endpoint host '{host}' is not in Mcp:AllowedHosts.", $"{prefix}.{nameof(McpTask.Endpoint)}");
+        }
+
+        if (!McpOperations.All.Contains(task.Operation))
+            result.AddError($"MCP task operation '{task.Operation}' is not supported.", $"{prefix}.{nameof(McpTask.Operation)}");
+
+        if (task.Operation == McpOperations.ReadResource && string.IsNullOrWhiteSpace(task.Uri))
+            result.AddError("MCP task operation 'readResource' requires 'uri'.", $"{prefix}.{nameof(McpTask.Uri)}");
+
+        if (task.Operation == McpOperations.GetPrompt && string.IsNullOrWhiteSpace(task.Prompt))
+            result.AddError("MCP task operation 'getPrompt' requires 'prompt'.", $"{prefix}.{nameof(McpTask.Prompt)}");
+
+        if (task.Auth is { } auth && string.IsNullOrWhiteSpace(auth.SecretRef))
+            result.AddError("MCP task auth requires 'secretRef'; credentials are never authored inline.", $"{prefix}.{nameof(McpTask.Auth)}");
+
+        foreach (var header in task.PlainTextHeaders)
+            result.AddError($"MCP task header '{header}' must be {{ \"secretRef\": ... }}; plain-text header values are not allowed.", $"{prefix}.{nameof(McpTask.Headers)}[{header}]");
+
+        if (task.TimeoutSeconds is < 1 or > McpTask.MaxTimeoutSeconds)
+            result.AddError($"MCP task timeoutSeconds must be between 1 and {McpTask.MaxTimeoutSeconds}.", $"{prefix}.{nameof(McpTask.TimeoutSeconds)}");
     }
 
     [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_.-]{0,127}$", RegexOptions.CultureInvariant)]

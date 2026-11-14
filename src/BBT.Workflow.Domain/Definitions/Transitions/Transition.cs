@@ -138,6 +138,16 @@ public sealed class Transition : IHasKey
     [JsonConverter(typeof(AvailableInJsonConverter))]
     public List<AvailableInEntry> AvailableIn { get; private set; }
     [JsonInclude] public ScriptCode? Mapping { get; private set; }
+
+    /// <summary>
+    /// Optional free-text description of when this transition applies (issue #1105). On an
+    /// <see cref="StateType.AiAgent"/> state it is one source of the "when" text the agent sees for a
+    /// candidate transition (after <c>decision.hintsMapping</c> and <c>decision.hints</c>). Never
+    /// evaluated as a rule.
+    /// </summary>
+    [JsonInclude]
+    [JsonPropertyName("description")]
+    public string? Description { get; private set; }
     [JsonInclude] public ResourceLockDefinition? ResourceLock { get; private set; }
 
     /// <summary>

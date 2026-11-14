@@ -151,6 +151,20 @@ public interface IComponentCacheStore
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Retrieves an agent component definition (<c>sys-agents</c>, issue #1105) from the cache.
+    /// </summary>
+    /// <param name="domain">The domain identifier where the agent belongs.</param>
+    /// <param name="key">The agent key.</param>
+    /// <param name="version">The version; null returns the latest.</param>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
+    /// <returns>The agent, or <see cref="Error.NotFound"/>.</returns>
+    Task<Result<Agent>> GetAgentAsync(
+        string domain,
+        string key,
+        string? version,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Stores an entity in the cache.
     /// </summary>
     /// <typeparam name="T">The type of entity to store. Must implement <see cref="IDomainEntity"/>.</typeparam>

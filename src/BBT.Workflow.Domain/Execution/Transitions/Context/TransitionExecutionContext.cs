@@ -178,6 +178,13 @@ public sealed class TransitionExecutionContext
     // Typed instructions
     public PipelineDirectives Directives { get; } = new();
 
+    /// <summary>
+    /// The decision an agent run produced in THIS hop (issue #1105), set by the agent step (order 65)
+    /// and read by the automatic-transition step (order 80). Null when no agent ran in this hop
+    /// (updateData, a resume path, any non-agent state).
+    /// </summary>
+    public BBT.Workflow.Instances.Agents.AgentHopDecision? AgentDecision { get; set; }
+
     public ClientResponse? ClientResponse { get; set; }
 
     /// <summary>

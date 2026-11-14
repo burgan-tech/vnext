@@ -125,6 +125,11 @@ public static class WorkflowInfrastructureModuleServiceCollectionExtensions
 
         // Explicit InstanceData persist path (per-instance FOR UPDATE lock + versioning).
         services.AddScoped<IInstanceDataWriteService, InstanceDataWriteService>();
+
+        // AI agent journal, read side and session store (issue #1105).
+        services.AddScoped<BBT.Workflow.Instances.Agents.IAgentRunJournal, BBT.Workflow.Agents.EfCoreAgentRunJournal>();
+        services.AddScoped<BBT.Workflow.Instances.Agents.IAgentRunReadRepository, BBT.Workflow.Agents.EfCoreAgentRunReadRepository>();
+        services.AddScoped<BBT.Workflow.Instances.Agents.IAgentSessionStore, BBT.Workflow.Agents.EfCoreAgentSessionStore>();
         services.AddScoped<BBT.Workflow.Execution.Persistence.IBookkeepingWriter, BookkeepingWriter>();
 
         // You can register your repositories here.

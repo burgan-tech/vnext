@@ -33,6 +33,15 @@ public sealed class AutoConditionEvaluator(
         TransitionExecutionContext context,
         CancellationToken cancellationToken = default)
     {
+        // AiAgent state (issue #1105): a rule-less automatic transition is decided by the agent run of
+        // THIS hop, never by a rule and never by default. Without an in-hop decision (updateData, a resume
+        // path) it is simply not satisfied — the agent's fallback must not fire because no agent ran.
+        if (context.Target is { StateType: StateType.AiAgent } agentState &&
+            AgentCandidateSet.IsAgentDecided(agentState, transition))
+        {
+            return Task.FromResult(Result<AutoConditionEvaluation>.Ok(EvaluateAgentDecided(transition, context.AgentDecision)));
+        }
+
         if(transition.TriggerKind == TransitionKind.DefaultAutoTransition)
         {
             return Task.FromResult(Result<AutoConditionEvaluation>.Ok(AutoConditionEvaluation.Satisfied(transition.Key)));
@@ -40,6 +49,28 @@ public sealed class AutoConditionEvaluator(
 
         return ValidateTransitionRule(transition)
             .BindAsync(_ => ExecuteConditionSafelyAsync(transition, context, cancellationToken));
+    }
+
+    /// <summary>
+    /// Evaluates a transition the agent decides. Model and script modes: satisfied only for the selected
+    /// key. Rules mode after a completed run: the candidates carry rules, so only the fallback is
+    /// agent-decided and it is satisfied (it is evaluated last, after every rule).
+    /// </summary>
+    private static AutoConditionEvaluation EvaluateAgentDecided(Transition transition, BBT.Workflow.Instances.Agents.AgentHopDecision? decision)
+    {
+        if (decision is null)
+            return new AutoConditionEvaluation(transition.Key, AutoConditionStatus.NotSatisfied);
+
+        if (decision.Source == BBT.Workflow.Instances.Agents.AgentDecisionSource.Rules)
+        {
+            return string.Equals(transition.Key, decision.Fallback, StringComparison.Ordinal)
+                ? AutoConditionEvaluation.Satisfied(transition.Key)
+                : new AutoConditionEvaluation(transition.Key, AutoConditionStatus.NotSatisfied);
+        }
+
+        return string.Equals(transition.Key, decision.Selected, StringComparison.Ordinal)
+            ? AutoConditionEvaluation.Satisfied(transition.Key)
+            : new AutoConditionEvaluation(transition.Key, AutoConditionStatus.NotSatisfied);
     }
 
     /// <summary>

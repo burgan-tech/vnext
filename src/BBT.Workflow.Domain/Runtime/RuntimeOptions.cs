@@ -136,6 +136,13 @@ public class RuntimeSysSchemaInfo(string name, string schema, Type type)
     public const string Mappings = "sys-mappings";
 
     /// <summary>
+    /// Constant representing the system agents schema identifier (issue #1105).
+    /// An agent component (<see cref="BBT.Workflow.Definitions.Agent"/>) is a reusable, versioned AI agent
+    /// definition: provider profile name, instructions, inline tools, memory, output schema and policy.
+    /// </summary>
+    public const string Agents = "sys-agents";
+
+    /// <summary>
     /// Constant representing the system version registry flow (<c>sys-version-registry</c>). Its instances
     /// (keyed by flow key) hold each flow's default-version pointer. It is a system flow, not a component
     /// type, so it is deliberately absent from the CLR-type schema dictionary.

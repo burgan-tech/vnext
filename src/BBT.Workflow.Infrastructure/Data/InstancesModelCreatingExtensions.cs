@@ -659,5 +659,104 @@ public static class InstancesModelCreatingExtensions
                 .HasFilter("\"IsActive\" = true")
                 .HasDatabaseName("IX_InstanceJobs_Active_Domain_CreatedAt");
         });
+        // AI agent journal and sessions (issue #1105). Written once per AiAgent state entry, read only by
+        // the agent-runs surface (projections, never entities) and the agent step's session lookup.
+        // No hot-path load (instance GET/list, state function) ever includes these tables.
+        builder.Entity<BBT.Workflow.Instances.Agents.InstanceAgentRun>(b =>
+        {
+            b.ToTable("InstanceAgentRuns", schema);
+            b.ConfigureByConvention();
+            b.Property(p => p.State).IsRequired().HasMaxLength(StateConstants.MaxKeyLength);
+            b.Property(p => p.ExecutionKey).IsRequired().HasMaxLength(64).IsFixedLength();
+            b.Property(p => p.AgentKey).IsRequired().HasMaxLength(WorkflowConstants.MaxKeyLength);
+            b.Property(p => p.AgentDomain).IsRequired().HasMaxLength(WorkflowConstants.MaxDomainLength);
+            b.Property(p => p.AgentVersion).IsRequired().HasMaxLength(WorkflowConstants.MaxVersionLength);
+            b.Property(p => p.RuntimeKey).IsRequired().HasMaxLength(32);
+            b.Property(p => p.ProviderKey).IsRequired().HasMaxLength(100);
+            b.Property(p => p.Model).HasMaxLength(128);
+            b.Property(p => p.Status).HasConversion<short>();
+            b.Property(p => p.FailureReason).HasMaxLength(400);
+            b.Property(p => p.ProviderResponseId).HasMaxLength(128);
+            b.Property(p => p.FinishReason).HasMaxLength(32);
+            b.Property(p => p.SessionScopeKey).HasMaxLength(200);
+            b.Property(p => p.Request).HasColumnType("jsonb");
+            b.Property(p => p.Response).HasColumnType("jsonb");
+            b.Property(p => p.Transcript).HasColumnType("bytea");
+
+            // One run per state entry; a retried transition reuses its record, so the entry number keeps
+            // the key unique.
+            b.HasIndex(p => p.ExecutionKey).IsUnique().HasDatabaseName("UX_InstanceAgentRuns_ExecutionKey");
+
+            // The agent-runs listing: newest first per instance, covering the listed columns so the
+            // page is an index-only walk plus heap fetches for the narrow row (jsonb stays TOASTed).
+            b.HasIndex(p => new { p.InstanceId, p.StartedAt })
+                .IsDescending(false, true)
+                .IncludeProperties(p => new { p.State, p.Status, p.AgentKey, p.TotalTokens })
+                .HasDatabaseName("IX_InstanceAgentRuns_Instance_StartedAt");
+
+            b.HasOne<Instance>().WithMany().HasForeignKey(p => p.InstanceId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<BBT.Workflow.Instances.Agents.InstanceAgentToolCall>(b =>
+        {
+            b.ToTable("InstanceAgentToolCalls", schema);
+            b.ConfigureByConvention();
+            b.Property(p => p.CallId).IsRequired().HasMaxLength(64);
+            b.Property(p => p.Name).IsRequired().HasMaxLength(64);
+            b.Property(p => p.Kind).HasConversion<short>();
+            b.Property(p => p.BindingRef).HasMaxLength(300);
+            b.Property(p => p.IdempotencyKey).IsRequired().HasMaxLength(64).IsFixedLength();
+            b.Property(p => p.Arguments).HasColumnType("jsonb");
+            b.Property(p => p.Result).HasColumnType("jsonb");
+            b.Property(p => p.Status).HasConversion<short>();
+            b.Property(p => p.Error).HasMaxLength(400);
+
+            b.HasIndex(p => new { p.RunId, p.Sequence }).HasDatabaseName("IX_InstanceAgentToolCalls_Run_Sequence");
+            b.HasIndex(p => p.InstanceId).HasDatabaseName("IX_InstanceAgentToolCalls_InstanceId");
+
+            b.HasOne<BBT.Workflow.Instances.Agents.InstanceAgentRun>().WithMany().HasForeignKey(p => p.RunId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<BBT.Workflow.Instances.Agents.InstanceAgentDecision>(b =>
+        {
+            b.ToTable("InstanceAgentDecisions", schema);
+            b.ConfigureByConvention();
+            b.Property(p => p.State).IsRequired().HasMaxLength(StateConstants.MaxKeyLength);
+            b.Property(p => p.Mode).HasConversion<short>();
+            b.Property(p => p.Source).HasConversion<short>();
+            b.Property(p => p.SelectedTransition).HasMaxLength(TransitionConstants.MaxKeyLength);
+            b.Property(p => p.Reason).HasMaxLength(2000);
+            b.Property(p => p.Candidates).IsRequired().HasColumnType("jsonb");
+
+            b.HasIndex(p => p.RunId).IsUnique().HasDatabaseName("UX_InstanceAgentDecisions_RunId");
+            b.HasIndex(p => p.InstanceId).HasDatabaseName("IX_InstanceAgentDecisions_InstanceId");
+
+            b.HasOne<BBT.Workflow.Instances.Agents.InstanceAgentRun>().WithMany().HasForeignKey(p => p.RunId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<BBT.Workflow.Instances.Agents.AgentSession>(b =>
+        {
+            b.ToTable("AgentSessions", schema);
+            b.HasKey(p => p.ScopeKey);
+            b.Property(p => p.ScopeKey).HasMaxLength(200);
+            b.Property(p => p.Mode).HasConversion<short>();
+            b.Property(p => p.Storage).HasConversion<short>();
+            b.Property(p => p.AgentKey).IsRequired().HasMaxLength(WorkflowConstants.MaxKeyLength);
+            b.Property(p => p.AgentVersion).IsRequired().HasMaxLength(WorkflowConstants.MaxVersionLength);
+            b.Property(p => p.InstructionsHash).HasMaxLength(64);
+            b.Property(p => p.SessionData).HasColumnType("bytea");
+            b.Property(p => p.ProviderConversationId).HasMaxLength(128);
+            b.Property(p => p.EncryptionKey).HasColumnType("bytea");
+            b.Property(p => p.RowVersion).IsRowVersion();
+
+            // The sweeper's range; a partial index keeps it to the rows that can expire.
+            b.HasIndex(p => p.ExpiresAt)
+                .HasFilter("\"ExpiresAt\" IS NOT NULL")
+                .HasDatabaseName("IX_AgentSessions_ExpiresAt");
+
+            // i:* rows die with their instance (crypto-shredding: the key is on the row).
+            b.HasIndex(p => p.OwnerInstanceId).HasDatabaseName("IX_AgentSessions_OwnerInstanceId");
+            b.HasOne<Instance>().WithMany().HasForeignKey(p => p.OwnerInstanceId).OnDelete(DeleteBehavior.Cascade);
+        });
     }
 }

@@ -33,6 +33,7 @@ public static class WorkflowDomainModuleServiceCollectionExtensions
             opt.Schemas.Add(RuntimeSysSchemaInfo.Views, "sys_views", typeof(View));
             opt.Schemas.Add(RuntimeSysSchemaInfo.Extensions, "sys_extensions", typeof(Extension));
             opt.Schemas.Add(RuntimeSysSchemaInfo.Mappings, "sys_mappings", typeof(Mapping));
+            opt.Schemas.Add(RuntimeSysSchemaInfo.Agents, "sys_agents", typeof(Agent));
         });
 
         services.AddSingleton<IRuntimeInfoProvider, RuntimeInfoProvider>();

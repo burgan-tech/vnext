@@ -20,6 +20,7 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
     public ICacheSet<View> Views { get; }
     public ICacheSet<Extension> Extensions { get; }
     public ICacheSet<Mapping> Mappings { get; }
+    public ICacheSet<Agent> Agents { get; }
 
     public DomainCacheContext(
         IDistributedCacheService distributedCache,
@@ -30,6 +31,7 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
         ICacheBackend<View> viewBackend,
         ICacheBackend<Extension> extensionBackend,
         ICacheBackend<Mapping> mappingBackend,
+        ICacheBackend<Agent> agentBackend,
         IComponentGenerationProvider generationProvider,
         IOptions<ComponentCacheOptions> options,
         TimeProvider timeProvider,
@@ -101,6 +103,15 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
             loggerFactory.CreateLogger<CacheSet<Mapping>>(),
             l1Cache);
 
+        Agents = new CacheSet<Agent>(
+            distributedCache,
+            agentBackend,
+            generationProvider,
+            options,
+            timeProvider,
+            loggerFactory.CreateLogger<CacheSet<Agent>>(),
+            l1Cache);
+
         _setsByComponentTypeKey = new Dictionary<string, ICacheSet>(StringComparer.OrdinalIgnoreCase)
         {
             [Definitions.Workflow.ComponentTypeKey] = Workflows,
@@ -109,7 +120,8 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
             [Function.ComponentTypeKey] = Functions,
             [View.ComponentTypeKey] = Views,
             [Extension.ComponentTypeKey] = Extensions,
-            [Mapping.ComponentTypeKey] = Mappings
+            [Mapping.ComponentTypeKey] = Mappings,
+            [Agent.ComponentTypeKey] = Agents
         };
     }
 
@@ -122,6 +134,7 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
         if (typeof(T) == typeof(View)) return (ICacheSet<T>)Views;
         if (typeof(T) == typeof(Extension)) return (ICacheSet<T>)Extensions;
         if (typeof(T) == typeof(Mapping)) return (ICacheSet<T>)Mappings;
+        if (typeof(T) == typeof(Agent)) return (ICacheSet<T>)Agents;
 
         throw new NotSupportedException($"Type {typeof(T).Name} is not supported in DomainCacheContext.");
     }
@@ -144,5 +157,6 @@ public class DomainCacheContext : IDomainCacheContext, IDisposable
         Views.Dispose();
         Extensions.Dispose();
         Mappings.Dispose();
+        Agents.Dispose();
     }
 }

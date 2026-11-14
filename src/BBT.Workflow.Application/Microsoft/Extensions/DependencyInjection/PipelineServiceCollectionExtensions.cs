@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using BBT.Workflow.Definitions.Policies;
 using BBT.Workflow.Definitions.Specifications;
 using BBT.Workflow.Execution;
@@ -94,6 +95,21 @@ public static class PipelineServiceCollectionExtensions
         services.AddScoped<ITransitionStep, RunOnExitTasksStep>();
         services.AddScoped<ITransitionStep, ChangeStateStep>();
         services.AddScoped<ITransitionStep, RunOnEntryTasksStep>();
+        // AI agent states (issue #1105). The runtime and the MCP transport default to "unavailable";
+        // the orchestration host replaces them through AddAgentsModule (modules/BBT.Workflow.Modules.Agents).
+        services.AddOptions<BBT.Workflow.Agents.AiAgentOptions>()
+            .BindConfiguration(BBT.Workflow.Agents.AiAgentOptions.Section)
+            .ValidateOnStart();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<
+            Microsoft.Extensions.Options.IValidateOptions<BBT.Workflow.Agents.AiAgentOptions>,
+            BBT.Workflow.Agents.AiAgentOptionsValidator>());
+        services.TryAddSingleton<BBT.Workflow.Agents.IAgentRuntime, BBT.Workflow.Agents.UnavailableAgentRuntime>();
+        services.TryAddSingleton<BBT.Workflow.Agents.AgentRunLimiter>();
+        services.TryAddScoped<BBT.Workflow.Agents.Tools.AgentToolCatalog>();
+        services.TryAddScoped<BBT.Workflow.Agents.AgentStateRunner>();
+        services.TryAddScoped<BBT.Workflow.Agents.IAgentRunQueryAppService, BBT.Workflow.Agents.AgentRunQueryAppService>();
+        services.TryAddScoped<BBT.Workflow.Agents.IAgentDryRunAppService, BBT.Workflow.Agents.AgentDryRunAppService>();
+        services.AddScoped<ITransitionStep, RunAgentStep>();
         services.AddScoped<ITransitionStep, HandleSubFlowStep>();
         services.AddScoped<ITransitionStep, HandleLongPollTerminationStep>();
         services.AddScoped<ITransitionStep, ClearBusyOnResumeStep>();

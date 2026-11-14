@@ -224,6 +224,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddSingleton<ICacheBackend<View>, RuntimeCacheBackend<View>>();
         services.AddSingleton<ICacheBackend<Extension>, RuntimeCacheBackend<Extension>>();
         services.AddSingleton<ICacheBackend<Mapping>, RuntimeCacheBackend<Mapping>>();
+        services.AddSingleton<ICacheBackend<Agent>, RuntimeCacheBackend<Agent>>();
 
         // Registered here rather than with the other application options so read-only hosts, which wire
         // only the cache module, still bind configuration instead of silently falling back to defaults.
@@ -261,6 +262,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddSingleton<IWorkflowCastHandler, SchemaWorkflowCastHandler>();
         services.AddSingleton<IWorkflowCastHandler, ExtensionWorkflowCastHandler>();
         services.AddSingleton<IWorkflowCastHandler, MappingWorkflowCastHandler>();
+        services.AddSingleton<IWorkflowCastHandler, AgentWorkflowCastHandler>();
         services.AddSingleton<WorkflowCastProcessor>();
     }
 
@@ -276,6 +278,7 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
         services.AddSingleton<IComponentValidator, SchemaComponentValidator>();
         services.AddSingleton<IComponentValidator, ExtensionComponentValidator>();
         services.AddSingleton<IComponentValidator, MappingComponentValidator>();
+        services.AddSingleton<IComponentValidator, AgentComponentValidator>();
         // Publish-time allowedAssemblies check. Factory + GetService because read-only hosts
         // (AddApplicationCacheModule) register validators without AddTaskHandlers, i.e. without
         // ScriptSandboxOptions; they never publish, so the defaults are enough there.

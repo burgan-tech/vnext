@@ -62,10 +62,14 @@ public sealed class PipelineExecutionProfile
     // RunAutomaticTransitionsStep (80) needs to evaluate the state's auto transitions against the
     // freshly written data. OnExecute (30) also stays — that is the transition's own work, not the
     // state's lifecycle.
+    // AgentRun (65) is excluded for the same reason as OnEntry: updateData does not enter the
+    // AiAgent state, so it must not run its agent again. The automatic-transition step then sees no
+    // in-hop agent decision and leaves the agent's candidates alone (see AutoConditionEvaluator).
     private static readonly ImmutableHashSet<int> SelfTargetExcluded = ImmutableHashSet.Create(
         LifecycleOrder.CancelScheduledJobs,
         LifecycleOrder.OnExit,
         LifecycleOrder.OnEntry,
+        LifecycleOrder.AgentRun,
         LifecycleOrder.Schedule);
 
     private static readonly PipelineExecutionProfile ManualInstance = new()

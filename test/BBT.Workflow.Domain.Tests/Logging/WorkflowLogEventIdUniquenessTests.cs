@@ -92,7 +92,7 @@ public class WorkflowLogEventIdUniquenessTests
     }
 
     /// <summary>
-    /// EventIds carry meaning by range — 10xxx transitions, 20xxx instances, 40xxx events,
+    /// EventIds carry meaning by range — 10xxx transitions, 20xxx instances, 30xxx AI agents, 40xxx events,
     /// 50xxx discovery, 60xxx host and scripting, 70xxx component cache, 80xxx functions,
     /// 90xxx deployment lifecycle — so an id outside every known band is almost certainly a typo.
     /// </summary>
@@ -104,7 +104,7 @@ public class WorkflowLogEventIdUniquenessTests
     [Fact]
     public void EveryEventIdFallsInAKnownBand()
     {
-        (int Lo, int Hi)[] bands = [(10_000, 19_999), (20_000, 29_999), (40_000, 49_999), (50_000, 59_999),
+        (int Lo, int Hi)[] bands = [(10_000, 19_999), (20_000, 29_999), (30_000, 39_999), (40_000, 49_999), (50_000, 59_999),
                                     (60_000, 69_999), (70_000, 79_999), (80_000, 89_999), (90_000, 99_999)];
 
         var strays = Declarations()

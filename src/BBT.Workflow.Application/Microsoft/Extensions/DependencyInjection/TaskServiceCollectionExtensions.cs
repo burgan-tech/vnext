@@ -167,6 +167,14 @@ public static class TaskServiceCollectionExtensions
             .ValidateOnStart();
         services.AddTaskExecutor<PythonTaskExecutor>();
 
+        // MCP tasks (type 24, issue #1105) run in-process on this host. The transport lives in the
+        // agents module (orchestration only); without it every MCP call fails with 503.
+        services.AddOptions<McpOptions>().BindConfiguration(McpOptions.Section);
+        services.TryAddSingleton<IMcpClientGateway, UnavailableMcpClientGateway>();
+        services.TryAddSingleton<BBT.Workflow.Agents.ISecretResolver, BBT.Workflow.Agents.SecretResolver>();
+        services.AddTaskExecutor<McpTaskExecutor>();
+        services.TryAddScoped<McpTaskExecutor>();
+
         // Shared Dapr state-store gateway, also used by the function response cache (issue #1007).
         // TryAdd because the Execution host registers the same implementation, and both layers
         // can live in one process.

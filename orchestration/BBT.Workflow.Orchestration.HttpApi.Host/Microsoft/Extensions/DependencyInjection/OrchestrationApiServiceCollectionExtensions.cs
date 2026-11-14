@@ -32,6 +32,9 @@ public static class OrchestrationApiServiceCollectionExtensions
             .AddApplicationModule()
             .AddInfrastructureModule(
                 configuration) // Infrastructure manages its own dependencies including URL templates
+            // AI agent runtime + MCP transport (issue #1105): orchestration only, so the Execution host
+            // never loads Microsoft.Agents.AI, OpenAI or the MCP SDK.
+            .AddAgentsModule()
             .AddAspNetCoreModules(configuration)
             .AddFormUrlEncodedJsonElementInput()
             .AddResultResilience(configuration)
@@ -79,6 +82,7 @@ public static class OrchestrationApiServiceCollectionExtensions
         services.AddScoped<IInstanceFunctionHandler, MasterFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandler, CatalogFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandler, TaskHistoryFunctionHandler>();
+        services.AddScoped<IInstanceFunctionHandler, AgentRunsFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandler, ActionHistoryFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandler, FileFunctionHandler>();
         services.AddScoped<IInstanceFunctionHandlerFactory, InstanceFunctionHandlerFactory>();
@@ -156,6 +160,9 @@ public static class OrchestrationApiServiceCollectionExtensions
         // (vnext-client-sdk-core#60). Unconditional and Orchestration-only — this is the host that
         // executes domain functions, so it is the only host that enqueues journal records.
         services.AddHostedService<BBT.Workflow.Functions.FunctionExecutionJournalWriter>();
+
+        // Deletes expired agent sessions (issue #1105); AiAgent:SessionSweepIntervalMinutes = 0 disables it.
+        services.AddHostedService<BBT.Workflow.Agents.AgentSessionSweeperHostedService>();
 
 #if DEBUG
         // Pays the Roslyn cold cost (assembly load + JIT + reference materialization, ~seconds) at

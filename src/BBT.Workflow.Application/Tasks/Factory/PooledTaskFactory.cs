@@ -182,6 +182,10 @@ public static class PoolableTaskRegistry
             ScriptTask.CreateEmpty,
             (source, target) => ((ScriptTask)target).CopyFromInternal((ScriptTask)source));
 
+        RegisterPoolableTask<McpTask>(
+            McpTask.CreateEmpty,
+            (source, target) => ((McpTask)target).CopyFromInternal((McpTask)source));
+
         RegisterPoolableTask<PythonTask>(
             PythonTask.CreateEmpty,
             (source, target) => ((PythonTask)target).CopyFromInternal((PythonTask)source));
