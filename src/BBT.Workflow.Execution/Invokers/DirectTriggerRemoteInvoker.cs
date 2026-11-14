@@ -302,14 +302,18 @@ public sealed class DirectTriggerRemoteInvoker : ITaskInvoker<DirectTriggerBindi
 
     private string PrepareDaprAppId(string? taskKey, DirectTriggerBinding binding)
     {
-        using var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
-        return binding.DaprAppId ?? _orchestrationAppId;
+        using (InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty))
+        {
+            return binding.DaprAppId ?? _orchestrationAppId;
+        }
     }
 
     private HttpClient PrepareHttpClient(string? taskKey, DirectTriggerBinding binding)
     {
-        using var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
-        return CreateHttpClient(binding, taskKey);
+        using (InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty))
+        {
+            return CreateHttpClient(binding, taskKey);
+        }
     }
 
     private static HttpRequestMessage CreateDaprRequest(DirectTriggerBinding binding, string appId)

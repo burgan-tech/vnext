@@ -272,17 +272,21 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
 
     private HttpRequestMessage PrepareDaprRequest(string? taskKey, SubProcessBinding binding)
     {
-        using var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
-        var appId = binding.DaprAppId ?? _orchestrationAppId;
-        return CreateDaprRequest(binding, appId);
+        using (InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty))
+        {
+            var appId = binding.DaprAppId ?? _orchestrationAppId;
+            return CreateDaprRequest(binding, appId);
+        }
     }
 
     private (HttpClient Client, HttpRequestMessage Request) PrepareHttpRequest(string? taskKey, SubProcessBinding binding)
     {
-        using var prepareActivity = InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty);
-        var httpClient = CreateHttpClient(binding, taskKey);
-        var request = CreateHttpRequest(binding);
-        return (httpClient, request);
+        using (InvokerActivityHelper.StartPrepareActivity(TaskType, taskKey ?? string.Empty))
+        {
+            var httpClient = CreateHttpClient(binding, taskKey);
+            var request = CreateHttpRequest(binding);
+            return (httpClient, request);
+        }
     }
 
     private static HttpRequestMessage CreateDaprRequest(SubProcessBinding binding, string appId)

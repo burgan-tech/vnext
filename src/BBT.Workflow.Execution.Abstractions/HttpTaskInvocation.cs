@@ -586,53 +586,54 @@ public static class HttpTaskInvocation
         TaskTraceContext? traceContext,
         string? taskKey)
     {
-        using var prepareActivity = StartPrepareActivity(taskType, taskKey);
-
-        var clientName = binding.ValidateSSL
-            ? WorkflowHttpClientNames.Default
-            : WorkflowHttpClientNames.NoSslValidation;
-        var httpClient = createClient(clientName);
-        httpClient.Timeout = TimeSpan.FromSeconds(binding.TimeoutSeconds);
-
-        var request = new HttpRequestMessage(
-            new HttpMethod(binding.Method),
-            binding.Url);
-
-        // Add headers. Content-Type is a content header in .NET, not a request header, so it is
-        // captured here and applied to request.Content below instead of request.Headers.
-        string? headerContentType = null;
-        if (!string.IsNullOrEmpty(binding.Headers))
+        using (StartPrepareActivity(taskType, taskKey))
         {
-            var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(binding.Headers);
-            if (headers != null)
+            var clientName = binding.ValidateSSL
+                ? WorkflowHttpClientNames.Default
+                : WorkflowHttpClientNames.NoSslValidation;
+            var httpClient = createClient(clientName);
+            httpClient.Timeout = TimeSpan.FromSeconds(binding.TimeoutSeconds);
+
+            var request = new HttpRequestMessage(
+                new HttpMethod(binding.Method),
+                binding.Url);
+
+            // Add headers. Content-Type is a content header in .NET, not a request header, so it is
+            // captured here and applied to request.Content below instead of request.Headers.
+            string? headerContentType = null;
+            if (!string.IsNullOrEmpty(binding.Headers))
             {
-                foreach (var header in headers)
+                var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(binding.Headers);
+                if (headers != null)
                 {
-                    if (string.Equals(header.Key, "Content-Type", StringComparison.OrdinalIgnoreCase))
+                    foreach (var header in headers)
                     {
-                        headerContentType = header.Value;
-                        continue;
+                        if (string.Equals(header.Key, "Content-Type", StringComparison.OrdinalIgnoreCase))
+                        {
+                            headerContentType = header.Value;
+                            continue;
+                        }
+
+                        if (IsReservedTraceHeader(header.Key))
+                            continue;
+
+                        request.Headers.TryAddWithoutValidation(header.Key, header.Value);
                     }
-
-                    if (IsReservedTraceHeader(header.Key))
-                        continue;
-
-                    request.Headers.TryAddWithoutValidation(header.Key, header.Value);
                 }
             }
+
+            ApplyTrustedCorrelationHeaders(request, traceContext);
+
+            // Add body for non-GET requests. Resolution: explicit ContentType → Content-Type header → json.
+            if (request.Method != HttpMethod.Get && !string.IsNullOrEmpty(binding.Body))
+            {
+                var contentType = HttpContentType.Resolve(binding.ContentType, headerContentType);
+                request.Content = new StringContent(binding.Body, Encoding.UTF8);
+                request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(contentType);
+            }
+
+            return (httpClient, request);
         }
-
-        ApplyTrustedCorrelationHeaders(request, traceContext);
-
-        // Add body for non-GET requests. Resolution: explicit ContentType → Content-Type header → json.
-        if (request.Method != HttpMethod.Get && !string.IsNullOrEmpty(binding.Body))
-        {
-            var contentType = HttpContentType.Resolve(binding.ContentType, headerContentType);
-            request.Content = new StringContent(binding.Body, Encoding.UTF8);
-            request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(contentType);
-        }
-
-        return (httpClient, request);
     }
 
     /// <summary>A header value that can be carried as is: present, bounded, no control characters (no header injection).</summary>
