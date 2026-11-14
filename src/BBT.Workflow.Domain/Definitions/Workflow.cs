@@ -403,6 +403,10 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     [JsonIgnore]
     public bool DeclaresInitialState => States.Any(s => s.StateType == StateType.Initial);
 
+    /// <summary>True when the definition has an AiAgent state, so its instances may own agent sessions.</summary>
+    [JsonIgnore]
+    public bool HasAiAgentState => States.Any(s => s.StateType == StateType.AiAgent);
+
     /// <summary>
     /// The state an instance is born in: the declared Initial state, or — when none is declared —
     /// the runtime's implicit <see cref="WellKnownStateKeys.Start"/> state (no tasks, view or

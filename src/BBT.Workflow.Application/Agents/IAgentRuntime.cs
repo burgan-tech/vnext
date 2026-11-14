@@ -78,11 +78,39 @@ public sealed record AgentToolResult(AgentToolCallStatus Status, string Content,
 /// <param name="Description">Description for the model.</param>
 /// <param name="ParametersSchema">JSON schema of the arguments.</param>
 /// <param name="InvokeAsync">Runs the tool; journaling and budgets are applied by the caller's wrapper.</param>
+/// <param name="RequiresApproval">The call waits for a human approval before it runs.</param>
 public sealed record AgentToolDefinition(
     string Name,
     string Description,
     JsonElement ParametersSchema,
-    Func<AgentToolInvocation, CancellationToken, Task<AgentToolResult>> InvokeAsync);
+    Func<AgentToolInvocation, CancellationToken, Task<AgentToolResult>> InvokeAsync,
+    bool RequiresApproval = false)
+{
+    /// <summary>
+    /// Null when the arguments match <see cref="ParametersSchema"/>, else the errors. The runtime asks it
+    /// before holding a call for approval, so nobody is asked to approve a call that would be rejected.
+    /// </summary>
+    public Func<JsonElement, string?>? ValidateArguments { get; init; }
+}
+
+/// <summary>A tool call that waits for an approval.</summary>
+/// <param name="RequestId">Approval request id (correlates the answer).</param>
+/// <param name="CallId">The model's tool call id.</param>
+/// <param name="ToolName">Tool name.</param>
+/// <param name="Arguments">Arguments object.</param>
+/// <param name="RequiresConfirmation">False for a call that does not need approval itself but was held with the others; it is approved automatically on resume.</param>
+public sealed record AgentPendingApproval(string RequestId, string CallId, string ToolName, JsonElement Arguments, bool RequiresConfirmation);
+
+/// <summary>The answer to a pending approval.</summary>
+/// <param name="Pending">The pending call.</param>
+/// <param name="Approved">Whether the call may run.</param>
+/// <param name="Reason">Optional reason the model sees.</param>
+public sealed record AgentApprovalAnswer(AgentPendingApproval Pending, bool Approved, string? Reason);
+
+/// <summary>A seed message sent before the user prompt.</summary>
+/// <param name="Role"><c>system</c>, <c>user</c> or <c>assistant</c>.</param>
+/// <param name="Content">Rendered content.</param>
+public sealed record AgentSeedMessage(string Role, string Content);
 
 /// <summary>One agent run.</summary>
 /// <param name="RunId">Run id.</param>
@@ -100,6 +128,10 @@ public sealed record AgentToolDefinition(
 /// <param name="UseProviderSession">Whether the provider keeps the conversation.</param>
 /// <param name="MaxMessages">Messages kept in a local session.</param>
 /// <param name="CaptureTranscript">Whether to return the transcript.</param>
+/// <param name="Compaction">How a local session is kept within <paramref name="MaxMessages"/>.</param>
+/// <param name="SeedMessages">Messages sent before <paramref name="UserPrompt"/> on this run.</param>
+/// <param name="FullTranscript">With <paramref name="CaptureTranscript"/>: the transcript also holds this run's input messages (<c>audit.transcript: full</c>).</param>
+/// <param name="ApprovalAnswers">When set, the run resumes a conversation that stopped for approval: only these answers are sent, no new prompt.</param>
 public sealed record AgentRunRequest(
     Guid RunId,
     string AgentKey,
@@ -115,7 +147,11 @@ public sealed record AgentRunRequest(
     string? ProviderConversationId,
     bool UseProviderSession,
     int MaxMessages,
-    bool CaptureTranscript);
+    bool CaptureTranscript,
+    AgentMemoryCompaction Compaction = AgentMemoryCompaction.Trim,
+    IReadOnlyList<AgentSeedMessage>? SeedMessages = null,
+    IReadOnlyList<AgentApprovalAnswer>? ApprovalAnswers = null,
+    bool FullTranscript = false);
 
 /// <summary>Outcome of one agent run.</summary>
 public sealed record AgentRunResult
@@ -164,6 +200,9 @@ public sealed record AgentRunResult
 
     /// <summary>Transcript JSON, when requested.</summary>
     public string? Transcript { get; init; }
+
+    /// <summary>Tool calls waiting for approval (<see cref="AgentRunStatus.ApprovalRequested"/>).</summary>
+    public IReadOnlyList<AgentPendingApproval> PendingApprovals { get; init; } = [];
 
     /// <summary>A failed run.</summary>
     public static AgentRunResult Failed(AgentRunStatus status, string reason, short attempts = 0) =>

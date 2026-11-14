@@ -24,6 +24,9 @@ public sealed class GetAgentRunsInput : IHasDomain
     /// <summary>Optional run id: returns that run with its tool calls.</summary>
     public Guid? RunId { get; set; }
 
+    /// <summary>With <see cref="RunId"/>: also return the stored transcript (<c>?include=transcript</c>).</summary>
+    public bool IncludeTranscript { get; set; }
+
     /// <summary>Page offset.</summary>
     public int Skip { get; set; }
 
@@ -34,7 +37,8 @@ public sealed class GetAgentRunsInput : IHasDomain
 /// <summary>A run and its tool calls.</summary>
 /// <param name="Run">The run.</param>
 /// <param name="ToolCalls">Tool calls in order.</param>
-public sealed record AgentRunDetailDto(AgentRunListItem Run, IReadOnlyList<AgentToolCallItem> ToolCalls);
+/// <param name="Transcript">The run's messages, when requested and stored (<c>audit.transcript</c> summary or full).</param>
+public sealed record AgentRunDetailDto(AgentRunListItem Run, IReadOnlyList<AgentToolCallItem> ToolCalls, System.Text.Json.JsonElement? Transcript = null);
 
 /// <summary>Output of the <c>agent-runs</c> system function.</summary>
 /// <param name="Items">Runs, newest first (listing).</param>
@@ -49,10 +53,10 @@ public interface IAgentRunQueryAppService
 }
 
 /// <summary>
-/// The <c>agent-runs</c> system function: metadata only — prompts, outputs, tool arguments and results,
-/// transcripts and sessions never leave the journal through this surface. A GUID instance identifier
-/// costs no instance load; a business key costs one read-only lookup. One query for the listing (decision
-/// joined), two for a run detail.
+/// The <c>agent-runs</c> system function: run metadata, and on request (<c>?runId=…&amp;include=transcript</c>)
+/// the transcript the agent's <c>audit.transcript</c> kept. A GUID instance identifier costs no instance
+/// load; a business key costs one read-only lookup. One query for the listing (decision joined), two for a
+/// run detail, three with the transcript.
 /// </summary>
 public sealed class AgentRunQueryAppService(
     IRuntimeInfoProvider runtimeInfoProvider,
@@ -83,7 +87,16 @@ public sealed class AgentRunQueryAppService(
             }
 
             var calls = await readRepository.ListToolCallsAsync(runId, cancellationToken);
-            return Result<GetAgentRunsOutput>.Ok(new GetAgentRunsOutput(null, new AgentRunDetailDto(run, calls)));
+            System.Text.Json.JsonElement? transcript = null;
+            if (input.IncludeTranscript && await readRepository.FindTranscriptAsync(instanceId, runId, cancellationToken) is { Length: > 0 } stored)
+            {
+                using var input2 = new MemoryStream(stored);
+                using var gzip = new System.IO.Compression.GZipStream(input2, System.IO.Compression.CompressionMode.Decompress);
+                using var doc = await System.Text.Json.JsonDocument.ParseAsync(gzip, cancellationToken: cancellationToken);
+                transcript = doc.RootElement.Clone();
+            }
+
+            return Result<GetAgentRunsOutput>.Ok(new GetAgentRunsOutput(null, new AgentRunDetailDto(run, calls, transcript)));
         }
 
         var items = await readRepository.ListAsync(instanceId, input.State, Math.Max(0, input.Skip), Math.Clamp(input.Take, 1, 100), cancellationToken);

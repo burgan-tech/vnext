@@ -54,10 +54,26 @@ Code is the source of truth; start at `RunAgentStep`, `AgentStateRunner` and `Au
 | `3` mcp | An Mcp task: the runtime lists the server's tools (memoized `discoveryCacheMinutes`, default 10) and calls them through the task engine | Only names in `allow` are exposed, prefixed by `prefix`. Name collisions are skipped and logged (`30010`) |
 
 Publish validation (`AgentComponentValidator`): provider and instructions required, `output.schema` and
-every tool `parameters` must be `type: object`, tool names `^[a-zA-Z0-9_-]{1,64}$` and unique (MCP names
-after the prefix), a binding per kind, script code decodable, policy positive and within the environment
-ceilings, `requiresApproval: true` rejected (approval is not implemented yet). Task references are not
-resolved at publish; an unresolvable task fails the tool call.
+every tool `parameters` must be `type: object`, every `required` name must be one of the node's
+`properties` (walked through `properties` and `items`), tool names `^[a-zA-Z0-9_-]{1,64}$` and unique (MCP
+names after the prefix), a binding per kind, script code decodable, policy positive and within the
+environment ceilings. Task references are not resolved at publish; an unresolvable task fails the tool call.
+
+### Schema checks at run time
+
+The model is untrusted input, so its JSON is checked against the schema it was given, with the same cached
+validator as transition input (`IJsonSchemaValidator`, format checks on). The errors are worded for the
+model, one per field (`amount: Value is "string" but should be "number"`).
+
+| What | When | On a mismatch |
+|---|---|---|
+| Tool arguments | Before the tool runs | The call is journaled `Rejected` without running; the model gets `invalid arguments: …` and may call again in the same run (bounded by `maxIterations`). |
+| Arguments of a `requiresApproval` call | Before the call is held | Nobody is asked to approve a call that would be rejected: the call is denied with the errors and the model gets a correction turn — at most 2 (`MaxArgumentCorrections`); other confirmation calls of that turn are denied with a "call again" note, calls without approval run. Still invalid after 2 → the run fails (`tool arguments do not match the tool schema …`) and the state takes its fallback. |
+| Structured output (with the added `decision`/`reason`/`handoff` fields) | Before it is returned | One repair turn (`MaxOutputRepairs = 1`) sends the errors back and asks for a matching object, `null` for unknown values the schema allows. Still invalid → the run fails (`the output does not match the output schema after 1 repair(s): …`), nothing is written to `output.path`, the state takes its fallback. |
+
+Correction turns use the same session and count toward `maxTokens`. Write a value the agent may not know as
+`"type": ["number", "null"]` and keep it `required`: a non-nullable required field pushes the model to
+invent a value. Dry-run applies the same checks (stub tools still reject invalid arguments).
 
 ### State `agent` block
 
@@ -171,27 +187,41 @@ instances). Local storage keeps the MAF-serialized session, trimmed to `maxMessa
 a tool result); provider storage (`storage: provider` and a profile with `SupportsServiceSessions`)
 keeps only the provider's conversation id.
 
-The message list is gzip-compressed and AES-256-GCM encrypted with a fresh random key per write,
-stored on the row; the scope key is the associated data, so ciphertext moved to another row does not
-decrypt. Deleting the row — or its instance, which cascades — destroys the key with the content.
-Writes are guarded by `xmin`: a writer that did not read the row, or read an older version, loses and
-logs `30008` (only possible for `k:*`). A session is reset (logged `30007`) when the agent version
+The message list is stored gzip-compressed, **not encrypted and not masked** (a product decision for
+this phase: no guard on session content until real use asks for one). `memory.compaction` keeps a local
+session within `maxMessages`: `trim` (default) drops the oldest messages, `summarize` replaces them with
+one model-written summary (MEAI `SummarizingChatReducer`, one extra provider call when it triggers).
+An instance row (`i:*`) has one writer under the instance's Busy mutex and is written unguarded. A shared
+row (`k:*`) is guarded by `xmin`: a writer that did not read the row, or read an older version, loses,
+logs `30008`, re-reads the row and writes once more. A session is reset (logged `30007`) when the agent version
 changes (`resetOn: agentVersionChange`, default) or the instructions change (`instructionsChange`).
-Rows expire `retentionDays` after their last write; `AgentSessionSweeperHostedService` deletes them in
-batches of 1000 every `AiAgent:SessionSweepIntervalMinutes` (0 disables it), and reads ignore expired rows.
+The default `memory.mode` is `state`, so an agent state keeps an instance row unless it sets `none`. A
+run held for approval keeps one even with `none`, because the resume continues from it.
+
+An instance's `i:*` rows are deleted when it completes or is cancelled (`HandleFinishStep`, same
+transaction, one statement, only for flows with an AiAgent state). A faulted instance keeps them, since
+a retry may re-enter the agent state. Shared `k:*` rows outlive any instance. Every row also expires
+`retentionDays` after its last write (agent or state setting, default 30); `AgentSessionSweeperHostedService`
+deletes expired rows in batches of 1000 every `AiAgent:SessionSweepIntervalMinutes` (0 disables it), and
+reads ignore expired rows. For `i:*` rows the expiry only matters for an instance that stays open.
 
 ## Read surface
 
 - `GET …/instances/{instance}/functions/agent-runs` — runs newest first with the decision; `?state=`,
-  `?skip=`, `?take=` (≤ 100). `?runId=` returns one run with its tool calls. Metadata only: prompts,
-  outputs, tool arguments/results, transcripts and sessions are never served. One statement for the
-  list (decision joined), two for a run. Errors `Instance:100054` (run not found, 404),
-  `Instance:100055` (bad `runId`, 400). No role gate of its own, like `tasks`.
+  `?skip=`, `?take=` (≤ 100). `?runId=` returns one run with its tool calls; `&include=transcript` adds
+  the transcript `audit.transcript` kept (`summary`: this run's response messages; `full`: also its input
+  — seed messages and prompt). Participant runs of a multi-agent state carry `participant`. One statement
+  for the list (decision joined), two for a run, three with the transcript. Errors `Instance:100054` (run
+  not found, 404), `Instance:100055` (bad `runId`, 400). No role gate of its own, like `tasks`.
 - `POST {domain}/definitions/agents/{key}/dry-run` — runs the agent once on sample data: no instance,
   no journal, no session, stub tools. Allowed for the roles in `AiAgent:DryRun:Roles` (empty disables).
+  `status: "ApprovalRequested"` is an outcome, not a failure: the agent asked for a `requiresApproval`
+  tool and the run stopped before any tool ran (a dry run has no session to resume). The held calls are
+  in `pendingApprovals[{requestId, callId, tool, arguments, requiresConfirmation}]` and `failureReason` is empty.
 - Instance data: `output.path` gets the structured output plus `$agent`: `runId`, `status`, `decision`,
   `decisionSource`, `reason`, `stopReason`, `iterations`, `attempts`, `toolCalls[{name, ok, durationMs}]`,
-  `usage`, `session{scope, resumed}`. Every run rewrites every `$agent` field with a non-null value
+  `usage`, `session{scope, resumed}`, `state`, `participants[{name, agentKey, runId, status}]`, `handoffTo`,
+  `pendingApprovals[{requestId, callId, tool, arguments, requiresConfirmation}]`. Every run rewrites every `$agent` field with a non-null value
   (`""`, `[]`, `session.scope: "none"`), because a `null` never clears a stored key. In `rules` mode
   `decision` is `""`: the winner is chosen after the write, by the Auto step, and lands on the decision
   row (`agent-runs`). A run that produced no output (failed, fallback, exhausted) leaves the output keys
@@ -236,13 +266,76 @@ Spans: `Agent.Run/{state}` (source `BBT.Workflow.Agents.Run`), one `gen_ai` span
 (source `BBT.Workflow.Agents`, MEAI OpenTelemetry), task-engine spans per kind-1/kind-3 tool call. Both
 sources are in the orchestration `AdditionalSources`. Logs `30001`–`30014` (`WorkflowLogs`, AI Agent region).
 
-## Known limits (Faz 1)
+## Prompt seed messages and data context
 
-- Tool approval (`requiresApproval`, `onApprovalRequest`) is not implemented; publish rejects it.
+```jsonc
+"prompt": {
+  "template": "<message>{{ data.message }}</message>",
+  "messages": [ { "role": "user", "content": "Example: my card is lost" },
+                { "role": "assistant", "content": "{\"category\":\"question\"}" } ],
+  "context": { "customer": "data.customer", "amount": "body.amount" }
+}
+```
+
+`messages` are sent before the user prompt on every run (`system`, `user`, `assistant`; content is a
+template). `context` appends each named value as `<data name="…">…</data>` (JSON for objects), so the
+model reads it as data and not as instructions; paths start with `data.`, `body.` or `instance.`.
+
+## Tool approval
+
+A tool with `"requiresApproval": true` is offered through MEAI's `ApprovalRequiredAIFunction`. When the
+model calls it, the run stops before the call: the held calls are journaled `ApprovalPending`, written to
+`$agent.pendingApprovals`, and the state leaves through `decision.onApprovalRequest` — an automatic
+transition to **any** state the author chooses (a Human state, a view, a notification flow; no state type
+is required). Without `onApprovalRequest` the state takes its fallback.
+
+When the instance enters the agent state again, the entering transition's body carries the answer and
+the conversation resumes from its session — no new prompt, no participant re-run, and the entry does not
+count against `maxEntries`:
+
+```jsonc
+{ "approval": { "approved": true } }                                               // every held call
+{ "approval": [ { "callId": "call_1", "approved": false, "reason": "limit exceeded" } ] }
+```
+
+A held call without an answer is denied (`"no approval answer was given"`) and journaled `Denied`; calls
+the model made in the same turn that need no approval run automatically. A state with `memory.mode: none`
+still keeps a session row for the round trip, with either storage (a `provider` row carries the provider
+conversation id). Approval works on the final agent only; a participant that
+requests one fails.
+
+## Multi-agent states
+
+```jsonc
+"agent": {
+  "agent": { "key": "triage-lead", "domain": "core", "flow": "sys-agents", "version": "1.0.0" },  // the lead
+  "mode": "handoff",                                  // single (default) | sequential | concurrent | handoff
+  "agents": [ { "name": "cards", "agent": { "key": "cards-agent", … }, "description": "Card issues." },
+              { "name": "loans", "agent": { "key": "loans-agent", … }, "description": "Loan questions." } ],
+  …
+}
+```
+
+| `mode` | Who runs | Who produces the output and decision |
+|---|---|---|
+| `sequential` | Participants in order, each prompt carrying the outputs before it, then the lead | The lead, with every output as `<data name="participant:…">` |
+| `concurrent` | Participants in parallel on the same prompt, then the lead | The lead, with every output |
+| `handoff` | The lead as a router (its output gains a required `handoff` enum of participant names), then the chosen participant | The chosen participant |
+
+Each participant uses its own component (instructions, tools, output schema, policy narrowed by the
+state's `policy`) and runs without memory or transcript; its run is journaled with `participant` (the
+handoff router as `$router`). A failed participant reaches the lead as `{"error": …}`; a router that fails
+or names no participant sends the state to its fallback. Memory, approval and the transcript belong to
+the final agent. Entry counting and `maxEntries` count the final run only.
+
+## Known limits (phase 2)
+
 - `ScriptContext.Agent` (reading earlier runs from scripts) is not implemented; rules read `$agent`.
-- Tool-call rows do not link to their `InstanceTasks` row (`InstanceTaskId` stays null); the journal key
-  `agent:{runId}:{tool}:{callId}` correlates them.
-- The prompt reads instance data as stored; `x-masking` is not applied to what the model sees.
-- No `Idempotency-Key` header is added to HTTP tool calls yet (`IdempotencyKey` is recorded on the row).
+- Tool-call rows do not link to their `InstanceTasks` row (`InstanceTaskId` stays null); the task
+  engine's journal key `agent:{runId}:{tool}:{callId}` correlates them.
+- The prompt reads instance data as stored; nothing is masked for the model (product decision).
+- An HTTP tool call carries `Idempotency-Key` (from run and call id); a mapping that replaces the whole
+  header set drops it.
+- Dry-run uses stub tools only.
 - `vnext-schema` does not know `stateType: 6`, `agent`, `description` on transitions, task type 24 or
   `sys-agents` yet; domain CI validation fails until it does.

@@ -667,6 +667,7 @@ public static class InstancesModelCreatingExtensions
             b.ToTable("InstanceAgentRuns", schema);
             b.ConfigureByConvention();
             b.Property(p => p.State).IsRequired().HasMaxLength(StateConstants.MaxKeyLength);
+            b.Property(p => p.Participant).HasMaxLength(64);
             b.Property(p => p.ExecutionKey).IsRequired().HasMaxLength(64).IsFixedLength();
             b.Property(p => p.AgentKey).IsRequired().HasMaxLength(WorkflowConstants.MaxKeyLength);
             b.Property(p => p.AgentDomain).IsRequired().HasMaxLength(WorkflowConstants.MaxDomainLength);
@@ -746,7 +747,6 @@ public static class InstancesModelCreatingExtensions
             b.Property(p => p.InstructionsHash).HasMaxLength(64);
             b.Property(p => p.SessionData).HasColumnType("bytea");
             b.Property(p => p.ProviderConversationId).HasMaxLength(128);
-            b.Property(p => p.EncryptionKey).HasColumnType("bytea");
             b.Property(p => p.RowVersion).IsRowVersion();
 
             // The sweeper's range; a partial index keeps it to the rows that can expire.
@@ -754,7 +754,8 @@ public static class InstancesModelCreatingExtensions
                 .HasFilter("\"ExpiresAt\" IS NOT NULL")
                 .HasDatabaseName("IX_AgentSessions_ExpiresAt");
 
-            // i:* rows die with their instance (crypto-shredding: the key is on the row).
+            // i:* rows are deleted when their instance completes or is cancelled (HandleFinishStep), and with
+            // the instance row itself. The index serves that delete.
             b.HasIndex(p => p.OwnerInstanceId).HasDatabaseName("IX_AgentSessions_OwnerInstanceId");
             b.HasOne<Instance>().WithMany().HasForeignKey(p => p.OwnerInstanceId).OnDelete(DeleteBehavior.Cascade);
         });

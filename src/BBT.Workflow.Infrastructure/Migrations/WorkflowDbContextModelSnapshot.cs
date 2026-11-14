@@ -195,9 +195,6 @@ namespace BBT.Workflow.Migrations
                         .HasMaxLength(180)
                         .HasColumnType("character varying(180)");
 
-                    b.Property<byte[]>("EncryptionKey")
-                        .HasColumnType("bytea");
-
                     b.Property<DateTime?>("ExpiresAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -367,6 +364,10 @@ namespace BBT.Workflow.Migrations
                     b.Property<string>("Model")
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)");
+
+                    b.Property<string>("Participant")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
 
                     b.Property<int>("PromptTokens")
                         .HasColumnType("integer");

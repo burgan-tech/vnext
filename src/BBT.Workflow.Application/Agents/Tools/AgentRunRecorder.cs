@@ -9,13 +9,14 @@ namespace BBT.Workflow.Agents.Tools;
 
 /// <summary>
 /// Collects the tool calls of one run and enforces the tool budgets: the call ceiling, the per-tool
-/// timeout, the required arguments and the result size the model receives. Rows stay in memory and
+/// timeout, the argument schema and the result size the model receives. Rows stay in memory and
 /// are written with the run.
 /// </summary>
 public sealed class AgentRunRecorder(Guid runId, Guid instanceId, EffectiveAgentPolicy policy, bool persistResults, DateTime startedAtUtc, ILogger logger)
 {
     private readonly object _gate = new();
     private readonly List<InstanceAgentToolCall> _calls = [];
+    private readonly Dictionary<string, (AgentToolKind Kind, string? BindingRef)> _tools = new(StringComparer.Ordinal);
     private int _sequence;
 
     /// <summary>Run id.</summary>
@@ -48,10 +49,11 @@ public sealed class AgentRunRecorder(Guid runId, Guid instanceId, EffectiveAgent
             return (++_sequence, _calls.Count(c => c.Status != AgentToolCallStatus.Rejected) >= policy.MaxToolCalls);
     }
 
-    /// <summary>Runs the body under its timeout, or rejects the call (budget spent, required argument missing).</summary>
+    /// <summary>Runs the body under its timeout, or rejects the call (budget spent, arguments invalid or missing).</summary>
     private async Task<AgentToolResult> InvokeAsync(
         bool overBudget,
         JsonElement parameters,
+        Func<JsonElement, string?>? validateArguments,
         AgentToolInvocation invocation,
         int? timeoutSeconds,
         Func<AgentToolInvocation, CancellationToken, Task<AgentToolResult>> body,
@@ -63,7 +65,10 @@ public sealed class AgentRunRecorder(Guid runId, Guid instanceId, EffectiveAgent
                 $"tool call budget exhausted ({policy.MaxToolCalls}); answer with what you have");
         }
 
-        if (MissingRequired(parameters, invocation.Arguments) is { } missing)
+        if (validateArguments is not null && validateArguments(invocation.Arguments) is { } invalid)
+            return new AgentToolResult(AgentToolCallStatus.Rejected, string.Empty, $"invalid arguments: {invalid}");
+
+        if (validateArguments is null && MissingRequired(parameters, invocation.Arguments) is { } missing)
             return new AgentToolResult(AgentToolCallStatus.Rejected, string.Empty, $"missing required argument '{missing}'");
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -84,7 +89,10 @@ public sealed class AgentRunRecorder(Guid runId, Guid instanceId, EffectiveAgent
     }
 
     /// <summary>
-    /// Wraps a tool body with budgets, timing, truncation and journaling.
+    /// Wraps a tool body with budgets, timing, truncation and journaling. <paramref name="validateArguments"/>
+    /// answers null for arguments that match the tool's parameter schema, else the errors; a call that does
+    /// not match is rejected without running and the model gets the errors. Without it only the
+    /// <c>required</c> names are checked.
     /// </summary>
     public Func<AgentToolInvocation, CancellationToken, Task<AgentToolResult>> Wrap(
         string name,
@@ -93,14 +101,18 @@ public sealed class AgentRunRecorder(Guid runId, Guid instanceId, EffectiveAgent
         JsonElement parameters,
         int? timeoutSeconds,
         int? resultMaxChars,
-        Func<AgentToolInvocation, CancellationToken, Task<AgentToolResult>> body) =>
-        async (invocation, cancellationToken) =>
+        Func<AgentToolInvocation, CancellationToken, Task<AgentToolResult>> body,
+        Func<JsonElement, string?>? validateArguments = null)
+    {
+        lock (_gate)
+            _tools[name] = (kind, bindingRef);
+        return async (invocation, cancellationToken) =>
         {
             var (sequence, overBudget) = Reserve();
 
             var started = Stopwatch.GetTimestamp();
             var startedAt = DateTime.UtcNow;
-            var result = await InvokeAsync(overBudget, parameters, invocation, timeoutSeconds, body, cancellationToken);
+            var result = await InvokeAsync(overBudget, parameters, validateArguments, invocation, timeoutSeconds, body, cancellationToken);
 
             var max = Math.Max(1, Math.Min(resultMaxChars ?? policy.ResultMaxChars, policy.ResultMaxChars));
             var content = result.Content.Length > max ? result.Content[..max] + "…[truncated]" : result.Content;
@@ -132,6 +144,39 @@ public sealed class AgentRunRecorder(Guid runId, Guid instanceId, EffectiveAgent
             logger.AgentToolInvoked(runId, name, kind.ToString(), result.Status.ToString(), elapsed);
             return result with { Content = content };
         };
+    }
+
+    /// <summary>
+    /// Records a call that did not run in this run: waiting for approval
+    /// (<see cref="AgentToolCallStatus.ApprovalPending"/>) or answered with a denial
+    /// (<see cref="AgentToolCallStatus.Denied"/>).
+    /// </summary>
+    public void RecordApproval(AgentPendingApproval pending, AgentToolCallStatus status, string? reason)
+    {
+        lock (_gate)
+        {
+            var (kind, bindingRef) = _tools.TryGetValue(pending.ToolName, out var known) ? known : (AgentToolKind.Task, null);
+            var now = DateTime.UtcNow;
+            _calls.Add(new InstanceAgentToolCall(Guid.NewGuid())
+            {
+                RunId = runId,
+                InstanceId = instanceId,
+                Sequence = ++_sequence,
+                Iteration = 0,
+                CallId = Truncate(pending.CallId, 64),
+                Name = Truncate(pending.ToolName, 64),
+                Kind = kind,
+                BindingRef = bindingRef is null ? null : Truncate(bindingRef, 300),
+                IdempotencyKey = InstanceAgentToolCall.CreateIdempotencyKey(runId, pending.CallId),
+                Arguments = pending.Arguments.GetRawText(),
+                Status = status,
+                Error = reason is null ? null : Truncate(reason, 400),
+                StartedAt = now,
+                FinishedAt = now,
+                DurationMs = 0
+            });
+        }
+    }
 
     private static string? MissingRequired(JsonElement schema, JsonElement args)
     {

@@ -63,6 +63,8 @@ public sealed partial class AgentComponentValidator(IOptions<AiAgentOptions>? op
 
         if (agent.Output?.Schema is not { } schema || !IsObjectSchema(schema))
             errors.Add(new ValidationResult("Agent 'output.schema' must be a JSON schema with \"type\": \"object\".", [$"{p}.output.schema"]));
+        else
+            ValidateRequiredNames(schema, $"{p}.output.schema", errors);
 
         ValidatePolicy(agent.Policy, $"{p}.policy", errors, ceilings);
         ValidateMemory(agent.Memory, $"{p}.memory", errors);
@@ -81,9 +83,6 @@ public sealed partial class AgentComponentValidator(IOptions<AiAgentOptions>? op
             errors.Add(new ValidationResult($"Tool kind '{(int)tool.Kind}' is not supported (1 task, 2 script, 3 mcp).", [$"{path}.kind"]));
             return;
         }
-
-        if (tool.RequiresApproval)
-            errors.Add(new ValidationResult("Tool approval (requiresApproval) is not available yet; remove it or set it to false.", [$"{path}.requiresApproval"]));
 
         if (tool.Kind == AgentToolKind.Mcp)
         {
@@ -115,6 +114,8 @@ public sealed partial class AgentComponentValidator(IOptions<AiAgentOptions>? op
 
         if (tool.Parameters is not { } parameters || !IsObjectSchema(parameters))
             errors.Add(new ValidationResult("Tool 'parameters' must be a JSON schema with \"type\": \"object\".", [$"{path}.parameters"]));
+        else
+            ValidateRequiredNames(parameters, $"{path}.parameters", errors);
 
         if (tool.TimeoutSeconds is <= 0)
             errors.Add(new ValidationResult("Tool 'timeoutSeconds' must be positive.", [$"{path}.timeoutSeconds"]));
@@ -196,6 +197,36 @@ public sealed partial class AgentComponentValidator(IOptions<AiAgentOptions>? op
             errors.Add(new ValidationResult("memory.maxMessages must be positive.", [$"{path}.maxMessages"]));
         if (memory.RetentionDays is <= 0)
             errors.Add(new ValidationResult("memory.retentionDays must be positive.", [$"{path}.retentionDays"]));
+    }
+
+    /// <summary>
+    /// Every <c>required</c> name of an object node must be one of its <c>properties</c>: the model and the
+    /// runtime check both read the same schema, and a required name nobody describes can never be produced
+    /// on purpose. Walks <c>properties</c> and <c>items</c>.
+    /// </summary>
+    private static void ValidateRequiredNames(JsonElement schema, string path, IList<ValidationResult> errors)
+    {
+        if (schema.ValueKind != JsonValueKind.Object)
+            return;
+
+        var hasProperties = schema.TryGetProperty("properties", out var properties) && properties.ValueKind == JsonValueKind.Object;
+        if (hasProperties && schema.TryGetProperty("required", out var required) && required.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in required.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.String && !properties.TryGetProperty(item.GetString()!, out _))
+                    errors.Add(new ValidationResult($"Required name '{item.GetString()}' is not in 'properties'.", [$"{path}.required"]));
+            }
+        }
+
+        if (hasProperties)
+        {
+            foreach (var property in properties.EnumerateObject())
+                ValidateRequiredNames(property.Value, $"{path}.properties.{property.Name}", errors);
+        }
+
+        if (schema.TryGetProperty("items", out var items))
+            ValidateRequiredNames(items, $"{path}.items", errors);
     }
 
     private static bool IsObjectSchema(JsonElement schema) =>

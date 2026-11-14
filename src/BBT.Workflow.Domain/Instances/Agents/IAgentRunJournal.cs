@@ -13,7 +13,7 @@ public interface IAgentRunJournal
     Task AddAsync(
         InstanceAgentRun run,
         IReadOnlyList<InstanceAgentToolCall> toolCalls,
-        InstanceAgentDecision decision,
+        InstanceAgentDecision? decision,
         CancellationToken cancellationToken = default);
 }
 
@@ -54,18 +54,20 @@ public sealed record AgentSessionWrite(
 
 /// <summary>
 /// Stores agent conversations (table <c>AgentSessions</c>). Reads are one primary-key lookup; a write is
-/// one upsert statement guarded by the row version. Content is compressed, then AES-256-GCM encrypted
-/// with a fresh random key stored on the row itself; deleting the row (or the owning instance, which
-/// cascades to its <c>i:*</c> rows) destroys the key with the content. Rows expire <c>retentionDays</c>
-/// after their last write.
+/// one upsert statement (a shared <c>k:*</c> row is guarded by its row version). Content is
+/// gzip-compressed, not encrypted. An instance's <c>i:*</c> rows are deleted when it completes or is
+/// cancelled; every row also expires <c>retentionDays</c> after its last write.
 /// </summary>
 public interface IAgentSessionStore
 {
-    /// <summary>Reads and decrypts a session.</summary>
+    /// <summary>Reads a session.</summary>
     Task<AgentSessionReadResult> FindAsync(string scopeKey, Guid instanceId, CancellationToken cancellationToken = default);
 
     /// <summary>Writes a session; false when another writer changed it since it was read.</summary>
     Task<bool> SaveAsync(AgentSessionWrite write, Guid instanceId, CancellationToken cancellationToken = default);
+
+    /// <summary>Deletes the sessions the instance owns (<c>i:*</c>); shared <c>k:*</c> rows are kept.</summary>
+    Task<int> DeleteInstanceSessionsAsync(Guid instanceId, CancellationToken cancellationToken = default);
 
     /// <summary>Deletes up to <paramref name="batchSize"/> expired rows; returns how many were deleted.</summary>
     Task<int> SweepExpiredAsync(int batchSize, CancellationToken cancellationToken = default);
@@ -94,7 +96,8 @@ public sealed record AgentRunListItem(
     bool SessionResumed,
     string? SelectedTransition,
     AgentDecisionSource? DecisionSource,
-    string? DecisionReason);
+    string? DecisionReason,
+    string? Participant = null);
 
 /// <summary>A tool call row as the read surface returns it.</summary>
 public sealed record AgentToolCallItem(
@@ -122,4 +125,7 @@ public interface IAgentRunReadRepository
 
     /// <summary>The tool calls of a run in order.</summary>
     Task<IReadOnlyList<AgentToolCallItem>> ListToolCallsAsync(Guid runId, CancellationToken cancellationToken = default);
+
+    /// <summary>The run's stored transcript (gzip-compressed JSON message list), or null.</summary>
+    Task<byte[]?> FindTranscriptAsync(Guid instanceId, Guid runId, CancellationToken cancellationToken = default);
 }

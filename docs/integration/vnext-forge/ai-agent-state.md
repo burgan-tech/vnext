@@ -44,6 +44,11 @@ status: pending
 - Dry-run button (`POST {domain}/definitions/agents/{key}/dry-run`) and an agent-runs viewer
   (`functions/agent-runs`, run → tool calls → decision).
 
+- Phase 2 (stacked PR): team editor (`mode`, participants with name, agent picker, description); prompt seed
+  messages and context map; `requiresApproval` toggle per tool; `onApprovalRequest` transition picker (any
+  target state); `memory.compaction`; agent-runs viewer shows `participant`, `ApprovalPending`/`Denied` tool
+  calls and `include=transcript`.
+
 ## Contract and examples
 
 See the vnext-schema handoff `docs/integration/vnext-schema/ai-agent-state.md` for the JSON shapes.

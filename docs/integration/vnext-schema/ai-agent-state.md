@@ -40,8 +40,14 @@ status: pending
   tool `name` pattern `^[a-zA-Z0-9_-]{1,64}$`, `parameters` and `output.schema` of `type: object`.
 - `task-definition`: add `"23"` (Python, already in the runtime) and `"24"` with the Mcp `config` branch; header
   values only as `{ "secretRef": "…" }` (plain strings are a publish error in the runtime).
-- `core-header`: allow `flow: sys-agents`.
+- `core-schema` already accepts the `sys-agents` flow name; `core-header` (the HTTP headers schema) needs no change.
 - `test/validate-*` examples for each.
+
+- Phase 2 (stacked PR): state `agent` block gains `mode` (`single|sequential|concurrent|handoff`), `agents[]`
+  (`name` `^[a-zA-Z0-9_-]{1,64}$`, `agent` reference, `description`), `prompt.messages[]` (`role`
+  `system|user|assistant`, `content`) and `prompt.context` (`{ name: "data.…|body.…|instance.…" }`);
+  agent component `memory.compaction` (`trim|summarize`); tool `requiresApproval` is now valid;
+  `decision.onApprovalRequest` may target any state.
 
 ## Contract and examples
 

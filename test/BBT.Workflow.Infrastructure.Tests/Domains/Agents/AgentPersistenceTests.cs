@@ -98,7 +98,7 @@ public sealed class AgentPersistenceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Session_round_trips_encrypted_and_detects_concurrent_writers()
+    public async Task Session_round_trips_compressed_and_detects_concurrent_writers()
     {
         var instance = await SeedInstanceAsync();
         var scope = $"i:{instance.Id:N}:flow:classifying";
@@ -122,30 +122,17 @@ public sealed class AgentPersistenceTests : IAsyncLifetime
             Encoding.UTF8.GetString(stored.SessionData!).ShouldNotContain("secret customer text");
         }
 
-        // A writer that did not read the row, and a writer holding a stale version, both lose.
-        (await store.SaveAsync(Write(scope, instance.Id, plain, null), instance.Id)).ShouldBeFalse();
-        (await store.SaveAsync(Write(scope, instance.Id, plain, first.Snapshot.RowVersion), instance.Id)).ShouldBeTrue();
-        (await store.SaveAsync(Write(scope, instance.Id, plain, first.Snapshot.RowVersion), instance.Id)).ShouldBeFalse();
-    }
+        // An instance row has one writer (the Busy mutex): it is written without a version guard.
+        (await store.SaveAsync(Write(scope, instance.Id, plain, null), instance.Id)).ShouldBeTrue();
 
-    [Fact]
-    public async Task Ciphertext_moved_to_another_scope_does_not_decrypt()
-    {
-        var instance = await SeedInstanceAsync();
-        var a = $"i:{instance.Id:N}:flow:a";
-        var b = $"i:{instance.Id:N}:flow:b";
-        await using var ctx = CreateContext(null);
-        var store = new EfCoreAgentSessionStore(new FixedProvider(ctx));
-        await store.SaveAsync(Write(a, instance.Id, Encoding.UTF8.GetBytes("A"), null), instance.Id);
-        await store.SaveAsync(Write(b, instance.Id, Encoding.UTF8.GetBytes("B"), null), instance.Id);
-
-        await ctx.Database.ExecuteSqlRawAsync(
-            "UPDATE public.\"AgentSessions\" SET \"SessionData\" = (SELECT \"SessionData\" FROM public.\"AgentSessions\" WHERE \"ScopeKey\" = {0}), " +
-            "\"EncryptionKey\" = (SELECT \"EncryptionKey\" FROM public.\"AgentSessions\" WHERE \"ScopeKey\" = {0}) WHERE \"ScopeKey\" = {1}", a, b);
-
-        var read = await store.FindAsync(b, instance.Id);
-        read.Snapshot.ShouldBeNull();
-        read.Unreadable.ShouldNotBeNull();
+        // A shared k:* row is guarded: a writer that did not read the row, and a writer holding a stale
+        // version, both lose.
+        var shared = $"k:core:triage:{instance.Id:N}";
+        (await store.SaveAsync(Write(shared, instance.Id, plain, null), instance.Id)).ShouldBeTrue();
+        var read = await store.FindAsync(shared, instance.Id);
+        (await store.SaveAsync(Write(shared, instance.Id, plain, null), instance.Id)).ShouldBeFalse();
+        (await store.SaveAsync(Write(shared, instance.Id, plain, read.Snapshot!.RowVersion), instance.Id)).ShouldBeTrue();
+        (await store.SaveAsync(Write(shared, instance.Id, plain, read.Snapshot.RowVersion), instance.Id)).ShouldBeFalse();
     }
 
     [Fact]
@@ -170,6 +157,30 @@ public sealed class AgentPersistenceTests : IAsyncLifetime
         (await ctx.AgentSessions.CountAsync(s => s.OwnerInstanceId == instance.Id)).ShouldBe(0);
         (await ctx.InstanceAgentRuns.CountAsync(r => r.InstanceId == instance.Id)).ShouldBe(0);
         (await ctx.InstanceAgentToolCalls.CountAsync(c => c.InstanceId == instance.Id)).ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Finishing_instance_deletes_its_own_sessions_in_one_statement_and_keeps_shared_ones()
+    {
+        var instance = await SeedInstanceAsync();
+        var other = await SeedInstanceAsync();
+        await using var ctx = CreateContext(null);
+        var store = new EfCoreAgentSessionStore(new FixedProvider(ctx));
+        await store.SaveAsync(Write($"i:{instance.Id:N}:flow:classifying", instance.Id, [1], null), instance.Id);
+        await store.SaveAsync(Write($"i:{instance.Id:N}:flow", instance.Id, [1], null), instance.Id);
+        await store.SaveAsync(Write($"i:{other.Id:N}:flow", other.Id, [1], null), other.Id);
+        var shared = Write($"k:core:triage:{instance.Id:N}", instance.Id, [1], null);
+        shared.Session.OwnerInstanceId = null;
+        await store.SaveAsync(shared, instance.Id);
+
+        var recorder = new CommandRecorder();
+        await using var counted = CreateContext(recorder);
+        (await new EfCoreAgentSessionStore(new FixedProvider(counted)).DeleteInstanceSessionsAsync(instance.Id)).ShouldBe(2);
+        recorder.Commands.Count.ShouldBe(1);
+
+        (await ctx.AgentSessions.CountAsync(s => s.OwnerInstanceId == instance.Id)).ShouldBe(0);
+        (await store.FindAsync(shared.ScopeKey, instance.Id)).Snapshot.ShouldNotBeNull();
+        (await store.FindAsync($"i:{other.Id:N}:flow", other.Id)).Snapshot.ShouldNotBeNull();
     }
 
     private static AgentSessionWrite Write(string scope, Guid instanceId, byte[] messages, uint? expected) => new(

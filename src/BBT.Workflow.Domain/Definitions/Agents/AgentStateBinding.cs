@@ -27,6 +27,51 @@ public sealed record AgentStateBinding
 
     /// <summary>Narrows the component's policy.</summary>
     public AgentPolicy? Policy { get; init; }
+
+    /// <summary>
+    /// How several agents work in this state. <c>single</c> (default): only <see cref="Agent"/> runs.
+    /// <c>sequential</c> / <c>concurrent</c>: the <see cref="Agents"/> run first (in order, each seeing the
+    /// outputs before it / in parallel on the same prompt), then <see cref="Agent"/> — the lead — runs with
+    /// their outputs and produces the state's output and decision. <c>handoff</c>: the lead runs as a router
+    /// and names one participant, which then produces the state's output and decision.
+    /// </summary>
+    public AgentTeamMode? Mode { get; init; }
+
+    /// <summary>Participants of a multi-agent state (<see cref="Mode"/> other than <c>single</c>).</summary>
+    public List<AgentParticipant>? Agents { get; init; }
+
+    /// <summary>The effective team mode.</summary>
+    [JsonIgnore]
+    public AgentTeamMode EffectiveMode => Mode ?? AgentTeamMode.Single;
+}
+
+/// <summary>How the agents of a state work together.</summary>
+public enum AgentTeamMode
+{
+    /// <summary>One agent.</summary>
+    Single = 0,
+
+    /// <summary>Participants in order, then the lead.</summary>
+    Sequential = 1,
+
+    /// <summary>Participants in parallel, then the lead.</summary>
+    Concurrent = 2,
+
+    /// <summary>The lead routes to one participant, which answers.</summary>
+    Handoff = 3
+}
+
+/// <summary>A participant agent of a multi-agent state.</summary>
+public sealed record AgentParticipant
+{
+    /// <summary>Name, unique in the state (<c>^[a-zA-Z0-9_-]{1,64}$</c>); the lead sees outputs and routes by it.</summary>
+    public string? Name { get; init; }
+
+    /// <summary>The <c>sys-agents</c> component.</summary>
+    public Reference? Agent { get; init; }
+
+    /// <summary>What the lead is told this participant is for (handoff).</summary>
+    public string? Description { get; init; }
 }
 
 /// <summary>
@@ -48,6 +93,19 @@ public sealed record AgentPrompt
     /// <summary>Encoding of <see cref="Code"/>.</summary>
     public string? Encoding { get; init; }
 
+    /// <summary>
+    /// Seed messages sent before the user prompt on every run (few-shot examples, extra instructions).
+    /// Each <c>content</c> is a template with the same placeholders as <see cref="Template"/>.
+    /// </summary>
+    public List<AgentPromptMessage>? Messages { get; init; }
+
+    /// <summary>
+    /// Named data blocks appended to the user prompt, each rendered as JSON inside
+    /// <c>&lt;data name="…"&gt;</c>, so the model reads them as data and not as instructions. The value is a
+    /// path: <c>data.customer</c>, <c>body.amount</c>, <c>instance.key</c>.
+    /// </summary>
+    public Dictionary<string, string>? Context { get; init; }
+
     /// <summary>True when the prompt is a C# mapping.</summary>
     [JsonIgnore]
     public bool IsScript => string.IsNullOrEmpty(Template) && !string.IsNullOrEmpty(Code);
@@ -58,6 +116,16 @@ public sealed record AgentPrompt
         string.Equals(Encoding, "Native", StringComparison.OrdinalIgnoreCase)
             ? ScriptCode.FromNative(Code ?? string.Empty, Location)
             : ScriptCode.FromBase64(Code ?? string.Empty, Location);
+}
+
+/// <summary>A seed message of an agent prompt.</summary>
+public sealed record AgentPromptMessage
+{
+    /// <summary><c>system</c>, <c>user</c> or <c>assistant</c>.</summary>
+    public string? Role { get; init; }
+
+    /// <summary>Template content.</summary>
+    public string? Content { get; init; }
 }
 
 /// <summary>Output placement of an agent state.</summary>

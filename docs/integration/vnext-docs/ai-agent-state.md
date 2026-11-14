@@ -38,6 +38,10 @@ status: pending
   state); the `$agent` summary in instance data is the client-facing result.
 - Configuration and operations: provider profiles, MCP host allow-list, cost/latency ceilings.
 
+- Phase 2 (stacked PR): pages for tool approval (the `approval` body on re-entry, any target state), agent
+  teams (sequential, concurrent, handoff), prompt seed messages and data context, transcripts on the
+  agent-runs function; sessions are stored unencrypted.
+
 ## Contract and examples
 
 Source pages in this repo: `docs/domain/ai-agent-state.md`, `docs/runtime/mcp-task.md`.

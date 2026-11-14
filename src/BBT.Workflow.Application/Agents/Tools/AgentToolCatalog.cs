@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Dynamic;
 using System.Text.Json;
+using BBT.Workflow.Validation;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances.Agents;
 using BBT.Workflow.Logging;
@@ -44,6 +45,7 @@ public sealed class AgentToolCatalog(
     IServiceScopeFactory scopeFactory,
     ITaskFactory taskFactory,
     IScriptEngine scriptEngine,
+    IJsonSchemaValidator schemaValidator,
     ILogger<AgentToolCatalog> logger)
 {
     private static readonly ConcurrentDictionary<string, (DateTime ExpiresAt, IReadOnlyList<McpToolInfo> Tools)> McpToolMemo = new();
@@ -96,15 +98,24 @@ public sealed class AgentToolCatalog(
                     _ => ScriptBody(ctx, tool)
                 };
 
+            var validate = ArgumentCheck(parameters);
             tools.Add(new AgentToolDefinition(
                 tool.Name,
                 tool.Description ?? tool.Name,
                 parameters,
-                ctx.Recorder.Wrap(tool.Name, tool.Kind, BindingRef(tool), parameters, tool.TimeoutSeconds, tool.ResultMaxChars, body)));
+                ctx.Recorder.Wrap(tool.Name, tool.Kind, BindingRef(tool), parameters, tool.TimeoutSeconds, tool.ResultMaxChars, body, validate),
+                tool.RequiresApproval)
+            {
+                ValidateArguments = validate
+            });
         }
 
         return tools;
     }
+
+    /// <summary>The argument check of one tool: null when the arguments match its parameter schema.</summary>
+    private Func<JsonElement, string?> ArgumentCheck(JsonElement parameters) =>
+        arguments => AgentSchemaCheck.Describe(schemaValidator, parameters, arguments);
 
     private static string? BindingRef(AgentTool tool)
     {
@@ -145,6 +156,11 @@ public sealed class AgentToolCatalog(
     {
         var branch = ctx.ScriptContext.CreateParallelBranch();
         branch.SetBody(JsonSerializer.Deserialize<ExpandoObject>(invocation.Arguments.GetRawText(), JsonSerializerConstants.JsonOptions));
+
+        // An HTTP tool call carries a key the target can deduplicate on: the same run and call id always
+        // produce the same key. A mapping that replaces the whole header set drops it.
+        if (prepared is HttpTask http)
+            http.AddHeader("Idempotency-Key", InstanceAgentToolCall.CreateIdempotencyKey(ctx.Recorder.RunId, invocation.CallId));
 
         await using var scope = scopeFactory.CreateAsyncScope();
         var engine = scope.ServiceProvider.GetRequiredService<ITaskExecutionEngine>();
@@ -251,12 +267,17 @@ public sealed class AgentToolCatalog(
                     return await RunTaskAsync(ctx, reference, prepared, null, invocation, ct);
                 };
 
+            var validate = ArgumentCheck(parameters);
             definitions.Add(new AgentToolDefinition(
                 exposed,
                 serverTool.Description ?? exposed,
                 parameters,
                 ctx.Recorder.Wrap(exposed, AgentToolKind.Mcp, $"sys-tasks/{reference.Domain}/{reference.Key}@{reference.Version}",
-                    parameters, tool.TimeoutSeconds, tool.ResultMaxChars, body)));
+                    parameters, tool.TimeoutSeconds, tool.ResultMaxChars, body, validate),
+                tool.RequiresApproval)
+            {
+                ValidateArguments = validate
+            });
         }
 
         return definitions;

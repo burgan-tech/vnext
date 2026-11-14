@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.RegularExpressions;
 using BBT.Workflow.Definitions.RowSecurity;
 using BBT.Workflow.Scripting.Rules;
 
@@ -8,8 +9,14 @@ namespace BBT.Workflow.Definitions.Validators;
 /// Provides consistent validation for workflow domain objects.
 /// Validates workflow structure, states, transitions, labels, and error boundaries according to business rules.
 /// </summary>
-public class WorkflowValidator
+public partial class WorkflowValidator
 {
+    private static readonly HashSet<string> AgentPromptRoles = new(StringComparer.OrdinalIgnoreCase) { "system", "user", "assistant" };
+    private static readonly string[] AgentContextRoots = ["data.", "body.", "instance."];
+
+    [GeneratedRegex("^[a-zA-Z0-9_-]{1,64}$")]
+    private static partial Regex AgentContextName();
+
     private readonly ErrorBoundaryValidator _errorBoundaryValidator = new();
 
     /// <summary>
@@ -108,7 +115,7 @@ public class WorkflowValidator
 
         const string wf = nameof(Workflow);
 
-        if (!workflow.States.Any(s => s.StateType == StateType.Finish))
+        if (workflow.States.All(s => s.StateType != StateType.Finish))
         {
             result.AddError(new ValidationResult(
                 $"A workflow with {HistoryNone} must declare at least one Finish state (stateType 3).",
@@ -303,10 +310,10 @@ public class WorkflowValidator
     /// </summary>
     private void ValidateUpdateDataTransition(Workflow workflow, WorkflowValidationResult result)
     {
-        if (workflow.UpdateData != null && workflow.UpdateData.Target != WellKnownStateKeys.Self)
+        if (workflow.UpdateData is { } updateData && updateData.Target != WellKnownStateKeys.Self)
         {
             result.AddError(new ValidationResult(
-                $"UpdateData transition must have target value of '$self'. Found: '{workflow.UpdateData.Target}'.",
+                $"UpdateData transition must have target value of '$self'. Found: '{updateData.Target}'.",
                 [$"{nameof(Workflow)}.{nameof(Workflow.UpdateData)}.{nameof(Transition.Target)}"]));
         }
     }
@@ -642,8 +649,8 @@ public class WorkflowValidator
             }
 
             var hasScopedViews =
-                (overrides?.States?.Values.Any(s => s.Views is { Count: > 0 }) ?? false)
-                || (overrides?.Transitions?.Values.Any(t => t.Views is { Count: > 0 }) ?? false);
+                overrides?.States?.Values.Any(s => s.Views is { Count: > 0 }) == true
+                || overrides?.Transitions?.Values.Any(t => t.Views is { Count: > 0 }) == true;
             if (hasScopedViews && subFlow.HasViewOverrides)
             {
                 result.AddError(new ValidationResult(
@@ -745,8 +752,42 @@ public class WorkflowValidator
             if (binding.Prompt is null || (string.IsNullOrWhiteSpace(binding.Prompt.Template) && string.IsNullOrWhiteSpace(binding.Prompt.Code)))
                 result.AddError(new ValidationResult($"AiAgent state '{state.Key}' must declare a prompt (template or mapping).", [$"{agentPath}.prompt"]));
 
+            for (var i = 0; i < (binding.Prompt?.Messages?.Count ?? 0); i++)
+            {
+                var message = binding.Prompt!.Messages![i];
+                if (message.Role is not { } role || !AgentPromptRoles.Contains(role))
+                    result.AddError(new ValidationResult($"AiAgent state '{state.Key}': prompt.messages[{i}].role must be system, user or assistant.", [$"{agentPath}.prompt.messages[{i}].role"]));
+                if (string.IsNullOrWhiteSpace(message.Content))
+                    result.AddError(new ValidationResult($"AiAgent state '{state.Key}': prompt.messages[{i}].content is required.", [$"{agentPath}.prompt.messages[{i}].content"]));
+            }
+
+            foreach (var (name, path) in binding.Prompt?.Context ?? [])
+            {
+                if (!AgentContextName().IsMatch(name))
+                    result.AddError(new ValidationResult($"AiAgent state '{state.Key}': prompt.context name '{name}' must match ^[a-zA-Z0-9_-]{{1,64}}$.", [$"{agentPath}.prompt.context[{name}]"]));
+                if (string.IsNullOrWhiteSpace(path) || AgentContextRoots.All(root => !path.Trim().StartsWith(root, StringComparison.Ordinal)))
+                    result.AddError(new ValidationResult($"AiAgent state '{state.Key}': prompt.context '{name}' must be a data., body. or instance. path.", [$"{agentPath}.prompt.context[{name}]"]));
+            }
+
             if (string.IsNullOrWhiteSpace(binding.Output?.Path) || !binding.Output!.Path!.StartsWith("$.", StringComparison.Ordinal))
                 result.AddError(new ValidationResult($"AiAgent state '{state.Key}' must declare output.path as a '$.' JSON path.", [$"{agentPath}.output.path"]));
+
+            var participants = binding.Agents ?? [];
+            if (binding.EffectiveMode == AgentTeamMode.Single && participants.Count > 0)
+                result.AddError(new ValidationResult($"AiAgent state '{state.Key}' declares agents[] but mode is single; set mode to sequential, concurrent or handoff.", [$"{agentPath}.agents"]));
+            if (binding.EffectiveMode != AgentTeamMode.Single && participants.Count == 0)
+                result.AddError(new ValidationResult($"AiAgent state '{state.Key}' in mode {binding.EffectiveMode} needs at least one participant in agents[].", [$"{agentPath}.agents"]));
+            var participantNames = new HashSet<string>(StringComparer.Ordinal);
+            for (var i = 0; i < participants.Count; i++)
+            {
+                var participant = participants[i];
+                if (participant.Name is not { } name || !AgentContextName().IsMatch(name))
+                    result.AddError(new ValidationResult($"AiAgent state '{state.Key}': agents[{i}].name must match ^[a-zA-Z0-9_-]{{1,64}}$.", [$"{agentPath}.agents[{i}].name"]));
+                else if (!participantNames.Add(name))
+                    result.AddError(new ValidationResult($"AiAgent state '{state.Key}': agents[{i}].name '{name}' is used more than once.", [$"{agentPath}.agents[{i}].name"]));
+                if (participant.Agent is null)
+                    result.AddError(new ValidationResult($"AiAgent state '{state.Key}': agents[{i}] must reference a sys-agents component.", [$"{agentPath}.agents[{i}].agent"]));
+            }
 
             if (state.SubType is not (StateSubType.None or StateSubType.Busy))
                 result.AddError(new ValidationResult($"AiAgent state '{state.Key}' sub type must be None or Busy.", [$"{statePath}.{nameof(State.SubType)}"]));
@@ -1780,7 +1821,7 @@ public class WorkflowValidator
                 {
                     var finding = new ValidationResult(
                         $"Error boundary on state '{stateKey}' routes to transition '{rule.Transition}', which is " +
-                        $"not available from that state. Declare it on the state, or as a shared transition whose " +
+                        "not available from that state. Declare it on the state, or as a shared transition whose " +
                         $"availableIn contains '{stateKey}'.",
                         [$"{ruleContext}.{nameof(ErrorHandlerRule.Transition)}"]);
 
@@ -1802,8 +1843,8 @@ public class WorkflowValidator
                 {
                     result.AddWarning(new ValidationResult(
                         $"Transition '{rule.Transition}' declares a resource lock but is used as an error-boundary " +
-                        $"target. The ErrorBoundary pipeline profile skips the resource-lock step, so that lock " +
-                        $"never runs when the transition is reached this way.",
+                        "target. The ErrorBoundary pipeline profile skips the resource-lock step, so that lock " +
+                        "never runs when the transition is reached this way.",
                         [$"{ruleContext}.{nameof(ErrorHandlerRule.Transition)}"]));
                 }
             }

@@ -29,6 +29,7 @@ namespace BBT.Workflow.Execution.Pipeline.Steps;
 /// <param name="subItemDataResolver">Opens the data a sub-item hands its parent; null uses the stored row.</param>
 /// <param name="instanceDataWriteService">Flushes buffered data for <c>history: none</c> flows.</param>
 /// <param name="carriedHeaderPolicy">Filters the request headers that ride the terminal event to the parent; null disables header capture, production DI always supplies it.</param>
+/// <param name="agentSessionStore">Deletes the agent sessions (<c>i:*</c>) a finishing instance owns; null skips it.</param>
 public sealed class HandleFinishStep(
     IInstanceRepository instanceRepository,
     ILogger<HandleFinishStep> logger,
@@ -37,7 +38,8 @@ public sealed class HandleFinishStep(
     IResourceLockService? resourceLockService = null,
     IUnitOfWorkManager? uowManager = null,
     IClock? clock = null,
-    ICarriedHeaderPolicy? carriedHeaderPolicy = null) : ITransitionStep
+    ICarriedHeaderPolicy? carriedHeaderPolicy = null,
+    BBT.Workflow.Instances.Agents.IAgentSessionStore? agentSessionStore = null) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.Finish;
@@ -70,6 +72,7 @@ public sealed class HandleFinishStep(
                     UpdateInstanceStatus(context, subItemData);
                     context.ExtractAndDeferInstanceEvents();
                     await instanceRepository.UpdateAsync(context.Instance, true, ct);
+                    await DeleteAgentSessionsAsync(context, ct);
                 },
                 cancellationToken);
             context.Items["IsFinishState"] = true;
@@ -77,14 +80,29 @@ public sealed class HandleFinishStep(
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
         }
 
-        // Railway chain: Update status -> Extract events -> Persist -> Mark finish
+        // Railway chain: Update status -> Extract events -> Persist -> Drop agent sessions -> Mark finish
         return await Result.Ok(context)
             .Tap(ctx => UpdateInstanceStatus(ctx, subItemData))
             .Tap(ctx => ctx.ExtractAndDeferInstanceEvents())
             .TapAsync(ctx => instanceRepository.UpdateAsync(ctx.Instance, true, cancellationToken))
+            .TapAsync(ctx => DeleteAgentSessionsAsync(ctx, cancellationToken))
             .Tap(ctx => ctx.Items["IsFinishState"] = true)
             .TapAsync(ctx => ArmResourceLockReleaseAsync(ctx, cancellationToken))
             .Map(_ => StepOutcome.Continue());
+    }
+
+    /// <summary>
+    /// A completed or cancelled instance has no later agent entry, so the conversations it owns
+    /// (<c>memory.mode</c> <c>state</c> / <c>flow</c>, and approval holds) are deleted in the same
+    /// transaction. Shared <c>k:*</c> sessions outlive it and expire by <c>retentionDays</c>. A flow
+    /// without an AiAgent state issues no statement.
+    /// </summary>
+    private async Task DeleteAgentSessionsAsync(TransitionExecutionContext context, CancellationToken cancellationToken)
+    {
+        if (agentSessionStore is null || !context.Workflow.HasAiAgentState)
+            return;
+
+        await agentSessionStore.DeleteInstanceSessionsAsync(context.Instance.Id, cancellationToken);
     }
 
     /// <summary>

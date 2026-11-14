@@ -28,14 +28,11 @@ public sealed class AgentSession
     /// <summary>SHA-256 of the instructions the session was written with.</summary>
     public string? InstructionsHash { get; set; }
 
-    /// <summary>Encrypted, compressed message list (<see cref="AgentMemoryStorage.Local"/>).</summary>
+    /// <summary>Gzip-compressed message list (<see cref="AgentMemoryStorage.Local"/>); stored as is, not encrypted.</summary>
     public byte[]? SessionData { get; set; }
 
     /// <summary>Provider conversation id (<see cref="AgentMemoryStorage.Provider"/>).</summary>
     public string? ProviderConversationId { get; set; }
-
-    /// <summary>The row's own AES-256 key (rotated on every write). Never served, logged or traced.</summary>
-    public byte[]? EncryptionKey { get; set; }
 
     /// <summary>Messages kept.</summary>
     public int MessageCount { get; set; }

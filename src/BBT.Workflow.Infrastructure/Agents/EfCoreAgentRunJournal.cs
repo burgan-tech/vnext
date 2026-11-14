@@ -19,20 +19,21 @@ public sealed class EfCoreAgentRunJournal(IAetherDbContextProvider<WorkflowDbCon
         var context = await dbContextProvider.GetDbContextAsync(cancellationToken);
         return await context.InstanceAgentRuns
             .AsNoTracking()
-            .CountAsync(r => r.InstanceId == instanceId && r.State == state, cancellationToken);
+            .CountAsync(r => r.InstanceId == instanceId && r.State == state && r.Participant == null, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task AddAsync(
         InstanceAgentRun run,
         IReadOnlyList<InstanceAgentToolCall> toolCalls,
-        InstanceAgentDecision decision,
+        InstanceAgentDecision? decision,
         CancellationToken cancellationToken = default)
     {
         var context = await dbContextProvider.GetDbContextAsync(cancellationToken);
         context.InstanceAgentRuns.Add(run);
         if (toolCalls.Count > 0)
             context.InstanceAgentToolCalls.AddRange(toolCalls);
-        context.InstanceAgentDecisions.Add(decision);
+        if (decision is not null)
+            context.InstanceAgentDecisions.Add(decision);
     }
 }

@@ -114,12 +114,45 @@ public class AiAgentStateDefinitionTests
         PipelineExecutionProfile.ForAutoChain().ExcludedStepOrders.ShouldNotContain(LifecycleOrder.AgentRun);
     }
 
+    [Fact]
+    public void Team_and_prompt_extensions_deserialize_and_validate()
+    {
+        var definition = Build(agentExtra: """
+            "mode": "handoff",
+            "agents": [ { "name": "cards", "agent": { "key": "cards-agent", "domain": "core", "flow": "sys-agents", "version": "1.0.0" }, "description": "Card issues." },
+                        { "name": "loans", "agent": { "key": "loans-agent", "domain": "core", "flow": "sys-agents", "version": "1.0.0" } } ],
+            """);
+        var agent = definition.States.Single(s => s.Key == "classifying").Agent!;
+
+        agent.EffectiveMode.ShouldBe(AgentTeamMode.Handoff);
+        agent.Agents!.Select(a => a.Name).ShouldBe(["cards", "loans"]);
+        _validator.Validate(definition).ValidationErrors.Select(e => e.ErrorMessage).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Team_without_participants_or_with_duplicate_names_is_rejected()
+    {
+        _validator.Validate(Build(agentExtra: "\"mode\": \"concurrent\","))
+            .ValidationErrors.ShouldContain(e => e.ErrorMessage!.Contains("needs at least one participant"));
+
+        _validator.Validate(Build(agentExtra: """
+            "mode": "sequential",
+            "agents": [ { "name": "a", "agent": { "key": "x", "domain": "core", "flow": "sys-agents", "version": "1.0.0" } },
+                        { "name": "a", "agent": { "key": "y", "domain": "core", "flow": "sys-agents", "version": "1.0.0" } } ],
+            """)).ValidationErrors.ShouldContain(e => e.ErrorMessage!.Contains("used more than once"));
+
+        _validator.Validate(Build(agentExtra: """
+            "agents": [ { "name": "a", "agent": { "key": "x", "domain": "core", "flow": "sys-agents", "version": "1.0.0" } } ],
+            """)).ValidationErrors.ShouldContain(e => e.ErrorMessage!.Contains("mode is single"));
+    }
+
     public static WorkflowDefinition Build(
         string? fallback = "\"classify-failed\"",
         string exclude = "",
         string hints = "{ \"is-fraud\": \"Fraud reported.\" }",
         int stateType = 6,
-        string extraTransition = "")
+        string extraTransition = "",
+        string agentExtra = "")
     {
         var fallbackJson = fallback is null ? "" : $"\"fallback\": {fallback},";
         var json = $$"""
@@ -137,6 +170,7 @@ public class AiAgentStateDefinitionTests
                       "agent": { "key": "triage-agent", "domain": "core", "flow": "sys-agents", "version": "1.0.0" },
                       "prompt": { "template": "Classify the message." },
                       "output": { "path": "$.triage" },
+                      {{agentExtra}}
                       "decision": { "mode": "model", {{fallbackJson}} "exclude": [{{exclude}}], "hints": {{hints}} }
                   },
                   "transitions": [
