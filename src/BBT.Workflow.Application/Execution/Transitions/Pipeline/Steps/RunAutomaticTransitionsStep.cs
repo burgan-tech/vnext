@@ -63,8 +63,7 @@ public sealed class RunAutomaticTransitionsStep(
         context.Directives.RequestNextTransition(
             new NextTransitionRequest(winner.TransitionKey, "auto"));
 
-        // Skip to Finalize to complete current transition, then pipeline will chain to next
-        // return StepOutcome.SkipTo(LifecycleOrder.Finalize);
+        // Continue to Finalize; the pipeline then chains to the requested transition.
         return Result<StepOutcome>.Ok(StepOutcome.Continue());
     }
 

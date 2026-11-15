@@ -727,14 +727,6 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             await PersistCompletionAsync(persistenceStrategy, instanceTask, cancellationToken);
         }
 
-        // Record metrics
-        if (response.IsSuccess)
-        {
-        }
-        else
-        {
-        }
-
         // 11. Handle business failure
         // response.IsSuccess is already overridden by AcceptedStatusCodes in TaskExecutorBase,
         // so a matching accepted code will arrive here as IsSuccess = true and fall through to step 12.
