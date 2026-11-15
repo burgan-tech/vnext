@@ -151,8 +151,17 @@ public sealed class SubflowProxyService(
 
         // Compensation: runs on its own bounded token, not the (possibly cancelled) caller's.
         using var cts = CompensationCancellation.Create();
-        await TryWriteEffectiveStatusAsync(
-            snapshot.Id, expected: InstanceStatus.Busy, prior, transitionKey, childId, cts.Token);
+        try
+        {
+            await TryWriteEffectiveStatusAsync(
+                snapshot.Id, expected: InstanceStatus.Busy, prior, transitionKey, childId, cts.Token);
+        }
+        catch (OperationCanceledException ex)
+        {
+            // The compensation budget ran out. The write helper lets cancellation through; here it
+            // must not escape, or it would replace the failure this revert is compensating for.
+            logger.SubFlowProxyEffectiveStatusWriteFailed(ex, transitionKey, childId, snapshot.Id, prior.Code);
+        }
     }
 
     /// <summary>

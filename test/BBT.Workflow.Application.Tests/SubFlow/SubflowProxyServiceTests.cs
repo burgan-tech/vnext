@@ -348,6 +348,43 @@ public class SubflowProxyServiceTests
     }
 
     [Fact]
+    public async Task Async_RevertAfterCancelledCallerToken_UsesALiveToken()
+    {
+        using var cts = new CancellationTokenSource();
+        _gateway
+            .ForwardTransitionAsync(_child.InstanceId, Arg.Any<string>(), Arg.Any<TransitionInput>(), Arg.Any<CancellationToken>())
+            .Returns<Task<Result<TransitionOutput>>>(_ =>
+            {
+                cts.Cancel();
+                return Task.FromResult(Result<TransitionOutput>.Fail(Error.Validation("Transition:100020", "no")));
+            });
+
+        await _service.TryProxyAsync(
+            Snapshot(_child, effectiveStatus: InstanceStatus.Active), CreateWorkflow(), "approve",
+            Input(sync: false), cts.Token);
+
+        await _instanceRepository.Received(1).TryCompareAndSetEffectiveStatusAsync(
+            _parentId, InstanceStatus.Busy, InstanceStatus.Active,
+            Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
+    }
+
+    [Fact]
+    public async Task Async_RevertBudgetExpires_DoesNotMaskTheOriginalFailure()
+    {
+        _gateway
+            .ForwardTransitionAsync(_child.InstanceId, Arg.Any<string>(), Arg.Any<TransitionInput>(), Arg.Any<CancellationToken>())
+            .Returns<Task<Result<TransitionOutput>>>(_ => throw new InvalidOperationException("boom"));
+        _instanceRepository.TryCompareAndSetEffectiveStatusAsync(
+                _parentId, InstanceStatus.Busy, InstanceStatus.Active, Arg.Any<CancellationToken>())
+            .Returns<Task<bool>>(_ => throw new OperationCanceledException());
+
+        // The original InvalidOperationException surfaces, not the revert's OCE.
+        await Should.ThrowAsync<InvalidOperationException>(() => _service.TryProxyAsync(
+            Snapshot(_child, effectiveStatus: InstanceStatus.Active), CreateWorkflow(), "approve",
+            Input(sync: false), CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Async_ChildOwnInstanceBusy_KeepsTheStamp()
     {
         // The child really is busy: the Busy projection is true, so nothing is reverted.

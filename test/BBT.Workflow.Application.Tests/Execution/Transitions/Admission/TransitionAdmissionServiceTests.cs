@@ -446,6 +446,28 @@ public class TransitionAdmissionServiceTests
     }
 
     [Fact]
+    public async Task AcceptAsync_TakenOverFlip_WhenUnderLockThrowsOperationCanceled_ReleasesWithLiveToken()
+    {
+        SetupAcquiredLock();
+        var context = CreateContext("cancel");
+        _busyManager.MarkBusyAsync(context.InstanceId, Arg.Any<CancellationToken>()).Returns(true);
+        using var cts = new CancellationTokenSource();
+
+        await Should.ThrowAsync<OperationCanceledException>(() => CreateService().AcceptAsync(
+            context,
+            (flip, _) =>
+            {
+                flip.ShouldBe(AcceptFlip.TakenOver);
+                cts.Cancel();
+                throw new OperationCanceledException(cts.Token);
+            },
+            cts.Token));
+
+        await _busyManager.Received(1).TryReleaseAsync(
+            context.InstanceId, Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
+    }
+
+    [Fact]
     public async Task ReleaseSubflowChainAsync_WhenCallerTokenCancelled_StillReleases()
     {
         SetupAcquiredLock();
