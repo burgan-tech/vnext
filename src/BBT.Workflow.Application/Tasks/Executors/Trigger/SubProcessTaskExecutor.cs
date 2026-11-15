@@ -495,7 +495,10 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
             [DomainConsts.MetaDataKeys.Version] = context.Workflow.Version,
             [DomainConsts.MetaDataKeys.State] = context.Instance.GetCurrentState,
             [DomainConsts.MetaDataKeys.Transition] = context.Transition.Key ?? string.Empty,
-            [DomainConsts.MetaDataKeys.FlowType] = SubFlowType.SubProcess.Code
+            [DomainConsts.MetaDataKeys.FlowType] = SubFlowType.SubProcess.Code,
+            // The parent's root (the parent itself when it is a root), as SubflowStarter writes it.
+            // Without it the child resolves itself as the root and the chain restarts there (#1267).
+            [DomainConsts.MetaDataKeys.RootInstanceId] = context.Instance.GetRootInstanceId()
         };
     }
 
@@ -511,7 +514,10 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
             [DomainConsts.MetaDataKeys.Version] = context.Workflow.Version,
             [DomainConsts.MetaDataKeys.State] = context.Instance.GetCurrentState,
             [DomainConsts.MetaDataKeys.Transition] = context.Transition.Key ?? string.Empty,
-            [DomainConsts.MetaDataKeys.FlowType] = SubFlowType.SubProcess.Code
+            [DomainConsts.MetaDataKeys.FlowType] = SubFlowType.SubProcess.Code,
+            // The parent's root (the parent itself when it is a root), as SubflowStarter writes it.
+            // Without it the child resolves itself as the root and the chain restarts there (#1267).
+            [DomainConsts.MetaDataKeys.RootInstanceId] = context.Instance.GetRootInstanceId()
         };
     }
 }
