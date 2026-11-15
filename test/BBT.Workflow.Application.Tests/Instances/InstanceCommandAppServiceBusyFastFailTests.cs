@@ -93,6 +93,7 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
             fileOffloadService: BBT.Workflow.Application.Files.FileTestDoubles.PassThroughOffload(),
             rawBodyProvider: Substitute.For<BBT.Workflow.Scripting.IRequestRawBodyProvider>(),
             subflowProxyService: _proxyService,
+            runCancellation: BBT.Workflow.Application.Tests.Execution.Cancellation.RunCancellationTestDoubles.Live(),
             logger: Substitute.For<ILogger<InstanceCommandAppService>>());
     }
 
@@ -407,6 +408,95 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
         result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceCompleted);
         await _proxyService.DidNotReceiveWithAnyArgs()
             .TryProxyAsync(default!, default!, default!, default!, default);
+    }
+
+    // ---- vnext#1258: a client disconnect (cancelled request token) must not cancel the run ----
+
+    [Fact]
+    public async Task TransitionAsync_WhenRequestTokenCancelled_RunsWithLiveToken()
+    {
+        var instanceId = Guid.NewGuid();
+        SetupSnapshot(instanceId, InstanceStatus.Active, hasActiveSubFlow: false);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await _service.TransitionAsync(
+            instanceId.ToString(), "regular-transition", CreateInput(), cts.Token);
+
+        await _executionService.Received(1).ExecuteTransitionAsync(
+            Arg.Any<WorkflowExecutionContext>(),
+            Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
+    }
+
+    [Fact]
+    public async Task TransitionAsync_WhenRequestTokenCancelledBeforeAdmission_StillRunsWithLiveToken()
+    {
+        // The request token is already cancelled when the intake reads the snapshot: the snapshot read
+        // and the execution entry both get the live run token, not the request token.
+        var instanceId = Guid.NewGuid();
+        SetupSnapshot(instanceId, InstanceStatus.Active, hasActiveSubFlow: false);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await _service.TransitionAsync(
+            instanceId.ToString(), "regular-transition", CreateInput(), cts.Token);
+
+        await _instanceRepository.Received(1).GetExecutionSnapshotAsync(
+            instanceId.ToString(), Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
+        await _executionService.Received(1).ExecuteTransitionAsync(
+            Arg.Any<WorkflowExecutionContext>(),
+            Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
+    }
+
+    [Fact]
+    public async Task TransitionAsync_Proxied_WhenRequestTokenCancelled_ForwardsWithLiveToken()
+    {
+        var instanceId = Guid.NewGuid();
+        SetupSnapshot(instanceId, InstanceStatus.Busy, hasActiveSubFlow: true);
+        _proxyService
+            .TryProxyAsync(Arg.Any<InstanceExecutionSnapshot>(), Arg.Any<Definitions.Workflow>(),
+                "approve", Arg.Any<TransitionInput>(), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = instanceId, Status = InstanceStatus.Busy, ExecutedAsync = true
+            }));
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var result = await _service.TransitionAsync(instanceId.ToString(), "approve", CreateInput(), cts.Token);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _proxyService.Received(1).TryProxyAsync(
+            Arg.Any<InstanceExecutionSnapshot>(), Arg.Any<Definitions.Workflow>(),
+            "approve", Arg.Any<TransitionInput>(), Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
+    }
+
+    [Fact]
+    public async Task TransitionAsync_WhenRequestTokenCancelled_TagsTheSpanAsClientAborted()
+    {
+        using var root = new System.Diagnostics.Activity("client-aborted-root");
+        root.Start();
+        var instanceId = Guid.NewGuid();
+        SetupSnapshot(instanceId, InstanceStatus.Active, hasActiveSubFlow: false);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await _service.TransitionAsync(instanceId.ToString(), "regular-transition", CreateInput(), cts.Token);
+
+        root.GetTagItem(TelemetryConstants.TagNames.ClientAborted).ShouldBe(true);
+    }
+
+    [Fact]
+    public async Task TransitionAsync_WhenRequestTokenLive_DoesNotTagClientAborted()
+    {
+        using var root = new System.Diagnostics.Activity("client-live-root");
+        root.Start();
+        var instanceId = Guid.NewGuid();
+        SetupSnapshot(instanceId, InstanceStatus.Active, hasActiveSubFlow: false);
+
+        await _service.TransitionAsync(instanceId.ToString(), "regular-transition", CreateInput(), CancellationToken.None);
+
+        root.GetTagItem(TelemetryConstants.TagNames.ClientAborted).ShouldBeNull();
     }
 
     private void SetupSnapshot(Guid instanceId, InstanceStatus status, bool hasActiveSubFlow)

@@ -3126,6 +3126,33 @@ public static partial class WorkflowLogs
         string? nextTransition);
 
     /// <summary>
+    /// Logs when the client of a transition request disconnected (its request token was cancelled)
+    /// while the run kept going on its own run token, so the committed work was finished instead of
+    /// stranding the instance Busy.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10265,
+        Level = LogLevel.Information,
+        Message = "Transition {TransitionKey} on instance {InstanceId} continued after the client disconnected")]
+    public static partial void TransitionContinuedAfterClientDisconnect(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey);
+
+    /// <summary>
+    /// Logs when the client of a start request disconnected (its request token was cancelled) while the
+    /// run kept going on its own run token, so the started instance was not stranded Busy.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10266,
+        Level = LogLevel.Information,
+        Message = "Start of flow {Flow} (instance {InstanceId}) continued after the client disconnected")]
+    public static partial void InstanceStartContinuedAfterClientDisconnect(
+        this ILogger logger,
+        string flow,
+        Guid instanceId);
+
+    /// <summary>
     /// Logs when a distributed resource lock TTL is successfully extended.
     /// </summary>
     [LoggerMessage(

@@ -108,6 +108,7 @@ public class InstanceCommandAppServiceStartFlowVersionTests : IDisposable
             fileOffloadService: BBT.Workflow.Application.Files.FileTestDoubles.PassThroughOffload(),
             rawBodyProvider: Substitute.For<BBT.Workflow.Scripting.IRequestRawBodyProvider>(),
             subflowProxyService: Substitute.For<BBT.Workflow.SubFlow.ISubflowProxyService>(),
+            runCancellation: BBT.Workflow.Application.Tests.Execution.Cancellation.RunCancellationTestDoubles.Live(),
             logger: Substitute.For<ILogger<InstanceCommandAppService>>());
     }
 
@@ -231,6 +232,22 @@ public class InstanceCommandAppServiceStartFlowVersionTests : IDisposable
         create.GetTagItem(TelemetryConstants.TagNames.FlowVersionRequested).ShouldBe("1.0");
         create.GetTagItem(TelemetryConstants.TagNames.FlowVersion).ShouldBe("1.0.3");
         root.Stop();
+    }
+
+    [Fact]
+    public async Task StartAsync_WhenRequestTokenCancelled_RunsWithLiveToken()
+    {
+        // vnext#1258: a client that disconnects mid-start must not strand the new instance Busy — the
+        // start transition runs on the live run token, not the cancelled request token.
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var result = await _service.StartAsync(CreateInput("1.0", key: "k-" + Guid.NewGuid()), cts.Token);
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        await _execution.Received(1).ExecuteTransitionAsync(
+            Arg.Any<WorkflowExecutionContext>(),
+            Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
     }
 
     private static StartInstanceInput CreateInput(string version, string key, bool strict = true)

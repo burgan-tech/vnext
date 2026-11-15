@@ -89,6 +89,7 @@ public class InstanceCommandAppServiceStartProbeTests : IDisposable
             fileOffloadService: BBT.Workflow.Application.Files.FileTestDoubles.PassThroughOffload(),
             rawBodyProvider: Substitute.For<BBT.Workflow.Scripting.IRequestRawBodyProvider>(),
             subflowProxyService: Substitute.For<BBT.Workflow.SubFlow.ISubflowProxyService>(),
+            runCancellation: BBT.Workflow.Application.Tests.Execution.Cancellation.RunCancellationTestDoubles.Live(),
             logger: Substitute.For<ILogger<InstanceCommandAppService>>());
     }
 

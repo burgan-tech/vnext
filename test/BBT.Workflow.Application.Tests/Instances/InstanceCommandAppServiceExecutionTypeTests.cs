@@ -94,6 +94,7 @@ public sealed class InstanceCommandAppServiceExecutionTypeTests : IDisposable
             fileOffloadService: BBT.Workflow.Application.Files.FileTestDoubles.PassThroughOffload(),
             rawBodyProvider: Substitute.For<BBT.Workflow.Scripting.IRequestRawBodyProvider>(),
             subflowProxyService: Substitute.For<BBT.Workflow.SubFlow.ISubflowProxyService>(),
+            runCancellation: BBT.Workflow.Application.Tests.Execution.Cancellation.RunCancellationTestDoubles.Live(),
             logger: Substitute.For<ILogger<InstanceCommandAppService>>());
     }
 
@@ -171,6 +172,23 @@ public sealed class InstanceCommandAppServiceExecutionTypeTests : IDisposable
         await _service.TransitionAsync(Guid.NewGuid().ToString(), "go", input, CancellationToken.None);
 
         _captured!.TrustedPayload.ShouldBe(trusted);
+    }
+
+    [Fact]
+    public async Task TransitionAsync_AsyncMode_WhenRequestTokenCancelled_AcceptsWithLiveToken()
+    {
+        // vnext#1258: the async accept (Busy flip + enqueue) runs inside the execution entry, so it must
+        // get the live run token, not the cancelled request token.
+        SetupInstanceAndWorkflow(WithSharedTransition(ExecutionType.Async));
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await _service.TransitionAsync(Guid.NewGuid().ToString(), "go", Input(sync: false), cts.Token);
+
+        _captured!.Mode.ShouldBe(ExecMode.Async);
+        await _workflowExecutionService.Received(1).ExecuteTransitionAsync(
+            Arg.Any<WorkflowExecutionContext>(),
+            Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
     }
 
     private void SetupInstanceAndWorkflow(Definitions.Workflow workflow)
