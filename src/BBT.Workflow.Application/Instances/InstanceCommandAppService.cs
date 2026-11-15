@@ -17,7 +17,6 @@ using BBT.Workflow.Caching;
 using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
-using BBT.Workflow.Execution.Cancellation;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Logging;
@@ -68,37 +67,13 @@ public sealed class InstanceCommandAppService(
     IFileOffloadService fileOffloadService,
     IRequestRawBodyProvider rawBodyProvider,
     ISubflowProxyService subflowProxyService,
-    IRunCancellation runCancellation,
     ILogger<InstanceCommandAppService> logger)
     : ApplicationService(serviceProvider), IInstanceCommandAppService
 {
     /// <inheritdoc />
-    /// <remarks>
-    /// Runs on a run token, not the request token (vnext#1258): once the start has persisted the
-    /// instance and its start transition has flipped Busy, a client disconnect must not cancel the rest
-    /// of the run and strand the instance Busy. Only host shutdown or the
-    /// <c>WorkflowExecution:TransitionJobTimeoutSeconds</c> budget can cancel it.
-    /// </remarks>
     public async Task<Result<StartInstanceOutput>> StartAsync(
         StartInstanceInput input,
         CancellationToken cancellationToken = default)
-    {
-        using var run = runCancellation.Begin(cancellationToken);
-        var result = await StartCoreAsync(input, run.Token);
-
-        if (run.CallerAborted)
-        {
-            var instanceId = result.IsSuccess ? result.Value!.Id : input.Instance.Id ?? Guid.Empty;
-            logger.InstanceStartContinuedAfterClientDisconnect(input.Workflow, instanceId);
-            Activity.Current?.SetTag(TelemetryConstants.TagNames.ClientAborted, true);
-        }
-
-        return result;
-    }
-
-    private async Task<Result<StartInstanceOutput>> StartCoreAsync(
-        StartInstanceInput input,
-        CancellationToken cancellationToken)
     {
         runtimeInfoProvider.Check(input.Domain);
         // Step 1: Load workflow
@@ -740,39 +715,11 @@ public sealed class InstanceCommandAppService(
     }
 
     /// <inheritdoc />
-    /// <remarks>
-    /// Runs on a run token, not the request token (vnext#1258): the snapshot read, the SubFlow proxy, the
-    /// execution entry (admission, pipeline, inline auto-chain, post-commit) and the response enrichment
-    /// all use it, so a client disconnect after the Busy CAS cannot strand the instance Busy. Only host
-    /// shutdown or the <c>WorkflowExecution:TransitionJobTimeoutSeconds</c> budget can cancel it — the
-    /// same contract the background transition job runs on.
-    /// </remarks>
     public async Task<Result<TransitionOutput>> TransitionAsync(
         string instance,
         string transitionKey,
         TransitionInput input,
         CancellationToken cancellationToken = default)
-    {
-        using var run = runCancellation.Begin(cancellationToken);
-        var result = await TransitionCoreAsync(instance, transitionKey, input, run.Token);
-
-        if (run.CallerAborted)
-        {
-            var instanceId = result.IsSuccess
-                ? result.Value!.Id
-                : Guid.TryParse(instance, out var parsed) ? parsed : Guid.Empty;
-            logger.TransitionContinuedAfterClientDisconnect(instanceId, transitionKey);
-            Activity.Current?.SetTag(TelemetryConstants.TagNames.ClientAborted, true);
-        }
-
-        return result;
-    }
-
-    private async Task<Result<TransitionOutput>> TransitionCoreAsync(
-        string instance,
-        string transitionKey,
-        TransitionInput input,
-        CancellationToken cancellationToken)
     {
         runtimeInfoProvider.Check(input.Domain);
 

@@ -188,7 +188,8 @@ public sealed class InstanceControllerRelatedDataTests
             relatedInstanceQueryAppService,
             Substitute.For<BBT.Workflow.Instances.HumanTask.IHumanTaskLeafResolver>(),
             Substitute.For<BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver>(),
-            new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()))
+            new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
+            new BBT.Workflow.Execution.Cancellation.RunCancellation(Substitute.For<Microsoft.Extensions.Hosting.IHostApplicationLifetime>(), Microsoft.Extensions.Options.Options.Create(new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions()), System.TimeProvider.System))
         {
             ControllerContext = new ControllerContext { HttpContext = httpContext }
         };
