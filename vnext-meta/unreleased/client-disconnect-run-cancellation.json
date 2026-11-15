@@ -1,6 +1,6 @@
 {
   "releaseNote": {
-    "summary": "Committed work is no longer cancelled when the HTTP client disconnects; compensation runs on its own bounded token, so instances are not stranded Busy.",
+    "summary": "Start, transition, event, retry, ack and SubFlow relay runs survive an HTTP client disconnect; compensation has its own bounded token, so instances are not stranded Busy.",
     "breaking": false,
     "docs": []
   },

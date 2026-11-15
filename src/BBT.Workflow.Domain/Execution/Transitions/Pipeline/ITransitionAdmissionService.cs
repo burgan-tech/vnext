@@ -124,8 +124,9 @@ public interface ITransitionAdmissionService
     /// <summary>
     /// Compensates a successful <see cref="ReserveAsync"/> whose follow-up work failed before
     /// any job or pipeline could run (e.g. async enqueue failure): under the short status lock,
-    /// settles Busy back to Active. Never throws — failure to release is logged; job-timeout
-    /// recovery remains the safety net.
+    /// settles Busy back to Active. Never throws — failure to release is logged. A Busy this
+    /// compensation fails to release has no automatic recovery: no job exists yet at accept time, so
+    /// job-timeout recovery never sees it, and manual cancel/exit is the only remedy.
     /// The <c>cancellationToken</c> is ignored for cancellation: compensation runs on its own bounded token
     /// (15 s), so an aborted request cannot strand the reservation.
     /// </summary>

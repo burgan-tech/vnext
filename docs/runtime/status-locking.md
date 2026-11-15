@@ -63,18 +63,27 @@ A client that disconnects (closed tab, client-side timeout) cancels the HTTP req
 request has committed its Busy reservation, that must not cancel the pipeline, the inline auto-chain or
 the post-commit work, or the instance is left Busy with no owner.
 
-- **Detach at the HTTP boundary only.** `InstanceController.RunDetachedFromClientAsync` wraps five
-  actions: Start, StartSub, SubflowForward, PATCH Transition and ScheduleStart. It runs the entry on a
-  *run token* (`IRunCancellation.Begin`) instead of the request token. `InstanceCommandAppService`
+- **Detach at the HTTP boundary only.** `InstanceController.RunDetachedFromClientAsync` wraps every
+  action that owns Busy or runs a pipeline: Start, StartSub, SubflowForward, PATCH Transition,
+  ScheduleStart, `instances/events` (event start / transition), Retry, long-poll ack, `child-cancel`, and
+  the SubFlow relay callbacks `complete`, `sub/state`, `sub/fault` and `sub/cancel` (each runs the
+  parent's resume pipeline and inline chain). It runs the entry on a *run token*
+  (`IRunCancellation.Begin`) instead of the request token. Work done before the run — such as reading
+  the event body — still uses the request token: nothing is committed yet. `InstanceCommandAppService`
   uses the token it is handed, so in-process callers (`LocalInstanceCommandGateway`, `EventAppService`,
   `InstanceScheduleAppService`, a background `TransitionJob`) keep their own token and budget.
 - **What cancels the run token:** host shutdown (`ApplicationStopping`) and the
   `WorkflowExecution:TransitionJobTimeoutSeconds` budget (default 300 s). A client abort does not.
-- **Nested entries share the token.** A `Begin` inside an already-open lease reuses the outer run token
-  and budget instead of starting a fresh one.
+- **Nested entries would share the token.** Today only the controller calls `Begin`, once per request.
+  As a defensive guarantee, a `Begin` inside an already-open lease reuses the outer run token and budget
+  instead of starting a fresh one, so a future in-process caller cannot extend the budget by nesting.
 - **Visibility.** On an abort the run continues and writes WorkflowLogs `10265`
-  `TransitionContinuedAfterClientDisconnect` / `10266` `InstanceStartContinuedAfterClientDisconnect`
-  (Information) and tags the span `vnext.client.aborted=true`.
+  `TransitionContinuedAfterClientDisconnect` / `10266` `InstanceStartContinuedAfterClientDisconnect` /
+  `10267` `RunContinuedAfterClientDisconnect` (event, retry, ack, child cancel, relay callbacks;
+  Information) and tags the span `vnext.client.aborted=true`.
+- **Redelivery meets the live run.** When a Dapr pub/sub event delivery times out on the caller side
+  and is redelivered, the redelivery now finds the original run still holding Busy and is answered
+  `409 Busy` — non-2xx, so the broker retries it later — instead of finding a stranded Busy.
 - **Compensation has its own budget.** Releasing a reservation or chain (`ReleaseReservationAsync`,
   `ReleaseSubflowChainAsync`, the accept-time `CompensateUnderLockAsync`), `SubflowProxyService.RevertStampAsync`,
   the transition runner's failed-coordination fault + chain release and `MarkInstanceFaultedAsync`
