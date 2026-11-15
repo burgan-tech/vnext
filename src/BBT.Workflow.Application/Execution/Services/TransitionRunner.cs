@@ -4,6 +4,7 @@ using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Aether.Users;
 using BBT.Workflow.CurrentUser;
+using BBT.Workflow.Execution.Cancellation;
 using BBT.Workflow.Execution.PostCommit;
 using BBT.Workflow.Execution.PostCommit.Relay;
 using BBT.Workflow.Instances;
@@ -233,8 +234,15 @@ public sealed class TransitionRunner(
         PostCommitParentSnapshot snapshot,
         TransitionCoreOutput coreOutput,
         Error error,
-        CancellationToken cancellationToken)
+        CancellationToken callerCancellationToken)
     {
+        // Compensation runs on its own bounded token: it exists because the run failed, often
+        // because the caller's token was cancelled (client disconnect); the caller's token is
+        // ignored for cancellation here.
+        _ = callerCancellationToken;
+        using var compensation = CompensationCancellation.Create();
+        var cancellationToken = compensation.Token;
+
         // ContinuationSet is a non-consuming projection, so the jobs are still readable here even
         // though the coordinator consumed the directives.
         // Testing for ANY StartSubflowJob (rather than the one that actually failed) is safe only

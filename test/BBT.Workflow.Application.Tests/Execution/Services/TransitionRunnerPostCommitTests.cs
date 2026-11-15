@@ -547,6 +547,29 @@ public sealed class TransitionRunnerPostCommitTests
     }
 
     [Fact]
+    public async Task RunAsync_WhenStartSubflowCoordinationFailsAfterTokenCancelled_StillFaultsParent()
+    {
+        // A client disconnect cancels the caller's token while the post-commit work runs. The
+        // compensation exists because of that, so it must run on a live bounded token.
+        using var cts = new CancellationTokenSource();
+        var harness = new RunnerHarness(new StagePlan(
+            "stage-0",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild,
+            PostCommitJob: PostCommitJobKind.StartSubflow))
+        {
+            PostCommitResult = PostCommitResult.Fail(Error.NotFound("Instance:100404", "sub flow not found")),
+            OnPostCommit = cts.Cancel
+        };
+
+        var result = await harness.Runner.RunAsync(harness.CreateInput("go"), cts.Token);
+
+        result.Error.Code.ShouldBe("Instance:100404");
+        await harness.ParentMutationService.Received(1).FaultAsync(
+            Arg.Any<PostCommitParentSnapshot>(), Arg.Any<PostCommitFaultRequest>(),
+            Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
+    }
+
+    [Fact]
     public async Task RunAsync_WhenStartSubflowCoordinationFails_AndContextDoesNotOwnStatus_CompensatesNothing()
     {
         // Defensive guard, not a reachable production path. A lost CAS on the start hop
@@ -680,6 +703,9 @@ public sealed class TransitionRunnerPostCommitTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource? PostCommitGate { get; init; }
         public PostCommitResult PostCommitResult { get; init; } = PostCommitResult.Ok();
+
+        /// <summary>Runs inside the post-commit executor, before it answers (e.g. to cancel the caller's token).</summary>
+        public Action? OnPostCommit { get; init; }
 
         /// <summary>
         /// When set, the post-commit executor answers like <c>ForwardToSubflowJobHandler</c> after a
@@ -841,6 +867,7 @@ public sealed class TransitionRunnerPostCommitTests
             if (PostCommitGate is not null)
                 await PostCommitGate.Task.WaitAsync(cancellationToken);
             BusinessCalls.Add("post-commit");
+            OnPostCommit?.Invoke();
             if (ForwardedChildStatus is { } childStatus)
             {
                 source.ClientResponse = new ClientResponse
