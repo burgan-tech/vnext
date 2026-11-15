@@ -168,7 +168,8 @@ public sealed class InstanceControllerChildCancelTests
                 value.Origin == TerminationOrigin.ParentCascade &&
                 value.InitiatorInstanceId == initiator &&
                 value.CascadeId == cascade),
-            CancellationToken.None);
+            // vnext#1258: child-cancel runs on the run token, not the request token.
+            Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
     }
 
     [Fact]
