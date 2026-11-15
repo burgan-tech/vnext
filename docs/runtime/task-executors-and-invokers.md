@@ -60,8 +60,9 @@ config, and what the local path trades away.
 - Invalid binding returns validation failure before external work.
 - Remote Execution failure returns an invocation result that the executor maps into
   task/pipeline error handling.
-- Non-blocking task failures are stored in pipeline context and finalized according to
-  the task semantics.
+- A business failure with no error boundary (task, state or workflow) is unhandled: the hook
+  stops, the step records an incident and the instance faults. A failure an `Ignore`/`Log`
+  boundary handles lets the remaining tasks of the hook run (vnext#1257).
 
 ## Observability
 

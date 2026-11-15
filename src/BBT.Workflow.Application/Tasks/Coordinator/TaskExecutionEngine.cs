@@ -155,10 +155,14 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                     return result;
                 }
 
-                // No boundary + business failure (e.g. 404) - flow continues; do not resolve fallback
-                if (result is { IsSuccess: true, Value: var value } && value is { TaskError: null, HasFailedTasks: true })
+                // No boundary at any level + business failure: UNHANDLED (vnext#1257). Returned as-is —
+                // TaskError set, no BoundaryAction — so the task step records an incident and faults.
+                // Nothing to retry or resolve: the chain is empty.
+                if (!boundaryChain.HasAnyBoundary && result is { IsSuccess: true, Value: { IsBusinessFailure: true, TaskError: { } unhandledError } })
                 {
                     _logger.TaskBusinessFailureWithoutBoundary(taskKey);
+                    TaskExecutionActivityHelper.SetError(
+                        Activity.Current, unhandledError.ErrorMessage, unhandledError.TaskType, unhandledError.StatusCode);
                     return result;
                 }
 
@@ -238,16 +242,6 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         var executionError = failedResult.Value?.TaskError;
         if (executionError == null)
         {
-            // No TaskError with successful Result = no boundary + business failure; should not reach here
-            // (ExecuteWithPollyAsync returns early). Return result so pipeline continues.
-            if (failedResult is { IsSuccess: true, Value: not null })
-            {
-                _logger.LogDebug(
-                    "Task {TaskKey}: no TaskError with successful Result (no-boundary business failure). Returning result for pipeline continuation.",
-                    taskKey);
-                return failedResult;
-            }
-
             // Infrastructure error - create from Result.Error
             executionError = _errorFactory.CreateFromError(
                 failedResult.Error, taskKey, "Unknown", totalDurationMs);
@@ -322,11 +316,11 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             // pipeline faults on. The error travels in HandledError instead, and the captured
             // response (non-null only under CaptureResponse, i.e. FanOut items) is kept so a
             // handled business failure still hands its payload to the caller.
-            return Result<TasksExecutionResult>.Ok(TasksExecutionResult.SuccessWithFailedTasks(
-                [summary],
+            return Result<TasksExecutionResult>.Ok(TasksExecutionResult.HandledFailure(
+                summary,
+                executionError,
                 executionDurationMs) with
             {
-                HandledError = executionError,
                 Response = capturedResponse
             });
         }
@@ -749,37 +743,11 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             var executionError = _errorFactory.CreateFromResponse(
                 response, task.Key, taskTypeStr, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
 
-            // Critical Decision: Check if ErrorBoundary is configured
-            // - No boundary: Developer manages via auto-transitions (e.g., 404 → NotFound state)
-            // - Has boundary: Apply retry/fallback policies
-            if (!boundaryChain.HasAnyBoundary)
-            {
-                // No ErrorBoundary - let flow continue with auto-transitions
-                _logger.LogError(
-                    "Task {TaskKey} failed with business error (StatusCode: {StatusCode}) and no ErrorBoundary is defined. Flow will continue with auto-transitions. Error: {Error}",
-                    task.Key, response.StatusCode, executionError.ErrorMessage);
-
-                // Add event only — span Status stays OK since the flow continues normally via auto-transitions
-                TaskExecutionActivityHelper.AddFailedEvent(Activity.Current, executionError.ErrorMessage, taskTypeStr, response.StatusCode);
-
-                var failureSummary = TaskExecutionSummary.Failure(
-                    task.Key, taskTypeStr, executionError.ErrorMessage,
-                    response.StatusCode, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
-
-                // Return success to let pipeline continue (auto-transitions will handle routing)
-                var noBoundaryResult = TasksExecutionResult.SuccessWithFailedTasks(
-                    [failureSummary], (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
-                if (options.CaptureResponse)
-                {
-                    noBoundaryResult = noBoundaryResult with { Response = response };
-                }
-
-                return Result<TasksExecutionResult>.Ok(noBoundaryResult);
-            }
-
-            // ErrorBoundary exists - return failure for retry evaluation
+            // One shape with or without a boundary: TaskError set, no BoundaryAction yet. With a
+            // boundary the engine's retry loop resolves it; without one the loop returns it as an
+            // unhandled failure and the task step faults the instance (vnext#1257).
             _logger.LogError(
-                "Task {TaskKey} failed with business error (StatusCode: {StatusCode}). ErrorBoundary is configured - retry policy will be evaluated. Error: {Error}",
+                "Task {TaskKey} failed with business error (StatusCode: {StatusCode}). Error: {Error}",
                 task.Key, response.StatusCode, executionError.ErrorMessage);
 
             // Add event per attempt so each failure is visible in the trace timeline
@@ -793,6 +761,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 FailedTask = onExecuteTask,
                 TaskError = executionError,
                 BoundaryAction = null, // No boundary action yet - raw result for retry
+                IsBusinessFailure = true,
                 ExecutedTasks = [],
                 TotalExecutionDurationMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
                 Response = options.CaptureResponse ? response : null

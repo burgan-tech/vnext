@@ -47,9 +47,9 @@ public static class BoundaryOutcomeHandler
         // Log/Ignore - continue pipeline execution (record informational incident as already-resolved).
         //
         // UNREACHABLE from the task steps as the engine stands: a continue-style outcome comes back as
-        // TasksExecutionResult.SuccessWithFailedTasks, which carries NO boundary action, so the step's
-        // BoundaryAction guard is false and this method is never called for Log/Ignore. The measured
-        // behaviour is therefore "no incident, and the rest of the hook is skipped". Left in place so
+        // TasksExecutionResult.HandledFailure, which carries NO boundary action, so the step's
+        // BoundaryAction guard is false and this method is never called for Log/Ignore. The behaviour
+        // is therefore "no incident; the remaining tasks of the hook run" (vnext#1257). Left in place so
         // the intended semantics are still expressed if the engine starts attaching the action.
         if (action.ShouldContinue)
         {

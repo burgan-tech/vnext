@@ -58,6 +58,14 @@ public sealed record TasksExecutionResult
     public ExecutionError? HandledError { get; init; }
 
     /// <summary>
+    /// True when the task RAN and answered with a business failure (a non-success response), as
+    /// opposed to an infrastructure failure where it never answered (factory load, executor lookup,
+    /// execution error). The engine returns an unbounded business failure as-is (vnext#1257) and
+    /// keeps routing an unbounded infrastructure failure through its fallback resolution.
+    /// </summary>
+    internal bool IsBusinessFailure { get; init; }
+
+    /// <summary>
     /// Gets the boundary action result from error boundary resolution.
     /// Contains the action to take (Abort, Retry, Rollback, Notify, etc.) and transition key.
     /// Set when a task fails and error boundary resolves a policy.
@@ -113,13 +121,44 @@ public sealed record TasksExecutionResult
     }
 
     /// <summary>
-    /// Creates a result where pipeline continues but some tasks failed at business level.
-    /// Used when tasks have BusinessStatus.Failed but no blocking error policy is defined.
+    /// The engine's result for ONE task whose failure the error boundary handled with a
+    /// non-blocking action (<c>Ignore</c> / <c>Log</c>).
     /// </summary>
-    /// <param name="executedTasks">The list of executed tasks (including failed ones).</param>
+    /// <remarks>
+    /// <c>IsSuccess</c> is false — the task itself did fail, and a per-task caller (a FanOut item,
+    /// an agent tool call) reports it as failed. <c>TaskError</c> and <c>BoundaryAction</c> stay
+    /// null, which is how <c>TaskCoordinator</c> tells it from an unhandled failure: it does not
+    /// stop the hook, and the hook's aggregate is <see cref="CompletedWithHandledFailures"/>.
+    /// </remarks>
+    /// <param name="failedTask">The summary of the failed task.</param>
+    /// <param name="handledError">The error the boundary let through.</param>
     /// <param name="totalDurationMs">The total execution duration.</param>
-    /// <returns>A TasksExecutionResult with IsSuccess=true but HasFailedTasks=true.</returns>
-    public static TasksExecutionResult SuccessWithFailedTasks(
+    public static TasksExecutionResult HandledFailure(
+        TaskExecutionSummary failedTask,
+        ExecutionError handledError,
+        long totalDurationMs = 0)
+    {
+        return new TasksExecutionResult
+        {
+            IsSuccess = false,
+            HasFailedTasks = true,
+            FailedTaskKeys = [failedTask.TaskKey],
+            FailedTask = null,
+            TaskError = null,
+            HandledError = handledError,
+            ExecutedTasks = [failedTask],
+            TotalExecutionDurationMs = totalDurationMs
+        };
+    }
+
+    /// <summary>
+    /// The aggregate of a hook that ran to its end although some of its tasks failed — every one
+    /// of those failures was handled by an <c>Ignore</c> / <c>Log</c> boundary.
+    /// </summary>
+    /// <param name="executedTasks">The list of executed tasks (including the failed ones).</param>
+    /// <param name="totalDurationMs">The total execution duration.</param>
+    /// <returns>A TasksExecutionResult with IsSuccess=true and HasFailedTasks=true.</returns>
+    public static TasksExecutionResult CompletedWithHandledFailures(
         IReadOnlyList<TaskExecutionSummary> executedTasks,
         long totalDurationMs = 0)
     {
@@ -130,7 +169,7 @@ public sealed record TasksExecutionResult
 
         return new TasksExecutionResult
         {
-            IsSuccess = false,
+            IsSuccess = true,
             HasFailedTasks = failedKeys.Count > 0,
             FailedTaskKeys = failedKeys,
             FailedTask = null,

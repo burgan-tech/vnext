@@ -249,7 +249,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         var hasBusinessFailures = executedTasks.Any(t => !t.IsSuccess);
         return Result<TasksExecutionResult>.Ok(
             hasBusinessFailures
-                ? TasksExecutionResult.SuccessWithFailedTasks(executedTasks, (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds)
+                ? TasksExecutionResult.CompletedWithHandledFailures(executedTasks, (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds)
                 : TasksExecutionResult.Success(executedTasks, (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds));
     }
 
@@ -280,7 +280,14 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
 
         var result = taskResult.Value!;
 
-        // Business error with blocking action
+        // A failure an Ignore/Log boundary let through: the hook goes on (vnext#1257).
+        if (IsHandledFailure(result))
+        {
+            executedTasks.AddRange(result.ExecutedTasks);
+            return null;
+        }
+
+        // Unhandled failure (no boundary) or a blocking boundary action: the hook stops here.
         if (!result.IsSuccess)
         {
             return Result<TasksExecutionResult>.Ok(new TasksExecutionResult
@@ -300,6 +307,15 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         executedTasks.AddRange(result.ExecutedTasks);
         return null;
     }
+
+    /// <summary>
+    /// A task failure the error boundary handled with a non-blocking action (<c>Ignore</c> /
+    /// <c>Log</c>): failed, but with neither a <c>TaskError</c> (unhandled) nor a
+    /// <c>BoundaryAction</c> (blocking) — see <see cref="TasksExecutionResult.HandledFailure"/>.
+    /// It does not stop the hook.
+    /// </summary>
+    private static bool IsHandledFailure(TasksExecutionResult result) =>
+        result is { IsSuccess: false, TaskError: null, BoundaryAction: null };
 
     /// <summary>
     /// Executes a group of tasks with same Order in parallel.
@@ -361,7 +377,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                             totalDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds));
                 }
 
-                if (!result.Value!.IsSuccess)
+                if (!result.Value!.IsSuccess && !IsHandledFailure(result.Value))
                 {
                     lock (_parallelTaskLock)
                     {
@@ -398,7 +414,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                 // Collect successful tasks before failure
                 foreach (var (_, result, _) in results)
                 {
-                    if (result.IsSuccess && result.Value != null && result.Value.IsSuccess)
+                    if (result.IsSuccess && result.Value != null && (result.Value.IsSuccess || IsHandledFailure(result.Value)))
                     {
                         executedTasks.AddRange(result.Value.ExecutedTasks);
                     }
@@ -429,7 +445,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             var hasBusinessFailures = executedTasks.Any(t => !t.IsSuccess);
             return Result<TasksExecutionResult>.Ok(
                 hasBusinessFailures
-                    ? TasksExecutionResult.SuccessWithFailedTasks(executedTasks, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds)
+                    ? TasksExecutionResult.CompletedWithHandledFailures(executedTasks, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds)
                     : TasksExecutionResult.Success(executedTasks, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds));
         }
         catch (Exception ex)

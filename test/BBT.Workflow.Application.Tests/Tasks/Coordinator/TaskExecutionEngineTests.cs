@@ -569,6 +569,42 @@ public sealed class TaskExecutionEngineTests : IDisposable
         result.Value.HandledError.ShouldBeNull();
     }
 
+    /// <summary>
+    /// vnext#1257: a business failure with no error boundary at any level (task, state, workflow)
+    /// is UNHANDLED. It comes back with its <c>TaskError</c> and no <c>BoundaryAction</c> — the
+    /// shape the task steps fault on with an incident — instead of the error-less shape the steps
+    /// read as success. Retried zero times, response kept under capture, span in error.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_WhenBusinessFailureHasNoBoundary_ReportsAnUnhandledTaskError()
+    {
+        var task = WorkflowTaskFactory.CreateHttpTask("mock-api");
+        ArrangeFailedExecution(task, statusCode: 400, message: "schema validation failed");
+        var onExecute = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty));
+        var options = new TaskEngineExecutionOptions { CaptureResponse = true, SuppressDataApply = true };
+        using var spans = new TraceSpanCollector(TaskSourceName);
+
+        var result = await CreateEngine().ExecuteAsync(
+            onExecute, Guid.NewGuid(), TaskTrigger.OnExecute, TaskExecutionOrigin.Flow,
+            CreateScriptContext(), options, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        var value = result.Value!;
+        value.IsSuccess.ShouldBeFalse();
+        value.HasFailedTasks.ShouldBeTrue();
+        value.BoundaryAction.ShouldBeNull();
+        value.HandledError.ShouldBeNull();
+        value.TaskError.ShouldNotBeNull();
+        value.TaskError!.StatusCode.ShouldBe(400);
+        value.TaskError.ErrorMessage.ShouldBe("schema validation failed");
+        value.FailedTask.ShouldBeSameAs(onExecute);
+        value.Response.ShouldNotBeNull();
+        value.Response!.StatusCode.ShouldBe(400);
+
+        var execute = spans.Spans.Single(a => a.OperationName == "Task.Execute.mock-api");
+        execute.Status.ShouldBe(ActivityStatusCode.Error);
+    }
+
     private void ArrangeFailedExecution(WorkflowTask factoryTask, int statusCode, string message)
     {
         _taskFactory.CreateExecutionTaskAsync(Arg.Any<IReference>(), Arg.Any<CancellationToken>())

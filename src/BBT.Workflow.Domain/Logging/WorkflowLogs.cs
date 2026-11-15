@@ -1079,12 +1079,13 @@ public static partial class WorkflowLogs
         this ILogger logger, string taskKey, long duration);
 
     /// <summary>
-    /// Business failure with no ErrorBoundary; the flow continues through auto-transitions.
+    /// Business failure with no ErrorBoundary at any level; unhandled, so the transition faults
+    /// with an incident (vnext#1257).
     /// </summary>
     [LoggerMessage(
         EventId = 10242,
         Level = LogLevel.Debug,
-        Message = "Task {TaskKey} failed with business error but no ErrorBoundary defined. Flow will continue with auto-transitions.")]
+        Message = "Task {TaskKey} failed with business error and no ErrorBoundary is defined. The failure is unhandled; the transition will fault.")]
     public static partial void TaskBusinessFailureWithoutBoundary(
         this ILogger logger, string taskKey);
 
@@ -3960,7 +3961,7 @@ public static partial class WorkflowLogs
     /// </summary>
     /// <remarks>
     /// Currently unreachable: the task engine reports a continue-style boundary outcome as a result
-    /// with no boundary action attached (<c>TasksExecutionResult.SuccessWithFailedTasks</c>), so the
+    /// with no boundary action attached (<c>TasksExecutionResult.HandledFailure</c>), so the
     /// pipeline step never enters the branch that would record an informational incident. Kept for
     /// the day that changes.
     /// </remarks>
