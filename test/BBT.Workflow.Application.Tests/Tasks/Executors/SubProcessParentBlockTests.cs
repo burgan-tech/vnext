@@ -21,9 +21,9 @@ namespace BBT.Workflow.Application.Tests.Tasks.Executors;
 /// stamped <see cref="InstanceType.Root"/> and every report loses it.
 /// </summary>
 /// <remarks>
-/// <see cref="SubProcessTaskExecutor"/> has TWO near-identical builders — one for the local
-/// <c>StartInstanceInput</c> and one for the remote binding — and nothing but this test keeps them
-/// from drifting apart. Both are private statics, hence the reflection.
+/// <see cref="SubProcessTaskExecutor"/> has TWO builders — one for the local
+/// <c>StartInstanceInput</c> and one for the remote binding; the local one wraps the remote one, and
+/// this test keeps it that way. Both are private statics, hence the reflection.
 /// </remarks>
 public class SubProcessParentBlockTests
 {
@@ -55,7 +55,7 @@ public class SubProcessParentBlockTests
                          methodName, BindingFlags.Static | BindingFlags.NonPublic)
                      ?? throw new InvalidOperationException($"{methodName} not found.");
 
-        return method.Invoke(null, [context, null])!;
+        return method.Invoke(null, [context])!;
     }
 
     [Fact]
