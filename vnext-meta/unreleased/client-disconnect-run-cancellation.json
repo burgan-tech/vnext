@@ -1,0 +1,19 @@
+{
+  "releaseNote": {
+    "summary": "Committed work is no longer cancelled when the HTTP client disconnects; compensation runs on its own bounded token, so instances are not stranded Busy.",
+    "breaking": false,
+    "docs": []
+  },
+  "knownIssues": [
+    {
+      "id": "run-cancelled-by-shutdown-can-strand-busy",
+      "affectedVersions": ">=next",
+      "severity": "error",
+      "component": "transition",
+      "path": null,
+      "title": "If the run token itself is cancelled while the run owns Busy - host shutdown (ApplicationStopping) or the WorkflowExecution:TransitionJobTimeoutSeconds budget (default 300 s) - the pipeline stops midway and the instance can be left Busy with no owner. A client disconnect no longer causes this; only these two causes remain, and there is no automatic recovery.",
+      "workaround": "Recover a stranded instance manually with the reserved cancel/exit transition.",
+      "fixedIn": null
+    }
+  ]
+}
