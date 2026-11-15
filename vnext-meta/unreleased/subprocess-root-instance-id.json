@@ -1,0 +1,7 @@
+{
+  "releaseNote": {
+    "summary": "A SubProcess child now carries the chain root (root.instance.id), so its events, traces and descendants report the real root instead of the child itself.",
+    "breaking": false,
+    "docs": []
+  }
+}
