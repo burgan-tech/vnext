@@ -404,6 +404,65 @@ public class TransitionAdmissionServiceTests
 
     #endregion
 
+    #region Compensation runs on its own live token
+
+    [Fact]
+    public async Task ReleaseReservationAsync_WhenCallerTokenCancelled_StillReleasesBusy()
+    {
+        SetupAcquiredLock();
+        var context = CreateContext();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await CreateService().ReleaseReservationAsync(context, cts.Token);
+
+        await _statusLock.Received(1).AcquireAsync(
+            context.LockKey, Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
+        await _busyManager.Received(1).TryReleaseAsync(
+            context.InstanceId, Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
+    }
+
+    [Fact]
+    public async Task AcceptAsync_WhenUnderLockThrowsOperationCanceled_ReleasesFlipWithLiveToken()
+    {
+        SetupAcquiredLock();
+        var context = CreateContext();
+        _busyManager
+            .TryMarkBusyWithPropagationAsync(context.Instance, Arg.Any<CancellationToken>())
+            .Returns(BusyMarkOutcome.Marked);
+        using var cts = new CancellationTokenSource();
+
+        await Should.ThrowAsync<OperationCanceledException>(() => CreateService().AcceptAsync(
+            context,
+            (_, _) =>
+            {
+                cts.Cancel();
+                throw new OperationCanceledException(cts.Token);
+            },
+            cts.Token));
+
+        await _busyManager.Received(1).TryReleaseAsync(
+            context.InstanceId, Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
+    }
+
+    [Fact]
+    public async Task ReleaseSubflowChainAsync_WhenCallerTokenCancelled_StillReleases()
+    {
+        SetupAcquiredLock();
+        var context = CreateContext();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await CreateService().ReleaseSubflowChainAsync(context.InstanceId, context.LockKey, cts.Token);
+
+        await _statusLock.Received(1).AcquireAsync(
+            context.LockKey, Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
+        await _busyManager.Received(1).ReleaseWithPropagationAsync(
+            context.InstanceId, Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
+    }
+
+    #endregion
+
     #region AcceptAsync — the accept path's single lock
 
     [Fact]
