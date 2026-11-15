@@ -151,6 +151,26 @@
       "fixedIn": null
     },
     {
+      "id": "client-disconnect-cancels-committed-work",
+      "affectedVersions": ">=0.0.97 <=0.0.105",
+      "severity": "error",
+      "component": "transition",
+      "path": null,
+      "title": "A client that disconnected (closed tab, client-side timeout) cancelled the HTTP request token, which the start/transition entry passed down through the pipeline, the inline auto-chain and the post-commit work. A run that had already committed its Busy reservation was cancelled midway and its compensation also ran on the cancelled token, so the instance was left Busy with no owner. The release that fixes it runs the five HTTP entries (Start, StartSub, SubflowForward, PATCH Transition, ScheduleStart) on a run token bounded only by host shutdown and WorkflowExecution:TransitionJobTimeoutSeconds, and runs compensation on a separate 15 s token.",
+      "workaround": "Recover a stranded instance with the reserved cancel/exit transition; prefer sync=false for callers that may time out.",
+      "fixedIn": "0.0.106"
+    },
+    {
+      "id": "run-cancelled-by-shutdown-can-strand-busy",
+      "affectedVersions": ">=0.0.26",
+      "severity": "error",
+      "component": "transition",
+      "path": null,
+      "title": "If the run token itself is cancelled while the run owns Busy - host shutdown (ApplicationStopping) or the WorkflowExecution:TransitionJobTimeoutSeconds budget (default 300 s) - the pipeline stops midway and the instance can be left Busy with no owner. A client disconnect no longer causes this (see client-disconnect-cancels-committed-work); only these two causes remain, and there is no automatic recovery.",
+      "workaround": "Recover a stranded instance manually with the reserved cancel/exit transition.",
+      "fixedIn": null
+    },
+    {
       "id": "function-multi-task-taskresponse-slot-collision",
       "affectedVersions": ">=0.0.26 <=0.0.94",
       "severity": "error",

@@ -105,6 +105,16 @@ transition variants).
 authoring it is a `vnext-schema` follow-up, not part of this change. Until then, those transitions fall
 back to the flow-level `executionType` (or the caller's query parameter).
 
+## A client disconnect does not cancel a sync request (vnext#1258)
+
+A `sync=true` request (or an `executionType: S` definition) holds the HTTP connection open until a rest
+point. If the client disconnects meanwhile, the work already started is **not** cancelled: the controller
+runs the entry on a run token bounded by host shutdown and `WorkflowExecution:TransitionJobTimeoutSeconds`,
+not by the request token, so the instance is not stranded Busy. The response is simply never read;
+the client polls the state function. Details and the remaining shutdown/budget gap:
+[status-locking § Client disconnect](status-locking.md#client-disconnect-vnext1258). The parent-address
+proxy still runs in the parent's resolved `executionType`, unchanged.
+
 ## Runtime-internal calls keep their forced mode
 
 - **A flow/transition `executionType` (`S`/`A`) overrides the `sync` query parameter** (vnext#1003):
