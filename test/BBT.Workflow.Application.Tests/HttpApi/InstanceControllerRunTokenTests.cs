@@ -6,9 +6,11 @@ using BBT.Aether.DependencyInjection;
 using BBT.Aether.Results;
 using BBT.Workflow.Application.Tests.Execution.Cancellation;
 using BBT.Workflow.BackgroundJobs;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Events;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.Instances;
+using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Instances.Related;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Orchestration.Controllers.Instances;
@@ -38,6 +40,13 @@ public sealed class InstanceControllerRunTokenTests
 
     private readonly IInstanceCommandAppService _commandAppService = Substitute.For<IInstanceCommandAppService>();
     private readonly IInstanceScheduleAppService _scheduleAppService = Substitute.For<IInstanceScheduleAppService>();
+    private readonly IInstanceRetryAppService _retryAppService = Substitute.For<IInstanceRetryAppService>();
+    private readonly IEventAppService _eventAppService = Substitute.For<IEventAppService>();
+    private readonly ISubflowCompletionService _subflowCompletionService = Substitute.For<ISubflowCompletionService>();
+    private readonly ISubflowStateService _subflowStateService = Substitute.For<ISubflowStateService>();
+    private readonly ISubflowFaultService _subflowFaultService = Substitute.For<ISubflowFaultService>();
+    private readonly ISubflowCancellationService _subflowCancellationService = Substitute.For<ISubflowCancellationService>();
+    private readonly IChildSubflowCancellationService _childSubflowCancellationService = Substitute.For<IChildSubflowCancellationService>();
     private readonly InstanceController _controller;
 
     public InstanceControllerRunTokenTests()
@@ -51,6 +60,19 @@ public sealed class InstanceControllerRunTokenTests
         _scheduleAppService
             .StartAsync(Arg.Any<ScheduledStartInput>(), Arg.Any<CancellationToken>())
             .Returns(Result<object?>.Ok(null));
+        _retryAppService
+            .RetryAsync(Arg.Any<RetryInstanceInput>(), Arg.Any<CancellationToken>())
+            .Returns(Result<RetryInstanceOutput>.Ok(new RetryInstanceOutput()));
+        _eventAppService
+            .HandleAsync(Arg.Any<EventInput>(), Arg.Any<CancellationToken>())
+            .Returns(Result<object?>.Ok(null));
+        _commandAppService
+            .AcknowledgeLongPollAsync(Arg.Any<AcknowledgeLongPollInput>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Ok());
+        _childSubflowCancellationService
+            .CancelChildSubflowAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(),
+                Arg.Any<TerminationContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Ok());
 
         var services = new ServiceCollection();
         services.AddSingleton<ILazyServiceProvider, LazyServiceProvider>();
@@ -62,18 +84,18 @@ public sealed class InstanceControllerRunTokenTests
         _controller = new InstanceController(
             commandAppService: _commandAppService,
             queryAppService: Substitute.For<IInstanceQueryAppService>(),
-            retryAppService: Substitute.For<IInstanceRetryAppService>(),
+            retryAppService: _retryAppService,
             httpContextAccessor: accessor,
-            subflowCompletionService: Substitute.For<ISubflowCompletionService>(),
-            subflowStateService: Substitute.For<ISubflowStateService>(),
-            subflowFaultService: Substitute.For<ISubflowFaultService>(),
-            subflowCancellationService: Substitute.For<ISubflowCancellationService>(),
+            subflowCompletionService: _subflowCompletionService,
+            subflowStateService: _subflowStateService,
+            subflowFaultService: _subflowFaultService,
+            subflowCancellationService: _subflowCancellationService,
             cancellationService: Substitute.For<IInstanceCancellationService>(),
-            childSubflowCancellationService: Substitute.For<IChildSubflowCancellationService>(),
+            childSubflowCancellationService: _childSubflowCancellationService,
             childSubflowFaultService: Substitute.For<IChildSubflowFaultService>(),
             transitionJobEnqueuer: Substitute.For<ITransitionJobEnqueuer>(),
             instanceCommandGateway: Substitute.For<IInstanceCommandGateway>(),
-            eventAppService: Substitute.For<IEventAppService>(),
+            eventAppService: _eventAppService,
             scheduleAppService: _scheduleAppService,
             relatedInstanceQueryAppService: Substitute.For<IRelatedInstanceQueryAppService>(),
             humanTaskLeafResolver: Substitute.For<BBT.Workflow.Instances.HumanTask.IHumanTaskLeafResolver>(),
@@ -145,6 +167,125 @@ public sealed class InstanceControllerRunTokenTests
 
         await _scheduleAppService.Received(1).StartAsync(
             Arg.Any<ScheduledStartInput>(), Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
+    }
+
+    [Fact]
+    public async Task Retry_WhenRequestTokenCancelled_RunsWithLiveToken()
+    {
+        await _controller.RetryAsync(Domain, Flow, Guid.NewGuid().ToString(), sync: true,
+            cancellationToken: CancelledRequestToken());
+
+        await _retryAppService.Received(1).RetryAsync(
+            Arg.Any<RetryInstanceInput>(), Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
+    }
+
+    [Theory]
+    [InlineData("start", null)]
+    [InlineData("transition", "approve")]
+    public async Task HandleEvent_WhenClientDisconnectsDuringRun_RunTokenStaysLive(string action, string? transitionKey)
+    {
+        // The body is read on the request token on purpose (nothing is committed yet), so the client
+        // disconnects mid-run here: once the run has started, the token it holds must not follow it.
+        using var request = new CancellationTokenSource();
+        bool? runTokenCancelled = null;
+        _eventAppService
+            .HandleAsync(Arg.Any<EventInput>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                request.Cancel();
+                runTokenCancelled = call.Arg<CancellationToken>().IsCancellationRequested;
+                return Result<object?>.Ok(null);
+            });
+
+        await _controller.HandleEventAsync(Domain, Flow, action, transitionKey, sync: true,
+            cancellationToken: request.Token);
+
+        runTokenCancelled.ShouldBe(false);
+    }
+
+    [Fact]
+    public async Task AcknowledgeLongPoll_WhenRequestTokenCancelled_RunsWithLiveToken()
+    {
+        await _controller.AcknowledgeLongPollAsync(Domain, Flow, Guid.NewGuid().ToString(),
+            cancellationToken: CancelledRequestToken());
+
+        await _commandAppService.Received(1).AcknowledgeLongPollAsync(
+            Arg.Any<AcknowledgeLongPollInput>(), Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
+    }
+
+    [Fact]
+    public async Task ChildCancel_WhenRequestTokenCancelled_RunsWithLiveToken()
+    {
+        var instance = Guid.NewGuid();
+
+        await _controller.ChildCancelAsync(Domain, Flow, instance,
+            new ChildSubflowCancelInput(null, TerminationContext.Direct(instance)), CancelledRequestToken());
+
+        await _childSubflowCancellationService.Received(1).CancelChildSubflowAsync(
+            instance, Domain, Flow, Arg.Any<string?>(), Arg.Any<TerminationContext>(),
+            Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
+    }
+
+    [Fact]
+    public async Task CompleteSub_WhenRequestTokenCancelled_RunsWithLiveToken()
+    {
+        var input = new FlowCompletedInput
+        {
+            InstanceId = Guid.NewGuid(), Domain = Domain, Flow = Flow, Version = null,
+            SubInstanceId = Guid.NewGuid(), CompletedState = "done", CompletedAt = DateTime.UtcNow
+        };
+
+        await _controller.CompleteSubAsync(Domain, Flow, input.InstanceId.ToString(), input, CancelledRequestToken());
+
+        await _subflowCompletionService.Received(1).CompletionAsync(
+            input, Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
+    }
+
+    [Fact]
+    public async Task UpdateSubFlowState_WhenRequestTokenCancelled_RunsWithLiveToken()
+    {
+        var input = new SubFlowStateChangedInput
+        {
+            ParentInstanceId = Guid.NewGuid(), SubInstanceId = Guid.NewGuid(), Domain = Domain, Flow = Flow,
+            Version = null, NewState = "next", PreviousState = "first", NewStateType = StateType.Intermediate,
+            NewStateSubType = StateSubType.None, ChangedAt = DateTime.UtcNow
+        };
+
+        await _controller.UpdateSubFlowStateAsync(Domain, Flow, input.ParentInstanceId.ToString(), input,
+            CancelledRequestToken());
+
+        await _subflowStateService.Received(1).UpdateParentStateAsync(
+            input, Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
+    }
+
+    [Fact]
+    public async Task FaultSub_WhenRequestTokenCancelled_RunsWithLiveToken()
+    {
+        var input = new SubFlowFaultedInput
+        {
+            InstanceId = Guid.NewGuid(), Domain = Domain, Flow = Flow, Version = null,
+            SubInstanceId = Guid.NewGuid(), FaultedState = "failed", FaultedAt = DateTime.UtcNow
+        };
+
+        await _controller.FaultSubAsync(Domain, Flow, input.InstanceId.ToString(), input, CancelledRequestToken());
+
+        await _subflowFaultService.Received(1).FaultAsync(
+            input, Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
+    }
+
+    [Fact]
+    public async Task CancelSub_WhenRequestTokenCancelled_RunsWithLiveToken()
+    {
+        var input = new SubItemCanceledInput
+        {
+            InstanceId = Guid.NewGuid(), SubInstanceId = Guid.NewGuid(), Domain = Domain, Flow = Flow,
+            CanceledState = "cancelled", CanceledAt = DateTime.UtcNow
+        };
+
+        await _controller.CancelSubAsync(Domain, Flow, input.InstanceId.ToString(), input, CancelledRequestToken());
+
+        await _subflowCancellationService.Received(1).CancellationAsync(
+            input, Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
     }
 
     [Fact]

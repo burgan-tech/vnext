@@ -95,6 +95,25 @@ public sealed class InstanceController(
         }
     }
 
+    /// <summary>
+    /// <see cref="RunDetachedFromClientAsync{TResult}"/> for an entry with no result (the SubFlow relay
+    /// callbacks), logged with the generic <c>RunContinuedAfterClientDisconnect</c> entry.
+    /// </summary>
+    private Task RunDetachedFromClientAsync(
+        CancellationToken requestToken,
+        Func<CancellationToken, Task> run,
+        string action,
+        string flow,
+        string? instance)
+        => RunDetachedFromClientAsync<bool>(
+            requestToken,
+            async ct =>
+            {
+                await run(ct);
+                return true;
+            },
+            _ => Logger.RunContinuedAfterClientDisconnect(action, flow, instance));
+
     private static Guid StartedInstanceId(Result<StartInstanceOutput>? result)
         => result is { IsSuccess: true, Value: { } output } ? output.Id : Guid.Empty;
 
@@ -245,7 +264,11 @@ public sealed class InstanceController(
                 request.EpisodeTransitionKey,
                 request.EpisodeTraceRoot));
 
-        await subflowCompletionService.CompletionAsync(request, cancellationToken);
+        // Runs the parent's resume pipeline and inline chain: detach it from the caller (vnext#1258).
+        await RunDetachedFromClientAsync(
+            cancellationToken,
+            ct => subflowCompletionService.CompletionAsync(request, ct),
+            "SubFlow completion", workflow, instance);
         return Ok();
     }
 
@@ -276,7 +299,10 @@ public sealed class InstanceController(
                 request.EpisodeStartedAt, request.EpisodeTrigger, request.EpisodeTransitionKey,
                 request.EpisodeTraceRoot));
 
-        await subflowStateService.UpdateParentStateAsync(request, cancellationToken);
+        await RunDetachedFromClientAsync(
+            cancellationToken,
+            ct => subflowStateService.UpdateParentStateAsync(request, ct),
+            "SubFlow state change", workflow, instance);
         return Ok();
     }
 
@@ -303,7 +329,10 @@ public sealed class InstanceController(
                 request.EpisodeStartedAt, request.EpisodeTrigger, request.EpisodeTransitionKey,
                 request.EpisodeTraceRoot));
 
-        await subflowFaultService.FaultAsync(request, cancellationToken);
+        await RunDetachedFromClientAsync(
+            cancellationToken,
+            ct => subflowFaultService.FaultAsync(request, ct),
+            "SubFlow fault", workflow, instance);
         return Ok();
     }
 
@@ -331,7 +360,10 @@ public sealed class InstanceController(
                 request.EpisodeStartedAt, request.EpisodeTrigger, request.EpisodeTransitionKey,
                 request.EpisodeTraceRoot));
 
-        await subflowCancellationService.CancellationAsync(request, cancellationToken);
+        await RunDetachedFromClientAsync(
+            cancellationToken,
+            ct => subflowCancellationService.CancellationAsync(request, ct),
+            "SubFlow cancel", workflow, instance);
         return Ok();
     }
 
@@ -505,8 +537,12 @@ public sealed class InstanceController(
         [FromBody] ChildSubflowCancelInput request,
         CancellationToken cancellationToken = default)
     {
-        var result = await childSubflowCancellationService.CancelChildSubflowAsync(
-            instance, domain, workflow, request.Version, request.Termination, cancellationToken);
+        // Runs the child's cancel transition: detach it from the caller (vnext#1258).
+        var result = await RunDetachedFromClientAsync(
+            cancellationToken,
+            ct => childSubflowCancellationService.CancelChildSubflowAsync(
+                instance, domain, workflow, request.Version, request.Termination, ct),
+            _ => Logger.RunContinuedAfterClientDisconnect("Child cancel", workflow, instance.ToString()));
         return FromResult(result);
     }
 
@@ -853,7 +889,11 @@ public sealed class InstanceController(
             Headers = headers
         };
 
-        var result = await commandAppService.AcknowledgeLongPollAsync(input, cancellationToken);
+        // Resumes the paused pipeline (clears Busy, runs the epilogue): detach it from the caller (vnext#1258).
+        var result = await RunDetachedFromClientAsync(
+            cancellationToken,
+            ct => commandAppService.AcknowledgeLongPollAsync(input, ct),
+            _ => Logger.RunContinuedAfterClientDisconnect("Long-poll acknowledge", workflow, instance));
         return FromResult(result);
     }
 
@@ -900,7 +940,11 @@ public sealed class InstanceController(
             RouteValues = routeValues
         };
 
-        var result = await retryAppService.RetryAsync(input, cancellationToken);
+        // Re-executes the incomplete transition: detach it from the caller (vnext#1258).
+        var result = await RunDetachedFromClientAsync(
+            cancellationToken,
+            ct => retryAppService.RetryAsync(input, ct),
+            _ => Logger.RunContinuedAfterClientDisconnect("Retry", workflow, instance));
         return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
     }
 
@@ -976,7 +1020,14 @@ public sealed class InstanceController(
                 .ToDictionary(h => h.Key.ToLower(), h => h.Value.FirstOrDefault())
         };
 
-        var result = await eventAppService.HandleAsync(input, cancellationToken);
+        // Starts or transitions an instance: detach it from the caller (vnext#1258). A Dapr pub/sub
+        // redelivery after a caller timeout then meets the still-running run (409 Busy), not a stranded Busy.
+        var result = await RunDetachedFromClientAsync(
+            cancellationToken,
+            ct => eventAppService.HandleAsync(input, ct),
+            _ => Logger.RunContinuedAfterClientDisconnect(
+                eventAction == EventAction.Start ? "Event start" : $"Event transition {transitionKey}",
+                workflow, null));
         return EventDeliveryResultMapper.ToActionResult(result, input, HttpContext, Logger);
     }
 

@@ -3153,6 +3153,21 @@ public static partial class WorkflowLogs
         Guid instanceId);
 
     /// <summary>
+    /// Logs when the caller of a Busy-owning entry that is neither a plain start nor a keyed transition
+    /// (event delivery, retry, long-poll acknowledge, child cancel, a SubFlow relay callback) disconnected
+    /// while the run kept going on its own run token, so the instance was not stranded Busy.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10267,
+        Level = LogLevel.Information,
+        Message = "{Action} on flow {Flow} (instance {Instance}) continued after the client disconnected")]
+    public static partial void RunContinuedAfterClientDisconnect(
+        this ILogger logger,
+        string action,
+        string flow,
+        string? instance);
+
+    /// <summary>
     /// Logs when a distributed resource lock TTL is successfully extended.
     /// </summary>
     [LoggerMessage(
