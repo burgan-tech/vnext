@@ -192,8 +192,10 @@ public sealed class InstanceQueryAppServiceFilterValidationTests : IDisposable
 
         var result = await InvokeAsync(filter);
 
-        // The code must carry the "Validation:" prefix: that prefix is what maps the error to 400.
+        // A Validation-prefixed error, not a thrown one re-prefixed as Failure: the prefix is what every
+        // Result reader classifies by, and the GetInstances task read Failure as a 500 (#1080).
         result.IsSuccess.ShouldBeFalse();
+        result.Error.Prefix.ShouldBe(BBT.Aether.Results.ErrorCodes.Prefixes.Validation);
         result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceFilterInvalid);
         result.Error.Message.ShouldStartWith("Filter could not be applied:");
 

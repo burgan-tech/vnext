@@ -240,6 +240,7 @@ public sealed class InstanceQueryAppService(
 
         Error? rowSecurityDenial = null;
         Error? extensionFailure = null;
+        Error? filterFailure = null;
         var listResult = await ResultExtensions.TryAsync(
             async ct =>
             {
@@ -386,15 +387,15 @@ public sealed class InstanceQueryAppService(
                     // through untouched.
                     logger.InstanceFilterCompilationFailed(ex, input.Domain, input.Workflow);
 
-                    if (ex is FilterCompilationException)
-                        throw; // Already a UserFriendlyException with InstanceFilterInvalid.
-
-                    // Named arguments on purpose: Aether's constructor is (message, code, ...), so a
-                    // positional (code, message) call put the text into the code, lost the
-                    // "Validation:" prefix and answered 500 instead of 400 (#1080).
-                    throw new UserFriendlyException(
-                        message: $"Filter could not be applied: {ex.Message}",
-                        code: WorkflowErrorCodes.InstanceFilterInvalid);
+                    // Returned as a Validation-prefixed error, never thrown (#1080). A thrown
+                    // UserFriendlyException comes back out of TryAsync as a Failure-prefixed error:
+                    // the HTTP status table can still map its code to 400, but every Result reader
+                    // that classifies by prefix — the GetInstances task above all — saw a 500.
+                    filterFailure = Error.Validation(
+                        WorkflowErrorCodes.InstanceFilterInvalid,
+                        ex is FilterCompilationException ? ex.Message : $"Filter could not be applied: {ex.Message}",
+                        target: "filter");
+                    return null!;
                 }
 
                 var route = urlTemplateBuilder.BuildInstanceListUrl(input.Domain, input.Workflow);
@@ -471,6 +472,9 @@ public sealed class InstanceQueryAppService(
 
         if (rowSecurityDenial is { } denial)
             return Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(denial);
+
+        if (filterFailure is { } filterError)
+            return Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(filterError);
 
         return extensionFailure is { } extensionError
             ? Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(extensionError)

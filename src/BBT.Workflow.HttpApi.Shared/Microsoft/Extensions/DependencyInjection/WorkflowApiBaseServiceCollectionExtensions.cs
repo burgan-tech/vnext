@@ -514,9 +514,9 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             // x-encryption "encrypt" path) is the caller's error. It surfaced as 500 before.
             opt.Map(WorkflowErrorCodes.SchemaFilterValidation, HttpStatusCode.BadRequest);
             // A filter that passed the boundary validator but could not be compiled into SQL (a
-            // non-Guid `id`, `createdAt eq "notadate"`, a fail-closed builder guard). It is thrown as a
-            // UserFriendlyException, which Aether turns into a Failure-prefixed error, so without this
-            // row the "Validation:" in the code never reached the status and it answered 500 (#1080).
+            // non-Guid `id`, `createdAt eq "notadate"`, a fail-closed builder guard). The list returns
+            // it Validation-prefixed; this row covers a FilterCompilationException (a UserFriendlyException)
+            // that escapes as an exception, which Aether re-prefixes as Failure — a 500 without it (#1080).
             opt.Map(WorkflowErrorCodes.InstanceFilterInvalid, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.RuntimeSchemaInvalidState, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.TransitionLocked, HttpStatusCode.Conflict);
