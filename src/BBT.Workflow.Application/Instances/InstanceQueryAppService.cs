@@ -80,19 +80,21 @@ public sealed class InstanceQueryAppService(
     /// Converts a failed query validation into a 400-mapping <see cref="Error"/>, carrying every
     /// rejection reason so the caller can fix them all in one round trip.
     /// </summary>
+    private const string FilterTarget = "filter";
+
     private static Error ToValidationError(FilterValidationResult validation)
     {
         var validationErrors = validation.Errors
             .Select(error => new System.ComponentModel.DataAnnotations.ValidationResult(
                 error.Message,
-                [error.Target ?? "filter"]))
+                [error.Target ?? FilterTarget]))
             .ToList();
 
         return Error.Validation(
             validation.PrimaryErrorCode,
             validation.ToMessage(),
             validationErrors,
-            validation.Errors[0].Target ?? "filter");
+            validation.Errors[0].Target ?? FilterTarget);
     }
 
     private IDisposable? BeginRootIdScopeIfSubflow(Instance instance)
@@ -231,7 +233,7 @@ public sealed class InstanceQueryAppService(
             foreach (var error in validation.Errors)
             {
                 logger.InstanceQueryParameterRejected(
-                    input.Domain, input.Workflow, error.Target ?? "filter", error.Code, error.Message);
+                    input.Domain, input.Workflow, error.Target ?? FilterTarget, error.Code, error.Message);
             }
 
             return Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(
@@ -394,7 +396,7 @@ public sealed class InstanceQueryAppService(
                     filterFailure = Error.Validation(
                         WorkflowErrorCodes.InstanceFilterInvalid,
                         ex is FilterCompilationException ? ex.Message : $"Filter could not be applied: {ex.Message}",
-                        target: "filter");
+                        target: FilterTarget);
                     return null!;
                 }
 
@@ -470,14 +472,9 @@ public sealed class InstanceQueryAppService(
             },
             cancellationToken);
 
-        if (rowSecurityDenial is { } denial)
-            return Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(denial);
-
-        if (filterFailure is { } filterError)
-            return Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(filterError);
-
-        return extensionFailure is { } extensionError
-            ? Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(extensionError)
+        // At most one is set: each one ends the lambda the moment it is recorded.
+        return (rowSecurityDenial ?? filterFailure ?? extensionFailure) is { } failure
+            ? Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(failure)
             : listResult;
     }
 

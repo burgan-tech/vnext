@@ -45,6 +45,7 @@ public sealed class InstanceQueryAppServiceFilterValidationTests : IDisposable
 {
     private const string Domain = "test-domain";
     private const string WorkflowKey = "wf-key";
+    private static readonly System.Text.Json.JsonSerializerOptions CaseInsensitiveJson = new() { PropertyNameCaseInsensitive = true };
 
     private readonly IRuntimeInfoProvider _runtimeInfoProvider = Substitute.For<IRuntimeInfoProvider>();
     private readonly IComponentCacheStore _componentCacheStore = Substitute.For<IComponentCacheStore>();
@@ -224,7 +225,7 @@ public sealed class InstanceQueryAppServiceFilterValidationTests : IDisposable
             .Returns(BBT.Aether.Results.Result<Definitions.Workflow>.Ok(
                 System.Text.Json.JsonSerializer.Deserialize<Definitions.Workflow>(
                     """{"type":"F","states":[],"extensions":[]}""",
-                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })!));
+                    CaseInsensitiveJson)!));
 
         const string extensionCode = "Validation:777001";
         const string extensionMessage = "Extension 'credit-score' rejected the request.";
