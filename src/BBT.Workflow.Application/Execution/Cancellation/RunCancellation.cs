@@ -23,7 +23,7 @@ public sealed class RunCancellation(
     public RunCancellationLease Begin(CancellationToken callerToken)
     {
         if (Current.Value is { IsDisposed: false } open)
-            return new RunCancellationLease(callerToken, open.Token);
+            return new RunCancellationLease(open, callerToken);
 
         var timeoutSource = new CancellationTokenSource(
             TimeSpan.FromSeconds(options.Value.TransitionJobTimeoutSeconds), timeProvider);
@@ -31,12 +31,12 @@ public sealed class RunCancellation(
             lifetime.ApplicationStopping, timeoutSource.Token);
 
         var previous = Current.Value;
-        var lease = new RunCancellationLease(callerToken, timeoutSource, linkedSource, disposedLease =>
+        var lease = new RunCancellationLease(timeoutSource, linkedSource, disposedLease =>
         {
             // Only clear the slot this lease filled; restore what was there before it opened.
             if (ReferenceEquals(Current.Value, disposedLease))
                 Current.Value = previous;
-        });
+        }, callerToken);
         Current.Value = lease;
         return lease;
     }

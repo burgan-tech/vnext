@@ -39,10 +39,10 @@ public sealed class RunCancellationLease : IDisposable
 
     /// <summary>Creates a lease that owns its sources (the outermost run).</summary>
     internal RunCancellationLease(
-        CancellationToken callerToken,
         CancellationTokenSource timeoutSource,
         CancellationTokenSource linkedSource,
-        Action<RunCancellationLease> onOwnerDisposed)
+        Action<RunCancellationLease> onOwnerDisposed,
+        CancellationToken callerToken)
     {
         this.callerToken = callerToken;
         this.timeoutSource = timeoutSource;
@@ -51,11 +51,11 @@ public sealed class RunCancellationLease : IDisposable
         Token = linkedSource.Token;
     }
 
-    /// <summary>Creates a non-owning lease that shares an open outer run's token.</summary>
-    internal RunCancellationLease(CancellationToken callerToken, CancellationToken sharedToken)
+    /// <summary>Creates a non-owning lease that shares the token of an open outer lease.</summary>
+    internal RunCancellationLease(RunCancellationLease outer, CancellationToken callerToken)
     {
         this.callerToken = callerToken;
-        Token = sharedToken;
+        Token = outer.Token;
     }
 
     /// <summary>The token the run executes on. Cancelled only by host shutdown or the run budget.</summary>
