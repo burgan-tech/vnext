@@ -14,6 +14,16 @@
       "title": "If the run token itself is cancelled while the run owns Busy - host shutdown (ApplicationStopping) or the WorkflowExecution:TransitionJobTimeoutSeconds budget (default 300 s) - the pipeline stops midway and the instance can be left Busy with no owner. A client disconnect no longer causes this; only these two causes remain, and there is no automatic recovery.",
       "workaround": "Recover a stranded instance manually with the reserved cancel/exit transition.",
       "fixedIn": null
+    },
+    {
+      "id": "detached-run-retry-can-duplicate",
+      "affectedVersions": ">=next",
+      "severity": "warning",
+      "component": "transition",
+      "path": null,
+      "title": "A run that continues after its caller disconnected completes, but an at-least-once caller (Dapr pub/sub redelivery, a gateway or client retrying a timed-out sync=true call, a parent relay retrying StartSub/SubflowForward/relay callbacks) may retry it after it committed. That retry is not recognised as a duplicate: a start without an instance key (or whose first instance already completed) creates a second instance, and a transition still valid from the resulting state (self-loop, re-entrant state) runs again. While the original run is still in flight the retry gets 409 Busy.",
+      "workaround": "Give event and client starts an instance key (the start path returns the existing active instance), avoid caller-side retries of sync=true calls that already timed out, and keep event-triggered transitions non-re-entrant.",
+      "fixedIn": null
     }
   ]
 }

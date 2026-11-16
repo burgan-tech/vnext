@@ -81,9 +81,20 @@ the post-commit work, or the instance is left Busy with no owner.
   `TransitionContinuedAfterClientDisconnect` / `10266` `InstanceStartContinuedAfterClientDisconnect` /
   `10267` `RunContinuedAfterClientDisconnect` (event, retry, ack, child cancel, relay callbacks;
   Information) and tags the span `vnext.client.aborted=true`.
-- **Redelivery meets the live run.** When a Dapr pub/sub event delivery times out on the caller side
-  and is redelivered, the redelivery now finds the original run still holding Busy and is answered
-  `409 Busy` — non-2xx, so the broker retries it later — instead of finding a stranded Busy.
+- **A retry while the run is live gets 409; a retry after it committed runs again.** When a caller
+  that retries on failure (Dapr pub/sub redelivery, a gateway or client retrying a timed-out
+  `sync=true` call, a parent relay retrying StartSub / SubflowForward / a relay callback) retries
+  while the detached run still holds Busy, it gets `409 Busy` (`Instance:100031`; non-2xx, so the
+  broker retries later). Once the run has committed and released Busy, nothing in admission
+  recognises the retry as a duplicate, and it is executed again. What still protects it:
+  - a start that carries an instance key returns the existing active instance (client calls) or
+    `409` (`StrictIdempotency`: StartSub, SubFlow / SubProcess starts); a start **without a key**, or
+    one whose first instance already completed, creates a second instance;
+  - a retried transition or event transition is rejected if the transition is no longer valid from
+    the resulting state; a self-loop or re-entrant transition runs twice.
+  Before vnext#1258 the same retry found a stranded Busy and was refused forever. The exposure
+  is tracked as known issue `detached-run-retry-can-duplicate`; a request idempotency key checked at
+  admission is the planned fix.
 - **Compensation has its own budget.** Releasing a reservation or chain (`ReleaseReservationAsync`,
   `ReleaseSubflowChainAsync`, the accept-time `CompensateUnderLockAsync`), `SubflowProxyService.RevertStampAsync`,
   the transition runner's failed-coordination fault + chain release and `MarkInstanceFaultedAsync`
