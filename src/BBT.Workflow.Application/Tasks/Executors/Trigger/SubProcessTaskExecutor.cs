@@ -347,7 +347,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
             TimeoutSeconds = binding.TimeoutSeconds,
             InstanceId = subFlowInstanceId,
             Callback = GetCallbackAppId(),
-            ExtraProperties = BuildExtraPropertiesAsDictionary(context.ScriptContext, task),
+            ExtraProperties = BuildExtraPropertiesAsDictionary(context.ScriptContext),
             // Caller credential: the mapping decides, blank included — HttpTaskInvocation.ResolveInstanceCallCredential. A blank value is NOT filled from the caller.
             Headers = Execution.HttpTaskInvocation.ResolveInstanceCallCredentialJson(binding.Headers, CallerHeadersOf(context.ScriptContext)),
             BaseUrl = endpoint.BaseUrl.ToString(),
@@ -383,7 +383,7 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
                     Attributes = task.Body,
                     Tags = task.TriggerTags,
                     Callback = GetCallbackAppId(),
-                    ExtraProperties = BuildExtraProperties(context, task)
+                    ExtraProperties = BuildExtraProperties(context)
                 },
                 Headers = headers,
                 StrictIdempotency = true, // Service-to-service call: return 409 if active instance exists
@@ -484,34 +484,35 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
 
     private string? GetCallbackAppId() => _configuration["DAPR_APP_ID"];
 
-    private static ExtraPropertyDictionary BuildExtraProperties(ScriptContext context, SubProcessTask task)
-    {
-        return new ExtraPropertyDictionary
-        {
-            [DomainConsts.MetaDataKeys.Id] = context.Instance.Id,
-            [DomainConsts.MetaDataKeys.Key] = context.Instance.Key ?? string.Empty,
-            [DomainConsts.MetaDataKeys.Domain] = context.Workflow.Domain,
-            [DomainConsts.MetaDataKeys.Flow] = context.Workflow.Key,
-            [DomainConsts.MetaDataKeys.Version] = context.Workflow.Version,
-            [DomainConsts.MetaDataKeys.State] = context.Instance.GetCurrentState,
-            [DomainConsts.MetaDataKeys.Transition] = context.Transition.Key ?? string.Empty,
-            [DomainConsts.MetaDataKeys.FlowType] = SubFlowType.SubProcess.Code
-        };
-    }
+    /// <summary>
+    /// The parent block of a SubProcess child, for the local start input. Same content as
+    /// <see cref="BuildExtraPropertiesAsDictionary"/>, which is the single source of both.
+    /// </summary>
+    private static ExtraPropertyDictionary BuildExtraProperties(ScriptContext context) =>
+        new(BuildExtraPropertiesAsDictionary(context).ToDictionary(kv => kv.Key, kv => (object?)kv.Value));
 
-    private static Dictionary<string, object> BuildExtraPropertiesAsDictionary(ScriptContext context,
-        SubProcessTask task)
+    /// <summary>
+    /// The parent block of a SubProcess child: what the child reads to classify itself as a
+    /// SubProcess (<c>parent.*</c>, flow type <c>P</c>) and to find its chain root.
+    /// </summary>
+    private static Dictionary<string, object> BuildExtraPropertiesAsDictionary(ScriptContext context)
     {
+        var instance = context.Instance
+                       ?? throw new InvalidOperationException("A SubProcess task runs only on a parent instance.");
+
         return new Dictionary<string, object>
         {
-            [DomainConsts.MetaDataKeys.Id] = context.Instance.Id,
-            [DomainConsts.MetaDataKeys.Key] = context.Instance.Key ?? string.Empty,
+            [DomainConsts.MetaDataKeys.Id] = instance.Id,
+            [DomainConsts.MetaDataKeys.Key] = instance.Key ?? string.Empty,
             [DomainConsts.MetaDataKeys.Domain] = context.Workflow.Domain,
             [DomainConsts.MetaDataKeys.Flow] = context.Workflow.Key,
             [DomainConsts.MetaDataKeys.Version] = context.Workflow.Version,
-            [DomainConsts.MetaDataKeys.State] = context.Instance.GetCurrentState,
+            [DomainConsts.MetaDataKeys.State] = instance.GetCurrentState,
             [DomainConsts.MetaDataKeys.Transition] = context.Transition.Key ?? string.Empty,
-            [DomainConsts.MetaDataKeys.FlowType] = SubFlowType.SubProcess.Code
+            [DomainConsts.MetaDataKeys.FlowType] = SubFlowType.SubProcess.Code,
+            // The parent's root (the parent itself when it is a root), as SubflowStarter writes it.
+            // Without it the child resolves itself as the root and the chain restarts there (#1267).
+            [DomainConsts.MetaDataKeys.RootInstanceId] = instance.GetRootInstanceId()
         };
     }
 }

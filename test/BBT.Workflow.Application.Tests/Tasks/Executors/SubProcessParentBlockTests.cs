@@ -21,9 +21,9 @@ namespace BBT.Workflow.Application.Tests.Tasks.Executors;
 /// stamped <see cref="InstanceType.Root"/> and every report loses it.
 /// </summary>
 /// <remarks>
-/// <see cref="SubProcessTaskExecutor"/> has TWO near-identical builders — one for the local
-/// <c>StartInstanceInput</c> and one for the remote binding — and nothing but this test keeps them
-/// from drifting apart. Both are private statics, hence the reflection.
+/// <see cref="SubProcessTaskExecutor"/> has TWO builders — one for the local
+/// <c>StartInstanceInput</c> and one for the remote binding; the local one wraps the remote one, and
+/// this test keeps it that way. Both are private statics, hence the reflection.
 /// </remarks>
 public class SubProcessParentBlockTests
 {
@@ -42,13 +42,20 @@ public class SubProcessParentBlockTests
             .Build();
     }
 
+    private static ScriptContext BuildContextForSubItemParent(Guid rootInstanceId)
+    {
+        var context = BuildContext();
+        context.Instance!.ExtraProperties[DomainConsts.MetaDataKeys.RootInstanceId] = rootInstanceId;
+        return context;
+    }
+
     private static object Invoke(string methodName, ScriptContext context)
     {
         var method = typeof(SubProcessTaskExecutor).GetMethod(
                          methodName, BindingFlags.Static | BindingFlags.NonPublic)
                      ?? throw new InvalidOperationException($"{methodName} not found.");
 
-        return method.Invoke(null, [context, null])!;
+        return method.Invoke(null, [context])!;
     }
 
     [Fact]
@@ -61,6 +68,49 @@ public class SubProcessParentBlockTests
         metadata[DomainConsts.MetaDataKeys.Id].ShouldBe(context.Instance.Id);
         metadata[DomainConsts.MetaDataKeys.FlowType].ShouldBe(SubFlowType.SubProcess.Code);
         InstanceType.FromStartMetadata(metadata).ShouldBe(InstanceType.SubProcess);
+    }
+
+    /// <summary>
+    /// Without <c>root.instance.id</c> the child resolves itself as the root, so its terminal events
+    /// carry no root and its own children inherit the wrong one (#1267). The SubFlow starter writes it;
+    /// both SubProcess builders must too.
+    /// </summary>
+    [Theory]
+    [InlineData("BuildExtraProperties")]
+    [InlineData("BuildExtraPropertiesAsDictionary")]
+    public void Builders_CarryTheParentAsRoot_WhenTheParentIsARoot(string builder)
+    {
+        var context = BuildContext();
+
+        var metadata = (IDictionary<string, object?>)Invoke(builder, context);
+
+        metadata[DomainConsts.MetaDataKeys.RootInstanceId].ShouldBe(context.Instance!.Id);
+    }
+
+    [Theory]
+    [InlineData("BuildExtraProperties")]
+    [InlineData("BuildExtraPropertiesAsDictionary")]
+    public void Builders_CarryTheParentsRoot_WhenTheParentIsASubItem(string builder)
+    {
+        var rootInstanceId = Guid.NewGuid();
+        var context = BuildContextForSubItemParent(rootInstanceId);
+
+        var metadata = (IDictionary<string, object?>)Invoke(builder, context);
+
+        metadata[DomainConsts.MetaDataKeys.RootInstanceId].ShouldBe(rootInstanceId);
+    }
+
+    [Fact]
+    public void TheChild_ResolvesTheChainRoot_NotItself()
+    {
+        var rootInstanceId = Guid.NewGuid();
+        var context = BuildContextForSubItemParent(rootInstanceId);
+        var metadata = (ExtraPropertyDictionary)Invoke("BuildExtraProperties", context);
+
+        var child = Instance.Create(Guid.NewGuid(), "child-flow", "1.0.0", "child-key");
+        child.SetInfoMetadata(isSync: true, callback: null, flowType: SubFlowType.SubProcess.Code, metadata);
+
+        child.GetRootInstanceId().ShouldBe(rootInstanceId);
     }
 
     [Fact]
