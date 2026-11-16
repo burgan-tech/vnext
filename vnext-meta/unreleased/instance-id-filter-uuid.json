@@ -1,0 +1,31 @@
+{
+  "releaseNote": {
+    "summary": "Filtering the instance list by id now matches by uuid; a bad filter value answers 400 on the list and in GetInstances tasks.",
+    "breaking": false,
+    "docs": ["https://burgan-tech.github.io/vnext-docs/docs/runtime/instance-filtering-and-queries"]
+  },
+  "migrations": [
+    {
+      "id": "instance-list-filter-compile-failure-is-400",
+      "type": "behavior",
+      "component": "api",
+      "path": "GET /{domain}/workflows/{flow}/instances?filter | GetInstancesTask",
+      "since": "next",
+      "severity": "info",
+      "title": "A list filter the runtime cannot compile answers 400 instead of 500",
+      "description": "A filter that passes validation but cannot be applied — a non-Guid id, a range or text-match operator on id, createdAt eq \"notadate\" — now answers 400 Validation:900011 on the instance list, and a GetInstances task records it with statusCode 400. Before, the list and the task both answered 500. The id filter itself now accepts eq, ne, in, nin and isnull and matches by uuid.",
+      "action": "None required. A client or error boundary that treated these failures as server errors should treat them as the caller's error."
+    },
+    {
+      "id": "instance-list-extension-error-keeps-its-status",
+      "type": "behavior",
+      "component": "api",
+      "path": "GET /{domain}/workflows/{flow}/instances (extensions)",
+      "since": "next",
+      "severity": "info",
+      "title": "An extension that fails on the instance list answers with its own error",
+      "description": "When an extension fails while the instance list is built, the list now answers with that extension's error unchanged — code, message and status prefix. Before, it was rethrown with the code and message swapped and always answered 500.",
+      "action": "None required; read the extension's own error code from the response."
+    }
+  ]
+}
