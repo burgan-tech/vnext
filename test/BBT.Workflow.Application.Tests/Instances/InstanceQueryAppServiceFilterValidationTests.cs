@@ -45,11 +45,13 @@ public sealed class InstanceQueryAppServiceFilterValidationTests : IDisposable
 {
     private const string Domain = "test-domain";
     private const string WorkflowKey = "wf-key";
+    private static readonly System.Text.Json.JsonSerializerOptions CaseInsensitiveJson = new() { PropertyNameCaseInsensitive = true };
 
     private readonly IRuntimeInfoProvider _runtimeInfoProvider = Substitute.For<IRuntimeInfoProvider>();
     private readonly IComponentCacheStore _componentCacheStore = Substitute.For<IComponentCacheStore>();
     private readonly IInstanceRepository _instanceRepository = Substitute.For<IInstanceRepository>();
     private readonly IPaginationLinkGenerator _paginationLinkGenerator = Substitute.For<IPaginationLinkGenerator>();
+    private readonly IInstanceExtensionService _instanceExtensionService = Substitute.For<IInstanceExtensionService>();
     private readonly IServiceProvider _ambientServiceProvider;
     private readonly IServiceProvider? _previousAmbientServiceProvider;
 
@@ -167,6 +169,82 @@ public sealed class InstanceQueryAppServiceFilterValidationTests : IDisposable
             Arg.Any<SchemaFilterContext?>(), Arg.Any<CancellationToken>());
     }
 
+    [Theory]
+    [InlineData("eq", "not-an-id", """{"id":{"eq":"not-an-id"}}""")]
+    [InlineData("in", "kimlik-degil", """{"id":{"in":["kimlik-degil"]}}""")]
+    [InlineData("gt", "00000000-0000-0000-0000-000000000001", """{"id":{"gt":"00000000-0000-0000-0000-000000000001"}}""")]
+    public async Task GetInstanceListAsync_ShouldMapIdFilterCompileFailure_ToFilterInvalid(
+        string op, string value, string filter)
+    {
+        // The boundary validator checks a filter's shape, not its values, so a non-Guid `id` reaches
+        // the SQL builder. Let the repository surface exactly what the builder throws there, and pin
+        // that the caller gets the 400 code (InstanceFilterInvalid), not a 500 (#1080).
+        _instanceRepository
+            .GetPagedResultsWithGroupsAsync(
+                Arg.Any<int>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>(),
+                Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<SchemaFilterContext?>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<(HateoasPagedList<Instance>, List<GroupSummary>?)>>(_ =>
+            {
+                var parameterIndex = 0;
+                InstanceColumnConditionBuilder.BuildCondition("id", op, value, ref parameterIndex);
+                throw new InvalidOperationException("The builder was expected to reject the id filter.");
+            });
+
+        var result = await InvokeAsync(filter);
+
+        // A Validation-prefixed error, not a thrown one re-prefixed as Failure: the prefix is what every
+        // Result reader classifies by, and the GetInstances task read Failure as a 500 (#1080).
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Prefix.ShouldBe(BBT.Aether.Results.ErrorCodes.Prefixes.Validation);
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceFilterInvalid);
+        result.Error.Message.ShouldStartWith("Filter could not be applied:");
+
+        // The filter passed the boundary validator, so the repository was really asked to run it.
+        await _instanceRepository.ReceivedWithAnyArgs(1).GetPagedResultsWithGroupsAsync(
+            default, default, default, default, default, default, default, default);
+    }
+
+    [Fact]
+    public async Task GetInstanceListAsync_ShouldKeepExtensionErrorCodeAndMessage_WhenExtensionFails()
+    {
+        // One row on the page, a resolvable flow, and an extension that fails. The list is
+        // fail-fast, so the extension's error is the answer — with its code still in the code slot
+        // (that code's prefix picks the HTTP status) and its text still in the message slot.
+        var instance = Instance.Create(Guid.NewGuid(), WorkflowKey, "1.0.0", "row-1");
+        _instanceRepository
+            .GetPagedResultsWithGroupsAsync(
+                Arg.Any<int>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>(),
+                Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<SchemaFilterContext?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(
+                (new HateoasPagedList<Instance>([instance], 1, 10, false), (List<GroupSummary>?)null)));
+
+        _componentCacheStore
+            .GetFlowAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(BBT.Aether.Results.Result<Definitions.Workflow>.Ok(
+                System.Text.Json.JsonSerializer.Deserialize<Definitions.Workflow>(
+                    """{"type":"F","states":[],"extensions":[]}""",
+                    CaseInsensitiveJson)!));
+
+        const string extensionCode = "Validation:777001";
+        const string extensionMessage = "Extension 'credit-score' rejected the request.";
+        _instanceExtensionService
+            .ProcessExtensionsAsync(
+                Arg.Any<string[]?>(), Arg.Any<ScriptContext>(), Arg.Any<Definitions.Workflow>(),
+                Arg.Any<ExtensionScope>(), Arg.Any<CancellationToken>())
+            .ReturnsForAnyArgs(BBT.Aether.Results.Result<Dictionary<string, object>>.Fail(
+                BBT.Aether.Results.Error.Validation(extensionCode, extensionMessage)));
+
+        var result = await InvokeAsync();
+
+        // Returned as is: the prefix too, since it is what picks the HTTP status (400 here, not 500).
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Prefix.ShouldBe(BBT.Aether.Results.ErrorCodes.Prefixes.Validation);
+        result.Error.Code.ShouldBe(extensionCode);
+        result.Error.Message.ShouldBe(extensionMessage);
+    }
+
     [Fact]
     public async Task GetInstanceListAsync_ShouldQuery_WhenNoFilterSupplied()
     {
@@ -233,7 +311,7 @@ public sealed class InstanceQueryAppServiceFilterValidationTests : IDisposable
             instanceTaskRepository: Substitute.For<IInstanceTaskRepository>(),
             instanceActionRepository: Substitute.For<IInstanceActionRepository>(),
             longPollInteractionGate: NSubstitute.Substitute.For<BBT.Workflow.Execution.LongPoll.ILongPollInteractionGate>(),
-            instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
+            instanceExtensionService: _instanceExtensionService,
             scriptContextFactory: scriptContextFactory,
             instanceQueryGateway: Substitute.For<IInstanceQueryGateway>(),
             viewContentResolutionService: Substitute.For<IViewContentResolutionService>(),

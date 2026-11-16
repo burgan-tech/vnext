@@ -60,6 +60,13 @@ public static class InstanceColumnConditionBuilder
             return BuildTypeCondition(properColumnName, operatorType, value, ref parameterIndex);
         }
 
+        // The Id column is a PostgreSQL uuid: only the set operators mean anything on it, and every
+        // operand must be bound as uuid, never text (uuid = text fails with 42883).
+        if (properColumnName.Equals("Id", StringComparison.OrdinalIgnoreCase))
+        {
+            return BuildIdCondition(properColumnName, operatorType, value, ref parameterIndex);
+        }
+
         // Route to appropriate condition builder based on operator
         return operatorType.ToLowerInvariant() switch
         {
@@ -346,13 +353,37 @@ public static class InstanceColumnConditionBuilder
     }
 
     /// <summary>
+    /// Build a condition for the uuid Id column. Every operand is parsed as a Guid and bound as
+    /// <see cref="NpgsqlDbType.Uuid"/>, so the comparison stays uuid = uuid and can use the primary
+    /// key index. A value that is not a Guid throws <see cref="ArgumentException"/>, which the query
+    /// boundary maps to 400.
+    /// </summary>
+    /// <remarks>
+    /// Restricted to the set operators: ordering a uuid has no business meaning, and the text-match
+    /// operators would need a <c>::text</c> cast that defeats the index.
+    /// </remarks>
+    private static (string, List<NpgsqlParameter>) BuildIdCondition(
+        string columnName, string operatorType, string value, ref int parameterIndex)
+    {
+        return operatorType.ToLowerInvariant() switch
+        {
+            "eq" => BuildEqualsCondition(columnName, value, ref parameterIndex),
+            "ne" => BuildNotEqualsCondition(columnName, value, ref parameterIndex),
+            "in" => BuildInCondition(columnName, value, ref parameterIndex),
+            "nin" => BuildNotInCondition(columnName, value, ref parameterIndex),
+            _ => throw new ArgumentException(
+                $"Id column does not support operator: {operatorType}. Supported operators: eq, ne, in, nin, isnull.")
+        };
+    }
+
+    /// <summary>
     /// Get the data type of an Instance column
     /// </summary>
     private static ColumnType GetColumnType(string columnName)
     {
         return columnName switch
         {
-            "Id" => ColumnType.String,
+            "Id" => ColumnType.Uuid,
             "Key" => ColumnType.String,
             "Flow" => ColumnType.String,
             "CurrentState" => ColumnType.String,
@@ -384,6 +415,7 @@ public static class InstanceColumnConditionBuilder
             ColumnType.DateTime => CreateDateTimeParameter(value),
             ColumnType.Boolean => CreateBooleanParameter(value),
             ColumnType.Integer => CreateIntegerParameter(value),
+            ColumnType.Uuid => CreateUuidParameter(value),
             _ => new NpgsqlParameter { Value = value }
         };
     }
@@ -428,6 +460,20 @@ public static class InstanceColumnConditionBuilder
     }
 
     /// <summary>
+    /// Create a uuid parameter. The Id column is a PostgreSQL uuid, so a text-bound value fails
+    /// with 42883 (operator does not exist: uuid = text).
+    /// </summary>
+    private static NpgsqlParameter CreateUuidParameter(string value)
+    {
+        if (Guid.TryParse(value, out var guidValue))
+        {
+            return new NpgsqlParameter { Value = guidValue, NpgsqlDbType = NpgsqlDbType.Uuid };
+        }
+
+        throw new ArgumentException($"Invalid Guid value: {value}");
+    }
+
+    /// <summary>
     /// Column data type enumeration
     /// </summary>
     private enum ColumnType
@@ -435,7 +481,8 @@ public static class InstanceColumnConditionBuilder
         String,
         DateTime,
         Boolean,
-        Integer
+        Integer,
+        Uuid
     }
 }
 

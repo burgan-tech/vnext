@@ -80,19 +80,21 @@ public sealed class InstanceQueryAppService(
     /// Converts a failed query validation into a 400-mapping <see cref="Error"/>, carrying every
     /// rejection reason so the caller can fix them all in one round trip.
     /// </summary>
+    private const string FilterTarget = "filter";
+
     private static Error ToValidationError(FilterValidationResult validation)
     {
         var validationErrors = validation.Errors
             .Select(error => new System.ComponentModel.DataAnnotations.ValidationResult(
                 error.Message,
-                [error.Target ?? "filter"]))
+                [error.Target ?? FilterTarget]))
             .ToList();
 
         return Error.Validation(
             validation.PrimaryErrorCode,
             validation.ToMessage(),
             validationErrors,
-            validation.Errors[0].Target ?? "filter");
+            validation.Errors[0].Target ?? FilterTarget);
     }
 
     private IDisposable? BeginRootIdScopeIfSubflow(Instance instance)
@@ -231,7 +233,7 @@ public sealed class InstanceQueryAppService(
             foreach (var error in validation.Errors)
             {
                 logger.InstanceQueryParameterRejected(
-                    input.Domain, input.Workflow, error.Target ?? "filter", error.Code, error.Message);
+                    input.Domain, input.Workflow, error.Target ?? FilterTarget, error.Code, error.Message);
             }
 
             return Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(
@@ -239,6 +241,8 @@ public sealed class InstanceQueryAppService(
         }
 
         Error? rowSecurityDenial = null;
+        Error? extensionFailure = null;
+        Error? filterFailure = null;
         var listResult = await ResultExtensions.TryAsync(
             async ct =>
             {
@@ -385,12 +389,15 @@ public sealed class InstanceQueryAppService(
                     // through untouched.
                     logger.InstanceFilterCompilationFailed(ex, input.Domain, input.Workflow);
 
-                    if (ex is FilterCompilationException)
-                        throw; // Already a UserFriendlyException with InstanceFilterInvalid.
-
-                    throw new UserFriendlyException(
+                    // Returned as a Validation-prefixed error, never thrown (#1080). A thrown
+                    // UserFriendlyException comes back out of TryAsync as a Failure-prefixed error:
+                    // the HTTP status table can still map its code to 400, but every Result reader
+                    // that classifies by prefix — the GetInstances task above all — saw a 500.
+                    filterFailure = Error.Validation(
                         WorkflowErrorCodes.InstanceFilterInvalid,
-                        $"Filter could not be applied: {ex.Message}");
+                        ex is FilterCompilationException ? ex.Message : $"Filter could not be applied: {ex.Message}",
+                        target: FilterTarget);
+                    return null!;
                 }
 
                 var route = urlTemplateBuilder.BuildInstanceListUrl(input.Domain, input.Workflow);
@@ -437,11 +444,13 @@ public sealed class InstanceQueryAppService(
                     // Propagate extension errors - fail-fast behavior
                     if (!instanceOutputResult.IsSuccess)
                     {
-                        throw new UserFriendlyException(
-                            instanceOutputResult.Error.Code,
-                            instanceOutputResult.Error.Message,
-                            instanceOutputResult.Error.Detail).WithData("Target",
-                            instanceOutputResult.Error.Target ?? string.Empty);
+                        // Hand the extension's error back as is, like the row-security denial above.
+                        // It used to be rethrown as a UserFriendlyException with (code, message) in
+                        // the wrong constructor slots (Aether's order is message, code), which swapped
+                        // the two, and the rethrow re-prefixed the error as Failure, so every
+                        // extension error answered 500 whatever its own prefix said.
+                        extensionFailure = instanceOutputResult.Error;
+                        return null!;
                     }
 
                     var instanceOutput = instanceOutputResult.Value!;
@@ -463,8 +472,9 @@ public sealed class InstanceQueryAppService(
             },
             cancellationToken);
 
-        return rowSecurityDenial is { } denial
-            ? Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(denial)
+        // At most one is set: each one ends the lambda the moment it is recorded.
+        return (rowSecurityDenial ?? filterFailure ?? extensionFailure) is { } failure
+            ? Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(failure)
             : listResult;
     }
 
