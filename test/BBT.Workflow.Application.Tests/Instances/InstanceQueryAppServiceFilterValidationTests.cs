@@ -50,6 +50,7 @@ public sealed class InstanceQueryAppServiceFilterValidationTests : IDisposable
     private readonly IComponentCacheStore _componentCacheStore = Substitute.For<IComponentCacheStore>();
     private readonly IInstanceRepository _instanceRepository = Substitute.For<IInstanceRepository>();
     private readonly IPaginationLinkGenerator _paginationLinkGenerator = Substitute.For<IPaginationLinkGenerator>();
+    private readonly IInstanceExtensionService _instanceExtensionService = Substitute.For<IInstanceExtensionService>();
     private readonly IServiceProvider _ambientServiceProvider;
     private readonly IServiceProvider? _previousAmbientServiceProvider;
 
@@ -202,6 +203,46 @@ public sealed class InstanceQueryAppServiceFilterValidationTests : IDisposable
     }
 
     [Fact]
+    public async Task GetInstanceListAsync_ShouldKeepExtensionErrorCodeAndMessage_WhenExtensionFails()
+    {
+        // One row on the page, a resolvable flow, and an extension that fails. The list is
+        // fail-fast, so the extension's error is the answer — with its code still in the code slot
+        // (that code's prefix picks the HTTP status) and its text still in the message slot.
+        var instance = Instance.Create(Guid.NewGuid(), WorkflowKey, "1.0.0", "row-1");
+        _instanceRepository
+            .GetPagedResultsWithGroupsAsync(
+                Arg.Any<int>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>(),
+                Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<SchemaFilterContext?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(
+                (new HateoasPagedList<Instance>([instance], 1, 10, false), (List<GroupSummary>?)null)));
+
+        _componentCacheStore
+            .GetFlowAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(BBT.Aether.Results.Result<Definitions.Workflow>.Ok(
+                System.Text.Json.JsonSerializer.Deserialize<Definitions.Workflow>(
+                    """{"type":"F","states":[],"extensions":[]}""",
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true })!));
+
+        const string extensionCode = "Validation:777001";
+        const string extensionMessage = "Extension 'credit-score' rejected the request.";
+        _instanceExtensionService
+            .ProcessExtensionsAsync(
+                Arg.Any<string[]?>(), Arg.Any<ScriptContext>(), Arg.Any<Definitions.Workflow>(),
+                Arg.Any<ExtensionScope>(), Arg.Any<CancellationToken>())
+            .ReturnsForAnyArgs(BBT.Aether.Results.Result<Dictionary<string, object>>.Fail(
+                BBT.Aether.Results.Error.Validation(extensionCode, extensionMessage)));
+
+        var result = await InvokeAsync();
+
+        // Returned as is: the prefix too, since it is what picks the HTTP status (400 here, not 500).
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Prefix.ShouldBe(BBT.Aether.Results.ErrorCodes.Prefixes.Validation);
+        result.Error.Code.ShouldBe(extensionCode);
+        result.Error.Message.ShouldBe(extensionMessage);
+    }
+
+    [Fact]
     public async Task GetInstanceListAsync_ShouldQuery_WhenNoFilterSupplied()
     {
         var result = await InvokeAsync();
@@ -267,7 +308,7 @@ public sealed class InstanceQueryAppServiceFilterValidationTests : IDisposable
             instanceTaskRepository: Substitute.For<IInstanceTaskRepository>(),
             instanceActionRepository: Substitute.For<IInstanceActionRepository>(),
             longPollInteractionGate: NSubstitute.Substitute.For<BBT.Workflow.Execution.LongPoll.ILongPollInteractionGate>(),
-            instanceExtensionService: Substitute.For<IInstanceExtensionService>(),
+            instanceExtensionService: _instanceExtensionService,
             scriptContextFactory: scriptContextFactory,
             instanceQueryGateway: Substitute.For<IInstanceQueryGateway>(),
             viewContentResolutionService: Substitute.For<IViewContentResolutionService>(),

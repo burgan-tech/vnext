@@ -239,6 +239,7 @@ public sealed class InstanceQueryAppService(
         }
 
         Error? rowSecurityDenial = null;
+        Error? extensionFailure = null;
         var listResult = await ResultExtensions.TryAsync(
             async ct =>
             {
@@ -440,11 +441,13 @@ public sealed class InstanceQueryAppService(
                     // Propagate extension errors - fail-fast behavior
                     if (!instanceOutputResult.IsSuccess)
                     {
-                        throw new UserFriendlyException(
-                            instanceOutputResult.Error.Code,
-                            instanceOutputResult.Error.Message,
-                            instanceOutputResult.Error.Detail).WithData("Target",
-                            instanceOutputResult.Error.Target ?? string.Empty);
+                        // Hand the extension's error back as is, like the row-security denial above.
+                        // It used to be rethrown as a UserFriendlyException with (code, message) in
+                        // the wrong constructor slots (Aether's order is message, code), which swapped
+                        // the two, and the rethrow re-prefixed the error as Failure, so every
+                        // extension error answered 500 whatever its own prefix said.
+                        extensionFailure = instanceOutputResult.Error;
+                        return null!;
                     }
 
                     var instanceOutput = instanceOutputResult.Value!;
@@ -466,8 +469,11 @@ public sealed class InstanceQueryAppService(
             },
             cancellationToken);
 
-        return rowSecurityDenial is { } denial
-            ? Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(denial)
+        if (rowSecurityDenial is { } denial)
+            return Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(denial);
+
+        return extensionFailure is { } extensionError
+            ? Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(extensionError)
             : listResult;
     }
 
