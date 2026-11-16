@@ -426,22 +426,22 @@ internal sealed class RecordingTaskExecutionEngine : ITaskExecutionEngine
             {
                 var summary = TaskExecutionSummary.Failure(
                     onExecuteTask.Task.Key, "DirectTrigger", "Instance is busy", 409, 0);
-                return Result<TasksExecutionResult>.Ok(
-                    TasksExecutionResult.SuccessWithFailedTasks([summary]) with
+                var handledError = new ExecutionError
+                {
+                    TaskKey = onExecuteTask.Task.Key,
+                    TaskType = "DirectTrigger",
+                    StatusCode = 409,
+                    ErrorMessage = "Instance is busy",
+                    NormalizedError = new NormalizedError
                     {
-                        HandledError = new ExecutionError
-                        {
-                            TaskKey = onExecuteTask.Task.Key,
-                            TaskType = "DirectTrigger",
-                            StatusCode = 409,
-                            ErrorMessage = "Instance is busy",
-                            NormalizedError = new NormalizedError
-                            {
-                                Code = $"Task:DirectTrigger:{onExecuteTask.Task.Key}:409",
-                                StatusCode = 409,
-                                Message = "Instance is busy"
-                            }
-                        },
+                        Code = $"Task:DirectTrigger:{onExecuteTask.Task.Key}:409",
+                        StatusCode = 409,
+                        Message = "Instance is busy"
+                    }
+                };
+                return Result<TasksExecutionResult>.Ok(
+                    TasksExecutionResult.HandledFailure(summary, handledError) with
+                    {
                         Response = new StandardTaskResponse
                         {
                             IsSuccess = false,

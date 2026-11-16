@@ -159,6 +159,25 @@ public sealed class TaskStepIncidentPersistenceTests
         result.Error!.Code.ShouldBe(error.ToError().Code);
     }
 
+    /// <summary>
+    /// vnext#1257: when every failure in the hook was handled by an Ignore/Log boundary, the step
+    /// continues — even into a target with no auto transitions — and records nothing. The removed
+    /// "non-blocking failure" guard would have faulted it here with <c>NoAutoTransitions</c>.
+    /// </summary>
+    [Fact]
+    public async Task FailuresHandledByTheBoundary_ContinueWithoutAFault()
+    {
+        var context = CreateContext(out var instance);
+        ArrangeTaskOutcome(TasksExecutionResult.CompletedWithHandledFailures(
+            [TaskExecutionSummary.Failure(TaskKey, "HttpTask", "downstream refused", 404, 0)]));
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.SkipToOrder.ShouldBeNull();
+        instance.HasActiveIncident.ShouldBeFalse();
+    }
+
     private void ArrangeTaskOutcome(TasksExecutionResult outcome)
     {
         _taskCoordinator

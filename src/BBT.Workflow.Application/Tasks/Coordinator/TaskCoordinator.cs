@@ -33,15 +33,6 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
     private readonly ILogger<TaskCoordinator> _logger;
 
     /// <summary>
-    /// Lock object for thread-safe parallel task failure tracking.
-    /// Per Microsoft guidelines: use a dedicated private readonly object for locking.
-    /// </summary>
-    /// <remarks>
-    /// See: https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/lock#guidelines
-    /// </remarks>
-    private readonly object _parallelTaskLock = new();
-
-    /// <summary>
     /// Initializes a new instance of TaskCoordinator.
     /// </summary>
     public TaskCoordinator(
@@ -195,15 +186,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             // disambiguation above so the two disambiguators compose instead of competing — the
             // refiner only ever adds to what ResolveGroupEngineOptions already resolved, never
             // races it.
-            if (optionsRefiner is not null)
-            {
-                var refined = new TaskEngineExecutionOptions[groupTasks.Count];
-                for (var i = 0; i < groupTasks.Count; i++)
-                {
-                    refined[i] = optionsRefiner(groupTasks[i], groupOptions[i]);
-                }
-                groupOptions = refined;
-            }
+            groupOptions = RefineGroupOptions(groupTasks, groupOptions, optionsRefiner);
 
             if (groupTasks.Count == 1)
             {
@@ -221,19 +204,13 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                 var parallelResult = await ExecuteTaskGroupInParallelAsync(
                     groupTasks, instanceTransitionId, taskTrigger, origin, context, groupOptions, cancellationToken);
 
-                if (!parallelResult.IsSuccess)
+                // Infrastructure failure, or a task in the group failed with a blocking outcome: stop.
+                if (!parallelResult.IsSuccess || !parallelResult.Value!.IsSuccess)
                 {
                     return parallelResult;
                 }
 
-                var groupResult = parallelResult.Value!;
-                executedTasks.AddRange(groupResult.ExecutedTasks);
-
-                // If any task in parallel group failed with blocking action, stop
-                if (!groupResult.IsSuccess)
-                {
-                    return parallelResult;
-                }
+                executedTasks.AddRange(parallelResult.Value.ExecutedTasks);
             }
 
         }
@@ -246,11 +223,42 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                 executedTasks.Count, skippedCount);
         }
 
-        var hasBusinessFailures = executedTasks.Any(t => !t.IsSuccess);
-        return Result<TasksExecutionResult>.Ok(
-            hasBusinessFailures
-                ? TasksExecutionResult.SuccessWithFailedTasks(executedTasks, (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds)
-                : TasksExecutionResult.Success(executedTasks, (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds));
+        return CompleteHook(executedTasks, totalStartTimestamp);
+    }
+
+    /// <summary>
+    /// The result of a hook (or one parallel group) that ran to its end: success, or success with
+    /// the failures an <c>Ignore</c> / <c>Log</c> boundary handled.
+    /// </summary>
+    private static Result<TasksExecutionResult> CompleteHook(
+        List<TaskExecutionSummary> executedTasks,
+        long startTimestamp)
+    {
+        var durationMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
+        return Result<TasksExecutionResult>.Ok(executedTasks.Exists(t => !t.IsSuccess)
+            ? TasksExecutionResult.CompletedWithHandledFailures(executedTasks, durationMs)
+            : TasksExecutionResult.Success(executedTasks, durationMs));
+    }
+
+    /// <summary>
+    /// Applies the caller-supplied per-task override (e.g. the extension path setting a distinct
+    /// ResponseVariableKey per extension) on top of the group's resolved options. Applied AFTER the
+    /// duplicate-key JournalTaskKey disambiguation so the two compose instead of competing.
+    /// </summary>
+    private static IReadOnlyList<TaskEngineExecutionOptions> RefineGroupOptions(
+        List<OnExecuteTask> groupTasks,
+        IReadOnlyList<TaskEngineExecutionOptions> groupOptions,
+        Func<OnExecuteTask, TaskEngineExecutionOptions, TaskEngineExecutionOptions>? optionsRefiner)
+    {
+        if (optionsRefiner is null)
+            return groupOptions;
+
+        var refined = new TaskEngineExecutionOptions[groupTasks.Count];
+        for (var i = 0; i < groupTasks.Count; i++)
+        {
+            refined[i] = optionsRefiner(groupTasks[i], groupOptions[i]);
+        }
+        return refined;
     }
 
     /// <summary>
@@ -280,7 +288,14 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
 
         var result = taskResult.Value!;
 
-        // Business error with blocking action
+        // A failure an Ignore/Log boundary let through: the hook goes on (vnext#1257).
+        if (IsHandledFailure(result))
+        {
+            executedTasks.AddRange(result.ExecutedTasks);
+            return null;
+        }
+
+        // Unhandled failure (no boundary) or a blocking boundary action: the hook stops here.
         if (!result.IsSuccess)
         {
             return Result<TasksExecutionResult>.Ok(new TasksExecutionResult
@@ -300,6 +315,15 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         executedTasks.AddRange(result.ExecutedTasks);
         return null;
     }
+
+    /// <summary>
+    /// A task failure the error boundary handled with a non-blocking action (<c>Ignore</c> /
+    /// <c>Log</c>): failed, but with neither a <c>TaskError</c> (unhandled) nor a
+    /// <c>BoundaryAction</c> (blocking) — see <see cref="TasksExecutionResult.HandledFailure"/>.
+    /// It does not stop the hook.
+    /// </summary>
+    private static bool IsHandledFailure(TasksExecutionResult result) =>
+        result is { IsSuccess: false, TaskError: null, BoundaryAction: null };
 
     /// <summary>
     /// Executes a group of tasks with same Order in parallel.
@@ -330,9 +354,8 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             "Executing {TaskCount} tasks in parallel for instance {InstanceId}",
             tasks.Count, context.Instance?.Id);
 
-        // Track first failure for error boundary (thread-safe)
-        TasksExecutionResult? firstFailure = null;
-        OnExecuteTask? firstFailedTask = null;
+        // Track first blocking failure for error boundary (thread-safe)
+        var firstFailure = new FirstBlockingFailure();
 
         var executionTasks = tasks.Select(async (task, index) =>
         {
@@ -344,34 +367,15 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
                 await using var scope = _serviceScopeFactory.CreateAsyncScope();
                 var scopedEngine = scope.ServiceProvider.GetRequiredService<ITaskExecutionEngine>();
 
-                var result = await scopedEngine.ExecuteAsync(
-                    task, instanceTransitionId, taskTrigger, origin, branchContext, engineOptionsPerTask[index], linkedToken);
+                var result = ToTaskOutcome(
+                    await scopedEngine.ExecuteAsync(
+                        task, instanceTransitionId, taskTrigger, origin, branchContext, engineOptionsPerTask[index], linkedToken),
+                    task,
+                    startTimestamp);
 
-                if (!result.IsSuccess)
+                if (IsBlockingFailure(result.Value!) && firstFailure.TryClaim(result.Value!, task))
                 {
-                    var infrastructureError = _errorFactory.CreateFromError(
-                        result.Error,
-                        task.Task.Key,
-                        "Unknown",
-                        (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
-                    result = Result<TasksExecutionResult>.Ok(
-                        TasksExecutionResult.Failure(
-                            task,
-                            infrastructureError,
-                            totalDurationMs: (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds));
-                }
-
-                if (!result.Value!.IsSuccess)
-                {
-                    lock (_parallelTaskLock)
-                    {
-                        if (firstFailure == null)
-                        {
-                            firstFailure = result.Value;
-                            firstFailedTask = task;
-                            linkedCts.CancelAsync();
-                        }
-                    }
+                    await linkedCts.CancelAsync();
                 }
 
                 return (Task: task, Result: result, Context: branchContext);
@@ -392,66 +396,91 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
             context.MergeParallelBranches(results.Select(outcome => outcome.Context).ToList());
 
 
-            // If there was a failure, return it with error boundary info
-            if (firstFailure != null && firstFailedTask != null)
-            {
-                // Collect successful tasks before failure
-                foreach (var (_, result, _) in results)
-                {
-                    if (result.IsSuccess && result.Value != null && result.Value.IsSuccess)
-                    {
-                        executedTasks.AddRange(result.Value.ExecutedTasks);
-                    }
-                }
+            // Tasks that completed or whose failure a boundary handled. A blocking failure (or a
+            // branch the first failure cancelled) is not counted as executed.
+            executedTasks.AddRange(results
+                .Where(outcome => outcome.Result is { IsSuccess: true, Value: { } value } && !IsBlockingFailure(value))
+                .SelectMany(outcome => outcome.Result.Value!.ExecutedTasks));
 
-                return Result<TasksExecutionResult>.Ok(new TasksExecutionResult
-                {
-                    IsSuccess = false,
-                    HasFailedTasks = true,
-                    FailedTaskKeys = firstFailure.FailedTaskKeys,
-                    FailedTask = firstFailure.FailedTask ?? firstFailedTask,
-                    TaskError = firstFailure.TaskError,
-                    BoundaryAction = firstFailure.BoundaryAction,
-                    ExecutedTasks = executedTasks,
-                    TotalExecutionDurationMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds
-                });
-            }
-
-            // All succeeded
-            foreach (var (_, result, _) in results)
-            {
-                if (result.IsSuccess && result.Value != null)
-                {
-                    executedTasks.AddRange(result.Value.ExecutedTasks);
-                }
-            }
-
-            var hasBusinessFailures = executedTasks.Any(t => !t.IsSuccess);
-            return Result<TasksExecutionResult>.Ok(
-                hasBusinessFailures
-                    ? TasksExecutionResult.SuccessWithFailedTasks(executedTasks, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds)
-                    : TasksExecutionResult.Success(executedTasks, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds));
+            // If there was a blocking failure, return it with error boundary info
+            return firstFailure.Result is { } failure
+                ? Result<TasksExecutionResult>.Ok(BlockingGroupFailure(
+                    failure, failure.FailedTask ?? firstFailure.Task!, executedTasks, startTimestamp))
+                : CompleteHook(executedTasks, startTimestamp);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Parallel task execution failed unexpectedly");
 
-            if (firstFailure != null && firstFailedTask != null)
-            {
-                return Result<TasksExecutionResult>.Ok(new TasksExecutionResult
-                {
-                    IsSuccess = false,
-                    HasFailedTasks = true,
-                    FailedTaskKeys = firstFailure.FailedTaskKeys,
-                    FailedTask = firstFailedTask,
-                    TaskError = firstFailure.TaskError,
-                    BoundaryAction = firstFailure.BoundaryAction,
-                    ExecutedTasks = executedTasks,
-                    TotalExecutionDurationMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds
-                });
-            }
+            return firstFailure.Result is { } failure
+                ? Result<TasksExecutionResult>.Ok(BlockingGroupFailure(
+                    failure, firstFailure.Task!, executedTasks, startTimestamp))
+                : Result<TasksExecutionResult>.Fail(Error.Failure("ParallelExecutionFailed", ex.Message));
+        }
+    }
 
-            return Result<TasksExecutionResult>.Fail(Error.Failure("ParallelExecutionFailed", ex.Message));
+    /// <summary>
+    /// Turns an engine infrastructure failure (a failed <see cref="Result{T}"/>) into the same
+    /// unhandled-failure shape a business failure has, so every branch reports one shape.
+    /// </summary>
+    private Result<TasksExecutionResult> ToTaskOutcome(
+        Result<TasksExecutionResult> result,
+        OnExecuteTask task,
+        long startTimestamp)
+    {
+        if (result.IsSuccess)
+            return result;
+
+        var durationMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
+        var infrastructureError = _errorFactory.CreateFromError(result.Error, task.Task.Key, "Unknown", durationMs);
+        return Result<TasksExecutionResult>.Ok(
+            TasksExecutionResult.Failure(task, infrastructureError, totalDurationMs: durationMs));
+    }
+
+    /// <summary>A failure that stops the hook: unhandled, or a blocking boundary action.</summary>
+    private static bool IsBlockingFailure(TasksExecutionResult result) =>
+        !result.IsSuccess && !IsHandledFailure(result);
+
+    /// <summary>The group's result when one of its tasks failed with a blocking outcome.</summary>
+    private static TasksExecutionResult BlockingGroupFailure(
+        TasksExecutionResult failure,
+        OnExecuteTask failedTask,
+        List<TaskExecutionSummary> executedTasks,
+        long startTimestamp) => new()
+    {
+        IsSuccess = false,
+        HasFailedTasks = true,
+        FailedTaskKeys = failure.FailedTaskKeys,
+        FailedTask = failedTask,
+        TaskError = failure.TaskError,
+        BoundaryAction = failure.BoundaryAction,
+        ExecutedTasks = executedTasks,
+        TotalExecutionDurationMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds
+    };
+
+    /// <summary>
+    /// The first blocking failure of a parallel group. Claimed once, under a lock, by the branch that
+    /// gets there first; that branch cancels its siblings.
+    /// </summary>
+    private sealed class FirstBlockingFailure
+    {
+        private readonly Lock _gate = new();
+
+        public TasksExecutionResult? Result { get; private set; }
+
+        public OnExecuteTask? Task { get; private set; }
+
+        public bool TryClaim(TasksExecutionResult result, OnExecuteTask task)
+        {
+            lock (_gate)
+            {
+                if (Result is not null)
+                    return false;
+
+                Result = result;
+                Task = task;
+                return true;
+            }
         }
     }
 

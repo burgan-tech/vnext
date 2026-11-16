@@ -57,15 +57,18 @@ the one-line imperatives.
   script's `Stage` mutation, which a faulting run should not persist) and wraps the save in
   try/catch so the step still fails with the original task error. The fallback branch stays: it is
   the only recorder for pipeline errors with no task error (`ResourceLockConflict`,
-  `TransitionChainDepthExceeded`, policy/schema failures), for
-  `ExecutionErrors.UnhandledNonBlockingTaskFailures`, and for the low-probability failed-save path.
+  `TransitionChainDepthExceeded`, policy/schema failures) and for the low-probability failed-save path.
+  A task that fails with **no boundary at any level** takes the unhandled path above: the engine
+  returns it with its `TaskError` and no `BoundaryAction`, so the step records the incident and the
+  instance faults (vnext#1257; before, it came back error-less and the step read it as success).
   Pinned by `TaskStepIncidentPersistenceTests`.
 - **`Handle`'s `ShouldContinue` branch is unreachable from the task steps.**
   `TaskExecutionEngine.ConvertActionResult` returns a continue-style outcome as
-  `TasksExecutionResult.SuccessWithFailedTasks`, which carries **no** boundary action, so the step's
+  `TasksExecutionResult.HandledFailure`, which carries **no** boundary action, so the step's
   `BoundaryAction != null` guard is false and `Handle` is never called for `ignore`/`log`. The
-  measured (and confirmed-correct) behaviour is therefore "no incident, and the rest of the hook is
-  skipped". Left in place so the intended semantics stay expressed.
+  behaviour is therefore "no incident; `TaskCoordinator` runs the remaining tasks of the hook and
+  the hook completes" (vnext#1257 — before, the rest of the hook was skipped). Left in place so the
+  intended semantics stay expressed.
 - **Resolve is set-based.** `Instance.ResolveOpenIncidents()` closes EVERY unresolved row on the
   materialized aggregate and recomputes the flag from that same snapshot; there is deliberately no
   single-row API to pick wrongly. One failure can leave more than one open row (a job-timeout

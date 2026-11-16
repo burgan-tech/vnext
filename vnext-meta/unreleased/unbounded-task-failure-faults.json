@@ -1,0 +1,31 @@
+{
+  "releaseNote": {
+    "summary": "A task that fails with no error boundary now faults the transition with an incident; Ignore/Log no longer skip the remaining tasks.",
+    "breaking": false,
+    "docs": []
+  },
+  "migrations": [
+    {
+      "id": "unbounded-task-failure-faults-transition",
+      "type": "behavior",
+      "component": "task",
+      "path": "transition.onExecutionTasks | state.onEntries | state.onExits",
+      "since": "next",
+      "severity": "warning",
+      "title": "A task that fails with no error boundary faults the transition",
+      "description": "A task that answers with a business failure (a non-success response) while no errorBoundary is declared on the task, its state or the workflow now stops the hook, records an incident and faults the instance. Before, the failure was logged as 'Flow will continue with auto-transitions', the transition completed as if the task had succeeded, the tasks after it in the same hook were silently skipped, and no incident was written (vnext#1257). Automatic transitions no longer decide whether such a failure is handled.",
+      "action": "Where a task's failure is meant to be tolerated, declare an errorBoundary on the task (or the state / workflow) with action Ignore or Log for the expected error codes. Route an expected failure to another state with an error-boundary transition instead of relying on an automatic transition."
+    },
+    {
+      "id": "ignore-log-boundary-runs-remaining-tasks",
+      "type": "behavior",
+      "component": "task",
+      "path": "errorBoundary.onError[].action (Ignore | Log)",
+      "since": "next",
+      "severity": "info",
+      "title": "Ignore and Log no longer skip the remaining tasks of the hook",
+      "description": "When a task's failure resolves to Ignore or Log, the tasks after it in the same onExecute, onEntry or onExit hook now run, and the hook completes. Before, the rest of the hook was silently skipped. A function or extension whose only failures were handled by Ignore or Log now succeeds instead of failing with TaskExecutionFailed.",
+      "action": "None required. A hook that relied on Ignore stopping the tasks after it must use Abort or a condition on the later tasks instead."
+    }
+  ]
+}

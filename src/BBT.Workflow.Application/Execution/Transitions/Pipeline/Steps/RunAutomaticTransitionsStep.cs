@@ -19,21 +19,9 @@ public sealed class RunAutomaticTransitionsStep(
     /// <inheritdoc />
     public async Task<Result<StepOutcome>> ExecuteAsync(TransitionExecutionContext context, CancellationToken cancellationToken)
     {
-        var nonBlockingFailures = NonBlockingTaskFailures.Get(context);
-
         // Check if target state has any automatic transitions
         if (context.Target?.AutoTransitions == null || !context.Target.AutoTransitions.Any())
         {
-            if (nonBlockingFailures.Count > 0)
-            {
-                return Result<StepOutcome>.Fail(
-                    ExecutionErrors.UnhandledNonBlockingTaskFailures(
-                        context.TransitionKey,
-                        context.Target?.Key ?? context.Current.Key,
-                        nonBlockingFailures,
-                        reason: "NoAutoTransitions"));
-            }
-
             return Result<StepOutcome>.Ok(StepOutcome.ContinueNoWork());
         }
 
@@ -44,7 +32,7 @@ public sealed class RunAutomaticTransitionsStep(
             return Result<StepOutcome>.Fail(evalResult.Error);
         }
 
-        return ProcessEvaluationResults(context, evalResult.Value!, nonBlockingFailures);
+        return ProcessEvaluationResults(context, evalResult.Value!);
     }
 
     /// <summary>
@@ -53,8 +41,7 @@ public sealed class RunAutomaticTransitionsStep(
     /// </summary>
     private Result<StepOutcome> ProcessEvaluationResults(
         TransitionExecutionContext context,
-        List<AutoConditionEvaluation> evaluations,
-        IReadOnlyList<NonBlockingTaskFailure> nonBlockingFailures)
+        List<AutoConditionEvaluation> evaluations)
     {
         var winner = evaluations.FirstOrDefault(e => e.Status == AutoConditionStatus.Satisfied);
 
@@ -64,16 +51,6 @@ public sealed class RunAutomaticTransitionsStep(
                 context.Target!.Key,
                 context.InstanceId,
                 string.Join(", ", evaluations.Select(e => e.TransitionKey)));
-
-            if (nonBlockingFailures.Count > 0)
-            {
-                return Result<StepOutcome>.Fail(
-                    ExecutionErrors.UnhandledNonBlockingTaskFailures(
-                        context.TransitionKey,
-                        context.Target!.Key,
-                        nonBlockingFailures,
-                        reason: "NoAutoTransitionWinner"));
-            }
 
             // No winner found - continue pipeline, stay in current state
             return Result<StepOutcome>.Ok(StepOutcome.Continue());
@@ -86,8 +63,7 @@ public sealed class RunAutomaticTransitionsStep(
         context.Directives.RequestNextTransition(
             new NextTransitionRequest(winner.TransitionKey, "auto"));
 
-        // Skip to Finalize to complete current transition, then pipeline will chain to next
-        // return StepOutcome.SkipTo(LifecycleOrder.Finalize);
+        // Continue to Finalize; the pipeline then chains to the requested transition.
         return Result<StepOutcome>.Ok(StepOutcome.Continue());
     }
 

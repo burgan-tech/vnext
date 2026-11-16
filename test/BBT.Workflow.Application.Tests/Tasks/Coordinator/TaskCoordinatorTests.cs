@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Results;
@@ -117,6 +118,135 @@ public sealed class TaskCoordinatorTests
         result.Value!.IsSuccess.ShouldBeFalse();
         result.Value.FailedTaskKeys.ShouldContain("first");
     }
+
+    /// <summary>
+    /// vnext#1257: an unhandled task failure (no boundary) stops the hook — the tasks after it never
+    /// run, and the failure travels up with its TaskError so the step faults.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteWithDetailsAsync_WhenATaskFailsUnhandled_StopsBeforeTheNextTask()
+    {
+        var engine = Substitute.For<ITaskExecutionEngine>();
+        var definitions = SequentialDefinitions();
+        ArrangeOutcome(engine, "first", call => TasksExecutionResult.Failure(call.Arg<OnExecuteTask>(), CreateError("first")));
+        ArrangeOutcome(engine, "second", _ => TasksExecutionResult.Success([TaskExecutionSummary.Success("second", "Http")]));
+
+        var result = await CreateCoordinator(engine, new ServiceCollection().BuildServiceProvider())
+            .ExecuteWithDetailsAsync(definitions, Guid.NewGuid(), TaskTrigger.OnExecute, TaskExecutionOrigin.Flow, CreateContext());
+
+        result.Value!.IsSuccess.ShouldBeFalse();
+        result.Value.TaskError.ShouldNotBeNull();
+        result.Value.FailedTask!.Task.Key.ShouldBe("first");
+        await engine.DidNotReceive().ExecuteAsync(
+            Arg.Is<OnExecuteTask>(t => t.Task.Key == "second"), Arg.Any<Guid?>(), Arg.Any<TaskTrigger>(),
+            Arg.Any<TaskExecutionOrigin>(), Arg.Any<ScriptContext>(), Arg.Any<TaskEngineExecutionOptions>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// vnext#1257: a failure the boundary handled with Ignore/Log does not stop the hook — the next
+    /// task runs, and the hook as a whole succeeds while still reporting the failed task.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteWithDetailsAsync_WhenABoundaryHandlesAFailure_RunsTheNextTaskAndSucceeds()
+    {
+        var engine = Substitute.For<ITaskExecutionEngine>();
+        var definitions = SequentialDefinitions();
+        ArrangeOutcome(engine, "first", _ => HandledFailure("first"));
+        ArrangeOutcome(engine, "second", _ => TasksExecutionResult.Success([TaskExecutionSummary.Success("second", "Http")]));
+
+        var result = await CreateCoordinator(engine, new ServiceCollection().BuildServiceProvider())
+            .ExecuteWithDetailsAsync(definitions, Guid.NewGuid(), TaskTrigger.OnExecute, TaskExecutionOrigin.Flow, CreateContext());
+
+        var value = result.Value!;
+        value.IsSuccess.ShouldBeTrue();
+        value.HasFailedTasks.ShouldBeTrue();
+        value.TaskError.ShouldBeNull();
+        value.FailedTaskKeys.ShouldBe(["first"]);
+        value.ExecutedTasks.Select(t => t.TaskKey).ShouldBe(["first", "second"]);
+    }
+
+    /// <summary>
+    /// The parallel twin: a handled failure in one branch neither cancels nor fails its sibling.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteWithDetailsAsync_WhenAParallelBranchHasAHandledFailure_TheGroupSucceeds()
+    {
+        var engine = Substitute.For<ITaskExecutionEngine>();
+        var definitions = new[]
+        {
+            OnExecuteTask.Create(1, WorkflowTaskFactory.CreateHttpTask("first"), ScriptCode.FromNative(string.Empty)),
+            OnExecuteTask.Create(1, WorkflowTaskFactory.CreateHttpTask("second"), ScriptCode.FromNative(string.Empty))
+        };
+        ArrangeOutcome(engine, "first", _ => HandledFailure("first"));
+        ArrangeOutcome(engine, "second", call =>
+        {
+            call.Arg<CancellationToken>().IsCancellationRequested.ShouldBeFalse();
+            return TasksExecutionResult.Success([TaskExecutionSummary.Success("second", "Http")]);
+        });
+        var services = new ServiceCollection().AddSingleton(engine).BuildServiceProvider();
+
+        var result = await CreateCoordinator(engine, services)
+            .ExecuteWithDetailsAsync(definitions, Guid.NewGuid(), TaskTrigger.OnExecute, TaskExecutionOrigin.Flow, CreateContext());
+
+        var value = result.Value!;
+        value.IsSuccess.ShouldBeTrue();
+        value.HasFailedTasks.ShouldBeTrue();
+        value.FailedTaskKeys.ShouldBe(["first"]);
+    }
+
+    /// <summary>
+    /// The plain overload (functions) collapses a hook whose only failures were handled to success.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_WhenTheOnlyFailureWasHandled_ReturnsOk()
+    {
+        var engine = Substitute.For<ITaskExecutionEngine>();
+        ArrangeOutcome(engine, "first", _ => HandledFailure("first"));
+        ArrangeOutcome(engine, "second", _ => TasksExecutionResult.Success([TaskExecutionSummary.Success("second", "Http")]));
+
+        var result = await CreateCoordinator(engine, new ServiceCollection().BuildServiceProvider())
+            .ExecuteAsync(SequentialDefinitions(), null, TaskTrigger.Extension, TaskExecutionOrigin.Function, CreateContext());
+
+        result.IsSuccess.ShouldBeTrue();
+    }
+
+    private static OnExecuteTask[] SequentialDefinitions() =>
+    [
+        OnExecuteTask.Create(1, WorkflowTaskFactory.CreateHttpTask("first"), ScriptCode.FromNative(string.Empty)),
+        OnExecuteTask.Create(2, WorkflowTaskFactory.CreateHttpTask("second"), ScriptCode.FromNative(string.Empty))
+    ];
+
+    private static void ArrangeOutcome(
+        ITaskExecutionEngine engine,
+        string taskKey,
+        Func<NSubstitute.Core.CallInfo, TasksExecutionResult> outcome)
+    {
+        engine.ExecuteAsync(
+                Arg.Is<OnExecuteTask>(task => task.Task.Key == taskKey),
+                Arg.Any<Guid?>(),
+                Arg.Any<TaskTrigger>(),
+                Arg.Any<TaskExecutionOrigin>(),
+                Arg.Any<ScriptContext>(),
+                Arg.Any<TaskEngineExecutionOptions>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call => Result<TasksExecutionResult>.Ok(outcome(call)));
+    }
+
+    /// <summary>The engine's shape for a failure an Ignore/Log boundary let through.</summary>
+    private static TasksExecutionResult HandledFailure(string taskKey) =>
+        TasksExecutionResult.HandledFailure(
+            TaskExecutionSummary.Failure(taskKey, "Http", "not found", 404, 0),
+            CreateError(taskKey));
+
+    private static ExecutionError CreateError(string taskKey) => new()
+    {
+        TaskKey = taskKey,
+        TaskType = "Http",
+        StatusCode = 404,
+        ErrorMessage = "not found",
+        NormalizedError = new NormalizedError { Code = $"Task:Http:{taskKey}:404", StatusCode = 404, Message = "not found" }
+    };
 
     private static TaskCoordinator CreateCoordinator(
         ITaskExecutionEngine engine,
