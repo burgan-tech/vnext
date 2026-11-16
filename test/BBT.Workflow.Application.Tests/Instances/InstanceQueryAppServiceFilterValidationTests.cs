@@ -167,6 +167,40 @@ public sealed class InstanceQueryAppServiceFilterValidationTests : IDisposable
             Arg.Any<SchemaFilterContext?>(), Arg.Any<CancellationToken>());
     }
 
+    [Theory]
+    [InlineData("eq", "not-an-id", """{"id":{"eq":"not-an-id"}}""")]
+    [InlineData("in", "kimlik-degil", """{"id":{"in":["kimlik-degil"]}}""")]
+    [InlineData("gt", "00000000-0000-0000-0000-000000000001", """{"id":{"gt":"00000000-0000-0000-0000-000000000001"}}""")]
+    public async Task GetInstanceListAsync_ShouldMapIdFilterCompileFailure_ToFilterInvalid(
+        string op, string value, string filter)
+    {
+        // The boundary validator checks a filter's shape, not its values, so a non-Guid `id` reaches
+        // the SQL builder. Let the repository surface exactly what the builder throws there, and pin
+        // that the caller gets the 400 code (InstanceFilterInvalid), not a 500 (#1080).
+        _instanceRepository
+            .GetPagedResultsWithGroupsAsync(
+                Arg.Any<int>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>(),
+                Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<SchemaFilterContext?>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<(HateoasPagedList<Instance>, List<GroupSummary>?)>>(_ =>
+            {
+                var parameterIndex = 0;
+                InstanceColumnConditionBuilder.BuildCondition("id", op, value, ref parameterIndex);
+                throw new InvalidOperationException("The builder was expected to reject the id filter.");
+            });
+
+        var result = await InvokeAsync(filter);
+
+        // The code must carry the "Validation:" prefix: that prefix is what maps the error to 400.
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceFilterInvalid);
+        result.Error.Message.ShouldStartWith("Filter could not be applied:");
+
+        // The filter passed the boundary validator, so the repository was really asked to run it.
+        await _instanceRepository.ReceivedWithAnyArgs(1).GetPagedResultsWithGroupsAsync(
+            default, default, default, default, default, default, default, default);
+    }
+
     [Fact]
     public async Task GetInstanceListAsync_ShouldQuery_WhenNoFilterSupplied()
     {

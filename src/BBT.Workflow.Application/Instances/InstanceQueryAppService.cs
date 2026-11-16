@@ -388,9 +388,12 @@ public sealed class InstanceQueryAppService(
                     if (ex is FilterCompilationException)
                         throw; // Already a UserFriendlyException with InstanceFilterInvalid.
 
+                    // Named arguments on purpose: Aether's constructor is (message, code, ...), so a
+                    // positional (code, message) call put the text into the code, lost the
+                    // "Validation:" prefix and answered 500 instead of 400 (#1080).
                     throw new UserFriendlyException(
-                        WorkflowErrorCodes.InstanceFilterInvalid,
-                        $"Filter could not be applied: {ex.Message}");
+                        message: $"Filter could not be applied: {ex.Message}",
+                        code: WorkflowErrorCodes.InstanceFilterInvalid);
                 }
 
                 var route = urlTemplateBuilder.BuildInstanceListUrl(input.Domain, input.Workflow);

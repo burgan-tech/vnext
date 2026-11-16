@@ -513,6 +513,11 @@ public static class WorkflowApiBaseServiceCollectionExtensions
             // A filter/sort/groupBy the master schema refuses (x-filterOperators, x-sortable, and every
             // x-encryption "encrypt" path) is the caller's error. It surfaced as 500 before.
             opt.Map(WorkflowErrorCodes.SchemaFilterValidation, HttpStatusCode.BadRequest);
+            // A filter that passed the boundary validator but could not be compiled into SQL (a
+            // non-Guid `id`, `createdAt eq "notadate"`, a fail-closed builder guard). It is thrown as a
+            // UserFriendlyException, which Aether turns into a Failure-prefixed error, so without this
+            // row the "Validation:" in the code never reached the status and it answered 500 (#1080).
+            opt.Map(WorkflowErrorCodes.InstanceFilterInvalid, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.RuntimeSchemaInvalidState, HttpStatusCode.BadRequest);
             opt.Map(WorkflowErrorCodes.TransitionLocked, HttpStatusCode.Conflict);
             opt.Map(WorkflowErrorCodes.AutoTransitionConditionNotMet, HttpStatusCode.BadRequest);

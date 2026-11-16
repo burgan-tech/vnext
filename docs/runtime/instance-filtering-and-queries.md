@@ -27,6 +27,14 @@ Two kinds of fields, distinguished by the name you pass:
   `.First()` / `.Last()` selector terminal has no name resolution for any of the three: it compares
   the literal text against the stored code, so pass codes there.
 
+> **`id` is a uuid and takes only the set operators.** `eq`, `ne`, `in`, `nin` and `isNull` work;
+> every value must be a Guid and is bound as a PostgreSQL `uuid`, so the comparison uses the primary
+> key index. A value that is not a Guid (`{"id":{"eq":"not-an-id"}}`) answers **400**
+> `InstanceFilterInvalid`, and so do the range and text-match operators (`gt`, `ge`, `lt`, `le`,
+> `between`, `like`, `startswith`, `endswith`) — ordering a uuid means nothing, and matching it as
+> text would need a cast that defeats the index. From a `GetInstancesTask`, the same rejection fails
+> the task (it reaches the error boundary) instead of answering 400.
+
 > **`effectiveStatus` filters the stored column, not the served field.** A filter runs in SQL; the
 > served `metadata.effectiveStatus` goes through a read-time clamp for the SubFlow completion window
 > (see `docs/runtime/state-function-cache-and-etag.md`). So `effectiveStatus eq Completed` can match

@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
+using NpgsqlTypes;
 using Xunit;
 using Shouldly;
 
@@ -530,6 +531,111 @@ public class InstanceColumnFilterTests
             InstanceColumnConditionBuilder.BuildCondition(
                 "IsTransient", "eq", "not-a-boolean", ref parameterIndex));
     }
+
+    #region Id (uuid) column
+
+    [Theory]
+    [InlineData("id", "eq", "=")]
+    [InlineData("Id", "ne", "!=")]
+    public void BuildCondition_IdEqNe_ShouldBindUuidParameter(string column, string op, string sqlOperator)
+    {
+        // Arrange
+        var parameterIndex = 0;
+        var id = Guid.NewGuid();
+
+        // Act
+        var (condition, parameters) = InstanceColumnConditionBuilder.BuildCondition(
+            column, op, id.ToString(), ref parameterIndex);
+
+        // Assert — a uuid-typed parameter, so the SQL compares uuid with uuid (not uuid = text, 42883)
+        condition.ShouldBe($"s.\"Id\" {sqlOperator} {{0}}");
+        parameters.Count.ShouldBe(1);
+        parameters[0].NpgsqlDbType.ShouldBe(NpgsqlDbType.Uuid);
+        parameters[0].Value.ShouldBe(id);
+        parameterIndex.ShouldBe(1);
+    }
+
+    [Theory]
+    [InlineData("in", "IN")]
+    [InlineData("nin", "NOT IN")]
+    public void BuildCondition_IdInNin_ShouldBindEveryValueAsUuid(string op, string sqlOperator)
+    {
+        // Arrange
+        var parameterIndex = 0;
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+
+        // Act
+        var (condition, parameters) = InstanceColumnConditionBuilder.BuildCondition(
+            "id", op, $"{first}, {second}", ref parameterIndex);
+
+        // Assert
+        condition.ShouldBe($"s.\"Id\" {sqlOperator} ({{0}}, {{1}})");
+        parameters.Count.ShouldBe(2);
+        parameters.ShouldAllBe(p => p.NpgsqlDbType == NpgsqlDbType.Uuid);
+        parameters[0].Value.ShouldBe(first);
+        parameters[1].Value.ShouldBe(second);
+        parameterIndex.ShouldBe(2);
+    }
+
+    [Theory]
+    [InlineData("eq", "not-an-id")]
+    [InlineData("ne", "kimlik-degil")]
+    [InlineData("in", "00000000-0000-0000-0000-000000000001,not-an-id")]
+    [InlineData("nin", "not-an-id")]
+    public void BuildCondition_IdInvalidGuid_ShouldThrowArgumentException(string op, string value)
+    {
+        // Arrange
+        var parameterIndex = 0;
+
+        // Act & Assert — ArgumentException is what the query boundary maps to 400
+        var ex = Should.Throw<ArgumentException>(() =>
+            InstanceColumnConditionBuilder.BuildCondition("id", op, value, ref parameterIndex));
+        ex.Message.ShouldContain("Invalid Guid value");
+    }
+
+    [Theory]
+    [InlineData("gt")]
+    [InlineData("ge")]
+    [InlineData("lt")]
+    [InlineData("le")]
+    [InlineData("between")]
+    [InlineData("like")]
+    [InlineData("match")]
+    [InlineData("startswith")]
+    [InlineData("endswith")]
+    public void BuildCondition_IdUnsupportedOperator_ShouldThrowArgumentException(string op)
+    {
+        // Arrange
+        var parameterIndex = 0;
+        var value = op == "between"
+            ? $"{Guid.NewGuid()},{Guid.NewGuid()}"
+            : Guid.NewGuid().ToString();
+
+        // Act & Assert
+        var ex = Should.Throw<ArgumentException>(() =>
+            InstanceColumnConditionBuilder.BuildCondition("id", op, value, ref parameterIndex));
+        ex.Message.ShouldContain("Id column does not support operator");
+    }
+
+    [Theory]
+    [InlineData("true", "IS NULL")]
+    [InlineData("false", "IS NOT NULL")]
+    public void BuildCondition_IdIsNull_ShouldStillWork(string value, string sqlOperator)
+    {
+        // Arrange
+        var parameterIndex = 0;
+
+        // Act
+        var (condition, parameters) = InstanceColumnConditionBuilder.BuildCondition(
+            "id", "isnull", value, ref parameterIndex);
+
+        // Assert
+        condition.ShouldBe($"s.\"Id\" {sqlOperator}");
+        parameters.ShouldBeEmpty();
+    }
+
+    #endregion
 
     [Fact]
     public void BuildCondition_Status_InvalidOperator_ShouldThrow()
