@@ -157,6 +157,18 @@ public sealed class ComponentDiscoveryAppService(
         _ => []
     };
 
+    /// <summary>
+    /// Runs one read inside <paramref name="domain"/>'s scope — component storage is per domain on a
+    /// co-hosted host — and closes the scope before the caller continues.
+    /// </summary>
+    private async Task<TResult> ReadInDomainAsync<TResult>(string domain, Func<Task<TResult>> read)
+    {
+        using (runtimeInfoProvider.UseDomain(domain))
+        {
+            return await read();
+        }
+    }
+
     private async Task<IReadOnlyList<ComponentSummaryDto>> ListSummariesAsync<T>(
         string domain,
         ComponentType type,
@@ -165,11 +177,8 @@ public sealed class ComponentDiscoveryAppService(
     {
         // Version metadata only: deserializing every stored body to report a key and a version cost memory
         // in proportion to the whole publish history of every component of the type.
-        IReadOnlyList<PublishedComponentVersion> versions;
-        using (runtimeInfoProvider.UseDomain(domain))
-        {
-            versions = await runtimeService.GetPublishedVersionsAsync<T>(cancellationToken);
-        }
+        var versions = await ReadInDomainAsync(domain,
+            () => runtimeService.GetPublishedVersionsAsync<T>(cancellationToken));
 
         var token = type.ToToken();
         var componentTypeKey = type.ToComponentTypeKey();
@@ -200,19 +209,16 @@ public sealed class ComponentDiscoveryAppService(
         var safeSize = pageSize < 1 ? DefaultVersionPageSize : Math.Min(pageSize, MaxVersionPageSize);
         var skip = (int)Math.Min((long)(safePage - 1) * safeSize, int.MaxValue);
 
-        IReadOnlyList<string> versions;
-        IReadOnlyList<ComponentVersionSummary> rows;
-        using (runtimeInfoProvider.UseDomain(domain))
-        {
-            // The candidate list version resolution itself reads on a cache miss, so Latest below is the
-            // answer the cache has to give once its entries expire.
-            versions = await runtimeService.GetVersionsAsync<T>(key, cancellationToken);
-            if (versions.Count == 0)
-                return Result<ComponentVersionListDto>.Fail(CacheErrors.ItemNotFoundInBackend<T>(domain, key, null));
+        // The candidate list version resolution itself reads on a cache miss, so Latest below is the
+        // answer the cache has to give once its entries expire.
+        var versions = await ReadInDomainAsync(domain,
+            () => runtimeService.GetVersionsAsync<T>(key, cancellationToken));
+        if (versions.Count == 0)
+            return Result<ComponentVersionListDto>.Fail(CacheErrors.ItemNotFoundInBackend<T>(domain, key, null));
 
-            // One row past the page tells whether a next page exists, without a COUNT.
-            rows = await runtimeService.GetVersionPageAsync<T>(key, skip, safeSize + 1, cancellationToken);
-        }
+        // One row past the page tells whether a next page exists, without a COUNT.
+        var rows = await ReadInDomainAsync(domain,
+            () => runtimeService.GetVersionPageAsync<T>(key, skip, safeSize + 1, cancellationToken));
 
         string? pointer = null;
         // The cache set's own rule, so this answer and the cache's agree on whether a pointer applies.

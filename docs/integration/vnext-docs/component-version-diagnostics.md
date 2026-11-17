@@ -8,7 +8,7 @@ status: pending
 
 ## Context
 
-- vNext PR: pending (link once opened)
+- vNext PR: https://github.com/burgan-tech/vnext/pull/1316
 - Milestone: v0.0.107
 - Issue: https://github.com/burgan-tech/vnext/issues/1192
 - Related: the floating-version resolution fix, released in v0.0.106 (known issue `floating-version-resolution-loads-every-version`)
