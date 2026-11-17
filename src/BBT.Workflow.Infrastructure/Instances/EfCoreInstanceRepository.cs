@@ -1642,21 +1642,25 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
-    public async Task<List<InstanceAndDataModel>> GetActiveDataListByKeyAsync(string key,
+    public async Task<List<PublishedComponentVersion>> GetActiveComponentVersionsAsync(
         CancellationToken cancellationToken = default)
     {
         var context = await GetDbContextAsync();
+
+        // One entry per (key, version), dated by its most recent write — the same grouping as the version
+        // page (GetVersionsPagedAsync), so a list and a component's version page count the same versions.
         return await context.Instances
-            .Where(i => i.Status == InstanceStatus.Active && i.Key == key)
+            .Where(i => i.Status == InstanceStatus.Active && i.Key != null)
             .Join(context.InstancesData,
                 i => i.Id,
                 d => d.InstanceId,
-                (i, d) => new InstanceAndDataModel
-                {
-                    Instance = i,
-                    InstanceData = d
-                })
-            .AsNoTracking()
+                (i, d) => new { Key = i.Key!, d.Version, d.EnteredAt })
+            .GroupBy(x => new { x.Key, x.Version })
+            .Select(g => new { g.Key.Key, g.Key.Version, PublishedAt = g.Max(x => x.EnteredAt) })
+            .OrderBy(x => x.Key)
+            .ThenByDescending(x => x.PublishedAt)
+            .ThenBy(x => x.Version)
+            .Select(x => new PublishedComponentVersion(x.Key, x.Version, x.PublishedAt))
             .ToListAsync(cancellationToken);
     }
 
@@ -2057,27 +2061,6 @@ public sealed class EfCoreInstanceRepository(
             .ToListAsync(cancellationToken);
     }
 
-    public async Task<List<InstanceAndDataModel>> GetActiveDataListPagedAsync(
-        int skip, int take, CancellationToken cancellationToken = default)
-    {
-        var context = await GetDbContextAsync();
-        return await context.Instances
-            .Where(i => i.Status == InstanceStatus.Active)
-            .OrderBy(i => i.Id)
-            .Join(context.InstancesData,
-                i => i.Id,
-                d => d.InstanceId,
-                (i, d) => new InstanceAndDataModel
-                {
-                    Instance = i,
-                    InstanceData = d
-                })
-            .AsNoTracking()
-            .Skip(skip)
-            .Take(take)
-            .ToListAsync(cancellationToken);
-    }
-
     /// <inheritdoc />
     public async Task<List<ActiveInstanceDataSummary>> GetActiveDataSummariesPagedAsync(
         int skip, int take, CancellationToken cancellationToken = default)
@@ -2121,6 +2104,9 @@ public sealed class EfCoreInstanceRepository(
         string key, int skip, int take, CancellationToken cancellationToken = default)
     {
         var context = await GetDbContextAsync();
+
+        // One entry per version string — the same set GetActiveVersionsByKeyAsync lists — so a page and that
+        // count agree; a version written more than once is dated by its most recent write.
         var raw = await context.Instances
             .Where(i => i.Status == InstanceStatus.Active && i.Key == key)
             .Join(context.InstancesData,
@@ -2131,16 +2117,23 @@ public sealed class EfCoreInstanceRepository(
                     d.Version,
                     d.IsLatest,
                     i.FlowVersion,
-                    PublishedAt = d.EnteredAt
+                    d.EnteredAt
                 })
-            .OrderByDescending(x => x.IsLatest)
-            .ThenByDescending(x => x.PublishedAt)
+            .GroupBy(x => x.Version)
+            .Select(g => new
+            {
+                Version = g.Key,
+                IsLatest = g.Max(x => x.IsLatest ? 1 : 0),
+                FlowVersion = g.Max(x => x.FlowVersion),
+                PublishedAt = g.Max(x => x.EnteredAt)
+            })
+            .OrderByDescending(x => x.PublishedAt)
+            .ThenBy(x => x.Version)
             .Skip(skip)
             .Take(take)
-            .AsNoTracking()
             .ToListAsync(cancellationToken);
 
-        return raw.Select(r => new ComponentVersionSummary(r.Version, r.IsLatest, r.FlowVersion, r.PublishedAt))
+        return raw.Select(r => new ComponentVersionSummary(r.Version, r.IsLatest == 1, r.FlowVersion, r.PublishedAt))
                   .ToList();
     }
 
@@ -2184,33 +2177,6 @@ public sealed class EfCoreInstanceRepository(
         return await context.InstancesData
             .AsNoTracking()
             .FirstOrDefaultAsync(d => d.Id == rowId && d.InstanceId == instanceId, cancellationToken);
-    }
-
-    public async Task<List<InstanceAndDataModel>> GetActiveDataListSinceAsync(
-        DateTime since, int skip, int take, CancellationToken cancellationToken = default)
-    {
-        var context = await GetDbContextAsync();
-
-        // Uses the LastTouchedAt STORED GENERATED column (COALESCE(ModifiedAt, CreatedAt)).
-        // Reading the shadow column via EF.Property keeps the query strongly typed
-        // while letting IX_Instances_Active_LastTouched_Id serve it.
-        return await context.Instances
-            .Where(i => i.Status == InstanceStatus.Active
-                        && EF.Property<DateTime>(i, "LastTouchedAt") >= since)
-            .OrderBy(i => EF.Property<DateTime>(i, "LastTouchedAt"))
-            .ThenBy(i => i.Id)
-            .Join(context.InstancesData,
-                i => i.Id,
-                d => d.InstanceId,
-                (i, d) => new InstanceAndDataModel
-                {
-                    Instance = i,
-                    InstanceData = d
-                })
-            .AsNoTracking()
-            .Skip(skip)
-            .Take(take)
-            .ToListAsync(cancellationToken);
     }
 
     /// <inheritdoc />

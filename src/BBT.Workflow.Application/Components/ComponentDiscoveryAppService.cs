@@ -1,27 +1,35 @@
 using BBT.Aether.Application.Services;
-using BBT.Aether.Auditing;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Components.Dtos;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
 
 namespace BBT.Workflow.Components;
 
 /// <summary>
 /// Read-only implementation of <see cref="IComponentDiscoveryAppService"/>.
-/// List operations use <see cref="IRuntimeService"/> (schema inferred from the entity
-/// type, filtered by domain); single-get operations use <see cref="IComponentCacheStore"/>
-/// (Redis-first with DB fallback). No new data-access layer is introduced.
+/// List and version operations use <see cref="IRuntimeService"/> (schema inferred from the entity
+/// type, read as the requested domain) and read version metadata only, never a stored body;
+/// single-get operations use <see cref="IComponentCacheStore"/> (Redis-first with DB fallback).
+/// No new data-access layer is introduced.
 /// </summary>
 public sealed class ComponentDiscoveryAppService(
     IServiceProvider serviceProvider,
     IRuntimeInfoProvider runtimeInfoProvider,
     IRuntimeService runtimeService,
-    IComponentCacheStore componentCacheStore)
+    IComponentCacheStore componentCacheStore,
+    IDomainCacheContext domainCacheContext,
+    IVersionPolicySource versionPolicy)
     : ApplicationService(serviceProvider), IComponentDiscoveryAppService
 {
     private static readonly ComponentType[] AllTypes = Enum.GetValues<ComponentType>();
+
+    private const int DefaultVersionPageSize = 20;
+
+    /// <summary>Largest version page. A version row is a few strings; the cap only bounds one response.</summary>
+    private const int MaxVersionPageSize = 100;
 
     /// <inheritdoc />
     public async Task<Result<ComponentListResultDto>> ListAllAsync(
@@ -89,6 +97,31 @@ public sealed class ComponentDiscoveryAppService(
     }
 
     /// <inheritdoc />
+    public async Task<Result<ComponentVersionListDto>> GetVersionsAsync(
+        string domain,
+        ComponentType type,
+        string key,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken = default)
+    {
+        runtimeInfoProvider.Check(domain);
+
+        return type switch
+        {
+            ComponentType.Workflows => await GetVersionsAsync<Definitions.Workflow>(domain, type, key, page, pageSize, cancellationToken),
+            ComponentType.Tasks => await GetVersionsAsync<WorkflowTask>(domain, type, key, page, pageSize, cancellationToken),
+            ComponentType.Functions => await GetVersionsAsync<Function>(domain, type, key, page, pageSize, cancellationToken),
+            ComponentType.Views => await GetVersionsAsync<View>(domain, type, key, page, pageSize, cancellationToken),
+            ComponentType.Extensions => await GetVersionsAsync<Extension>(domain, type, key, page, pageSize, cancellationToken),
+            ComponentType.Schemas => await GetVersionsAsync<SchemaDefinition>(domain, type, key, page, pageSize, cancellationToken),
+            ComponentType.Mappings => await GetVersionsAsync<Mapping>(domain, type, key, page, pageSize, cancellationToken),
+            ComponentType.Agents => await GetVersionsAsync<Agent>(domain, type, key, page, pageSize, cancellationToken),
+            _ => Result<ComponentVersionListDto>.Fail(Error.Validation("validation", $"Unsupported component type '{type}'."))
+        };
+    }
+
+    /// <inheritdoc />
     public async Task<Result<MappingCodeDto>> GetMappingCodeAsync(
         string domain,
         string key,
@@ -130,23 +163,117 @@ public sealed class ComponentDiscoveryAppService(
         CancellationToken cancellationToken)
         where T : class, IDomainEntity, IReferenceSetter
     {
-        var entities = await runtimeService.GetAsync<T>(cancellationToken);
-        var token = type.ToToken();
+        // Version metadata only: deserializing every stored body to report a key and a version cost memory
+        // in proportion to the whole publish history of every component of the type.
+        IReadOnlyList<PublishedComponentVersion> versions;
+        using (runtimeInfoProvider.UseDomain(domain))
+        {
+            versions = await runtimeService.GetPublishedVersionsAsync<T>(cancellationToken);
+        }
 
-        return entities
-            .Where(e => e is not null && string.Equals(e!.Domain, domain, StringComparison.OrdinalIgnoreCase))
-            .Select(e => ToSummary(token, e!))
+        var token = type.ToToken();
+        var componentTypeKey = type.ToComponentTypeKey();
+
+        return versions
+            .Select(v => new ComponentSummaryDto
+            {
+                Type = token,
+                ComponentTypeKey = componentTypeKey,
+                Key = v.Key,
+                Domain = domain,
+                Version = v.Version,
+                CreatedAt = v.PublishedAt
+            })
             .ToList();
     }
 
-    private static ComponentSummaryDto ToSummary(string token, IDomainEntity entity) => new()
+    private async Task<Result<ComponentVersionListDto>> GetVersionsAsync<T>(
+        string domain,
+        ComponentType type,
+        string key,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken)
+        where T : class, IDomainEntity, IReferenceSetter
     {
-        Type = token,
-        ComponentTypeKey = entity.ComponentKey,
-        Key = entity.Key,
-        Domain = entity.Domain,
-        Version = entity.Version,
-        CreatedAt = entity is IHasCreatedAt created ? created.CreatedAt : null
+        var safePage = page < 1 ? 1 : page;
+        var safeSize = pageSize < 1 ? DefaultVersionPageSize : Math.Min(pageSize, MaxVersionPageSize);
+        var skip = (int)Math.Min((long)(safePage - 1) * safeSize, int.MaxValue);
+
+        IReadOnlyList<string> versions;
+        IReadOnlyList<ComponentVersionSummary> rows;
+        using (runtimeInfoProvider.UseDomain(domain))
+        {
+            // The candidate list version resolution itself reads on a cache miss, so Latest below is the
+            // answer the cache has to give once its entries expire.
+            versions = await runtimeService.GetVersionsAsync<T>(key, cancellationToken);
+            if (versions.Count == 0)
+                return Result<ComponentVersionListDto>.Fail(CacheErrors.ItemNotFoundInBackend<T>(domain, key, null));
+
+            // One row past the page tells whether a next page exists, without a COUNT.
+            rows = await runtimeService.GetVersionPageAsync<T>(key, skip, safeSize + 1, cancellationToken);
+        }
+
+        string? pointer = null;
+        // The cache set's own rule, so this answer and the cache's agree on whether a pointer applies.
+        if (domainCacheContext.Set<T>().AppliesVersionPolicy(key))
+        {
+            // A failed read fails the answer, as it fails resolution: reporting "no pointer" instead would
+            // describe a resolution the runtime does not make.
+            var pointerResult = await versionPolicy.GetDefaultVersionAsync(domain, key, cancellationToken);
+            if (!pointerResult.IsSuccess)
+                return Result<ComponentVersionListDto>.Fail(pointerResult.Error);
+
+            pointer = pointerResult.Value;
+        }
+
+        var latest = DefaultVersionResolver.Resolve(versions, pointer, InstanceDataVersionComparer.LatestKeyword);
+
+        return Result<ComponentVersionListDto>.Ok(new ComponentVersionListDto
+        {
+            Type = type.ToToken(),
+            ComponentTypeKey = type.ToComponentTypeKey(),
+            Domain = domain,
+            Key = key,
+            TotalVersions = versions.Count,
+            DefaultVersion = pointer,
+            Latest = new ComponentLatestResolutionDto
+            {
+                Version = latest.Version,
+                Outcome = ToValue(latest.Outcome),
+                Source = ToValue(latest.Source)
+            },
+            Items = rows
+                .Take(safeSize)
+                .Select(r => new ComponentVersionItemDto
+                {
+                    Version = r.Version,
+                    PublishedAt = r.PublishedAt,
+                    LatestRow = r.IsLatest
+                })
+                .ToList(),
+            Page = safePage,
+            PageSize = safeSize,
+            HasNext = rows.Count > safeSize
+        });
+    }
+
+    private static string ToValue(VersionResolutionOutcome outcome) => outcome switch
+    {
+        VersionResolutionOutcome.Resolved => "resolved",
+        VersionResolutionOutcome.NotFound => "notFound",
+        VersionResolutionOutcome.NotActivated => "notActivated",
+        VersionResolutionOutcome.PointerInvalid => "pointerInvalid",
+        _ => outcome.ToString()
+    };
+
+    private static string ToValue(VersionResolutionSource source) => source switch
+    {
+        VersionResolutionSource.Automatic => "automatic",
+        VersionResolutionSource.Explicit => "explicit",
+        VersionResolutionSource.Default => "default",
+        VersionResolutionSource.Ceiling => "ceiling",
+        _ => source.ToString()
     };
 
     private static ComponentDetailDto ToDetail(string token, string domain, string key, string version, object definition) => new()

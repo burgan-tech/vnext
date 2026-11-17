@@ -21,6 +21,6 @@ public sealed class ComponentSummaryDto
     /// <summary>The component version (SemVer).</summary>
     public required string Version { get; init; }
 
-    /// <summary>Creation timestamp when the component exposes one; otherwise <c>null</c>.</summary>
+    /// <summary>When this version was published (its data row was written).</summary>
     public DateTime? CreatedAt { get; init; }
 }
