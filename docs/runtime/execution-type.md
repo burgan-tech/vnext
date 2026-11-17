@@ -111,7 +111,9 @@ A `sync=true` request (or an `executionType: S` definition) holds the HTTP conne
 point. If the client disconnects meanwhile, the work already started is **not** cancelled: the controller
 runs the entry on a run token bounded by host shutdown and `WorkflowExecution:TransitionJobTimeoutSeconds`,
 not by the request token, so the instance is not stranded Busy. The response is simply never read;
-the client polls the state function. Details and the remaining shutdown/budget gap:
+the client polls the state function. The same budget caps the run a request executes inline: a run
+that is still going after `TransitionJobTimeoutSeconds` (default 300 s) is cancelled, so a sync
+transition must reach a rest point well inside it; put longer work behind an async hop. Details and the remaining shutdown/budget gap:
 [status-locking § Client disconnect](status-locking.md#client-disconnect-vnext1258). The parent-address
 proxy still runs in the parent's resolved `executionType`, unchanged.
 

@@ -254,5 +254,5 @@ public sealed class InstanceControllerChildCancelTests
         relatedInstanceQueryAppService ?? Substitute.For<IRelatedInstanceQueryAppService>(), Substitute.For<BBT.Workflow.Instances.HumanTask.IHumanTaskLeafResolver>(),
             Substitute.For<BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver>(),
         new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
-        new BBT.Workflow.Execution.Cancellation.RunCancellation(Substitute.For<Microsoft.Extensions.Hosting.IHostApplicationLifetime>(), Microsoft.Extensions.Options.Options.Create(new BBT.Workflow.BackgroundJobs.Options.WorkflowExecutionOptions()), System.TimeProvider.System));
+        BBT.Workflow.Application.Tests.Execution.Cancellation.RunCancellationTestDoubles.Live());
 }
