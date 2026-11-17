@@ -317,7 +317,10 @@ public static class WorkflowErrorCodes
 
     #region Authorization Errors (110xxx)
 
-    /// <summary>Role denied for the requested transition or function.</summary>
+    /// <summary>
+    /// Role denied: a read or acknowledge the caller's roles may not perform, or a call the sub-endpoint gate
+    /// refused (no valid runtime-caller token and the configured grants do not admit the caller).
+    /// </summary>
     public const string AuthorizationRoleDenied = "Authorization:110001";
 
     /// <summary>Authorize requires exactly one of transitionKey, functionKey, or queryRoles (instance only).</summary>
@@ -333,8 +336,10 @@ public static class WorkflowErrorCodes
     public const string AuthorizeUnsupportedType = "Authorization:110005";
 
     /// <summary>
-    /// A rule-based selection (schema or view) read the caller's roles and the caller-role provider could
-    /// not answer, so the selection cannot be decided. Transient: the request can be retried. Maps to HTTP 503.
+    /// A decision that reads the caller's roles could not be made because the caller-role provider could
+    /// not answer: a rule-based selection (schema or view), an automatic rule, a timer script, and the
+    /// sub-endpoint gate for a caller without a runtime-caller token. Never an admit.
+    /// Transient: the request can be retried. Maps to HTTP 503.
     /// </summary>
     public const string CallerRolesUnavailable = "Authorization:110006";
 

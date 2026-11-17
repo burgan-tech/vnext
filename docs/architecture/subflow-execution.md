@@ -147,7 +147,8 @@ Child terminal events use two delivery paths:
 
 - the event is stored in the transactional outbox;
 - after commit, `PostCommitRelayDispatcher` immediately invokes the parent command locally or through
-  Dapr, while the Inbox handler remains a durable backup.
+  Dapr, while the Inbox handler remains a durable backup — for a parent in the same domain only; a
+  cross-domain relay that fails has no backup ([event-publish-modes](../runtime/event-publish-modes.md)).
 
 `ISubItemTerminalGuard` deduplicates the two paths. For blocking `S`, completion prepares output
 mapping before the terminal lock where possible, reloads the authoritative parent/correlation under

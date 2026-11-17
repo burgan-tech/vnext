@@ -734,6 +734,25 @@ public static class WorkflowErrors
             $"Access to function '{functionKey}' is not permitted for the current roles.");
 
     /// <summary>
+    /// The sub-endpoint gate refused a call to a runtime-internal endpoint (<c>sub-start</c> or
+    /// <c>complete</c>): it carried no valid runtime-caller token and the configured grants do not
+    /// admit the caller (vnext#1265). Maps to HTTP 403; nothing was read or written.
+    /// </summary>
+    public static Error SubEndpointAccessDenied(string operation)
+        => Error.Forbidden(
+            WorkflowErrorCodes.AuthorizationRoleDenied,
+            $"The runtime-internal '{operation}' endpoint is not permitted for this caller.");
+
+    /// <summary>
+    /// The sub-endpoint gate needed the caller's roles (no valid runtime-caller token) and the role
+    /// provider could not answer. Never an admit; retryable (HTTP 503).
+    /// </summary>
+    public static Error SubEndpointCallerRolesUnavailable()
+        => Error.Transient(
+            WorkflowErrorCodes.CallerRolesUnavailable,
+            "The caller's roles could not be resolved, so the runtime-internal endpoint's gate cannot be decided; the request can be retried");
+
+    /// <summary>
     /// The configured caller-role provider could not answer, so the caller's role set is unknown.
     /// Maps to HTTP 403 rather than a gateway error: the only safe reading of an unknown set is denial.
     /// <para>

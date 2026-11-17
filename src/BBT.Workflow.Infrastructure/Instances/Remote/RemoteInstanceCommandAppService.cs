@@ -5,6 +5,7 @@ using BBT.Aether.Tracing;
 using BBT.Workflow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Discovery;
+using BBT.Workflow.Execution.RuntimeCaller;
 using BBT.Aether.Users;
 using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Gateway;
@@ -25,10 +26,12 @@ public sealed class RemoteInstanceCommandAppService(
     IOptions<RemoteOptions> options,
     IDomainDiscoveryResolver endpointResolver,
     ICurrentUser currentUser,
-    ICorrelationIdProvider correlationIdProvider)
+    ICorrelationIdProvider correlationIdProvider,
+    IRuntimeCallerSigner? runtimeCallerSigner = null)
     : IRemoteInstanceCommandAppService
 {
     private readonly RemoteOptions _options = options.Value;
+    private readonly IRuntimeCallerSigner _runtimeCallerSigner = runtimeCallerSigner ?? NullRuntimeCallerSigner.Instance;
 
     private string ApiVersionPrefix => InstanceUrlTemplates.GetApiVersionPrefix(_options.ApiVersion);
 
@@ -152,6 +155,9 @@ public sealed class RemoteInstanceCommandAppService(
 
                 var forwardHeaders = currentUser.ToForwardHeaders();
                 CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, input.Headers, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
+                // Last, so neither the ambient user's nor the mapping's headers can replace it (vnext#1265).
+                _runtimeCallerSigner.Stamp(requestMessage, RuntimeCallTarget.SubStart(input.Domain, input.Workflow),
+                    RuntimeCallerClasses.SubFlow);
             }, cancellationToken);
 
             // Status code → Result.Fail (per Railway Pattern)
@@ -374,6 +380,10 @@ public sealed class RemoteInstanceCommandAppService(
 
                 var forwardHeaders = currentUser.ToForwardHeaders();
                 CurrentUserForwardHeadersHelper.MergeIntoRequest(requestMessage, forwardHeaders, null, RemoteHttpResponseHelper.IsRestrictedHeader, correlationIdProvider.Get());
+                // The relay often runs with no user (a timer- or Inbox-settled hop), so only the token
+                // tells the parent's gate this is the runtime (vnext#1265).
+                _runtimeCallerSigner.Stamp(requestMessage, RuntimeCallTarget.Complete(input.Domain, input.Flow, input.InstanceId),
+                    RuntimeCallerClasses.Relay);
             }, cancellationToken);
 
             // Status code → Result.Fail (per Railway Pattern)

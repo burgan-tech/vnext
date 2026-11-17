@@ -1,0 +1,59 @@
+{
+  "releaseNote": {
+    "summary": "Optional gate on the runtime-internal sub-start and complete endpoints: the runtime proves its own calls with a short-lived signed token; other callers need a configured role grant.",
+    "breaking": false,
+    "docs": [
+      "https://burgan-tech.github.io/vnext-docs/docs/domain/role-grant-authorization"
+    ]
+  },
+  "features": {
+    "engine": {
+      "subEndpointGate": {
+        "since": "next",
+        "status": "experimental",
+        "configFlag": "Workflow:SubEndpointGate:Mode",
+        "description": "An optional, domain-configured gate on the two runtime-internal endpoints one runtime calls on another: POST {domain}/workflows/{workflow}/sub/instances/start (a parent starting a cross-domain SubFlow or SubProcess child) and POST {domain}/workflows/{workflow}/instances/{instance}/complete (a child's runtime settling its parent, or the parent domain's own Inbox backup). Off by default, and then the endpoints behave exactly as before. In Enforce a call is refused with 403 Authorization:110001 before its body is bound or anything is written, unless it carries a valid runtime-caller token (header x-vnext-runtime-token: HMAC-SHA256 over key id, timestamp, caller domain and class, the operation and the target route values - domain, workflow and, for complete, the parent instance - accepted while its timestamp is within +/-MaxClockSkewSeconds (60-900, default 300) of the receiver's clock) or its caller's roles satisfy Workflow:SubEndpointGate:Grants under the shared role-grant rule (static roles and $Everyone only; runtime-only = [{ role: $Everyone, grant: deny }]). An invalid or expired token counts as no token. Observe decides and logs would-refuse but admits; CompleteMode can keep complete in Observe while sub-start enforces. In Enforce, when the grants name a static role and the role provider fails for a caller without a valid token, the answer is 503 Authorization:110006. The token is minted per send by the four runtime callers only (cross-domain SubFlow start, cross-domain SubProcess start, cross-domain completion relay, same-domain Inbox completion backup) from a key ring read from a mounted file (Workflow:RuntimeCaller:KeyFile); a key- or secret-named entry under Workflow:RuntimeCaller other than its four known keys fails startup, and a key ring on the Orchestration host requires the script sandbox unless Workflow:RuntimeCaller:AllowWithoutScriptSandbox=true, which logs Critical at every start. The Orchestration host strips the header from every request, in every mode, before anything logs or copies headers. An Inbox forward refused by the gate is re-delivered instead of dropped. The sibling runtime-internal endpoints (sub/state, sub/fault, sub/cancel, internal/*, ...) are not gated.",
+        "apiEndpoints": [
+          "POST {domain}/workflows/{workflow}/sub/instances/start",
+          "POST {domain}/workflows/{workflow}/instances/{instance}/complete"
+        ],
+        "relatedConfig": [
+          "Workflow:SubEndpointGate:Mode",
+          "Workflow:SubEndpointGate:CompleteMode",
+          "Workflow:SubEndpointGate:Grants",
+          "Workflow:RuntimeCaller:KeyFile",
+          "Workflow:RuntimeCaller:Required",
+          "Workflow:RuntimeCaller:MaxClockSkewSeconds",
+          "Workflow:RuntimeCaller:AllowWithoutScriptSandbox"
+        ],
+        "documentation": "docs/runtime/sub-endpoint-gate.md"
+      }
+    }
+  },
+  "migrations": [
+    {
+      "id": "runtime-caller-token-header-stripped-at-ingress",
+      "type": "behavior",
+      "component": "api",
+      "path": "every Orchestration route (request header x-vnext-runtime-token)",
+      "since": "next",
+      "severity": "info",
+      "title": "The x-vnext-runtime-token request header no longer reaches instances",
+      "description": "The Orchestration host now removes the x-vnext-runtime-token request header at ingress on every route, whatever Workflow:SubEndpointGate:Mode is. It no longer reaches request-header logs, instance headers, transition records or the headers flow scripts read. With the gate Off and no key ring, this is the only change a caller of the Orchestration API sees; the runtime's own sub-start and complete calls also drop any mapped header of that name before sending.",
+      "action": "None required; the header is reserved for the runtime-caller token.",
+      "documentation": "docs/runtime/sub-endpoint-gate.md"
+    },
+    {
+      "id": "inbox-forward-gate-refusal-redelivered",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "Inbox worker forward to Orchestration",
+      "since": "next",
+      "severity": "info",
+      "title": "A signed Inbox completion forward refused by the sub-endpoint gate is re-delivered",
+      "description": "The Inbox completion backup (the only forward the Inbox signs) is now re-delivered when the Orchestration answers it with 403 Authorization:110001, and dead-lettered after the inbox retry budget, instead of being logged and dropped like other 4xx answers. Every unsigned forward, and every other non-transient answer, keeps the drop.",
+      "action": "None required. A dead-lettered forward with this code means the Inbox host signed with no key, with a key the Orchestration does not hold, or with a clock more than MaxClockSkewSeconds away from the Orchestration's; fix the key ring (or the clock) and replay it.",
+      "documentation": "docs/runtime/sub-endpoint-gate.md"
+    }
+  ]
+}

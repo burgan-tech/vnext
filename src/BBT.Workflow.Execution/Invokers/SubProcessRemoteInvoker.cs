@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using BBT.Workflow.Execution.Bindings;
 using BBT.Workflow.Execution.Metrics;
+using BBT.Workflow.Execution.RuntimeCaller;
 using BBT.Workflow.Execution.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -22,6 +23,7 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<SubProcessRemoteInvoker> _logger;
     private readonly ITaskMetrics _metrics;
+    private readonly IRuntimeCallerSigner _runtimeCallerSigner;
     private const string FailureOutcome = "failure";
 
     private readonly string _orchestrationAppId;
@@ -31,12 +33,14 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
         ILogger<SubProcessRemoteInvoker> logger,
-        ITaskMetrics? metrics = null)
+        ITaskMetrics? metrics = null,
+        IRuntimeCallerSigner? runtimeCallerSigner = null)
     {
         _daprInvocation = daprInvocation;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
         _metrics = metrics ?? NullTaskMetrics.Instance;
+        _runtimeCallerSigner = runtimeCallerSigner ?? NullRuntimeCallerSigner.Instance;
         _orchestrationAppId = VNextAppIds.OrchestratorOrDefault(
             configuration[VNextAppIds.ConfigKeys.Orchestrator],
             configuration[VNextAppIds.ConfigKeys.AppDomain]);
@@ -289,7 +293,7 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
         }
     }
 
-    private static HttpRequestMessage CreateDaprRequest(SubProcessBinding binding, string appId)
+    private HttpRequestMessage CreateDaprRequest(SubProcessBinding binding, string appId)
     {
         var path = BuildPath(binding);
         var requestBody = CreateRequestBody(binding);
@@ -308,10 +312,13 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
         InvokerHelpers.ApplyRequestId(request);
         // Blank credential markers are removed before the request leaves. See HttpTaskInvocation.ResolveInstanceCallCredential.
         InvokerHelpers.DropBlankCredentialHeaders(request);
+        // Last, so a mapping header cannot replace the runtime-caller token (vnext#1265).
+        _runtimeCallerSigner.Stamp(request, RuntimeCallTarget.SubStart(binding.Domain, binding.Workflow),
+            RuntimeCallerClasses.SubProcess);
         return request;
     }
 
-    private static HttpRequestMessage CreateHttpRequest(SubProcessBinding binding)
+    private HttpRequestMessage CreateHttpRequest(SubProcessBinding binding)
     {
         var path = BuildPath(binding);
 
@@ -334,6 +341,9 @@ public sealed class SubProcessRemoteInvoker : ITaskInvoker<SubProcessBinding>
         InvokerHelpers.ApplyRequestId(request);
         // Blank credential markers are removed before the request leaves. See HttpTaskInvocation.ResolveInstanceCallCredential.
         InvokerHelpers.DropBlankCredentialHeaders(request);
+        // Last, so a mapping header cannot replace the runtime-caller token (vnext#1265).
+        _runtimeCallerSigner.Stamp(request, RuntimeCallTarget.SubStart(binding.Domain, binding.Workflow),
+            RuntimeCallerClasses.SubProcess);
         return request;
     }
 

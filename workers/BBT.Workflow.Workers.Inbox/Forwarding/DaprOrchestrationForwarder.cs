@@ -1,13 +1,21 @@
+using System;
 using System.Diagnostics;
 using System.Net;
+using System.Net.Http;
 using System.Net.Http.Json;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using BBT.Aether.Tracing;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.RuntimeCaller;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Workers.Inbox.Tracing;
 using BBT.Workflow.Shared;
 using Dapr.Client;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Workers.Inbox.Forwarding;
 
@@ -35,22 +43,45 @@ public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
     private readonly int _invocationTimeoutSeconds;
     private readonly ILogger<DaprOrchestrationForwarder> _logger;
     private readonly ICorrelationIdProvider? _correlationIdProvider;
+    private readonly IRuntimeCallerSigner _runtimeCallerSigner;
 
     public DaprOrchestrationForwarder(
         IConfiguration configuration,
         ILogger<DaprOrchestrationForwarder> logger,
-        ICorrelationIdProvider? correlationIdProvider = null)
+        ICorrelationIdProvider? correlationIdProvider = null,
+        IRuntimeCallerSigner? runtimeCallerSigner = null)
+        : this(
+            // Invokable client: relative requests are rewritten to the Dapr invoke endpoint for appId.
+            DaprClient.CreateInvokeHttpClient(appId: OrchestratorAppId(configuration)),
+            OrchestratorAppId(configuration),
+            int.TryParse(configuration["OrchestrationApi:InvocationTimeoutSeconds"], out var t) ? t : 60,
+            logger,
+            correlationIdProvider,
+            runtimeCallerSigner)
     {
+    }
+
+    /// <summary>Test seam: a forwarder over a given client.</summary>
+    internal DaprOrchestrationForwarder(
+        HttpClient httpClient,
+        string orchestrationAppId,
+        int invocationTimeoutSeconds,
+        ILogger<DaprOrchestrationForwarder> logger,
+        ICorrelationIdProvider? correlationIdProvider = null,
+        IRuntimeCallerSigner? runtimeCallerSigner = null)
+    {
+        _httpClient = httpClient;
+        _orchestrationAppId = orchestrationAppId;
+        _invocationTimeoutSeconds = invocationTimeoutSeconds;
+        _logger = logger;
         _correlationIdProvider = correlationIdProvider;
-        _orchestrationAppId = VNextAppIds.OrchestratorOrDefault(
+        _runtimeCallerSigner = runtimeCallerSigner ?? NullRuntimeCallerSigner.Instance;
+    }
+
+    private static string OrchestratorAppId(IConfiguration configuration)
+        => VNextAppIds.OrchestratorOrDefault(
             configuration[VNextAppIds.ConfigKeys.Orchestrator],
             configuration[VNextAppIds.ConfigKeys.AppDomain]);
-        _invocationTimeoutSeconds = int.TryParse(
-            configuration["OrchestrationApi:InvocationTimeoutSeconds"], out var t) ? t : 60;
-        // Invokable client: relative requests are rewritten to the Dapr invoke endpoint for appId.
-        _httpClient = DaprClient.CreateInvokeHttpClient(appId: _orchestrationAppId);
-        _logger = logger;
-    }
 
     /// <inheritdoc />
     public async Task ForwardAsync<TBody>(
@@ -61,7 +92,8 @@ public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
         string workflow,
         string? version,
         Guid instanceId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        RuntimeCallTarget? runtimeCallTarget = null)
     {
         // The Inbox worker's ONLY outbound call. Without this span the timeout budget, the
         // transient/non-transient decision and the deliberate drop all collapse into one generic
@@ -94,6 +126,10 @@ public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
         var correlationId = _correlationIdProvider?.Get();
         if (!string.IsNullOrEmpty(correlationId))
             request.Headers.TryAddWithoutValidation(TelemetryConstants.HeaderNames.RequestId, correlationId);
+
+        // This forward carries no user: on a gated endpoint only the token proves it is the runtime (vnext#1265).
+        if (runtimeCallTarget is { } target)
+            _runtimeCallerSigner.Stamp(request, target, RuntimeCallerClasses.Inbox);
 
         HttpResponseMessage response;
         try
@@ -156,6 +192,20 @@ public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
                     statusCode: response.StatusCode);
             }
 
+            // A gate refusal of a SIGNED forward is a configuration state (a key ring not yet on this host,
+            // rotated, or clocks apart), not a bad request: redeliver it so a rollout gap delays the completion
+            // instead of dropping it; the inbox dead-letters it after its retry budget (vnext#1265). An unsigned
+            // forward that meets the same code keeps the drop.
+            if (runtimeCallTarget is not null && IsSubEndpointGateRefusal(response.StatusCode, responseBody))
+            {
+                SetOutcome(activity, "gate_refused", statusCode);
+                _logger.InboxForwardRefusedByGate(method.Method, route, instanceId);
+                throw new HttpRequestException(
+                    $"Sub-endpoint gate on '{_orchestrationAppId}' refused {method} {route}.",
+                    inner: null,
+                    statusCode: response.StatusCode);
+            }
+
             // Non-transient error response (e.g. 4xx): the request will never succeed on retry.
             // Log and ignore so the inbox does not re-deliver it forever. This is the outcome most
             // worth seeing: the delivery is gone on purpose and nothing downstream will say so.
@@ -163,6 +213,30 @@ public sealed class DaprOrchestrationForwarder : IOrchestrationForwarder
             _logger.LogError(
                 "Non-transient {StatusCode} forwarding {Method} {Route} to {AppId} for instance {InstanceId}; ignoring. Response: {Response}",
                 statusCode, method, route, _orchestrationAppId, instanceId, responseBody);
+        }
+    }
+
+    /// <summary>
+    /// Whether an error response is the Orchestration's sub-endpoint gate refusing the call: 403 with
+    /// error code <c>Authorization:110001</c>. Consulted only for a signed forward (the <c>complete</c>
+    /// backup), where only that gate produces the code.
+    /// </summary>
+    internal static bool IsSubEndpointGateRefusal(HttpStatusCode statusCode, string responseBody)
+    {
+        if (statusCode != HttpStatusCode.Forbidden || string.IsNullOrWhiteSpace(responseBody))
+            return false;
+
+        try
+        {
+            using var document = JsonDocument.Parse(responseBody);
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                   && document.RootElement.TryGetProperty("code", out var code)
+                   && code.ValueKind == JsonValueKind.String
+                   && code.GetString() == WorkflowErrorCodes.AuthorizationRoleDenied;
+        }
+        catch (JsonException)
+        {
+            return false;
         }
     }
 

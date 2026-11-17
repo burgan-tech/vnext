@@ -107,9 +107,11 @@ internal sealed class InstanceSubCompletedEventHandler(
                     RearmAttempt = eventData.RearmAttempt
                 };
 
-                var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/complete";
+                // `complete` is gated: the forward carries no user, so only the runtime-caller token signed for
+                // this exact route lets it through (vnext#1265).
+                var (route, target) = GatedOrchestrationRoutes.Complete(eventData.Domain, eventData.Flow, eventData.InstanceId);
                 await forwarder.ForwardAsync(HttpMethod.Post, route, body,
-                    eventData.Domain, eventData.Flow, eventData.Version, eventData.InstanceId, cancellationToken);
+                    eventData.Domain, eventData.Flow, eventData.Version, eventData.InstanceId, cancellationToken, target);
             }
         }
         catch (Exception ex) when (traceScope.RecordFailure(ex))
