@@ -1,5 +1,6 @@
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution.Cancellation;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -223,20 +224,23 @@ public sealed class TransitionAdmissionService(
         AcceptFlip flip,
         CancellationToken cancellationToken)
     {
+        // Own bounded token: the caller's is typically the cancelled one that got us here.
+        using var cts = CompensationCancellation.Create();
         try
         {
             switch (flip)
             {
                 case AcceptFlip.Reserved:
                 case AcceptFlip.TakenOver:
-                    if (await busyManager.TryReleaseAsync(context.InstanceId, cancellationToken))
+                    if (await busyManager.TryReleaseAsync(context.InstanceId, cts.Token))
                         logger.InstanceStatusSettled(context.InstanceId, InstanceStatus.Active.Code);
                     break;
             }
         }
         catch (Exception exception)
         {
-            // A stranded Busy is recovered by job-timeout recovery.
+            // At accept time no job row exists yet, so nothing recovers a stranded Busy — which is
+            // why the release above must run on a live token.
             logger.ReservationReleaseFailed(exception, context.InstanceId);
         }
     }
@@ -348,16 +352,17 @@ public sealed class TransitionAdmissionService(
         string lockKey,
         CancellationToken cancellationToken = default)
     {
+        using var cts = CompensationCancellation.Create();
         try
         {
-            await using var scope = await statusLock.AcquireAsync(lockKey, cancellationToken);
+            await using var scope = await statusLock.AcquireAsync(lockKey, cts.Token);
             if (!scope.IsAcquired)
             {
                 logger.StatusLockAcquireFailed(lockKey);
                 return;
             }
 
-            await busyManager.ReleaseWithPropagationAsync(instanceId, cancellationToken);
+            await busyManager.ReleaseWithPropagationAsync(instanceId, cts.Token);
         }
         catch (Exception exception)
         {
@@ -374,16 +379,17 @@ public sealed class TransitionAdmissionService(
         TransitionExecutionContext context,
         CancellationToken cancellationToken = default)
     {
+        using var cts = CompensationCancellation.Create();
         try
         {
-            await using var scope = await statusLock.AcquireAsync(context.LockKey, cancellationToken);
+            await using var scope = await statusLock.AcquireAsync(context.LockKey, cts.Token);
             if (!scope.IsAcquired)
             {
                 logger.StatusLockAcquireFailed(context.LockKey);
                 return;
             }
 
-            var released = await busyManager.TryReleaseAsync(context.InstanceId, cancellationToken);
+            var released = await busyManager.TryReleaseAsync(context.InstanceId, cts.Token);
             if (released)
                 logger.InstanceStatusSettled(context.InstanceId, InstanceStatus.Active.Code);
         }

@@ -1,8 +1,10 @@
 using System.ComponentModel.DataAnnotations;
+using System.Diagnostics;
 using System.Text.Json;
 using BBT.Aether;
 using BBT.Aether.AspNetCore.Controllers;
 using BBT.Aether.AspNetCore.Results;
+using BBT.Aether.Results;
 using BBT.Aether.Users;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.BackgroundJobs.Payloads;
@@ -10,6 +12,7 @@ using BBT.Workflow.CurrentUser;
 using BBT.Workflow.Definitions.Events;
 using BBT.Workflow.Domain.Shared;
 using BBT.Workflow.Events;
+using BBT.Workflow.Execution.Cancellation;
 using BBT.Workflow.Execution.Events;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.HttpApi.Results;
@@ -52,8 +55,84 @@ public sealed class InstanceController(
     IRelatedInstanceQueryAppService relatedInstanceQueryAppService,
     BBT.Workflow.Instances.HumanTask.IHumanTaskLeafResolver humanTaskLeafResolver,
     BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver instanceCorrelationResolver,
-    ICallerRoleResolver callerRoleResolver) : AetherControllerBase
+    ICallerRoleResolver callerRoleResolver,
+    IRunCancellation runCancellation) : AetherControllerBase
 {
+    /// <summary>
+    /// Runs a start/transition entry on a run token instead of the request token (vnext#1258). A client
+    /// that disconnects (closed tab, client-side timeout) cancels the request token; once the run has
+    /// committed its Busy reservation that must not cancel the pipeline, the inline auto-chain or the
+    /// post-commit work, or the instance is stranded Busy. Only host shutdown or the
+    /// <c>WorkflowExecution:TransitionJobTimeoutSeconds</c> budget cancels the run token. Detaching
+    /// happens HERE, at the HTTP boundary, and nowhere deeper: in-process callers of the app services
+    /// (tasks, event delivery, a TransitionJob) keep their own token and budget.
+    /// </summary>
+    /// <param name="run">The entry to run; receives the run token.</param>
+    /// <param name="onClientAborted">
+    /// Writes the entry's WorkflowLogs record when the client disconnected; receives the result, or
+    /// <c>default</c> when the entry threw.
+    /// </param>
+    /// <param name="requestToken">The HTTP request token; only read to detect a disconnect.</param>
+    private async Task<TResult> RunDetachedFromClientAsync<TResult>(
+        Func<CancellationToken, Task<TResult>> run,
+        Action<TResult?> onClientAborted,
+        CancellationToken requestToken)
+    {
+        using var lease = runCancellation.Begin(requestToken);
+        TResult? result = default;
+        try
+        {
+            result = await run(lease.Token);
+            return result;
+        }
+        finally
+        {
+            if (lease.CallerAborted)
+            {
+                onClientAborted(result);
+                Activity.Current?.SetTag(TelemetryConstants.TagNames.ClientAborted, true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// <see cref="RunDetachedFromClientAsync{TResult}"/> for an entry with no result (the SubFlow relay
+    /// callbacks), logged with the generic <c>RunContinuedAfterClientDisconnect</c> entry.
+    /// </summary>
+    private Task RunDetachedFromClientAsync(
+        Func<CancellationToken, Task> run,
+        string action,
+        string flow,
+        string? instance,
+        CancellationToken requestToken)
+        => RunDetachedFromClientAsync<bool>(
+            async ct =>
+            {
+                await run(ct);
+                return true;
+            },
+            _ => Logger.RunContinuedAfterClientDisconnect(action, flow, instance),
+            requestToken);
+
+    /// <summary>
+    /// The id of the started instance for the disconnect log, or <see cref="Guid.Empty"/> when the start
+    /// failed or threw.
+    /// </summary>
+    private static Guid StartedInstanceId(Result<StartInstanceOutput>? result)
+        => result is { IsSuccess: true, Value: { } output } ? output.Id : Guid.Empty;
+
+    /// <summary>
+    /// The id of the transitioned instance for the disconnect log: the result's id, else the route value
+    /// when it is an id (it may be a key), else <see cref="Guid.Empty"/>.
+    /// </summary>
+    private static Guid TransitionedInstanceId(Result<TransitionOutput>? result, string instance)
+    {
+        if (result is { IsSuccess: true, Value: { } output })
+            return output.Id;
+
+        return Guid.TryParse(instance, out var parsed) ? parsed : Guid.Empty;
+    }
+
     /// <summary>
     /// Starts a new workflow instance.
     /// </summary>
@@ -108,7 +187,10 @@ public sealed class InstanceController(
             input.RouteValues = httpContext.Request.RouteValues.ToDictionary(s => s.Key, s => s.Value?.ToString());
         }
 
-        var result = await commandAppService.StartAsync(input, cancellationToken);
+        var result = await RunDetachedFromClientAsync(
+            ct => commandAppService.StartAsync(input, ct),
+            r => Logger.InstanceStartContinuedAfterClientDisconnect(workflow, StartedInstanceId(r)),
+            cancellationToken);
         // Shape 200 vs 202 by the EFFECTIVE mode (#1003): a flow/transition executionType definition may
         // have overridden the caller's sync query parameter. When the execution path did not determine it
         // (null — e.g. an idempotent early return that ran no pipeline) or on failure, fall back to the query param.
@@ -164,7 +246,11 @@ public sealed class InstanceController(
             input.RouteValues = httpContext.Request.RouteValues.ToDictionary(s => s.Key, s => s.Value?.ToString());
         }
 
-        var result = await commandAppService.StartAsync(input, cancellationToken);
+        var result = await RunDetachedFromClientAsync(
+            ct => commandAppService.StartAsync(input, ct),
+            r => Logger.InstanceStartContinuedAfterClientDisconnect(
+                workflow, r is { IsSuccess: true, Value: { } o } ? o.Id : request.Id ?? Guid.Empty),
+            cancellationToken);
         return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
     }
 
@@ -190,7 +276,11 @@ public sealed class InstanceController(
                 request.EpisodeTransitionKey,
                 request.EpisodeTraceRoot));
 
-        await subflowCompletionService.CompletionAsync(request, cancellationToken);
+        // Runs the parent's resume pipeline and inline chain: detach it from the caller (vnext#1258).
+        await RunDetachedFromClientAsync(
+            ct => subflowCompletionService.CompletionAsync(request, ct),
+            "SubFlow completion", workflow, instance,
+            cancellationToken);
         return Ok();
     }
 
@@ -221,7 +311,10 @@ public sealed class InstanceController(
                 request.EpisodeStartedAt, request.EpisodeTrigger, request.EpisodeTransitionKey,
                 request.EpisodeTraceRoot));
 
-        await subflowStateService.UpdateParentStateAsync(request, cancellationToken);
+        await RunDetachedFromClientAsync(
+            ct => subflowStateService.UpdateParentStateAsync(request, ct),
+            "SubFlow state change", workflow, instance,
+            cancellationToken);
         return Ok();
     }
 
@@ -248,7 +341,10 @@ public sealed class InstanceController(
                 request.EpisodeStartedAt, request.EpisodeTrigger, request.EpisodeTransitionKey,
                 request.EpisodeTraceRoot));
 
-        await subflowFaultService.FaultAsync(request, cancellationToken);
+        await RunDetachedFromClientAsync(
+            ct => subflowFaultService.FaultAsync(request, ct),
+            "SubFlow fault", workflow, instance,
+            cancellationToken);
         return Ok();
     }
 
@@ -276,7 +372,10 @@ public sealed class InstanceController(
                 request.EpisodeStartedAt, request.EpisodeTrigger, request.EpisodeTransitionKey,
                 request.EpisodeTraceRoot));
 
-        await subflowCancellationService.CancellationAsync(request, cancellationToken);
+        await RunDetachedFromClientAsync(
+            ct => subflowCancellationService.CancellationAsync(request, ct),
+            "SubFlow cancel", workflow, instance,
+            cancellationToken);
         return Ok();
     }
 
@@ -378,10 +477,9 @@ public sealed class InstanceController(
                 input.EpisodeStartedAt, input.EpisodeTrigger, input.EpisodeTransitionKey,
                 input.EpisodeTraceRoot));
 
-        var result = await commandAppService.TransitionAsync(
-            instance.ToString(),
-            transitionKey,
-            transitionInput,
+        var result = await RunDetachedFromClientAsync(
+            ct => commandAppService.TransitionAsync(instance.ToString(), transitionKey, transitionInput, ct),
+            _ => Logger.TransitionContinuedAfterClientDisconnect(instance, transitionKey),
             cancellationToken);
 
         return InstanceResponseActionResultMapper.ToActionResult(result, HttpContext, async: !input.Sync);
@@ -451,8 +549,12 @@ public sealed class InstanceController(
         [FromBody] ChildSubflowCancelInput request,
         CancellationToken cancellationToken = default)
     {
-        var result = await childSubflowCancellationService.CancelChildSubflowAsync(
-            instance, domain, workflow, request.Version, request.Termination, cancellationToken);
+        // Runs the child's cancel transition: detach it from the caller (vnext#1258).
+        var result = await RunDetachedFromClientAsync(
+            ct => childSubflowCancellationService.CancelChildSubflowAsync(
+                instance, domain, workflow, request.Version, request.Termination, ct),
+            _ => Logger.RunContinuedAfterClientDisconnect("Child cancel", workflow, instance.ToString()),
+            cancellationToken);
         return FromResult(result);
     }
 
@@ -753,10 +855,9 @@ public sealed class InstanceController(
             input.RouteValues = httpContext.Request.RouteValues.ToDictionary(s => s.Key, s => s.Value?.ToString());
         }
 
-        var result = await commandAppService.TransitionAsync(
-            instance,
-            transitionKey,
-            input,
+        var result = await RunDetachedFromClientAsync(
+            ct => commandAppService.TransitionAsync(instance, transitionKey, input, ct),
+            r => Logger.TransitionContinuedAfterClientDisconnect(TransitionedInstanceId(r, instance), transitionKey),
             cancellationToken);
 
         // Shape 200 vs 202 by the EFFECTIVE mode (#1003): a flow/transition executionType definition may
@@ -800,7 +901,11 @@ public sealed class InstanceController(
             Headers = headers
         };
 
-        var result = await commandAppService.AcknowledgeLongPollAsync(input, cancellationToken);
+        // Resumes the paused pipeline (clears Busy, runs the epilogue): detach it from the caller (vnext#1258).
+        var result = await RunDetachedFromClientAsync(
+            ct => commandAppService.AcknowledgeLongPollAsync(input, ct),
+            _ => Logger.RunContinuedAfterClientDisconnect("Long-poll acknowledge", workflow, instance),
+            cancellationToken);
         return FromResult(result);
     }
 
@@ -847,7 +952,11 @@ public sealed class InstanceController(
             RouteValues = routeValues
         };
 
-        var result = await retryAppService.RetryAsync(input, cancellationToken);
+        // Re-executes the incomplete transition: detach it from the caller (vnext#1258).
+        var result = await RunDetachedFromClientAsync(
+            ct => retryAppService.RetryAsync(input, ct),
+            _ => Logger.RunContinuedAfterClientDisconnect("Retry", workflow, instance),
+            cancellationToken);
         return WorkflowResultActionResultMapper.ToActionResult(result, HttpContext);
     }
 
@@ -923,7 +1032,14 @@ public sealed class InstanceController(
                 .ToDictionary(h => h.Key.ToLower(), h => h.Value.FirstOrDefault())
         };
 
-        var result = await eventAppService.HandleAsync(input, cancellationToken);
+        // Starts or transitions an instance: detach it from the caller (vnext#1258). A Dapr pub/sub
+        // redelivery after a caller timeout then meets the still-running run (409 Busy), not a stranded Busy.
+        var result = await RunDetachedFromClientAsync(
+            ct => eventAppService.HandleAsync(input, ct),
+            _ => Logger.RunContinuedAfterClientDisconnect(
+                eventAction == EventAction.Start ? "Event start" : $"Event transition {transitionKey}",
+                workflow, null),
+            cancellationToken);
         return EventDeliveryResultMapper.ToActionResult(result, input, HttpContext, Logger);
     }
 
@@ -997,7 +1113,11 @@ public sealed class InstanceController(
                 .ToDictionary(h => h.Key.ToLower(), h => h.Value.FirstOrDefault())
         };
 
-        var result = await scheduleAppService.StartAsync(input, cancellationToken);
+        var result = await RunDetachedFromClientAsync(
+            ct => scheduleAppService.StartAsync(input, ct),
+            r => Logger.InstanceStartContinuedAfterClientDisconnect(
+                workflow, r is { IsSuccess: true, Value: StartInstanceOutput o } ? o.Id : Guid.Empty),
+            cancellationToken);
         return ScheduledStartResultMapper.ToActionResult(result, input, HttpContext, Logger);
     }
 

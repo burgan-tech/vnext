@@ -1674,6 +1674,38 @@ public class TransitionPipelineTests
     }
 
     [Fact]
+    public async Task RunAsync_WhenHopFailsAfterTokenCancelled_FaultWriteUsesLiveToken()
+    {
+        // The caller's token is cancelled (client disconnect) while a step runs and the step then
+        // fails. The fault write exists because of that failure, so it must not run on the
+        // cancelled token or the instance stays Busy.
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        using var cts = new CancellationTokenSource();
+        SetupContextFactory(context);
+
+        foreach (var step in _mockSteps)
+        {
+            step.ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.Continue())));
+        }
+
+        _mockSteps[2].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                cts.Cancel();
+                return Task.FromResult(Result<StepOutcome>.Fail(Error.Failure("step.failed", "Step execution failed")));
+            });
+
+        await _pipeline.RunAsync(workflowContext, cts.Token);
+
+        await _mockInstanceRepository.Received(1).UpdateAsync(
+            Arg.Is<Instance>(x => x.Status.Equals(InstanceStatus.Faulted)),
+            true,
+            Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
+    }
+
+    [Fact]
     public async Task RunAsync_WhenStepFailsWithClientFacingError_ShouldFaultInstanceAndReturnFailure()
     {
         // A caller-actionable failure (ResourceLockConflict) must fault the instance AND surface the

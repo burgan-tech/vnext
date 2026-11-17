@@ -57,6 +57,57 @@ the [transition proxy](../architecture/subflow-transition-proxy.md) forwards it 
 the one status lock. (Async still pre-stamps the parent's `EffectiveStatus` outside the lock, in its own
 UoW, and no longer reserves the chain.)
 
+## Client disconnect (vnext#1258)
+
+A client that disconnects (closed tab, client-side timeout) cancels the HTTP request token. Once a
+request has committed its Busy reservation, that must not cancel the pipeline, the inline auto-chain or
+the post-commit work, or the instance is left Busy with no owner.
+
+- **Detach at the HTTP boundary only.** `InstanceController.RunDetachedFromClientAsync` wraps every
+  action that owns Busy or runs a pipeline: Start, StartSub, SubflowForward, PATCH Transition,
+  ScheduleStart, `instances/events` (event start / transition), Retry, long-poll ack, `child-cancel`, and
+  the SubFlow relay callbacks `complete`, `sub/state`, `sub/fault` and `sub/cancel` (each runs the
+  parent's resume pipeline and inline chain). It runs the entry on a *run token*
+  (`IRunCancellation.Begin`) instead of the request token. Work done before the run — such as reading
+  the event body — still uses the request token: nothing is committed yet. `InstanceCommandAppService`
+  uses the token it is handed, so in-process callers (`LocalInstanceCommandGateway`, `EventAppService`,
+  `InstanceScheduleAppService`, a background `TransitionJob`) keep their own token and budget.
+- **What cancels the run token:** host shutdown (`ApplicationStopping`) and the
+  `WorkflowExecution:TransitionJobTimeoutSeconds` budget (default 300 s). A client abort does not.
+- **Nested entries would share the token.** Today only the controller calls `Begin`, once per request.
+  As a defensive guarantee, a `Begin` inside an already-open lease reuses the outer run token and budget
+  instead of starting a fresh one, so a future in-process caller cannot extend the budget by nesting.
+- **Visibility.** On an abort the run continues and writes WorkflowLogs `10265`
+  `TransitionContinuedAfterClientDisconnect` / `10266` `InstanceStartContinuedAfterClientDisconnect` /
+  `10267` `RunContinuedAfterClientDisconnect` (event, retry, ack, child cancel, relay callbacks;
+  Information) and tags the span `vnext.client.aborted=true`.
+- **A retry while the run is live gets 409; a retry after it committed runs again.** When a caller
+  that retries on failure (Dapr pub/sub redelivery, a gateway or client retrying a timed-out
+  `sync=true` call, a parent relay retrying StartSub / SubflowForward / a relay callback) retries
+  while the detached run still holds Busy, it gets `409 Busy` (`Instance:100031`; non-2xx, so the
+  broker retries later). Once the run has committed and released Busy, nothing in admission
+  recognises the retry as a duplicate, and it is executed again. What still protects it:
+  - a start that carries an instance key returns the existing active instance (client calls) or
+    `409` (`StrictIdempotency`: StartSub, SubFlow / SubProcess starts); a start **without a key**, or
+    one whose first instance already completed, creates a second instance;
+  - a retried transition or event transition is rejected if the transition is no longer valid from
+    the resulting state; a self-loop or re-entrant transition runs twice.
+  Before vnext#1258 the same retry found a stranded Busy and was refused forever. The exposure
+  is tracked as known issue `detached-run-retry-can-duplicate`; a request idempotency key checked at
+  admission is the planned fix.
+- **Compensation has its own budget.** Releasing a reservation or chain (`ReleaseReservationAsync`,
+  `ReleaseSubflowChainAsync`, the accept-time `CompensateUnderLockAsync`), `SubflowProxyService.RevertStampAsync`,
+  the transition runner's failed-coordination fault + chain release and `MarkInstanceFaultedAsync`
+  run on `CompensationCancellation` — a 15 s token independent of the caller's, so a cancelled request
+  cannot skip the cleanup.
+- **Child runs on its own budget.** StartSub / SubflowForward are called by a parent runtime over HTTP;
+  an aborted parent call no longer cancels the child, which runs on a fresh budget. The
+  budget ⊂ chain-lock-lease relation (`WorkflowExecutionOptionsValidator`) does not extend across that
+  process hop.
+- **Remaining gap (not fixed).** If the run token itself is cancelled (host shutdown or the 300 s
+  budget) while the run owns Busy, the instance can still be stranded; recovery is only the reserved
+  `cancel` / `exit`. Tracked as known issue `run-cancelled-by-shutdown-can-strand-busy`.
+
 ## Related
 
 - [Workflow Execution Pipeline](../architecture/workflow-execution-pipeline.md) — admission and the Busy ownership marker.
