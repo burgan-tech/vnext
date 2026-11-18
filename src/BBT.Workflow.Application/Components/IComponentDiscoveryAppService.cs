@@ -43,6 +43,24 @@ public interface IComponentDiscoveryAppService : IApplicationService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Lists the published versions of one component, newest publish first, with its default-version
+    /// pointer and the version a request with no version resolves to, all read from the database. Lets a
+    /// domain team see which version new instances start on without database access.
+    /// </summary>
+    /// <returns>
+    /// The version list; not found when the component has no published version. A pointer the registry cannot
+    /// read (503 <c>Instance:100053</c>) or a malformed one (409 <c>Instance:100052</c>) fails the call the same way
+    /// it fails resolution.
+    /// </returns>
+    Task<Result<ComponentVersionListDto>> GetVersionsAsync(
+        string domain,
+        ComponentType type,
+        string key,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets the decoded <c>.csx</c> code for a mapping component.
     /// </summary>
     Task<Result<MappingCodeDto>> GetMappingCodeAsync(

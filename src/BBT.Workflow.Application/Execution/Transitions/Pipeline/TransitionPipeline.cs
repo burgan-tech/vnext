@@ -4,6 +4,7 @@ using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Execution.Cancellation;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Execution.Validation;
@@ -812,8 +813,15 @@ public class TransitionPipeline
     private async Task MarkInstanceFaultedAsync(
         TransitionExecutionContext context,
         Error error,
-        CancellationToken cancellationToken)
+        CancellationToken callerCancellationToken)
     {
+        // The fault write is a compensation: it exists because the run failed, often because the
+        // caller's token was cancelled (client disconnect). It runs on its own bounded token, so an
+        // abandoned request cannot leave the instance stranded Busy.
+        _ = callerCancellationToken;
+        using var compensation = CompensationCancellation.Create();
+        var cancellationToken = compensation.Token;
+
         _logger.InstanceFaultedDueToPipelineError(context.InstanceId, error.Code, error.Message);
 
         // The failure path's own rest point: a status lock, a fresh unit of work, a reload and a

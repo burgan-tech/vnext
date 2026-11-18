@@ -168,7 +168,8 @@ public sealed class InstanceControllerChildCancelTests
                 value.Origin == TerminationOrigin.ParentCascade &&
                 value.InitiatorInstanceId == initiator &&
                 value.CascadeId == cascade),
-            CancellationToken.None);
+            // vnext#1258: child-cancel runs on the run token, not the request token.
+            Arg.Is<CancellationToken>(t => !t.IsCancellationRequested));
     }
 
     [Fact]
@@ -252,5 +253,6 @@ public sealed class InstanceControllerChildCancelTests
             Substitute.For<IInstanceScheduleAppService>(),
         relatedInstanceQueryAppService ?? Substitute.For<IRelatedInstanceQueryAppService>(), Substitute.For<BBT.Workflow.Instances.HumanTask.IHumanTaskLeafResolver>(),
             Substitute.For<BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver>(),
-        new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()));
+        new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
+        BBT.Workflow.Application.Tests.Execution.Cancellation.RunCancellationTestDoubles.Live());
 }

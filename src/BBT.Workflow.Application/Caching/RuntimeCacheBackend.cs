@@ -52,36 +52,6 @@ public sealed class RuntimeCacheBackend<T>(
         return result;
     }
 
-    /// <summary>
-    /// Loads every active version of a component key in the given domain.
-    /// </summary>
-    /// <param name="domain">The domain identifier</param>
-    /// <param name="key">The entity key/name</param>
-    /// <param name="cancellationToken">Token to monitor for cancellation requests</param>
-    /// <returns>A Result containing all active versions, which may be empty</returns>
-    public Task<Result<List<T>>> LoadAllByKeyAsync(
-        string domain,
-        string key,
-        CancellationToken cancellationToken = default) => RunDetachedAsync(async services =>
-    {
-        var runtimeService = services.GetRequiredService<IRuntimeService>();
-        var runtimeInfoProvider = services.GetRequiredService<IRuntimeInfoProvider>();
-
-        runtimeInfoProvider.Check(domain);
-        // RuntimeService stamps the current domain on what it loads; load as the requested one,
-        // which differs from the caller's when a co-hosted domain's component is resolved.
-        using var domainScope = runtimeInfoProvider.UseDomain(domain);
-
-        var all = await runtimeService.GetAsync<T>(key, cancellationToken);
-        var filtered = all
-            .Where(e => e is not null &&
-                        string.Equals(e!.Domain, domain, StringComparison.OrdinalIgnoreCase))
-            .Select(e => e!)
-            .ToList();
-
-        return Result<List<T>>.Ok(filtered);
-    }, cancellationToken);
-
     /// <inheritdoc />
     public Task<Result<T>> LoadAsync(
         string domain,

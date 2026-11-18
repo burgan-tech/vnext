@@ -3,6 +3,7 @@ using BBT.Aether.Uow;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Specifications;
 using BBT.Workflow.Execution;
+using BBT.Workflow.Execution.Cancellation;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
@@ -148,8 +149,19 @@ public sealed class SubflowProxyService(
         if (snapshot.EffectiveStatus is not { } prior || prior.Equals(InstanceStatus.Busy))
             return;
 
-        await TryWriteEffectiveStatusAsync(
-            snapshot.Id, expected: InstanceStatus.Busy, prior, transitionKey, childId, cancellationToken);
+        // Compensation: runs on its own bounded token, not the (possibly cancelled) caller's.
+        using var cts = CompensationCancellation.Create();
+        try
+        {
+            await TryWriteEffectiveStatusAsync(
+                snapshot.Id, expected: InstanceStatus.Busy, prior, transitionKey, childId, cts.Token);
+        }
+        catch (OperationCanceledException ex)
+        {
+            // The compensation budget ran out. The write helper lets cancellation through; here it
+            // must not escape, or it would replace the failure this revert is compensating for.
+            logger.SubFlowProxyEffectiveStatusWriteFailed(ex, transitionKey, childId, snapshot.Id, prior.Code);
+        }
     }
 
     /// <summary>

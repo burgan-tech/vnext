@@ -131,13 +131,9 @@ public sealed class CacheSetTestHarness
     /// </summary>
     public sealed class FakeCacheBackend : ICacheBackend<View>
     {
-        private int _loadAllCallCount;
         private int _versionListCallCount;
 
         public List<View> Versions { get; set; } = [];
-
-        /// <summary>Body-loading reads of every version. The cache must never need one.</summary>
-        public int LoadAllCallCount => Volatile.Read(ref _loadAllCallCount);
 
         /// <summary>Version-list reads — the backend query a resolution miss or a publish warm-up costs.</summary>
         public int VersionListCallCount => Volatile.Read(ref _versionListCallCount);
@@ -153,16 +149,6 @@ public sealed class CacheSetTestHarness
 
         /// <summary>When true, version-list reads throw — used to prove behaviour that must not depend on warming.</summary>
         public bool FailVersionList { get; set; }
-
-        public Task<Result<List<View>>> LoadAllByKeyAsync(
-            string domain,
-            string key,
-            CancellationToken cancellationToken = default)
-        {
-            Interlocked.Increment(ref _loadAllCallCount);
-
-            return Task.FromResult(Result<List<View>>.Ok(Matching(domain, key).ToList()));
-        }
 
         public async Task<Result<IReadOnlyList<string>>> LoadVersionsAsync(
             string domain,
@@ -205,7 +191,6 @@ public sealed class CacheSetTestHarness
 
         public void ResetCounts()
         {
-            Interlocked.Exchange(ref _loadAllCallCount, 0);
             Interlocked.Exchange(ref _versionListCallCount, 0);
             LoadCallCount = 0;
         }
@@ -225,6 +210,9 @@ public sealed class CacheSetTestHarness
         /// <summary>When true, the read fails as a registry outage would.</summary>
         public bool Fail { get; set; }
 
+        /// <summary>The error a failing read returns; a registry outage unless a test sets another one.</summary>
+        public Error FailureError { get; set; } = Error.Transient("Test:RegistryUnavailable", "Simulated registry read failure.");
+
         /// <summary>How many times the pointer was read.</summary>
         public int Calls => Volatile.Read(ref _calls);
 
@@ -233,7 +221,7 @@ public sealed class CacheSetTestHarness
             Interlocked.Increment(ref _calls);
 
             return Task.FromResult(Fail
-                ? Result<string?>.Fail(Error.Transient("Test:RegistryUnavailable", "Simulated registry read failure."))
+                ? Result<string?>.Fail(FailureError)
                 : Result<string?>.Ok(Pointer));
         }
     }

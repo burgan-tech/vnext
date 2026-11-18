@@ -121,7 +121,8 @@ public sealed class EventPayloadBindingTests
             humanTaskLeafResolver: Substitute.For<BBT.Workflow.Instances.HumanTask.IHumanTaskLeafResolver>(),
             instanceCorrelationResolver: Substitute.For<BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver>(),
             callerRoleResolver: new BBT.Workflow.Authorization.DefaultCallerRoleResolver(
-                Substitute.For<BBT.Aether.Users.ICurrentUser>()));
+                Substitute.For<BBT.Aether.Users.ICurrentUser>()),
+            runCancellation: BBT.Workflow.Application.Tests.Execution.Cancellation.RunCancellationTestDoubles.Live());
 
         // AetherControllerBase resolves its Logger through the request services.
         var services = new ServiceCollection();

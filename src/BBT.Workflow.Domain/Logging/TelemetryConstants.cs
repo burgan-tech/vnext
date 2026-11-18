@@ -34,6 +34,11 @@ public static class TelemetryConstants
         /// </summary>
         public const string CorrelationId = "correlation.id";
         /// <summary>
+        /// <c>true</c> when the HTTP client disconnected before a start/transition run finished; the
+        /// run continued on its own run token instead of the cancelled request token (vnext#1258).
+        /// </summary>
+        public const string ClientAborted = "vnext.client.aborted";
+        /// <summary>
         /// Primary subject exposed by the gateway authentication chain.
         /// It is propagated as correlation metadata only.
         /// </summary>

@@ -143,6 +143,13 @@ nothing follows the callee's pointer. Pilot: publish the callee's new version (p
 by full version from the pilot caller version, flip callee's default, then the caller's. The two
 registries are not atomic: flip the callee first.
 
+**Inspect a flow's versions and pointer.** `GET /api/v1/{domain}/components/workflows/{flowKey}/versions`
+lists the published versions, the pointer (`defaultVersion`, omitted = Automatic) and what `latest` resolves
+to from the database; `GET /api/v1/{domain}/components/workflows/{flowKey}` is the cached answer new instances
+get. A publish never moves the pointer: with a pointer set, a newer publish stays pending until
+`set-default` moves it. See
+[Diagnosing which version a request resolves to](../domain/domain-cache-context.md#diagnosing-which-version-a-request-resolves-to).
+
 **Symptoms.** 404 `100051`: request is above the pointer; use an explicit version or move the pointer.
 409 `100052`: fix the registry pointer (`set-default` to a published version or `"latest"`). 503 `100053`:
 check the database, then retry.

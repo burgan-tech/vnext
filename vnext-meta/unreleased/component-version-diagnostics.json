@@ -1,0 +1,32 @@
+{
+  "releaseNote": {
+    "summary": "GET {domain}/components/{type}/{key}/versions lists a component's published versions, its default-version pointer and what latest resolves to, without database access.",
+    "breaking": false,
+    "docs": []
+  },
+  "features": {
+    "engine": {
+      "componentVersionDiagnostics": {
+        "since": "next",
+        "status": "stable",
+        "description": "Read-only component discovery view of one component's versions: the published versions (newest publish first: version, publishedAt, latestRow = the row the store flags latest, i.e. the highest version written so far; no body), totalVersions, the sys-version-registry pointer (defaultVersion, workflows only, omitted = Automatic) and latest {version, outcome resolved|notFound|pointerInvalid, source automatic|default} decided from the database by DefaultVersionResolver over the same candidate list version resolution reads. Comparing latest with GET {domain}/components/{type}/{key} (the cached answer new instances start on) shows a stale cache entry; POST utilities/invalidate re-resolves. One item per version (as totalVersions counts them). 404 when nothing is published; a registry read failure answers Instance:100053 and a malformed pointer Instance:100052, as resolution does. Same exposure as the other discovery reads; metadata only. The component lists read version metadata only, never the stored bodies.",
+        "apiEndpoints": [
+          "GET {domain}/components/{type}/{key}/versions"
+        ]
+      }
+    }
+  },
+  "migrations": [
+    {
+      "id": "component-list-reads-version-metadata",
+      "type": "behavior",
+      "component": "api",
+      "path": "GET {domain}/components | GET {domain}/components/{type}",
+      "since": "next",
+      "severity": "info",
+      "title": "The component lists carry each version's publish time and no longer load every stored body",
+      "description": "The component discovery lists read version metadata only instead of deserializing the stored body of every published version of every component, and return one summary per published version (a version written more than once is listed once, dated by its latest write). createdAt is now the time the version was published; before, it was 0001-01-01T00:00:00 for workflows and null for the other types. Summaries are ordered by key, newest publish first.",
+      "action": "None required. A consumer that ignored createdAt can start using it as the publish time."
+    }
+  ]
+}

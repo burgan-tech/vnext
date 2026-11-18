@@ -3,6 +3,7 @@ using BBT.Workflow.Definitions.Policies;
 using BBT.Workflow.Definitions.Specifications;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Admission;
+using BBT.Workflow.Execution.Cancellation;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Execution.LongPoll;
@@ -37,6 +38,11 @@ public static class PipelineServiceCollectionExtensions
         
         // Transition Runner (owns chaining with isolated scope + UoW per hop)
         services.AddScoped<ITransitionRunner, TransitionRunner>();
+
+        // Run token for HTTP-entered runs (vnext#1258): a client disconnect must not cancel committed
+        // work; only host shutdown or the TransitionJobTimeoutSeconds budget can.
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<IRunCancellation, RunCancellation>();
 
         // Post-commit COMMAND relay (Outbox + PostCommitRelay mode). The registration below IS the
         // per-event opt-in — the dispatcher resolves by the event's runtime type and needs no edit

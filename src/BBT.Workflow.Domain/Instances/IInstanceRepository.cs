@@ -182,14 +182,16 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
 
     Task<List<InstanceAndDataModel>> GetActiveDataListAsync(CancellationToken cancellationToken = default);
 
-    Task<List<InstanceAndDataModel>> GetActiveDataListPagedAsync(int skip, int take, CancellationToken cancellationToken = default);
-
-    Task<List<InstanceAndDataModel>> GetActiveDataListSinceAsync(DateTime since, int skip, int take, CancellationToken cancellationToken = default);
-
     Task<InstanceAndDataModel?> FindActiveDataAsync(string key, string version,
         CancellationToken cancellationToken = default);
 
-    Task<List<InstanceAndDataModel>> GetActiveDataListByKeyAsync(string key,
+    /// <summary>
+    /// Returns the key, version and publish time of every published version of every component of one type
+    /// in the current schema — one entry per key and version, dated by its most recent write — ordered by key,
+    /// newest publish first. Only those columns are read, never the stored body, so listing components does
+    /// not cost the size of their whole publish history.
+    /// </summary>
+    Task<List<PublishedComponentVersion>> GetActiveComponentVersionsAsync(
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -722,11 +724,14 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
 
     /// <summary>
     /// Returns a paged, slim projection of all published versions for the component
-    /// identified by <paramref name="key"/> in the current schema.
-    /// Results are ordered latest-first (<c>IsLatest DESC</c>, <c>PublishedAt DESC</c>).
+    /// identified by <paramref name="key"/> in the current schema — one entry per version string, the set
+    /// version resolution chooses from (<see cref="GetActiveVersionsByKeyAsync"/>), without the bodies. A
+    /// version written more than once is dated by its most recent write.
+    /// Results are ordered newest publish first (<c>PublishedAt DESC</c>, then version). <see cref="ComponentVersionSummary.IsLatest"/>
+    /// is the store's latest flag, which an explicitly versioned row takes only when it is the highest version so
+    /// far — it is not publish order.
     /// Pass <paramref name="take"/> as <c>pageSize + 1</c> to determine <c>hasNext</c>
-    /// without an extra COUNT query.
-    /// Only monitoring consumes this method (additive, monitoring-only).
+    /// without an extra COUNT query. Consumed by the component discovery version list.
     /// </summary>
     Task<List<ComponentVersionSummary>> GetVersionsPagedAsync(
         string key,

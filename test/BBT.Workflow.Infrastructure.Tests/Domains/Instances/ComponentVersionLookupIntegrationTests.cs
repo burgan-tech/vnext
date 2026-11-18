@@ -102,6 +102,44 @@ public sealed class ComponentVersionLookupIntegrationTests(AttributeIndexPostgre
     }
 
     [Fact]
+    public async Task GetVersionsPaged_PagesTheKeysVersionsWithoutReadingABody()
+    {
+        var capture = new ReadCapture();
+        await using var db = CreateContext(capture);
+        var repository = CreateRepository(db);
+
+        var all = await repository.GetVersionsPagedAsync(Key, skip: 0, take: 100);
+        var firstTwo = await repository.GetVersionsPagedAsync(Key, skip: 0, take: 2);
+
+        all.Select(v => v.Version).OrderBy(v => v, StringComparer.Ordinal)
+            .ShouldBe(Published.OrderBy(v => v, StringComparer.Ordinal), "one entry per version of the key, no other key's");
+        all.Count.ShouldBe((await repository.GetActiveVersionsByKeyAsync(Key)).Count, "the page counts what the version list counts");
+        all.Select(v => v.PublishedAt).ShouldBeInOrder(SortDirection.Descending, "newest publish first");
+        all[0].Version.ShouldBe("1.0.0-pkg.1.0.123+core", "a version written twice is dated by its re-write, the last row written");
+        all.Single(v => v.IsLatest).Version.ShouldBe(Published[^1], "the stored latest flag is reported as stored");
+        firstTwo.Count.ShouldBe(2);
+        firstTwo[0].Version.ShouldBe(all[0].Version);
+        capture.Commands.ShouldAllBe(c => !c.Contains("\"Data\""), "the version page must not read any body");
+    }
+
+    [Fact]
+    public async Task GetActiveComponentVersions_ListsEveryKeysVersionsWithoutReadingABody()
+    {
+        var capture = new ReadCapture();
+        await using var db = CreateContext(capture);
+
+        var versions = await CreateRepository(db).GetActiveComponentVersionsAsync();
+
+        versions.Select(v => v.Key).Distinct().ShouldBe([Key, "other-flow"], "ordered by key");
+        versions.Count(v => v.Key == Key).ShouldBe(Published.Length, "one entry per version, the re-write folded in");
+        versions.First(v => v.Key == Key).Version.ShouldBe("1.0.0-pkg.1.0.123+core", "dated by its re-write, the newest publish");
+        versions.Single(v => v.Key == "other-flow").Version.ShouldBe("9.0.0-pkg.1.0.0+core");
+        versions.ShouldAllBe(v => v.PublishedAt > DateTime.MinValue);
+        capture.Commands.ShouldHaveSingleItem();
+        capture.Commands[0].ShouldNotContain("\"Data\"", customMessage: "listing components must not read any body");
+    }
+
+    [Fact]
     public async Task FindActiveData_ArtifactVersion_ReturnsTheHighestPackageAndItsLatestWrite()
     {
         await using var db = CreateContext();

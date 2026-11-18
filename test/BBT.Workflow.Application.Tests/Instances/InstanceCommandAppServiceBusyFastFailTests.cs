@@ -409,6 +409,27 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
             .TryProxyAsync(default!, default!, default!, default!, default);
     }
 
+    /// <summary>
+    /// vnext#1258: the app service is also called in-process (trigger/SubProcess/SubFlow tasks, event
+    /// delivery, scheduled start, inside a TransitionJob) and must honour the token it is GIVEN — e.g. the
+    /// job's own timeout. Detaching from a disconnected client happens only at the HTTP boundary (the
+    /// controller), never here.
+    /// </summary>
+    [Fact]
+    public async Task TransitionAsync_PassesTheCallersTokenThroughUnchanged()
+    {
+        var instanceId = Guid.NewGuid();
+        SetupSnapshot(instanceId, InstanceStatus.Active, hasActiveSubFlow: false);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await _service.TransitionAsync(
+            instanceId.ToString(), "regular-transition", CreateInput(), cts.Token);
+
+        await _executionService.Received(1).ExecuteTransitionAsync(
+            Arg.Any<WorkflowExecutionContext>(), cts.Token);
+    }
+
     private void SetupSnapshot(Guid instanceId, InstanceStatus status, bool hasActiveSubFlow)
         => _instanceRepository
             .GetExecutionSnapshotAsync(instanceId.ToString(), Arg.Any<CancellationToken>())

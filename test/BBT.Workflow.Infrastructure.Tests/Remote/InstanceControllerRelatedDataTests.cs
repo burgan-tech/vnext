@@ -188,7 +188,8 @@ public sealed class InstanceControllerRelatedDataTests
             relatedInstanceQueryAppService,
             Substitute.For<BBT.Workflow.Instances.HumanTask.IHumanTaskLeafResolver>(),
             Substitute.For<BBT.Workflow.Instances.Correlation.IInstanceCorrelationResolver>(),
-            new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()))
+            new DefaultCallerRoleResolver(Substitute.For<ICurrentUser>()),
+            BBT.Workflow.Application.Tests.Execution.Cancellation.RunCancellationTestDoubles.Live())
         {
             ControllerContext = new ControllerContext { HttpContext = httpContext }
         };

@@ -143,9 +143,9 @@ public static class InstancesModelCreatingExtensions
                 .FindNavigation(nameof(Instance.ChildCorrelations))
                 ?.SetPropertyAccessMode(PropertyAccessMode.Field);
 
-            // STORED GENERATED column: COALESCE(ModifiedAt, CreatedAt).
-            // Enables index-friendly incremental scans (GetActiveDataListSinceAsync) and
-            // is paired with IX_Instances_Active_LastTouched_Id below.
+            // STORED GENERATED column: COALESCE(ModifiedAt, CreatedAt), paired with
+            // IX_Instances_Active_LastTouched_Id below for incremental scans of active instances by last change.
+            // No code reads it today: its one reader (a full-history component load) was removed (#1192).
             b.Property<DateTime>("LastTouchedAt")
                 .HasColumnType("timestamp with time zone")
                 .HasComputedColumnSql("COALESCE(\"ModifiedAt\", \"CreatedAt\")", stored: true);
