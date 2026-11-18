@@ -44,6 +44,8 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
     private readonly ITransitionAuthorizationManager _transitionAuthorizationManager;
     private readonly ISchemaFieldFilterService _schemaFieldFilterService;
     private readonly Caching.IDataFunctionCache _dataFunctionCache;
+    private readonly IInstanceQueryGateway _instanceQueryGateway = Substitute.For<IInstanceQueryGateway>();
+    private readonly IInstanceCorrelationRepository _instanceCorrelationRepository = Substitute.For<IInstanceCorrelationRepository>();
     private readonly InstanceQueryAppService _service;
     private readonly IServiceProvider _ambientServiceProvider;
     private readonly IServiceProvider? _previousAmbientServiceProvider;
@@ -114,7 +116,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             componentCacheStore: _componentCacheStore,
             instanceRepository: _instanceRepository,
             instanceTransitionRepository: Substitute.For<IInstanceTransitionRepository>(),
-            instanceCorrelationRepository: Substitute.For<IInstanceCorrelationRepository>(),
+            instanceCorrelationRepository: _instanceCorrelationRepository,
             instanceJobRepository: Substitute.For<IInstanceJobRepository>(),
             instanceIncidentRepository: Substitute.For<IInstanceIncidentRepository>(),
             instanceTaskRepository: Substitute.For<IInstanceTaskRepository>(),
@@ -122,7 +124,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             longPollInteractionGate: NSubstitute.Substitute.For<BBT.Workflow.Execution.LongPoll.ILongPollInteractionGate>(),
             instanceExtensionService: _instanceExtensionService,
             scriptContextFactory: _scriptContextFactory,
-            instanceQueryGateway: Substitute.For<IInstanceQueryGateway>(),
+            instanceQueryGateway: _instanceQueryGateway,
             viewContentResolutionService: Substitute.For<IViewContentResolutionService>(),
             taskConditionService: Substitute.For<ITaskConditionService>(),
             urlTemplateBuilder: Substitute.For<IUrlTemplateBuilder>(),
@@ -442,7 +444,237 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             .FindByIdentifierAsReadOnlyAsync(instance.Id.ToString(), Arg.Any<CancellationToken>());
     }
 
+    // ── Active SubFlow (#1084) ────────────────────────────────────────────────
+
+    /// <summary>
+    /// An unchanged chain: the parent part matches and the child answers 304 to the child part, so
+    /// the parent answers 304 without loading its aggregate or running any extension.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceDataAsync_ActiveSubFlow_ChildUnchanged_Returns304WithoutBuild()
+    {
+        var parentId = Guid.NewGuid();
+        var correlation = CreateSubFlowCorrelation(parentId);
+        EnableCache();
+        SetupFingerprint(parentId, hasActiveSubFlow: true);
+        _instanceCorrelationRepository.FindActiveSubFlowByParentAsync(parentId, Arg.Any<CancellationToken>())
+            .Returns(correlation);
+        _instanceQueryGateway.GetInstanceDataAsync(Arg.Any<GetInstanceDataInput>(), Arg.Any<CancellationToken>())
+            .Returns(ConditionalResult<GetInstanceDataOutput>.NotModified());
+
+        var input = CreateInput(parentId.ToString());
+        input.IfNoneMatch = "\"etag-current.child-1\"";
+
+        var result = await _service.GetInstanceDataAsync(input, CancellationToken.None);
+
+        result.IsNotModified.ShouldBeTrue();
+        await _instanceQueryGateway.Received(1).GetInstanceDataAsync(
+            Arg.Is<GetInstanceDataInput>(i =>
+                i.Instance == correlation.SubFlowInstanceId.ToString()
+                && i.Domain == correlation.SubFlowDomain
+                && i.Workflow == correlation.SubFlowName
+                && i.IfNoneMatch == "child-1"
+                && i.Version == null),
+            Arg.Any<CancellationToken>());
+        await _instanceRepository.DidNotReceive()
+            .FindByIdentifierAsReadOnlyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The caller's own conditional headers never reach the child: the remote client merges the input
+    /// headers over the request, so a forwarded <c>If-None-Match: "parent.child"</c> would replace the
+    /// child part and the child could never answer 304 (found on the cross-domain lab).
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceDataAsync_ActiveSubFlow_DoesNotForwardTheCallersConditionalHeaders()
+    {
+        var parentId = Guid.NewGuid();
+        var correlation = CreateSubFlowCorrelation(parentId);
+        EnableCache();
+        SetupFingerprint(parentId, hasActiveSubFlow: true);
+        _instanceCorrelationRepository.FindActiveSubFlowByParentAsync(parentId, Arg.Any<CancellationToken>())
+            .Returns(correlation);
+        _instanceQueryGateway.GetInstanceDataAsync(Arg.Any<GetInstanceDataInput>(), Arg.Any<CancellationToken>())
+            .Returns(ConditionalResult<GetInstanceDataOutput>.NotModified());
+
+        var input = CreateInput(parentId.ToString());
+        input.IfNoneMatch = "\"etag-current.child-1\"";
+        input.Headers = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["if-none-match"] = "\"etag-current.child-1\"",
+            ["If-Modified-Since"] = "Wed, 18 Nov 2026 10:00:00 GMT",
+            ["sub"] = "caller-1"
+        };
+
+        var result = await _service.GetInstanceDataAsync(input, CancellationToken.None);
+
+        result.IsNotModified.ShouldBeTrue();
+        await _instanceQueryGateway.Received(1).GetInstanceDataAsync(
+            Arg.Is<GetInstanceDataInput>(i =>
+                i.IfNoneMatch == "child-1"
+                && !i.Headers!.ContainsKey("If-None-Match")
+                && !i.Headers.ContainsKey("If-Modified-Since")
+                && i.Headers["sub"] == "caller-1"),
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The #1084 bug: the parent part still matches, but the child's data moved. The child answers
+    /// with a body, the parent serves the child's new extensions under a new composed ETag, and the
+    /// child is read once — the build reuses the fast path's read.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceDataAsync_ActiveSubFlow_ChildChanged_Returns200WithChildExtensionsAndComposedEtag()
+    {
+        var instance = CreateInstanceWithData(out _);
+        var correlation = AddActiveSubFlow(instance);
+        EnableCache();
+        SetupFingerprint(instance.Id, hasActiveSubFlow: true);
+        SetupFullPathMocks(instance);
+        _instanceCorrelationRepository.FindActiveSubFlowByParentAsync(instance.Id, Arg.Any<CancellationToken>())
+            .Returns(correlation);
+        SetupChildData("child-2", new Dictionary<string, object> { ["otpInput"] = "wrong-otp" });
+
+        var input = CreateInput(instance.Id.ToString());
+        input.IfNoneMatch = "\"etag-current.child-1\"";
+
+        var result = await _service.GetInstanceDataAsync(input, CancellationToken.None);
+
+        result.IsNotModified.ShouldBeFalse();
+        result.Result.Value!.ETag.ShouldBe("\"etag-current.child-2\"");
+        result.Result.Value.Extensions!["otpInput"].ShouldBe("wrong-otp");
+        await _instanceQueryGateway.Received(1)
+            .GetInstanceDataAsync(Arg.Any<GetInstanceDataInput>(), Arg.Any<CancellationToken>());
+        await _instanceExtensionService.DidNotReceive().ProcessExtensionsAsync(
+            Arg.Any<string[]?>(), Arg.Any<ScriptContext>(), Arg.Any<Definitions.Workflow>(),
+            Arg.Any<ExtensionScope>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A plain parent-only ETag (issued before the SubFlow opened, or by an older runtime) is no longer
+    /// a 304 on its own: the child is asked without a condition and the composed ETag is served.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceDataAsync_ActiveSubFlow_ParentOnlyEtag_IsNot304AndChildIsAskedUnconditionally()
+    {
+        var instance = CreateInstanceWithData(out _);
+        var correlation = AddActiveSubFlow(instance);
+        EnableCache();
+        SetupFingerprint(instance.Id, hasActiveSubFlow: true);
+        SetupFullPathMocks(instance);
+        _instanceCorrelationRepository.FindActiveSubFlowByParentAsync(instance.Id, Arg.Any<CancellationToken>())
+            .Returns(correlation);
+        SetupChildData("child-1", new Dictionary<string, object>());
+
+        var input = CreateInput(instance.Id.ToString());
+        input.IfNoneMatch = "\"etag-current\"";
+
+        var result = await _service.GetInstanceDataAsync(input, CancellationToken.None);
+
+        result.IsNotModified.ShouldBeFalse();
+        result.Result.Value!.ETag.ShouldBe("\"etag-current.child-1\"");
+        await _instanceQueryGateway.Received(1).GetInstanceDataAsync(
+            Arg.Is<GetInstanceDataInput>(i => i.IfNoneMatch == null), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The composed ETag decides the 304 on the build path too (cache disabled ⇒ no fast path).
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceDataAsync_ActiveSubFlow_CacheDisabled_MatchingComposedEtag_Returns304()
+    {
+        var instance = CreateInstanceWithData(out _);
+        AddActiveSubFlow(instance);
+        SetupFullPathMocks(instance);
+        _dataFunctionCache
+            .ComputeEtag(Arg.Any<GetInstanceDataInput>(), Arg.Any<InstanceDataFingerprint>())
+            .Returns("etag-current");
+        SetupChildData("child-1", new Dictionary<string, object>());
+
+        var input = CreateInput(instance.Id.ToString());
+        input.IfNoneMatch = "\"etag-current.child-1\"";
+
+        var result = await _service.GetInstanceDataAsync(input, CancellationToken.None);
+
+        result.IsNotModified.ShouldBeTrue();
+        await _instanceRepository.DidNotReceive()
+            .GetDataFingerprintAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A failed child read keeps the old behaviour (parent data, empty extensions) but gives the body no
+    /// ETag, so a client can never pin the empty extensions block behind a 304.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceDataAsync_ActiveSubFlow_ChildReadFails_ServesWithoutEtagAndNever304()
+    {
+        var instance = CreateInstanceWithData(out _);
+        AddActiveSubFlow(instance);
+        SetupFullPathMocks(instance);
+        _dataFunctionCache
+            .ComputeEtag(Arg.Any<GetInstanceDataInput>(), Arg.Any<InstanceDataFingerprint>())
+            .Returns("etag-current");
+        _instanceQueryGateway.GetInstanceDataAsync(Arg.Any<GetInstanceDataInput>(), Arg.Any<CancellationToken>())
+            .Returns(ConditionalResult<GetInstanceDataOutput>.Fail(Error.Transient("remote_network_error", "down")));
+
+        var input = CreateInput(instance.Id.ToString());
+        input.IfNoneMatch = "\"etag-current\"";
+
+        var result = await _service.GetInstanceDataAsync(input, CancellationToken.None);
+
+        result.IsNotModified.ShouldBeFalse();
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.ETag.ShouldBeNull();
+        result.Result.Value.Extensions!.ShouldBeEmpty();
+    }
+
+    /// <summary>
+    /// Regression guard for the hot path: without an active SubFlow nothing new is queried or called.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceDataAsync_NoActiveSubFlow_NeverQueriesCorrelationOrChild()
+    {
+        var instance = CreateInstanceWithData(out _);
+        EnableCache();
+        SetupFingerprint(instance.Id);
+        SetupFullPathMocks(instance);
+
+        var result = await _service.GetInstanceDataAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.Value!.ETag.ShouldBe("\"etag-current\"");
+        await _instanceCorrelationRepository.DidNotReceive()
+            .FindActiveSubFlowByParentAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+        await _instanceQueryGateway.DidNotReceive()
+            .GetInstanceDataAsync(Arg.Any<GetInstanceDataInput>(), Arg.Any<CancellationToken>());
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    private static InstanceCorrelation CreateSubFlowCorrelation(Guid parentId) =>
+        InstanceCorrelation.Create(
+            id: Guid.NewGuid(),
+            instanceId: parentId,
+            parentState: "review",
+            subFlowInstanceId: Guid.NewGuid(),
+            subFlowType: "S",
+            subFlowDomain: "sub-domain",
+            subFlowName: "sub-flow",
+            subFlowVersion: TestVersion);
+
+    private static InstanceCorrelation AddActiveSubFlow(Instance instance)
+    {
+        var correlation = CreateSubFlowCorrelation(instance.Id);
+        instance.AddCorrelation(correlation);
+        return correlation;
+    }
+
+    private void SetupChildData(string childEtag, Dictionary<string, object> extensions) =>
+        _instanceQueryGateway.GetInstanceDataAsync(Arg.Any<GetInstanceDataInput>(), Arg.Any<CancellationToken>())
+            .Returns(ConditionalResult<GetInstanceDataOutput>.Success(new GetInstanceDataOutput
+            {
+                ETag = childEtag,
+                Extensions = extensions
+            }));
 
     private void EnableCache()
     {
@@ -458,10 +690,11 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
             .Returns("data-etag-current");
     }
 
-    private void SetupFingerprint(Guid instanceId, string? latestDataEtag = "01JD2G4YV0EXAMPLEULID0000A") =>
+    private void SetupFingerprint(
+        Guid instanceId, string? latestDataEtag = "01JD2G4YV0EXAMPLEULID0000A", bool hasActiveSubFlow = false) =>
         _instanceRepository
             .GetDataFingerprintAsync(instanceId.ToString(), Arg.Any<CancellationToken>())
-            .Returns(new InstanceDataFingerprint(instanceId, "test-key", latestDataEtag, TestVersion, "review", HasActiveSubFlow: false));
+            .Returns(new InstanceDataFingerprint(instanceId, "test-key", latestDataEtag, TestVersion, "review", hasActiveSubFlow));
 
     private void SetupCachedEntry(out Caching.DataFunctionCacheEntry entry, string etag = "data-etag-current")
     {

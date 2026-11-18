@@ -4285,6 +4285,33 @@ public static partial class WorkflowLogs
         this ILogger logger,
         string instance);
 
+    /// <summary>
+    /// Logs when an instance with an active SubFlow answered 304: the parent part of the composed
+    /// ETag matched and the child's data function answered 304 to the child part.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20520,
+        Level = LogLevel.Debug,
+        Message = "Data function ETag unchanged for instance {Instance} and its active SubFlow {SubFlowInstanceId}; returning 304")]
+    public static partial void DataFunctionSubFlowEtagNotModified(
+        this ILogger logger,
+        string instance,
+        Guid subFlowInstanceId);
+
+    /// <summary>
+    /// Logs when the data function could not read its active SubFlow child's data; the parent's data
+    /// is served with an empty extensions block and no ETag.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20521,
+        Level = LogLevel.Warning,
+        Message = "Data function for instance {Instance} could not read its active SubFlow {SubFlowInstanceId}: {Error}; serving without extensions and ETag")]
+    public static partial void DataFunctionSubFlowReadFailed(
+        this ILogger logger,
+        string instance,
+        Guid subFlowInstanceId,
+        string? error);
+
     #endregion
 
     #region Master/Schema Function Cache
