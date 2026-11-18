@@ -24,6 +24,9 @@ status: pending
   startup. The `dapr-api-token` header is removed right after routing, before controllers and any Dapr
   job handler run.
 - A DROP response body's `reason` is now only the error code; the full message is in the EventId 40994 log.
+- A call through the runtime's OWN sidecar API (`/v1.0/invoke/<own-app-id>/...`) passes the guard (no
+  caller header, token present). On Kubernetes that API listens on loopback by default, so only the pod
+  can make it; deployments must keep `dapr.io/sidecar-listen-addresses` on loopback.
 - Scope: orchestration host only. Execution/inbox/outbox hosts and vNext-to-vNext internal endpoints
   are a later phase.
 
@@ -37,7 +40,7 @@ Source of truth: `docs/domain/event-driven-workflows.md` § Who can call it, `do
   direct `curl`, and note that a direct call without it gets `404` in `Enforce`.
 - Deployment/security pages: document the sidecar side (`APP_API_TOKEN` on daprd; Kubernetes annotation
   `dapr.io/app-token-secret: <secret>`, key `token`, plus the same secret on the app container via
-  `secretKeyRef`) and the rollout: `LogOnly` -> enable the sidecar token -> EventId 40996 at zero -> `Enforce`.
+  `secretKeyRef`), the requirement to keep the sidecar API on loopback, and the rollout: `LogOnly` -> enable the sidecar token -> EventId 40996 at zero -> `Enforce`.
 - Change any example that shows `"reason": "Code: message"` to the code-only form.
 - Release blog for v0.0.107: a security fix, non-breaking while `LogOnly`; operators should plan the `Enforce` step.
 

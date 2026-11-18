@@ -148,6 +148,14 @@ The sidecar must hold the same token: set `APP_API_TOKEN` on `daprd`. On Kuberne
 annotation `dapr.io/app-token-secret: <secret>` (key `token`); the injector gives the secret only to
 `daprd`, so the app container needs the same secret through its own `secretKeyRef`.
 
+**The sidecar's own API is inside the boundary.** A call made to this runtime's own sidecar
+(`POST <sidecar>/v1.0/invoke/<own-app-id>/method/...`) reaches the app with the token and without
+`dapr-caller-app-id`, so the guard accepts it (measured on daprd 1.16.19). On Kubernetes the sidecar
+API listens on `[::1],127.0.0.1` by default, so only processes inside the pod can make that call.
+Keep it that way: do not set `dapr.io/sidecar-listen-addresses` to a non-loopback address, or protect
+the sidecar API with `dapr.io/api-token-secret` if you must. Locally, `etc/docker` publishes the
+sidecar ports to the host, so on a developer machine anything that can reach `localhost` is trusted.
+
 Rollout: ship the runtime in `LogOnly`, enable the sidecar token (Helm), watch EventId 40996 fall to
 zero, then set `Mode=Enforce`. Rollback is `Mode=LogOnly`. Scope of this phase: the orchestration host
 only; the execution, inbox and outbox hosts and the vNext-to-vNext internal endpoints (for example
