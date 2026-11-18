@@ -75,21 +75,22 @@ need() { command -v "$1" >/dev/null 2>&1 || die "'$1' is required but not instal
 
 compose() { docker compose -f "$COMPOSE_FILE" "$@"; }
 
-# Per-run Dapr app API token (Dapr local-delivery guard). daprd adds it as `dapr-api-token` to every call
+# Per-checkout Dapr app API token (Dapr local-delivery guard). daprd adds it as `dapr-api-token` to every call
 # it makes to the orchestration app; the app reads the expected value from APP_API_TOKEN. A pre-set
 # VNEXT_APP_API_TOKEN wins; otherwise one random token is generated once and kept in a git-ignored,
-# chmod-600 file so a sidecar that is reused across runs (compose --no-recreate) still matches the app.
+# chmod-600 file (.vnext-local/app-api-token; delete it to rotate) so a sidecar that is reused across runs (compose --no-recreate) still matches the app.
 # The value is exported for compose interpolation (${VNEXT_APP_API_TOKEN:-}) and is never printed.
 ensure_app_api_token() {
   local file="$STATE/app-api-token"
   if [ -z "${VNEXT_APP_API_TOKEN:-}" ]; then
     mkdir -p "$STATE"
     if [ -s "$file" ]; then
-      VNEXT_APP_API_TOKEN="$(cat "$file")"
+      VNEXT_APP_API_TOKEN="$(cat "$file" 2>/dev/null)" || die "cannot read $file (delete it to generate a new Dapr app API token)"
     else
       need openssl
       VNEXT_APP_API_TOKEN="$(openssl rand -hex 32)"
-      ( umask 077; printf '%s' "$VNEXT_APP_API_TOKEN" > "$file" )
+      rm -f "$file"   # a leftover empty file would keep its old mode; always create fresh under umask 077
+      ( umask 077; printf '%s' "$VNEXT_APP_API_TOKEN" > "$file" ) || die "cannot write $file"
     fi
   fi
   export VNEXT_APP_API_TOKEN
@@ -493,7 +494,7 @@ write_record() {   # <domain> <running|stopped>
 | Database | \`$db\` on localhost:5432 (postgres/postgres) |
 | Base URL | http://localhost:$(app_port 4201 "$offset") |
 | Init (package publisher) | http://localhost:$(init_port "$offset") (\`$(init_name "$domain" "$offset")\`) |
-| Dapr app API token | set (per run; not recorded) |
+| Dapr app API token | set (stable per checkout in \`.vnext-local/app-api-token\`, value not recorded; delete the file to rotate) |
 | Runtime source | \`$branch\` @ \`$rev\` |
 | Sidecar compose | $([ "$offset" = 0 ] && echo "\`etc/docker/docker-compose.yml\` (core owns the default sidecars)" || echo "\`$ddir/sidecars.json\` (project \`vnext-$domain\`)") |
 
@@ -654,7 +655,9 @@ cmd_stack() {
   case "$mode" in
     stage) exec docker compose -f "$HERE/docker-compose.stage.yml" up --build ;;
     dev)   exec docker compose -f "$HERE/docker-compose.dev.yml" up --build ;;
-    *)     log "infrastructure only"; exec docker compose -f "$COMPOSE_FILE" up --build ;;
+    *)     log "infrastructure only"
+           log "a hand-run orchestration host needs APP_API_TOKEN from $STATE/app-api-token (the sidecar already has it)"
+           exec docker compose -f "$COMPOSE_FILE" up --build ;;
   esac
 }
 
