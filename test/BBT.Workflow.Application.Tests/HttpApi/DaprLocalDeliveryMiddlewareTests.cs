@@ -112,13 +112,49 @@ public sealed class DaprLocalDeliveryMiddlewareTests
     }
 
     [Fact]
-    public async Task LogOnly_GuardedEndpoint_NoToken_CallsNext_AndLogs40996()
+    public async Task LogOnly_GuardedEndpoint_NoToken_CallsNext_StripsHeader_NoPerRequestLog()
+    {
+        var h = new Harness(DaprLocalDeliveryMode.LogOnly, token: null);
+        await h.Run(Guarded(), Token);
+        await h.Run(Guarded(), Token);
+        h.NextCalled.ShouldBeTrue();
+        h.SeenHeaders.ShouldNotContain("dapr-api-token");
+        h.Logger.EventIds.ShouldNotContain(40996);
+        h.Logger.EventIds.Count(i => i == 40998).ShouldBe(1);
+    }
+
+    [Fact]
+    public void LogOnly_TokenConfigured_DoesNotLog40998()
+    {
+        var h = new Harness(DaprLocalDeliveryMode.LogOnly);
+        h.Logger.EventIds.ShouldNotContain(40998);
+    }
+
+    [Fact]
+    public async Task LogOnly_TokenConfigured_MissingToken_CallsNext_AndLogs40996()
     {
         var h = new Harness(DaprLocalDeliveryMode.LogOnly);
         await h.Run(Guarded());
         h.NextCalled.ShouldBeTrue();
         h.Logger.EventIds.Count(i => i == 40996).ShouldBe(1);
         h.Logger.Messages.Single(m => m.Contains("LogOnly")).ShouldContain("would reject");
+    }
+
+    [Fact]
+    public async Task LogOnly_TokenConfigured_InvalidToken_Logs40996()
+    {
+        var h = new Harness(DaprLocalDeliveryMode.LogOnly);
+        await h.Run(Guarded(), Token + "-wrong");
+        h.NextCalled.ShouldBeTrue();
+        h.Logger.EventIds.Count(i => i == 40996).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Enforce_TokenNotConfigured_Logs40996_PerRequest()
+    {
+        var h = new Harness(DaprLocalDeliveryMode.Enforce, token: null);
+        await h.Run(Guarded(), Token);
+        h.Logger.EventIds.Count(i => i == 40996).ShouldBe(1);
     }
 
     [Fact]

@@ -36,6 +36,10 @@ public sealed class DaprLocalDeliveryMiddleware
         {
             _logger.DaprLocalDeliveryEnforcedWithoutToken();
         }
+        else if (current.Mode == DaprLocalDeliveryMode.LogOnly && string.IsNullOrWhiteSpace(current.AppApiToken))
+        {
+            _logger.DaprLocalDeliveryLogOnlyWithoutToken();
+        }
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -46,7 +50,11 @@ public sealed class DaprLocalDeliveryMiddleware
         if (options.Mode != DaprLocalDeliveryMode.Off && IsGuarded(context.GetEndpoint()))
         {
             var verdict = DaprLocalDeliveryEvaluator.Evaluate(context.Request.Headers, options.AppApiToken);
-            if (verdict != DaprLocalDeliveryVerdict.Accepted)
+            // LogOnly without a token is announced once at construction; per-request entries would only
+            // repeat it for every pubsub, cron and Dapr Scheduler delivery.
+            var silent = verdict == DaprLocalDeliveryVerdict.TokenNotConfigured
+                         && options.Mode == DaprLocalDeliveryMode.LogOnly;
+            if (verdict != DaprLocalDeliveryVerdict.Accepted && !silent)
             {
                 _logger.DaprLocalDeliveryRejected(
                     options.Mode.ToString(),

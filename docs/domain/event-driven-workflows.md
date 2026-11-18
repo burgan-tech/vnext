@@ -136,13 +136,13 @@ runtime's **own Dapr sidecar**:
 
 Anything else is answered with an empty-body `404`. The same rule guards
 `POST .../instances/schedule` and Dapr Scheduler's `/job/{jobName}` callback. The
-`dapr-api-token` header is removed from every request before application code runs, so it never
-reaches scripts, instance data or logs.
+`dapr-api-token` header is removed from every request right after routing, before controllers and any Dapr job handler
+run, so it never reaches scripts, instance data or logs.
 
 | Setting | Meaning |
 |---|---|
 | `Dapr:LocalDelivery:Mode` | `Off`, `LogOnly` (**default**: a failing request is served and logged as EventId 40996 "would reject") or `Enforce` (a failing request gets `404`). |
-| `Dapr:LocalDelivery:AppApiToken` | The token the sidecar presents. Falls back to the `APP_API_TOKEN` environment variable. `Enforce` with no token rejects every guarded request and logs EventId 40997 at startup. |
+| `Dapr:LocalDelivery:AppApiToken` | The token the sidecar presents. Falls back to the `APP_API_TOKEN` environment variable. `Enforce` with no token rejects every guarded request and logs EventId 40997 at startup. `LogOnly` with no token logs EventId 40998 (Information) once at startup and nothing per request. |
 
 The sidecar must hold the same token: set `APP_API_TOKEN` on `daprd`. On Kubernetes that is the
 annotation `dapr.io/app-token-secret: <secret>` (key `token`); the injector gives the secret only to

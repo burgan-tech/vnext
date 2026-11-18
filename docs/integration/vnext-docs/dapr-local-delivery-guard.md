@@ -19,8 +19,10 @@ status: pending
   `dapr-api-token` header equal to the app API token, and no `dapr-caller-app-id` header. Anything else
   gets an empty-body `404` (in `Enforce`).
 - `Dapr:LocalDelivery:Mode` = `Off` | `LogOnly` (default) | `Enforce`; `Dapr:LocalDelivery:AppApiToken`,
-  falling back to env `APP_API_TOKEN`. `LogOnly` serves the request and logs EventId 40996;
-  `Enforce` with no token rejects everything and logs EventId 40997 at startup.
+  falling back to env `APP_API_TOKEN`. `LogOnly` serves the request and logs EventId 40996 (with no token it logs EventId 40998 once at
+  startup and nothing per request); `Enforce` with no token rejects everything and logs EventId 40997 at
+  startup. The `dapr-api-token` header is removed right after routing, before controllers and any Dapr
+  job handler run.
 - A DROP response body's `reason` is now only the error code; the full message is in the EventId 40994 log.
 - Scope: orchestration host only. Execution/inbox/outbox hosts and vNext-to-vNext internal endpoints
   are a later phase.
