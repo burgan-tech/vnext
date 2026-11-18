@@ -28,23 +28,14 @@ public interface ICacheBackend<T>
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Loads all active versions of an entity for a given domain and key.
-    /// More efficient than calling <see cref="LoadAsync"/> repeatedly when all versions are needed.
-    /// </summary>
-    /// <remarks>
-    /// Materializes every stored body, so its cost grows with the number of published versions times their
-    /// size. Never use it to decide which version a request means — use <see cref="LoadVersionsAsync"/> and
-    /// then load the one winning version.
-    /// </remarks>
-    Task<Result<List<T>>> LoadAllByKeyAsync(
-        string domain,
-        string key,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Returns the stored version strings (build metadata included) of every active version of an entity for a
     /// given domain and key, without loading any body.
     /// </summary>
+    /// <remarks>
+    /// The backend deliberately offers no read of every version's body: its cost grows with the number of
+    /// published versions times their size. Decide which version a request means from this list, then load
+    /// the one winning version with <see cref="LoadAsync"/>.
+    /// </remarks>
     /// <returns>The version strings, which may be empty</returns>
     Task<Result<IReadOnlyList<string>>> LoadVersionsAsync(
         string domain,

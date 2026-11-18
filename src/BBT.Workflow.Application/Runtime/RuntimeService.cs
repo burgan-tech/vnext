@@ -12,10 +12,10 @@ namespace BBT.Workflow.Runtime;
 /// entities.
 /// </summary>
 /// <remarks>
-/// Only a malformed row (<see cref="JsonException"/>) is skipped, and logged. Any other failure — above all
-/// <see cref="OutOfMemoryException"/> — propagates: skipping a row the process could not afford to load
-/// returns a silently incomplete list, and a version resolved from that list is a wrong answer, not a
-/// degraded one.
+/// Versions are listed from the version column alone and only the one chosen body is deserialized. A malformed
+/// body (<see cref="JsonException"/>) reads as absent, and is logged. Any other failure — above all
+/// <see cref="OutOfMemoryException"/> — propagates: a row the process could not afford to load must fail the
+/// read, never pass for a version that does not exist.
 /// </remarks>
 public sealed class RuntimeService(
     IInstanceRepository instanceRepository,
@@ -24,106 +24,6 @@ public sealed class RuntimeService(
     IRuntimeInfoProvider runtimeInfoProvider,
     ILogger<RuntimeService> logger) : IRuntimeService
 {
-    private const int PageSize = 100;
-
-    /// <inheritdoc />
-    public async Task<IEnumerable<T?>> GetAsync<T>(CancellationToken cancellationToken = default)
-        where T : class, IDomainEntity, IReferenceSetter
-        => await GetAsync<T>(since: null, cancellationToken);
-
-    /// <inheritdoc />
-    public async Task<IEnumerable<T?>> GetAsync<T>(DateTime? since, CancellationToken cancellationToken = default)
-        where T : class, IDomainEntity, IReferenceSetter
-    {
-        var schemaName = runtimeOptions.Value.GetSchemaNameByType(typeof(T));
-        var schemaInfo = runtimeOptions.Value.Schemas[schemaName];
-
-        using (currentSchema.Change(schemaInfo.Schema))
-        {
-            var result = new List<T?>();
-            int skip = 0;
-            List<InstanceAndDataModel> page;
-
-            do
-            {
-                page = since.HasValue
-                    ? await instanceRepository.GetActiveDataListSinceAsync(since.Value, skip, PageSize, cancellationToken)
-                    : await instanceRepository.GetActiveDataListPagedAsync(skip, PageSize, cancellationToken);
-
-                foreach (var item in page)
-                {
-                    try
-                    {
-                        var flow = item.InstanceData.Data.JsonElement
-                            .Deserialize<T>(JsonSerializerConstants.JsonOptions);
-
-                        if (flow != null)
-                        {
-                            flow.SetReference(new Reference(
-                                item.Instance.Key ?? string.Empty,
-                                runtimeInfoProvider.Domain,
-                                schemaInfo.Name,
-                                item.InstanceData.Version
-                            ));
-                        }
-
-                        result.Add(flow);
-                    }
-                    catch (JsonException ex)
-                    {
-                        logger.InstanceDeserializationFailed(ex, schemaName, item.Instance.Key, item.InstanceData.Version);
-                    }
-                }
-
-                skip += PageSize;
-            }
-            while (page.Count == PageSize);
-
-            return result.Where(f => f != null);
-        }
-    }
-
-    /// <inheritdoc />
-    public async Task<IEnumerable<T?>> GetAsync<T>(string key, CancellationToken cancellationToken = default)
-        where T : class, IDomainEntity, IReferenceSetter
-    {
-        var schemaName = runtimeOptions.Value.GetSchemaNameByType(typeof(T));
-        var schemaInfo = runtimeOptions.Value.Schemas[schemaName];
-
-        using (currentSchema.Change(schemaInfo.Schema))
-        {
-            var items = await instanceRepository.GetActiveDataListByKeyAsync(key, cancellationToken);
-            var result = new List<T?>();
-
-            foreach (var item in items)
-            {
-                try
-                {
-                    var flow = item.InstanceData.Data.JsonElement
-                        .Deserialize<T>(JsonSerializerConstants.JsonOptions);
-
-                    if (flow != null)
-                    {
-                        flow.SetReference(new Reference(
-                            item.Instance.Key ?? string.Empty,
-                            runtimeInfoProvider.Domain,
-                            schemaInfo.Name,
-                            item.InstanceData.Version
-                        ));
-                    }
-
-                    result.Add(flow);
-                }
-                catch (JsonException ex)
-                {
-                    logger.InstanceDeserializationFailed(ex, schemaName, item.Instance.Key, item.InstanceData.Version);
-                }
-            }
-
-            return result.Where(f => f != null);
-        }
-    }
-
     /// <inheritdoc />
     public async Task<IReadOnlyList<string>> GetVersionsAsync<T>(string key, CancellationToken cancellationToken = default)
         where T : class, IDomainEntity, IReferenceSetter
@@ -134,6 +34,34 @@ public sealed class RuntimeService(
         using (currentSchema.Change(schemaInfo.Schema))
         {
             return await instanceRepository.GetActiveVersionsByKeyAsync(key, cancellationToken);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<ComponentVersionSummary>> GetVersionPageAsync<T>(
+        string key, int skip, int take, CancellationToken cancellationToken = default)
+        where T : class, IDomainEntity, IReferenceSetter
+    {
+        var schemaName = runtimeOptions.Value.GetSchemaNameByType(typeof(T));
+        var schemaInfo = runtimeOptions.Value.Schemas[schemaName];
+
+        using (currentSchema.Change(schemaInfo.Schema))
+        {
+            return await instanceRepository.GetVersionsPagedAsync(key, skip, take, cancellationToken);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<PublishedComponentVersion>> GetPublishedVersionsAsync<T>(
+        CancellationToken cancellationToken = default)
+        where T : class, IDomainEntity, IReferenceSetter
+    {
+        var schemaName = runtimeOptions.Value.GetSchemaNameByType(typeof(T));
+        var schemaInfo = runtimeOptions.Value.Schemas[schemaName];
+
+        using (currentSchema.Change(schemaInfo.Schema))
+        {
+            return await instanceRepository.GetActiveComponentVersionsAsync(cancellationToken);
         }
     }
 

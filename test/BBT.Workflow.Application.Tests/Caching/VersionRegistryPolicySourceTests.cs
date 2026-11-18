@@ -118,13 +118,13 @@ public class VersionRegistryPolicySourceTests
     public async Task ReadPointer_ShouldReturnPointer_WhenRegistryInstanceIsBusy()
     {
         Stored("""{"type":"Flow","defaultVersion":"2.1"}""");
-        _repository.GetActiveDataListByKeyAsync(FlowKey, Arg.Any<CancellationToken>())
-            .Returns(new List<InstanceAndDataModel>());
+        _repository.GetActiveVersionsByKeyAsync(FlowKey, Arg.Any<CancellationToken>())
+            .Returns(new List<string>());
 
         var result = await _sut.GetDefaultVersionAsync(Domain, FlowKey, CancellationToken.None);
 
         result.Value.ShouldBe("2.1");
-        await _repository.DidNotReceiveWithAnyArgs().GetActiveDataListByKeyAsync(default!, default);
+        await _repository.DidNotReceiveWithAnyArgs().GetActiveVersionsByKeyAsync(default!, default);
     }
 
     /// <summary>
@@ -135,8 +135,8 @@ public class VersionRegistryPolicySourceTests
     public async Task ReadPointer_ShouldReturnPointer_WhenRegistryInstanceIsFaulted()
     {
         Stored("""{"type":"Flow","defaultVersion":"2"}""");
-        _repository.GetActiveDataListByKeyAsync(FlowKey, Arg.Any<CancellationToken>())
-            .Returns(new List<InstanceAndDataModel>());
+        _repository.GetActiveVersionsByKeyAsync(FlowKey, Arg.Any<CancellationToken>())
+            .Returns(new List<string>());
 
         var result = await _sut.GetDefaultVersionAsync(Domain, FlowKey, CancellationToken.None);
 

@@ -15,15 +15,16 @@ using Xunit;
 namespace BBT.Workflow.Runtime;
 
 /// <summary>
-/// Pins what <see cref="RuntimeService"/> may and may not skip while turning stored rows into components:
-/// a malformed row is skipped, but a row the process failed to load for any other reason — out of memory
-/// above all — must fail the read, because a silently shortened version list resolves to an older version.
+/// Pins what <see cref="RuntimeService"/> may and may not skip while turning a stored row into a component —
+/// a malformed row is skipped, but a row the process failed to load for any other reason, out of memory above
+/// all, must fail the read — and that its version reads stay on the version column of the component's schema.
 /// </summary>
 public sealed class RuntimeServiceTests
 {
     private const string Key = "contract-approval-workflow";
 
     private readonly IInstanceRepository _repository = Substitute.For<IInstanceRepository>();
+    private readonly ICurrentSchema _currentSchema = Substitute.For<ICurrentSchema>();
     private readonly RuntimeService _sut;
 
     public RuntimeServiceTests()
@@ -36,7 +37,7 @@ public sealed class RuntimeServiceTests
 
         _sut = new RuntimeService(
             _repository,
-            Substitute.For<ICurrentSchema>(),
+            _currentSchema,
             Options.Create(options),
             runtimeInfo,
             NullLogger<RuntimeService>.Instance);
@@ -51,27 +52,36 @@ public sealed class RuntimeServiceTests
         var versions = await _sut.GetVersionsAsync<ProbeEntity>(Key);
 
         versions.ShouldBe(["1.0.0-pkg.1.0.9+core", "1.0.0-pkg.1.0.123+core"]);
-        await _repository.DidNotReceiveWithAnyArgs().GetActiveDataListByKeyAsync(default!, default);
+        _currentSchema.Received(1).Change("sys_probe");
     }
 
     [Fact]
-    public async Task GetAsyncByKey_WhenARowRunsOutOfMemory_FailsInsteadOfReturningTheRest()
+    public async Task GetVersionPageAsync_PagesTheVersionMetadataOfTheComponentsSchema()
     {
-        _repository.GetActiveDataListByKeyAsync(Key, Arg.Any<CancellationToken>())
-            .Returns([Row("1.0.0-pkg.1.0.9+core", """{"name":"old"}"""), Row("1.0.0-pkg.1.0.123+core", """{"explode":true}""")]);
+        var publishedAt = new DateTime(2026, 11, 9, 9, 28, 0, DateTimeKind.Utc);
+        _repository.GetVersionsPagedAsync(Key, 20, 21, Arg.Any<CancellationToken>())
+            .Returns([new ComponentVersionSummary("1.0.0-pkg.1.0.350+contract", true, "1.0.0", publishedAt)]);
 
-        await Should.ThrowAsync<OutOfMemoryException>(() => _sut.GetAsync<ProbeEntity>(Key));
+        var page = await _sut.GetVersionPageAsync<ProbeEntity>(Key, skip: 20, take: 21);
+
+        page.ShouldHaveSingleItem().Version.ShouldBe("1.0.0-pkg.1.0.350+contract");
+        _currentSchema.Received(1).Change("sys_probe");
     }
 
     [Fact]
-    public async Task GetAsyncByKey_SkipsOnlyAMalformedRow()
+    public async Task GetPublishedVersionsAsync_ListsEveryComponentsVersionsFromTheComponentsSchema()
     {
-        _repository.GetActiveDataListByKeyAsync(Key, Arg.Any<CancellationToken>())
-            .Returns([Row("1.0.0-pkg.1.0.9+core", """{"name":"ok"}"""), Row("1.0.0-pkg.1.0.123+core", """{"name":42}""")]);
+        var publishedAt = new DateTime(2026, 11, 9, 9, 28, 0, DateTimeKind.Utc);
+        _repository.GetActiveComponentVersionsAsync(Arg.Any<CancellationToken>())
+            .Returns([
+                new PublishedComponentVersion("flow-a", "1.0.0-pkg.1.0.2+core", publishedAt),
+                new PublishedComponentVersion("flow-b", "2.0.0-pkg.1.0.1+core", publishedAt)
+            ]);
 
-        var loaded = (await _sut.GetAsync<ProbeEntity>(Key)).ToList();
+        var versions = await _sut.GetPublishedVersionsAsync<ProbeEntity>();
 
-        loaded.Select(e => e!.Version).ShouldBe(["1.0.0-pkg.1.0.9+core"]);
+        versions.Select(v => (v.Key, v.Version)).ShouldBe([("flow-a", "1.0.0-pkg.1.0.2+core"), ("flow-b", "2.0.0-pkg.1.0.1+core")]);
+        _currentSchema.Received(1).Change("sys_probe");
     }
 
     [Fact]

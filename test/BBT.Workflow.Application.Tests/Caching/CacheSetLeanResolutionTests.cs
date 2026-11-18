@@ -27,7 +27,6 @@ public sealed class CacheSetLeanResolutionTests
         result.Value!.Version.ShouldBe("1.0.0-pkg.1.0.123+core");
         harness.Backend.VersionListCallCount.ShouldBe(1);
         harness.Backend.LoadCallCount.ShouldBe(1);
-        harness.Backend.LoadAllCallCount.ShouldBe(0);
     }
 
     [Fact]
@@ -85,7 +84,6 @@ public sealed class CacheSetLeanResolutionTests
 
         harness.Backend.VersionListCallCount.ShouldBe(1);
         harness.Backend.LoadCallCount.ShouldBe(0);
-        harness.Backend.LoadAllCallCount.ShouldBe(0);
         harness.ResolutionSpellingsInCache().ShouldBe(["1", "1.0", "1.0.0", "latest"]);
     }
 

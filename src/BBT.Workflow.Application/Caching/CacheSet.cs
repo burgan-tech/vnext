@@ -369,12 +369,12 @@ public class CacheSet<T>(
         }
     }
 
-    /// <summary>
-    /// Whether floating resolutions of <paramref name="key"/> go through the default-version policy.
+    /// <inheritdoc />
+    /// <remarks>
     /// A set wired without a policy source skips the step entirely, so it resolves exactly as it did
     /// before the policy existed; system components are always exempt.
-    /// </summary>
-    private bool AppliesVersionPolicy(string key)
+    /// </remarks>
+    public bool AppliesVersionPolicy(string key)
         => _versionPolicy is not NoVersionPolicySource
            && !key.StartsWith(SystemKeyPrefix, StringComparison.OrdinalIgnoreCase);
 

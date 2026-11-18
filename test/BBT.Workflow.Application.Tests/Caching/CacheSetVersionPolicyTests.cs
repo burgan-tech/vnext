@@ -19,6 +19,23 @@ public class CacheSetVersionPolicyTests
         return (new CacheSetTestHarness(versionPolicy: policy), policy);
     }
 
+    [Theory]
+    [InlineData("account-type-selection-view", true)]
+    [InlineData("sys-flows", false)]
+    [InlineData("SYS-version-registry", false)]
+    public void AppliesVersionPolicy_ShouldExemptSystemKeys_WhenWiredWithAPolicy(string key, bool expected)
+    {
+        var (harness, _) = Create(pointer: null);
+
+        harness.Sut.AppliesVersionPolicy(key).ShouldBe(expected);
+    }
+
+    [Fact]
+    public void AppliesVersionPolicy_ShouldBeFalse_WhenWiredWithoutAPolicy()
+    {
+        new CacheSetTestHarness().Sut.AppliesVersionPolicy("account-type-selection-view").ShouldBeFalse();
+    }
+
     [Fact]
     public async Task Resolve_ShouldReturnPointer_ForLatest()
     {

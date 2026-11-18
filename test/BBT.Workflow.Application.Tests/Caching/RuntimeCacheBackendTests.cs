@@ -44,7 +44,6 @@ public sealed class RuntimeCacheBackendTests
         var result = await _sut.LoadVersionsAsync(Domain, Key);
 
         result.Value!.ShouldBe(["1.0.0-pkg.1.0.9+core", "1.0.0-pkg.1.0.123+core"]);
-        await NeverLoadedEveryBody();
     }
 
     [Fact]
@@ -57,7 +56,6 @@ public sealed class RuntimeCacheBackendTests
 
         result.IsSuccess.ShouldBeTrue();
         result.Value!.Version.ShouldBe("1.0.0-pkg.1.0.123+core");
-        await NeverLoadedEveryBody();
     }
 
     [Fact]
@@ -80,7 +78,6 @@ public sealed class RuntimeCacheBackendTests
         var result = await _sut.LoadAsync(Domain, Key, "1.0.0-pkg.1.0.123");
 
         result.IsSuccess.ShouldBeFalse();
-        await NeverLoadedEveryBody();
     }
 
     [Fact]
@@ -92,7 +89,6 @@ public sealed class RuntimeCacheBackendTests
         var result = await _sut.LoadAsync(Domain, Key, "1.0.0");
 
         result.Value!.Version.ShouldBe("1.0.0-pkg.1.0.123+core");
-        await NeverLoadedEveryBody();
     }
 
     private void Published(params string[] versions)
@@ -102,7 +98,4 @@ public sealed class RuntimeCacheBackendTests
     private void Body(string version)
         => _runtime.GetAsync<View>(Key, version, Arg.Any<CancellationToken>())
             .Returns(CacheSetTestHarness.CreateView(version));
-
-    private async Task NeverLoadedEveryBody()
-        => await _runtime.DidNotReceive().GetAsync<View>(Key, Arg.Any<CancellationToken>());
 }

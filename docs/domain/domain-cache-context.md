@@ -151,6 +151,36 @@ cache store, hit/miss, `cache.l1.hit` (whether the in-process layer answered),
 generation token, coalescing, item count, and error status. The metrics-aware store records
 cache hit/miss counts and approximate cache size/entry gauges by component type.
 
+## Diagnosing which version a request resolves to
+
+A new instance is pinned for life to the full version its request resolved to (`Instance.FlowVersion`),
+so a wrong resolution matters long after the request. Three read-only calls on the component discovery
+API (`ComponentDiscoveryController`, hidden from Swagger) answer "which version do new instances start on,
+and why" without database access:
+
+| Call | Answers |
+| --- | --- |
+| `GET /api/v1/{domain}/components/{type}/{key}/versions?page=&pageSize=` | The published versions (newest publish first: version, `publishedAt`, `latestRow` — the row the store flags latest, the highest version written so far and the definition the instance API shows; no body), `totalVersions`, the default-version pointer (`defaultVersion`, workflows only; omitted when none, like every null field of the API) and `latest`: what a request with no version resolves to, decided from the database by `DefaultVersionResolver` — the answer the cache has to give once its entries expire. `latest.outcome` is `resolved`, `notFound` or `pointerInvalid` — the last is a well-formed pointer that matches no published version, which a versionless start refuses with 409 `Instance:100052`; `latest.source` is `automatic` (no pointer) or `default`. One item per version, as `totalVersions` counts them; `pageSize` defaults to 20 and is clamped to 100 (the response echoes the size used). 404 when nothing is published; 503 `Instance:100053` / 409 `Instance:100052` when the pointer cannot be read / is malformed, as for a start. |
+| `GET /api/v1/{domain}/components/{type}/{key}` | What a versionless request resolves to **now**, through the cache — the version new instances start on. |
+| `GET /api/v1/{domain}/components/{type}/{key}/{version}` | The same for a spelling (`1.0.0`, `1.0`, `1`); a full version returns exactly that version. |
+
+`{type}` is the URL token (`workflows`, `tasks`, `functions`, `views`, `extensions`, `schemas`,
+`mappings`, `agents`). The version list has the same exposure as the other discovery reads and returns
+version metadata and the pointer only — never a component body or instance data. Whether a pointer
+applies is asked of the component's cache set (`ICacheSet<T>.AppliesVersionPolicy`), the rule resolution
+itself uses. If the cached answer differs from `versions` → `latest` (or from the highest
+matching published version for an artifact spelling), the cache holds a stale entry. Re-resolve with
+`POST /api/v1/utilities/invalidate` (`{ "domain", "flow": "sys-flows", "key", "version": "<a published full version>" }`):
+it bumps the component's generation — every cached resolution becomes unreachable at once — and re-casts
+that version, whose warm-up re-resolves the common spellings from the stored version list. A publish and
+a pointer change (`set-default`) bump the generation the same way. Publishing never moves the pointer
+([Flow Default Version](../runtime/flow-default-version.md)).
+
+The version list and the component lists (`GET {domain}/components`, `GET {domain}/components/{type}`, one
+summary per published version, `createdAt` = when that version was published) read version metadata only.
+They used to deserialize the stored body of every published version, the same cost that made floating
+resolution run out of memory (issue #1192).
+
 ## Change Safety
 
 - Add a new definition component by extending `IDomainCacheContext`, `DomainCacheContext`,

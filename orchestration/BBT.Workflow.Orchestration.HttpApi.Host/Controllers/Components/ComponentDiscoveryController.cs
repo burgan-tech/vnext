@@ -70,6 +70,33 @@ public sealed class ComponentDiscoveryController(
     }
 
     /// <summary>
+    /// Lists the published versions of a component, newest publish first, with its default-version pointer
+    /// and the version a request with no version resolves to — read from the database, not the cache, so a
+    /// stale cached answer (<c>GET {domain}/components/{type}/{key}</c>) can be told apart. Bodies are never
+    /// loaded. 404 when the component has no published version.
+    /// </summary>
+    /// <remarks>
+    /// The literal <c>versions</c> segment takes precedence over the <c>{cVersion}</c> route below; no
+    /// component version is spelled <c>versions</c>.
+    /// </remarks>
+    [HttpGet("{domain}/components/{type}/{key}/versions")]
+    public async Task<IActionResult> GetVersionsAsync(
+        [FromRoute] string domain,
+        [FromRoute] string type,
+        [FromRoute] string key,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken cancellationToken = default)
+    {
+        if (!ComponentTypeExtensions.TryParse(type, out var componentType))
+            return FromResult(InvalidType(type));
+
+        var result = await componentDiscoveryAppService.GetVersionsAsync(
+            domain, componentType, key, page, pageSize, cancellationToken);
+        return FromResult(result);
+    }
+
+    /// <summary>
     /// Gets a single component definition by type, key and a specific version.
     /// </summary>
     [HttpGet("{domain}/components/{type}/{key}/{cVersion}")]

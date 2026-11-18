@@ -87,4 +87,12 @@ public interface ICacheSet<T> : ICacheSet where T : class, IDomainEntity, IRefer
     /// monotonic, and a lower version may be released deliberately.
     /// </remarks>
     Task<Result> SetAsync(T entity, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Whether a floating request for <paramref name="key"/> (no version, <c>latest</c>, MAJOR, MAJOR.MINOR) is
+    /// resolved through the component's default-version pointer in this set. The one copy of that rule: a
+    /// reader explaining a resolution asks the set rather than restating it.
+    /// </summary>
+    /// <param name="key">The component key.</param>
+    bool AppliesVersionPolicy(string key);
 }
