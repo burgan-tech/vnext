@@ -74,6 +74,37 @@ die()  { printf '\033[1;31m✗\033[0m %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "'$1' is required but not installed"; }
 
 compose() { docker compose -f "$COMPOSE_FILE" "$@"; }
+
+# Per-run Dapr app API token (Dapr local-delivery guard). daprd adds it as `dapr-api-token` to every call
+# it makes to the orchestration app; the app reads the expected value from APP_API_TOKEN. A pre-set
+# VNEXT_APP_API_TOKEN wins; otherwise one random token is generated once and kept in a git-ignored,
+# chmod-600 file so a sidecar that is reused across runs (compose --no-recreate) still matches the app.
+# The value is exported for compose interpolation (${VNEXT_APP_API_TOKEN:-}) and is never printed.
+ensure_app_api_token() {
+  local file="$STATE/app-api-token"
+  if [ -z "${VNEXT_APP_API_TOKEN:-}" ]; then
+    mkdir -p "$STATE"
+    if [ -s "$file" ]; then
+      VNEXT_APP_API_TOKEN="$(cat "$file")"
+    else
+      need openssl
+      VNEXT_APP_API_TOKEN="$(openssl rand -hex 32)"
+      ( umask 077; printf '%s' "$VNEXT_APP_API_TOKEN" > "$file" )
+    fi
+  fi
+  export VNEXT_APP_API_TOKEN
+}
+
+# A running orchestration sidecar keeps the APP_API_TOKEN it was created with (compose --no-recreate).
+# Recreate it when that differs from the token this run gives the app. Compares silently.
+sync_sidecar_token() {   # <container> <compose service> <compose -f file>
+  local cur
+  cur="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$1" 2>/dev/null | grep '^APP_API_TOKEN=' || true)"
+  [ "$cur" = "APP_API_TOKEN=$VNEXT_APP_API_TOKEN" ] && return 0
+  log "recreating $1 (Dapr app API token changed)"
+  docker compose -f "$3" up -d --force-recreate --no-deps --quiet-pull "$2" >> "$DDIR/logs/infra.log" 2>&1 \
+    || { tail -n 20 "$DDIR/logs/infra.log" >&2; die "could not recreate $1 — see $DDIR/logs/infra.log"; }
+}
 f() { printf '%s' "$1" | cut -d'|' -f"$2"; }          # f <row> <field>
 
 selected_hosts() { printf '%s\n' "$HOSTS"; }
@@ -184,6 +215,8 @@ load_env() {
   ENVS=()
   while IFS= read -r line; do [ -n "$line" ] && ENVS+=("$line"); done < <(profile_env "$project" "$profile")
   ENVS+=("APP_DOMAIN=$domain")
+  # Dapr local-delivery guard: the orchestration app expects the token its own sidecar presents (never printed)
+  [ "$(f "$row" 1)" = orchestration ] && [ -n "${VNEXT_APP_API_TOKEN:-}" ] && ENVS+=("APP_API_TOKEN=$VNEXT_APP_API_TOKEN")
   [ -n "$(cohosted "$domain")" ] && ENVS+=("APP_DOMAINS=$(cohosted_names "$domain")")
   # d=db → that co-hosted domain's own database (ConnectionStrings:Domains:<d>), for every host with a database
   if [ "$(f "$row" 5)" = 1 ]; then
@@ -258,7 +291,7 @@ wait_sidecar() {   # wait_sidecar <container name> <http port>
 # writes the per-domain sidecar compose (JSON) derived from the base file's sidecar definitions
 write_sidecars_json() {   # <domain> <offset> <out file>
   local domain="$1" offset="$2" out="$3" h spec=""
-  compose config --format json > "$out.base.json" 2>/dev/null || die "docker compose config failed for $COMPOSE_FILE"
+  VNEXT_APP_API_TOKEN="" compose config --format json > "$out.base.json" 2>/dev/null || die "docker compose config failed for $COMPOSE_FILE"
   # one line per sidecar: base service|new container|new app-id|app port ('' = none)|dapr http|dapr grpc
   while IFS= read -r h; do
     spec="$spec$(f "$h" 6)|$(sidecar_name "$(f "$h" 6)" "$domain" "$offset")|$(app_id "$(f "$h" 8)" "$domain" "$offset")|$([ "$(f "$h" 10)" = 1 ] && app_port "$(f "$h" 4)" "$offset")|$(dapr_http "$h" "$offset")|$(dapr_grpc "$h" "$offset")
@@ -287,6 +320,11 @@ for line in spec.strip().splitlines():
     setarg("--app-id", app_id); setarg("--dapr-http-port", http); setarg("--dapr-grpc-port", grpc)
     if app_port: setarg("--app-port", app_port)
     s["container_name"] = cname
+    # the token never lands in the generated file: compose interpolates it when the file is used
+    env = s.setdefault("environment", {})
+    env.pop("APP_API_TOKEN", None)
+    if svc == "vnext-orchestration-dapr":
+        env["APP_API_TOKEN"] = "${VNEXT_APP_API_TOKEN:-}"
     s["ports"] = [{"target": int(http), "published": http, "protocol": "tcp"},
                   {"target": int(grpc), "published": grpc, "protocol": "tcp"}]
     s["networks"] = {"bbt-development": {"aliases": [f"{app_id}-dapr"]}}
@@ -321,6 +359,9 @@ ensure_infra() {   # <domain> <offset>
     write_sidecars_json "$domain" "$offset" "$DDIR/sidecars.json"
     docker compose -f "$DDIR/sidecars.json" up -d --no-recreate --quiet-pull >> "$DDIR/logs/infra.log" 2>&1 \
       || { tail -n 20 "$DDIR/logs/infra.log" >&2; die "sidecar compose up failed — see $DDIR/logs/infra.log"; }
+    sync_sidecar_token "$(sidecar_name vnext-orchestration-dapr "$domain" "$offset")" "$(sidecar_name vnext-orchestration-dapr "$domain" "$offset")" "$DDIR/sidecars.json"
+  else
+    sync_sidecar_token vnext-orchestration-dapr vnext-orchestration-dapr "$COMPOSE_FILE"
   fi
   while IFS= read -r h; do wait_sidecar "$(sidecar_name "$(f "$h" 6)" "$domain" "$offset")" "$(dapr_http "$h" "$offset")"; done < <(selected_hosts)
   [ "${SKIP_MIGRATE:-0}" = "1" ] || wait_sidecar "$(sidecar_name "$(f "$MIGRATOR" 6)" "$domain" "$offset")" "$(dapr_http "$MIGRATOR" "$offset")"
@@ -452,6 +493,7 @@ write_record() {   # <domain> <running|stopped>
 | Database | \`$db\` on localhost:5432 (postgres/postgres) |
 | Base URL | http://localhost:$(app_port 4201 "$offset") |
 | Init (package publisher) | http://localhost:$(init_port "$offset") (\`$(init_name "$domain" "$offset")\`) |
+| Dapr app API token | set (per run; not recorded) |
 | Runtime source | \`$branch\` @ \`$rev\` |
 | Sidecar compose | $([ "$offset" = 0 ] && echo "\`etc/docker/docker-compose.yml\` (core owns the default sidecars)" || echo "\`$ddir/sidecars.json\` (project \`vnext-$domain\`)") |
 
@@ -542,6 +584,7 @@ cmd_up() {
   local domain offset db h
   domain="$(resolve_domain "${1:-}")"; offset="$(resolve_offset "$domain" "${OFFSET_ARG:-}")"; db="$(db_for_domain "$domain")"
   DDIR="$(dom_dir "$domain")"; mkdir -p "$DDIR/logs" "$DDIR/pids" "$STATE"
+  ensure_app_api_token
   print_plan "$domain" "$offset" "$db"
   if domain_running "$domain"; then log "stopping running $domain hosts"; stop_domain "$domain"; fi
   printf '%s' "$offset" > "$DDIR/offset"; printf '%s' "$db" > "$DDIR/db"; printf '%s' "$(cohosted "$domain")" > "$DDIR/cohosted"
@@ -601,6 +644,7 @@ cmd_stack() {
   need docker
   docker network create bbt-development >/dev/null 2>&1 || true
   local mode="$1" domain db
+  ensure_app_api_token
   if [ "$mode" = dev ] || [ "$mode" = stage ]; then
     domain="$(resolve_domain "${2:-}")"; db="$(db_for_domain "$domain")"
     mkdir -p "$STATE"; printf '%s' "$domain" > "$STATE/last"

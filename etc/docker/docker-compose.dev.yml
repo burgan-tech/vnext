@@ -10,6 +10,8 @@ services:
     environment:
       # `environment` wins over env_file — lets run-docker.sh pick the domain per run without editing files
       APP_DOMAIN: ${APP_DOMAIN:-core}
+      # Shared with the orchestration sidecar so daprd's calls to the app carry dapr-api-token (Dapr local-delivery guard).
+      APP_API_TOKEN: ${VNEXT_APP_API_TOKEN:-}
       ConnectionStrings__Default: "Host=vnext-postgres;Port=5432;Database=${VNEXT_DB:-Aether_WorkflowDb};Username=postgres;Password=postgres;"
     ports:
       - "4201:5000"
@@ -118,6 +120,8 @@ services:
       "--dapr-http-port", "42110",
       "--scheduler-host-address", "dapr-scheduler:50007",
     ]
+    environment:
+      APP_API_TOKEN: ${VNEXT_APP_API_TOKEN:-}
     volumes:
       - "../../etc/orchestration/dapr/components:/components"
       - "../../etc/orchestration/dapr/config.yaml:/dapr-config.yaml"

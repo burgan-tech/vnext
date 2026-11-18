@@ -6,6 +6,9 @@ services:
             dockerfile: orchestration/BBT.Workflow.Orchestration.HttpApi.Host/Dockerfile.dev
         env_file:
             - .env.orchestration.dev
+        environment:
+            # Shared with the orchestration sidecar (Dapr local-delivery guard).
+            APP_API_TOKEN: ${VNEXT_APP_API_TOKEN:-}
         ports:
             - '4201:5000'
         volumes:
@@ -131,6 +134,8 @@ services:
                 '--scheduler-host-address',
                 'dapr-scheduler:50007',
             ]
+        environment:
+            APP_API_TOKEN: ${VNEXT_APP_API_TOKEN:-}
         volumes:
             - '../../etc/orchestration/dapr/components:/components'
             - './data/blobs:/blobs'
