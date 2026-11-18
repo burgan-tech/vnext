@@ -1010,8 +1010,9 @@ public sealed class InstanceController(
         // is a permanent defect: retrying it can never succeed, so drop instead of wedging the topic.
         if (!Enum.TryParse<EventAction>(action, ignoreCase: true, out var eventAction))
             return EventDeliveryResultMapper.Drop(
+                "InvalidEventAction",
                 $"InvalidEventAction: action must be 'start' or 'transition'. Received: '{action}'.",
-                domain, workflow, transitionKey, "InvalidEventAction", Logger);
+                domain, workflow, transitionKey, Logger);
 
         JsonElement payload;
         try
@@ -1021,8 +1022,9 @@ public sealed class InstanceController(
         catch (JsonException exception)
         {
             return EventDeliveryResultMapper.Drop(
+                "InvalidEventPayload",
                 $"InvalidEventPayload: the request body could not be parsed as JSON: {exception.Message}",
-                domain, workflow, transitionKey, "InvalidEventPayload", Logger);
+                domain, workflow, transitionKey, Logger);
         }
 
         var input = new EventInput
