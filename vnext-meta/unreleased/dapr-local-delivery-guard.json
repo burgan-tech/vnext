@@ -1,0 +1,31 @@
+{
+  "releaseNote": {
+    "summary": "Dapr-triggered endpoints (events, schedule, job) now accept only deliveries from the domain's own sidecar; LogOnly by default, Enforce after the sidecar token is enabled.",
+    "breaking": false,
+    "docs": []
+  },
+  "migrations": [
+    {
+      "id": "dapr-local-delivery-guard",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "Dapr:LocalDelivery:Mode | Dapr:LocalDelivery:AppApiToken | APP_API_TOKEN",
+      "since": "next",
+      "severity": "warning",
+      "title": "Dapr-triggered endpoints accept only the domain's own sidecar (security fix)",
+      "description": "POST .../instances/events, POST .../instances/schedule and Dapr Scheduler's /job/{jobName} used to answer any caller that could reach the port (vnext#1253). They now require exactly one dapr-api-token header equal to the configured app API token and no dapr-caller-app-id header (the marker of a service-invocation call from another app); otherwise the request gets an empty-body 404. Dapr:LocalDelivery:Mode is Off, LogOnly or Enforce and defaults to LogOnly: a failing request is still served and logged as EventId 40996, so nothing changes until Enforce is set. Enforce with no token rejects every guarded request and logs EventId 40997 at startup. The dapr-api-token header is stripped before application code runs. Scope of this release: the orchestration host only; execution, inbox and outbox hosts and vNext-to-vNext internal endpoints (for example transitions/{key}/enqueue) follow in a later phase.",
+      "action": "Give the sidecar the token (APP_API_TOKEN on daprd; Kubernetes: annotation dapr.io/app-token-secret with key token, and the same secret via secretKeyRef on the app container, or Dapr:LocalDelivery:AppApiToken). Run in LogOnly until EventId 40996 is zero, then set Dapr:LocalDelivery:Mode=Enforce. Roll back with Mode=LogOnly. Hand-made calls to these endpoints must send the dapr-api-token header."
+    },
+    {
+      "id": "event-drop-reason-is-code-only",
+      "type": "behavior",
+      "component": "event",
+      "path": "POST .../instances/events | .../instances/schedule response body reason",
+      "since": "next",
+      "severity": "info",
+      "title": "DROP response reason carries only the error code",
+      "description": "The body of a 200 DROP answer from the events and schedule endpoints now holds only the error code (for example NotAnEventTransition, InvalidEventAction, InvalidEventPayload) in reason, instead of 'Code: message', because the message can name flows and transitions. The full message stays in the EventDeliveryDropped log (EventId 40994). Dapr reads only the top-level status, so delivery behavior is unchanged.",
+      "action": "Tests or tooling that matched the text after the code in reason must read the EventId 40994 log instead."
+    }
+  ]
+}

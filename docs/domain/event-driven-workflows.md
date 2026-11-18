@@ -124,6 +124,36 @@ POST /api/v1/{domain}/workflows/{workflow}/instances/events
 
 Body: the raw event payload (CloudEvent envelopes are unwrapped automatically).
 
+### Who can call it: the domain's own Dapr sidecar
+
+The endpoint is a delivery target, not a public API. It accepts a request only when it came from this
+runtime's **own Dapr sidecar**:
+
+- exactly one `dapr-api-token` header whose value equals the configured app API token
+  (compared in constant time), **and**
+- no `dapr-caller-app-id` header. Dapr stamps that header on service-invocation calls from *another*
+  app; pub/sub, binding and job deliveries from the app's own sidecar do not carry it.
+
+Anything else is answered with an empty-body `404`. The same rule guards
+`POST .../instances/schedule` and Dapr Scheduler's `/job/{jobName}` callback. The
+`dapr-api-token` header is removed from every request before application code runs, so it never
+reaches scripts, instance data or logs.
+
+| Setting | Meaning |
+|---|---|
+| `Dapr:LocalDelivery:Mode` | `Off`, `LogOnly` (**default**: a failing request is served and logged as EventId 40996 "would reject") or `Enforce` (a failing request gets `404`). |
+| `Dapr:LocalDelivery:AppApiToken` | The token the sidecar presents. Falls back to the `APP_API_TOKEN` environment variable. `Enforce` with no token rejects every guarded request and logs EventId 40997 at startup. |
+
+The sidecar must hold the same token: set `APP_API_TOKEN` on `daprd`. On Kubernetes that is the
+annotation `dapr.io/app-token-secret: <secret>` (key `token`); the injector gives the secret only to
+`daprd`, so the app container needs the same secret through its own `secretKeyRef`.
+
+Rollout: ship the runtime in `LogOnly`, enable the sidecar token (Helm), watch EventId 40996 fall to
+zero, then set `Mode=Enforce`. Rollback is `Mode=LogOnly`. Scope of this phase: the orchestration host
+only; the execution, inbox and outbox hosts and the vNext-to-vNext internal endpoints (for example
+`transitions/{key}/enqueue`) are not yet covered. Local runs through `etc/docker/run-docker.sh` get a
+per-checkout token in the git-ignored `.vnext-local/app-api-token` (delete the file to rotate).
+
 ### The response is a Dapr protocol body, not an instance envelope
 
 Dapr reads the **top-level `status` field of the subscriber's JSON response** as its delivery signal
@@ -135,7 +165,7 @@ is an `InstanceStatus` code (`"A"`, `"B"`, `"C"`, `"F"`, `"P"`). So this endpoin
 
 ```jsonc
 { "status": "SUCCESS" }                       // processed, or intentionally ignored
-{ "status": "DROP", "reason": "TransitionNotFound: …" }   // unprocessable, discarded
+{ "status": "DROP", "reason": "TransitionNotFound" }   // unprocessable, discarded (reason = the error code only)
 { "status": "SUCCESS", "instance": { "id": "…", "key": "…", "status": "C" } }  // sync=true only
 ```
 
@@ -244,8 +274,8 @@ Notes:
 - The 200-on-no-match rule is deliberate: an abort event for an already-completed instance must
   evaporate, not redeliver forever.
 - Every `DROP` is logged as a **Warning** (`EventDeliveryDropped`, EventId 40994) with the error code
-  and reason, and the reason is echoed in the response body — a discarded message is still
-  diagnosable. Alert on that log; a silently dropped event is worse than a noisy one.
+  and the full message; the response body carries only the error code as `reason` (the message can name
+  flows and transitions, so it stays in the log) — a discarded message is still diagnosable. Alert on that log; a silently dropped event is worse than a noisy one.
 - A mapping script that throws deterministically is in the *retry* class, so it will be redelivered
   until the resiliency policy gives up. Bound it: give the subscription a `maxRetries` policy and a
   `deadLetterTopic` so the poison message ends up somewhere inspectable instead of consuming the
@@ -274,10 +304,13 @@ exercised without a broker:
 ```bash
 curl -X POST "http://localhost:4201/api/v1/morph-touch/workflows/event-driven-workflow/instances/events?action=start" \
   -H "Content-Type: application/json" \
+  -H "dapr-api-token: $APP_API_TOKEN" \
   -d '{"orderId":"ord-1","amount":250}'
 ```
 
-Expect `200 {"status":"SUCCESS"}`. Add `&sync=true` to also get the `instance` snapshot back. Because
+Send the app API token the sidecar uses (`.vnext-local/app-api-token` for a `run-docker.sh` stack). In
+`Enforce` mode a direct call without a matching `dapr-api-token` gets an empty `404`; in `LogOnly` it is
+served and logged (EventId 40996). Expect `200 {"status":"SUCCESS"}`. Add `&sync=true` to also get the `instance` snapshot back. Because
 unprocessable messages answer `200 DROP` rather than 4xx, read the `status` field — not just the
 status code — when testing by hand: a `DROP` means the delivery was discarded, and the `reason` says
 why.
@@ -302,7 +335,7 @@ startup — restart the Dapr sidecar after adding or changing a YAML.
   reads the top-level `status` field as its signal, so an `InstanceStatus` code there (`"B"`) causes
   endless redelivery. Processed or no-active-match ⇒ `200 {"status":"SUCCESS"}`; permanently
   unprocessable (bad `transitionKey`/action/domain, non-JSON body, missing event definition) ⇒
-  `200 {"status":"DROP","reason":…}` + `EventDeliveryDropped` warning; transient failures keep non-2xx
+  `200 {"status":"DROP","reason":<error code>}` + `EventDeliveryDropped` warning; transient failures keep non-2xx
   so the broker retries. Full guide: `docs/domain/event-driven-workflows.md`.
 
 ## References
