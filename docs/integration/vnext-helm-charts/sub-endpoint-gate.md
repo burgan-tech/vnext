@@ -8,7 +8,7 @@ status: pending
 
 ## Context
 
-- vNext PR: (link added when the PR opens) — branch `1265-enhancement-add-a-role-gate-to-sub-start-and-complete-endpoints`
+- vNext PR: https://github.com/burgan-tech/vnext/pull/1317
 - Milestone: v0.0.107
 - Issue: <https://github.com/burgan-tech/vnext/issues/1265>
 - Decision: council `2026-11-17-sub-endpoint-role-gate` (APPROVE_WITH_CONDITIONS, Awaiting Chair)
