@@ -27,6 +27,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Middlewares;
 using BBT.Workflow.Schedule;
 
 using BBT.Workflow.Instances.HumanTask;
@@ -994,6 +995,7 @@ public sealed class InstanceController(
     /// <response code="500">Transient failure — the broker should redeliver.</response>
     [ApiExplorerSettings(IgnoreApi = true)]
     [HttpPost("{domain}/workflows/{workflow}/instances/events")]
+    [DaprLocalDeliveryOnly]
     [ProducesResponseType(typeof(EventDeliveryResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> HandleEventAsync(
@@ -1094,6 +1096,7 @@ public sealed class InstanceController(
     /// <response code="500">Transient failure.</response>
     [ApiExplorerSettings(IgnoreApi = true)]
     [HttpPost("{domain}/workflows/{workflow}/instances/schedule")]
+    [DaprLocalDeliveryOnly]
     [ProducesResponseType(typeof(EventDeliveryResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> ScheduleStartAsync(

@@ -3,6 +3,7 @@ using BBT.Workflow.Controllers.Instances;
 using BBT.Workflow.Formatters;
 using BBT.Workflow.HostedServices;
 using BBT.Workflow.HttpApi.Shared.HealthChecks;
+using BBT.Workflow.Middlewares;
 using BBT.Workflow.Orchestration.Services;
 using HealthChecks.NpgSql;
 using Microsoft.AspNetCore.Mvc;
@@ -57,7 +58,8 @@ public static class OrchestrationApiServiceCollectionExtensions
             .AddOrchestrationDbHealthCheck(configuration)
             // vnext#1265: sign this runtime's calls to a peer's runtime-internal endpoints and gate our own.
             .AddRuntimeCallerIdentity(configuration, runsFlowScripts: true)
-            .AddSubEndpointGate();
+            .AddSubEndpointGate()
+            .AddDaprLocalDelivery(configuration);
         return services;
     }
 
@@ -69,6 +71,26 @@ public static class OrchestrationApiServiceCollectionExtensions
     {
         services.Configure<MvcOptions>(options =>
             options.InputFormatters.Insert(0, new FormUrlEncodedJsonElementInputFormatter()));
+        return services;
+    }
+
+    /// <summary>
+    /// Binds <see cref="DaprLocalDeliveryOptions"/> from <c>Dapr:LocalDelivery</c>. A blank
+    /// <c>AppApiToken</c> falls back to the <c>APP_API_TOKEN</c> environment variable (the same value
+    /// the sidecar is started with), so the token never has to be written into appsettings.
+    /// </summary>
+    internal static IServiceCollection AddDaprLocalDelivery(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.Configure<DaprLocalDeliveryOptions>(configuration.GetSection(DaprLocalDeliveryOptions.SectionPath));
+        services.PostConfigure<DaprLocalDeliveryOptions>(options =>
+        {
+            if (string.IsNullOrWhiteSpace(options.AppApiToken))
+            {
+                options.AppApiToken = Environment.GetEnvironmentVariable("APP_API_TOKEN");
+            }
+        });
         return services;
     }
 
