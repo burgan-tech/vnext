@@ -59,7 +59,7 @@ internal sealed class RuntimeCallerOptionsValidator(IConfiguration configuration
             if (runsFlowScripts
                 && !configuration.GetValue<bool>(SandboxEnabledKey)
                 && !options.AllowWithoutScriptSandbox)
-                failures.Add($"A runtime-caller key ring is configured on a host that runs flow scripts with " +
+                failures.Add("A runtime-caller key ring is configured on a host that runs flow scripts with " +
                              $"{SandboxEnabledKey}=false: an unsandboxed script can read the key file. Enable the " +
                              $"sandbox, or set {RuntimeCallerOptions.SectionName}:AllowWithoutScriptSandbox=true " +
                              "(logged as Critical at every start).");

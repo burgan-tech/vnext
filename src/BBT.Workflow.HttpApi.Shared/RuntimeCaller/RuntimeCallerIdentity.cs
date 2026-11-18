@@ -82,20 +82,14 @@ internal static class RuntimeCallerKeyRingLoader
         if (string.IsNullOrWhiteSpace(keyFile))
             return null;
 
-        string json;
         try
         {
-            json = File.ReadAllText(keyFile);
+            return RuntimeCallerKeyRing.Parse(File.ReadAllText(keyFile));
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             throw new InvalidOperationException(
                 $"The runtime-caller key file '{keyFile}' cannot be read: {exception.GetType().Name}.");
-        }
-
-        try
-        {
-            return RuntimeCallerKeyRing.Parse(json);
         }
         catch (FormatException exception)
         {

@@ -132,6 +132,7 @@ public sealed class RuntimeCallerTokenTests
     [InlineData("v2;k=k1;t=1;d=core;c=subflow;s=AAAA", RuntimeCallerTokenStatus.Malformed)]
     [InlineData("v1;k=k1;t=x;d=core;c=subflow;s=AAAA", RuntimeCallerTokenStatus.Malformed)]
     [InlineData("v1;k=k1;t=1;d=core;c=subflow;s=AAAA", RuntimeCallerTokenStatus.Malformed)]
+    [InlineData("v1;k=k1;t=1;d=core;c=subflow;s=!!!!", RuntimeCallerTokenStatus.Malformed)]
     [InlineData("v1;k=k1;t=1;d=core;c=subflow", RuntimeCallerTokenStatus.Malformed)]
     [InlineData("v1;k=;t=1;d=core;c=subflow;s=AAAA", RuntimeCallerTokenStatus.Malformed)]
     public void Verify_ShouldClassify_MissingAndMalformedTokens(string? token, RuntimeCallerTokenStatus expected)

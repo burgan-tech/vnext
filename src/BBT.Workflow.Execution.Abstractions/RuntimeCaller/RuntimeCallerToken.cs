@@ -126,22 +126,26 @@ public static class RuntimeCallerToken
         if (!long.TryParse(timestampText, NumberStyles.None, CultureInfo.InvariantCulture, out var timestamp))
             return false;
 
-        byte[] mac;
-        try
-        {
-            mac = Base64Url.DecodeFromChars(macText);
-        }
-        catch (FormatException)
-        {
-            return false;
-        }
-
-        if (mac.Length != MacBytes)
+        var mac = DecodeMac(macText);
+        if (mac is not { Length: MacBytes })
             return false;
 
         parsed = new ParsedToken(keyId, timestamp, Uri.UnescapeDataString(callerDomain),
             Uri.UnescapeDataString(callerClass), mac);
         return true;
+    }
+
+    /// <summary>The decoded MAC, or null when <paramref name="text"/> is not base64url.</summary>
+    private static byte[]? DecodeMac(string text)
+    {
+        try
+        {
+            return Base64Url.DecodeFromChars(text);
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
     }
 
     private static bool TryField(string field, string prefix, out string value)
