@@ -3796,6 +3796,32 @@ public static partial class WorkflowLogs
         string? errorCode,
         string? reason);
 
+    /// <summary>
+    /// Logs a Dapr-triggered endpoint delivery that did not come from this domain's own sidecar.
+    /// Under LogOnly the request is still served, so the entry reads "would reject".
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40996,
+        Level = LogLevel.Warning,
+        Message = "Dapr local delivery check failed (mode {Mode}; Enforce rejects, LogOnly would reject and still serves). Verdict: {Verdict}, Path: {Path}, RemoteAddress: {RemoteAddress}, CallerAppId: {CallerAppId}")]
+    public static partial void DaprLocalDeliveryRejected(
+        this ILogger logger,
+        string mode,
+        string verdict,
+        string? path,
+        string? remoteAddress,
+        string? callerAppId);
+
+    /// <summary>
+    /// Logs once at startup that the Dapr local-delivery guard is in Enforce mode without an app API
+    /// token, so every guarded request is rejected.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40997,
+        Level = LogLevel.Error,
+        Message = "Dapr local delivery guard is in Enforce mode but no Dapr:LocalDelivery:AppApiToken is configured; every Dapr-triggered delivery will be rejected")]
+    public static partial void DaprLocalDeliveryEnforcedWithoutToken(this ILogger logger);
+
     #endregion
 
     #region Authorization (authorize / permissions)
