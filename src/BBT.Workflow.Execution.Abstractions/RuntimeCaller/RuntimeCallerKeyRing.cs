@@ -95,9 +95,11 @@ public sealed partial class RuntimeCallerKeyRing
         if (keys.Count > MaximumKeys)
             throw new FormatException($"The runtime-caller key ring holds more than {MaximumKeys} keys.");
 
+        // Not echoed: unlike a key name, 'activeKeyId' has not been shape-checked, and a key pasted there
+        // by mistake would land in the startup log.
         var activeKeyId = activeElement.GetString()!;
         if (!keys.ContainsKey(activeKeyId))
-            throw new FormatException($"The active runtime-caller key '{activeKeyId}' is not in the ring.");
+            throw new FormatException("The runtime-caller key ring's 'activeKeyId' does not name a key in the ring.");
 
         return new RuntimeCallerKeyRing(activeKeyId, keys);
     }

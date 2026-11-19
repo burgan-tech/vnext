@@ -35,6 +35,7 @@ namespace BBT.Workflow.Application.Tests.HttpApi;
 public sealed class SubEndpointGatePipelineTests
 {
     private static readonly SubEndpointGrantOptions RuntimeOnly = new() { Role = "$Everyone", Grant = "deny" };
+    private static readonly SubEndpointGrantOptions AllowOps = new() { Role = "vnext.ops", Grant = "allow" };
 
     [Fact]
     public async Task Enforce_ShouldRefuseClient_BeforeModelBinding_AndNeverRunTheAction()
@@ -85,10 +86,12 @@ public sealed class SubEndpointGatePipelineTests
         SubEndpointGateProbeController.Calls[domain].ShouldBe("header:absent");
     }
 
-    [Fact]
-    public async Task Off_ShouldStillStripTheTokenHeader()
+    [Theory]
+    [InlineData(SubEndpointGateMode.Off)]
+    [InlineData(SubEndpointGateMode.Observe)]
+    public async Task OffAndObserve_ShouldStillStripTheTokenHeader(SubEndpointGateMode mode)
     {
-        await using var app = await StartAsync(SubEndpointGateMode.Off);
+        await using var app = await StartAsync(mode);
         var domain = NewDomain();
         using var request = Post($"/_tests/sub-gate/{domain}/workflows/child/sub/instances/start");
         request.Headers.Add(RuntimeCallerToken.HeaderName, "anything-a-client-sent");
@@ -97,6 +100,37 @@ public sealed class SubEndpointGatePipelineTests
 
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
         SubEndpointGateProbeController.Calls[domain].ShouldBe("header:absent");
+    }
+
+    [Fact]
+    public async Task Strip_ShouldRemoveTheTokenHeader_OnAnUngatedRoute()
+    {
+        await using var app = await StartAsync(SubEndpointGateMode.Enforce);
+        var domain = NewDomain();
+        using var request = Post($"/_tests/sub-gate/{domain}/ungated");
+        request.Headers.Add(RuntimeCallerToken.HeaderName, "anything-a-client-sent");
+
+        var response = await app.GetTestClient().SendAsync(request);
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        SubEndpointGateProbeController.Calls[domain].ShouldBe("header:absent");
+    }
+
+    [Fact]
+    public async Task Enforce_ShouldAnswer503_WhenTheCallerRolesCannotBeResolved()
+    {
+        var roles = Substitute.For<ICallerRoleResolver>();
+        roles.ResolveRoleSetAsync(Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<CancellationToken>())
+            .Returns(new CallerRoleResolution([], CallerRoleOutcome.Failed, "unavailable"));
+        await using var app = await StartAsync(SubEndpointGateMode.Enforce, AllowOps, roles);
+        var domain = NewDomain();
+
+        var response = await app.GetTestClient().SendAsync(Post($"/_tests/sub-gate/{domain}/workflows/child/sub/instances/start"));
+
+        response.StatusCode.ShouldBe(HttpStatusCode.ServiceUnavailable);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        body.RootElement.GetProperty("code").GetString().ShouldBe(WorkflowErrorCodes.CallerRolesUnavailable);
+        SubEndpointGateProbeController.Calls.ContainsKey(domain).ShouldBeFalse();
     }
 
     [Theory]
@@ -115,7 +149,10 @@ public sealed class SubEndpointGatePipelineTests
     private static HttpRequestMessage Post(string path)
         => new(HttpMethod.Post, path) { Content = new StringContent("{}", Encoding.UTF8, "application/json") };
 
-    private static async Task<WebApplication> StartAsync(SubEndpointGateMode mode)
+    private static async Task<WebApplication> StartAsync(
+        SubEndpointGateMode mode,
+        SubEndpointGrantOptions? grant = null,
+        ICallerRoleResolver? roles = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -125,10 +162,10 @@ public sealed class SubEndpointGatePipelineTests
         builder.Services.Configure<SubEndpointGateOptions>(options =>
         {
             options.Mode = mode;
-            options.Grants = [RuntimeOnly];
+            options.Grants = [grant ?? RuntimeOnly];
         });
         builder.Services.AddSingleton<IRuntimeCallerVerifier>(Identity(DefaultRing()));
-        builder.Services.AddSingleton(Substitute.For<ICallerRoleResolver>());
+        builder.Services.AddSingleton(roles ?? Substitute.For<ICallerRoleResolver>());
         builder.Services.AddScoped<ISubEndpointGate, SubEndpointGate>();
 
         var app = builder.Build();
@@ -157,6 +194,10 @@ public sealed class SubEndpointGateProbeController : ControllerBase
     [SubEndpointGate(RuntimeCallOperations.Complete)]
     public IActionResult Complete(string domain, string workflow, string instance, [FromBody] JsonElement body)
         => Record(domain);
+
+    /// <summary>A route without the gate: the ingress strip still applies.</summary>
+    [HttpPost("{domain}/ungated")]
+    public IActionResult Ungated(string domain, [FromBody] JsonElement body) => Record(domain);
 
     private IActionResult Record(string domain)
     {

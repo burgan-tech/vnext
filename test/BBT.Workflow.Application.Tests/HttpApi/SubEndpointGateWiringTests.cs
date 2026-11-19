@@ -1,13 +1,20 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using BBT.Workflow.Authorization;
+using BBT.Workflow.Authorization.SubEndpoints;
 using BBT.Workflow.Execution.RuntimeCaller;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.RuntimeCaller;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Shouldly;
 using Xunit;
@@ -80,6 +87,33 @@ public sealed class SubEndpointGateWiringTests
         signer.ShouldBeOfType<RuntimeCallerIdentity>();
         provider.GetRequiredService<IRuntimeCallerVerifier>().ShouldBeSameAs(signer);
         ((IRuntimeCallerVerifier)signer).IsConfigured.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task ShippedOrchestrationSettings_ShouldStartWithTheGateOff_AndNoKeyRing()
+    {
+        // An upgrade with no new configuration: the shipped defaults must pass both validators and the
+        // startup check, or every existing deployment would fail to start.
+        var configuration = new ConfigurationBuilder()
+            .AddJsonStream(new MemoryStream(Encoding.UTF8.GetBytes(
+                ReadSource("orchestration/BBT.Workflow.Orchestration.HttpApi.Host/appsettings.json"))))
+            .Build();
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IConfiguration>(configuration);
+        services.AddSingleton(Substitute.For<IRuntimeInfoProvider>());
+        services.AddSingleton(Substitute.For<ICallerRoleResolver>());
+        services.AddRuntimeCallerIdentity(configuration, runsFlowScripts: true);
+        services.AddSubEndpointGate();
+        await using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<IOptions<RuntimeCallerOptions>>().Value.KeyFile.ShouldBeNullOrEmpty();
+        provider.GetRequiredService<IOptions<SubEndpointGateOptions>>().Value.Mode.ShouldBe(SubEndpointGateMode.Off);
+        foreach (var hostedService in provider.GetServices<IHostedService>())
+            await hostedService.StartAsync(CancellationToken.None);
+        provider.GetRequiredService<IRuntimeCallerVerifier>().IsConfigured.ShouldBeFalse();
+        using var scope = provider.CreateScope();
+        scope.ServiceProvider.GetRequiredService<ISubEndpointGate>().ShouldNotBeNull();
     }
 
     private static string ReadSource(string relativePath)

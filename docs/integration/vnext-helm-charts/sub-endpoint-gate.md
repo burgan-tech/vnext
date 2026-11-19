@@ -33,9 +33,11 @@ Source of truth:
 ## What this product must do
 
 - **Secret.** An optional, environment-wide Kubernetes Secret holding the key ring. It is opt-in, off by default, and **one ring per environment, shared by every domain** — pending council condition C-3 (that a shared ring across domains is acceptable in that environment).
-- **Mount and env.** When the Secret is enabled, mount it read-only (mode `0400`) into the **Orchestration, Execution and Inbox** containers of every domain. Do not mount it into Outbox or DbMigrator. Set on those three containers:
-  - `Workflow__RuntimeCaller__KeyFile=<mount path>`;
-  - `Workflow__RuntimeCaller__Required=true`.
+- **Mount and env.** When the Secret is enabled, mount it read-only into the **Orchestration, Execution and Inbox** containers of every domain. Do not mount it into Outbox or DbMigrator.
+  - The images run as the non-root `workflowuser`, and a Secret's files are owned by root. Set the pod's `securityContext.fsGroup` and the volume's `defaultMode: 0440`, so the file is group-readable by the container's processes. A plain `0400` without `fsGroup` is unreadable, and the pod fails to start.
+  - Set on those three containers:
+    - `Workflow__RuntimeCaller__KeyFile=<mount path>`;
+    - `Workflow__RuntimeCaller__Required=true`.
 - **Gate values.** Per domain, Orchestration only, all optional:
   - `Workflow__SubEndpointGate__Mode` (`Off` | `Observe` | `Enforce`);
   - `Workflow__SubEndpointGate__CompleteMode`;
@@ -43,11 +45,19 @@ Source of truth:
   - Keep the default `Off`.
 - **No key material in values or env.** Startup fails when a key- or secret-named entry appears under `Workflow__RuntimeCaller__`.
 - **Redaction list.** If a values file overrides `Telemetry__Logging__Body__AdditionalSensitiveHeaderNames` for Orchestration, it must keep `x-vnext-runtime-token` in the list.
+  - Env-var arrays merge by index: `…__0=<name>` replaces the shipped `x-vnext-runtime-token` entry instead of adding to it.
+  - So either list `x-vnext-runtime-token` yourself, or start your own entries at `__1`.
+  - It is a second layer. The ingress strip runs first, so a missing entry exposes nothing today.
 - **Script sandbox.** On Orchestration, keep `Scripting__Sandbox__Enabled=true` whenever the ring is mounted. Startup fails otherwise, unless the Chair-gated `Workflow__RuntimeCaller__AllowWithoutScriptSandbox=true` is set.
 - **Rotation.** Document it as restart-based:
   1. add the new key to the ring everywhere;
   2. move `activeKeyId` everywhere;
   3. remove the old key.
+- **Rollback of the release.** Before reverting any of the three images to a release without this feature:
+  1. set both `Workflow__SubEndpointGate__Mode` and `Workflow__SubEndpointGate__CompleteMode` to `Off` (or unset both) everywhere;
+  2. disable the Secret (unmount it, clear `KeyFile` and `Required`).
+
+  Only then revert the image. The order is in `docs/runtime/sub-endpoint-gate.md` § Enabling it in an environment.
 
 ## Contract and examples
 
@@ -72,6 +82,7 @@ Errors when the gate refuses: 403 `Authorization:110001`. When the role provider
 - With the Secret disabled, rendered manifests are identical to today's (the header strip lives in the image, not the chart).
 - With the Secret enabled, every Orchestration, Execution and Inbox pod logs `Runtime-caller identity loaded. ActiveKeyId: <id>` (EventId 50047) at start, with the same id everywhere.
 - A pod without the mount, but with `Required=true` set, fails to start.
+- A pod whose user cannot read the mounted file (no `fsGroup`, or a mode without group read) fails to start with `cannot be read: UnauthorizedAccessException`; with `fsGroup` and `0440` it logs 50047.
 
 ## Out of scope
 

@@ -36,6 +36,7 @@ public sealed class RuntimeCallerKeyRingTests
     [InlineData("""{"activeKeyId":"k1"}""")]
     [InlineData("""{"activeKeyId":"k1","keys":{}}""")]
     [InlineData("""{"activeKeyId":"k2","keys":{"k1":"__S__"}}""")]
+    [InlineData("""{"activeKeyId":"__S__","keys":{"k1":"__S__"}}""")]
     [InlineData("""{"activeKeyId":"k1","keys":{"k1":"c2hvcnQ="}}""")]
     [InlineData("""{"activeKeyId":"k1","keys":{"k1":"!!not-base64!!"}}""")]
     [InlineData("""{"activeKeyId":"k 1","keys":{"k 1":"__S__"}}""")]

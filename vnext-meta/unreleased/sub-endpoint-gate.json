@@ -55,5 +55,18 @@
       "action": "None required. A dead-lettered forward with this code means the Inbox host signed with no key, with a key the Orchestration does not hold, or with a clock more than MaxClockSkewSeconds away from the Orchestration's; fix the key ring (or the clock) and replay it.",
       "documentation": "docs/runtime/sub-endpoint-gate.md"
     }
+  ],
+  "knownIssues": [
+    {
+      "id": "sub-endpoint-gate-cross-domain-completion-not-retried",
+      "affectedVersions": ">=next",
+      "severity": "warning",
+      "component": "runtime",
+      "path": "POST {domain}/workflows/{workflow}/instances/{instance}/complete (cross-domain completion relay)",
+      "title": "A cross-domain child completion that the parent domain's gate refuses is not retried, so the parent stays parked.",
+      "description": "A child in another domain settles its parent through one post-commit relay call to the parent domain's complete endpoint. That call has no durable backup: the child domain's Inbox drops a completion whose parent lives elsewhere. This was already true for any failed relay. With the sub-endpoint gate in Enforce on complete, a relay without a valid runtime-caller token (child domain not yet signing, a different key ring, or a clock outside MaxClockSkewSeconds) is refused with 403 Authorization:110001, and the parent waits with no automatic recovery. A durable retry is a separate issue (council condition C-5).",
+      "workaround": "Keep CompleteMode=Observe until every domain hosting the flow's children signs, and enforce complete last. To recover a parked parent, fix the key ring, then re-post the completion from the child domain's outbox row (instance.sub.completed) to the parent's complete endpoint as an operator role admitted by Workflow:SubEndpointGate:Grants (docs/runtime/sub-endpoint-gate.md, Failure modes).",
+      "fixedIn": null
+    }
   ]
 }

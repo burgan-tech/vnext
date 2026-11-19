@@ -59,7 +59,7 @@ x-vnext-runtime-token: v1;k={keyId};t={unixSeconds};d={callerDomain};c={callerCl
 
 ### Key ring
 
-One JSON file per environment, mounted read-only (a Kubernetes Secret, mode `0400`) into the Orchestration, Execution and Inbox containers of every domain:
+One JSON file per environment, mounted read-only from a Kubernetes Secret into the Orchestration, Execution and Inbox containers of every domain. The images run as a non-root user (`workflowuser`) and a Secret's files are owned by root, so give the pod a `securityContext.fsGroup` and the volume `defaultMode: 0440`: the file is then group-owned by that group, which the container's processes belong to. A plain `0400` without `fsGroup` cannot be read, and a host with `KeyFile` set fails to start (`cannot be read: UnauthorizedAccessException`).
 
 ```json
 { "activeKeyId": "k2", "keys": { "k2": "<base64, at least 32 bytes>", "k1": "<base64>" } }
@@ -149,7 +149,13 @@ All keys are optional. The Helm chart (`vnext-helm-charts`) needs a mount and en
 
    Consider `CompleteMode=Observe` first (next section).
 
-Rollback is `Mode=Off` on the affected domain plus a restart of its Orchestration host (the options are read at start): no flow republish, and no other domain is touched. If a token or key was ever exposed, rotate the key.
+Rollback is `Mode=Off` and `CompleteMode=Off` (or `CompleteMode` unset) on the affected domain, plus a restart of its Orchestration host (the options are read at start): no flow republish, and no other domain is touched. If a token or key was ever exposed, rotate the key.
+
+**Rolling back the release** (any host back to an image without this feature) once a ring is mounted reopens both mixed-version hazards the enable order avoids. Go in this order:
+
+1. `Mode=Off` and `CompleteMode=Off` on every domain, then restart its Orchestration. Otherwise a reverted Execution or Orchestration sends start and completion calls with no token and is refused, and a reverted Inbox drops a refused `complete` backup instead of re-delivering it, which strands the parent.
+2. Unmount the ring and clear `KeyFile` and `Required` on every Orchestration, Execution and Inbox host, then restart them. A host keeps signing while it holds the ring, and a reverted callee copies the token into `InstanceTransitions."Header"` and its logs.
+3. Revert the images.
 
 ## Failure modes
 
