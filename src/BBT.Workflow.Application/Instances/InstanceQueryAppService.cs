@@ -1807,6 +1807,13 @@ public sealed class InstanceQueryAppService(
             TelemetryConstants.DescentFunctions.Data);
 
         var result = await instanceQueryGateway.GetInstanceDataAsync(childInput, cancellationToken);
+        if (!result.IsNotModified && result.Result is not { IsSuccess: true })
+        {
+            // The parent still serves its data with an empty extensions block; mark the hop so that
+            // fallback is not read as a descent that succeeded and returned nothing.
+            InstanceReadActivityHelper.SetUnresolved(descent.Activity, "subflow-data-unavailable");
+        }
+
         return new SubFlowDataRead(subflow.SubFlowInstanceId, result);
     }
 
