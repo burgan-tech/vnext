@@ -1,6 +1,7 @@
 using System;
 using BBT.Aether.Testing;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
@@ -14,6 +15,22 @@ namespace BBT.Workflow;
 public abstract class WorkflowTestBase<TEntry> : TestBase<TEntry>
     where TEntry : ModuleEntryPointBase, new()
 {
+    /// <summary>
+    /// Pre-registers an empty in-memory <see cref="IConfiguration"/> so that <c>AddAetherCore</c>, which the Aether
+    /// <c>TestBase</c> constructor calls first, skips <c>ConfigurationHelper.BuildConfiguration</c>. That helper builds a
+    /// file-backed root over the working directory with <c>reloadOnChange: true</c>; the test base replaces it with an
+    /// in-memory configuration right after, but the root and its <c>PhysicalFilesWatcher</c> are never disposed. One leaked
+    /// watcher per test (thousands per run) floods the thread pool with change-token callbacks on file-system events and
+    /// starved <c>InstanceTests.LatestData_ShouldReturnCorrectResult_DuringConcurrentAccess</c> into a hang. No test
+    /// project ships an <c>appsettings*.json</c>, so the skipped root contributed nothing the tests read.
+    /// </summary>
+    protected override IServiceCollection CreateServiceCollection()
+    {
+        var services = base.CreateServiceCollection();
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
+        return services;
+    }
+
     /// <summary>
     /// Adds application-specific services to the service collection.
     /// </summary>
