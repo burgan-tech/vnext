@@ -154,8 +154,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
-            InstanceReadKinds.Instance, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.Instance, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, input.Version, cancellationToken)
             .MatchAsync(
@@ -215,8 +215,8 @@ public sealed class InstanceQueryAppService(
 
         // Captured before the read envelope opens, so the tag lands on the transaction like the data
         // function's read outcome does.
-        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
-            InstanceReadKinds.List, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.List, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         // Validate before any query is built. A filter the runtime cannot honor must be rejected,
         // never silently ignored — ignoring it widens the result set instead of narrowing it.
@@ -619,8 +619,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
-            InstanceReadKinds.IncidentActive, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.IncidentActive, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
@@ -653,8 +653,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
-            InstanceReadKinds.TaskHistory, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.TaskHistory, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
@@ -687,8 +687,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
-            InstanceReadKinds.ActionHistory, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.ActionHistory, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
@@ -725,8 +725,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
-            InstanceReadKinds.TransitionMetrics, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.TransitionMetrics, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(async instance =>
@@ -774,8 +774,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
-            InstanceReadKinds.StateMetrics, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.StateMetrics, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(async instance =>
@@ -920,8 +920,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
-            InstanceReadKinds.IncidentHistory, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.IncidentHistory, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         var page = input.Page < 1 ? 1 : input.Page;
         var pageSize = Math.Clamp(input.PageSize, 1, GetInstanceIncidentsInput.MaxPageSize);
@@ -962,8 +962,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
-            InstanceReadKinds.DataHistory, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.DataHistory, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         var page = input.Page < 1 ? 1 : input.Page;
         var pageSize = Math.Clamp(input.PageSize, 1, GetInstanceDataHistoryInput.MaxPageSize);
@@ -1007,8 +1007,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
-            InstanceReadKinds.DataHistory, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.DataHistory, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
@@ -1043,8 +1043,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
-            InstanceReadKinds.History, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.History, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         return await GetInstanceWithFullHistoryAsync(input.Instance, cancellationToken)
             .ThenAsync(async instance =>
@@ -1853,8 +1853,8 @@ public sealed class InstanceQueryAppService(
         try
         {
             // Opened only here, after the fast path has declined: the envelope measures a build.
-            using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
-                InstanceReadKinds.State, input.Domain, input.Workflow);
+            using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.State, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+                input.Domain, input.Workflow);
 
             return await GetInstanceWithAllCorrelationsAsync(input.Instance, cancellationToken)
             .BindAsync(loaded =>
@@ -2894,8 +2894,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
-            InstanceReadKinds.View, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.View, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         // Railway chain: Get Instance → Get Workflow → Resolve State → Get View
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
@@ -2923,8 +2923,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
-            InstanceReadKinds.Schema, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.Schema, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         // Fast path: the ETag is a deterministic hash of the data fingerprint (instance id +
         // latest data ETag + effective state + flow version) plus caller scope and transition
@@ -3066,8 +3066,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
-            InstanceReadKinds.Extensions, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.Extensions, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         // Railway chain: Get Instance → Get Workflow → Build Extensions Output
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
@@ -3091,8 +3091,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
-            InstanceReadKinds.Master, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.Master, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         // Fast path: the master ETag is a deterministic hash of the data fingerprint
         // (instance id + latest data ETag + flow version) plus the caller scope — the
@@ -3714,8 +3714,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
-            InstanceReadKinds.InstanceCorrelation, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.InstanceCorrelation, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         var instanceResult = await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken);
         if (!instanceResult.IsSuccess)
@@ -3788,8 +3788,8 @@ public sealed class InstanceQueryAppService(
         runtimeInfoProvider.Check(domain);
 
         var transaction = Activity.Current;
-        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
-            InstanceReadKinds.HumanTasks, domain);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.HumanTasks, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            domain);
 
         var bounds = humanTaskOptions.Value;
 
