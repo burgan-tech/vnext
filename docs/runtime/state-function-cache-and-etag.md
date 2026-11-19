@@ -106,7 +106,7 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   same fingerprint, so 304 works with an empty cache (after TTL expiry, Redis flush, or
   failover).
 - **`responseShapeVersion` guards runtime-side body changes** (`StateFunctionCache.ResponseShapeVersion`,
-  currently `v14`). The material is derived from instance facts and caller scope only — it says nothing
+  currently `v15`). The material is derived from instance facts and caller scope only — it says nothing
   about what the body *contains*. So when a runtime release changes the body for an unchanged instance
   (v2 started listing the workflow-level `updateData` and `exit` transitions; v3 added the workflow's
   `functions` discovery links; v4 replaced that inline list with a `hasFunctions` flag plus a link to
@@ -126,7 +126,8 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
   `kind: "scheduled"` entries and on the `timeout` block; v13 restored the `interaction` block for a
   non-terminating long poll; v14 added `labels` and a `target` object to every `transitions[]`
   entry, the top-level `stateSubType` and `stateLabels`, and turned the `timeout` block's `target`
-  string into the same object), every previously issued ETag must be
+  string into the same object; v15 made each `transitions[]` entry's `view.loadData` carry the value
+  declared on the transition's view binding instead of a constant), every previously issued ETag must be
   invalidated: otherwise a client
   long-polling an instance parked in a human state would keep receiving 304 and never observe the new
   shape. The same constant is a segment of the cache key, so bumping it also discards bodies written by
@@ -176,6 +177,12 @@ etag = h(responseShapeVersion | instanceId | effectiveState | status | flowVersi
 - **`labels`, `target`, `stateSubType` and `stateLabels` need no fingerprint member** for the same
   reason: they come from definitions, a property of the flow version (or, for a subflow's state,
   from the descended body the subflow variant already covers). The `v14` bump was for the shape.
+- **A transition's `view.loadData` needs no fingerprint member** either: it is the `loadData`
+  declared on the transition's view binding — the first entry's, since the state function does not
+  evaluate view rules — so a property of the flow version. A binding that declares nothing keeps the
+  value the path answered before: `true` for the instance's own transitions, `false` for a
+  parent-added shared transition while a subflow is active. A subflow's own entries carry what the
+  subflow answered. The `v15` bump was for the value's meaning (#1266).
 - **`hasActiveIncident` is in the hash** because the body's `incident` block flips with it and the
   flag can move without a state/status change (Boundary Abort with a transition raises one,
   `FinalizeTransitionStep` resolves it). The flag is the block's *only* varying member: since `v9`

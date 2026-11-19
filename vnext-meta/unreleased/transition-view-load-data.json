@@ -1,0 +1,20 @@
+{
+  "releaseNote": {
+    "summary": "The state function's transitions[].view.loadData now carries the loadData declared on the transition's view binding, so a form declared loadData: false opens empty.",
+    "breaking": false,
+    "docs": []
+  },
+  "migrations": [
+    {
+      "id": "transition-view-load-data-honoured",
+      "type": "behavior",
+      "component": "transition",
+      "path": "transition.view.views[].loadData",
+      "since": "next",
+      "severity": "info",
+      "title": "State function honours a transition view binding's loadData",
+      "description": "Each transitions[] entry of the state function now answers view.loadData with the value declared on the transition's view binding (the first entry's, since the state function does not evaluate view rules). Before, a transition outside an active subflow always answered true, so a form declared loadData: false opened pre-filled with the record's data, and a parent-added shared transition listed while a subflow is active always answered false (vnext#1266). A subflow's own entries now carry what the subflow declares instead of true. A binding that declares no loadData, and a transition without a view, answer as before. StateFunctionCache.ResponseShapeVersion moved to v15, so parked long-pollers receive the corrected body once.",
+      "action": "None required. A binding that declares loadData: false and relied on the form being pre-filled must declare loadData: true. Mapping-side clearing added as a workaround for stale form values can stay or be removed. With several view entries, give every entry the same loadData: the view function picks the entry by its rules, but the state function reports the first entry's value. Deploy a subflow's domain before (or with) its parent's: the parent relays the subflow's own answer, and a subflow still on an older runtime keeps answering true."
+    }
+  ]
+}

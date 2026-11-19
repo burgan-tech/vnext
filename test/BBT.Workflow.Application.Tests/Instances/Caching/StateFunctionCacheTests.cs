@@ -81,7 +81,7 @@ public class StateFunctionCacheTests
         // be served from entries written by an earlier build.
         // Bump this literal in the same commit as ResponseShapeVersion — the assertion exists to make
         // a silent shape change impossible.
-        key.ShouldStartWith($"state-fn:v14:{TestDomain}:{TestWorkflow}:{TestInstance}:");
+        key.ShouldStartWith($"state-fn:v15:{TestDomain}:{TestWorkflow}:{TestInstance}:");
     }
 
     [Fact]
@@ -423,9 +423,9 @@ public class StateFunctionCacheTests
         var subFlowEtag = sut.ComputeEtag(input, fingerprint with { HasActiveSubFlow = true },
             new GetInstanceStateOutput { State = "sub-review", Status = InstanceStatus.Busy });
 
-        key.ShouldBe("state-fn:v14:test-domain:test-flow:instance-1:b543189985b3b2e3");
-        etag.ShouldBe("997b1c41830040997941d0dc3a5ec7ec");
-        subFlowEtag.ShouldBe("94c90a92c0c75107aab59fdd55d80fb9");
+        key.ShouldBe("state-fn:v15:test-domain:test-flow:instance-1:b543189985b3b2e3");
+        etag.ShouldBe("bb0b4aef2d71c9eb1d926485d1ffffb6");
+        subFlowEtag.ShouldBe("52eb4dfbd9b3f86cbe3b4db9c829282e");
 
         // Same answers on repeated calls with the same request (the per-request memo) ...
         sut.BuildKey(input).ShouldBe(key);
