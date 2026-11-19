@@ -138,6 +138,11 @@ public static class InstanceColumnConditionBuilder
             throw new ArgumentException($"Column '{columnName}' of type Boolean does not support comparison operator '{sqlOperator}'");
         }
 
+        if (columnType == ColumnType.Uuid)
+        {
+            throw new ArgumentException($"Column '{columnName}' of type Guid does not support comparison operator '{sqlOperator}'");
+        }
+
         var parameter = CreateTypedParameter(value, columnType);
         parameters.Add(parameter);
 
@@ -170,6 +175,11 @@ public static class InstanceColumnConditionBuilder
             throw new ArgumentException($"Column '{columnName}' of type Boolean does not support BETWEEN operator");
         }
 
+        if (columnType == ColumnType.Uuid)
+        {
+            throw new ArgumentException($"Column '{columnName}' of type Guid does not support BETWEEN operator");
+        }
+
         var minParam = CreateTypedParameter(minValue, columnType);
         var maxParam = CreateTypedParameter(maxValue, columnType);
         parameters.Add(minParam);
@@ -187,12 +197,21 @@ public static class InstanceColumnConditionBuilder
         return value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
     }
 
+    private static void RejectTextMatchOnUuid(string columnName)
+    {
+        if (GetColumnType(columnName) == ColumnType.Uuid)
+        {
+            throw new ArgumentException($"Column '{columnName}' of type Guid does not support text match operators");
+        }
+    }
+
     /// <summary>
     /// Build LIKE condition (case-insensitive)
     /// </summary>
     private static (string, List<NpgsqlParameter>) BuildLikeCondition(
         string columnName, string value, ref int parameterIndex)
     {
+        RejectTextMatchOnUuid(columnName);
         var parameters = new List<NpgsqlParameter>();
         var paramIndex = parameterIndex++;
 
@@ -209,6 +228,7 @@ public static class InstanceColumnConditionBuilder
     private static (string, List<NpgsqlParameter>) BuildStartsWithCondition(
         string columnName, string value, ref int parameterIndex)
     {
+        RejectTextMatchOnUuid(columnName);
         var parameters = new List<NpgsqlParameter>();
         var paramIndex = parameterIndex++;
 
@@ -225,6 +245,7 @@ public static class InstanceColumnConditionBuilder
     private static (string, List<NpgsqlParameter>) BuildEndsWithCondition(
         string columnName, string value, ref int parameterIndex)
     {
+        RejectTextMatchOnUuid(columnName);
         var parameters = new List<NpgsqlParameter>();
         var paramIndex = parameterIndex++;
 
@@ -446,6 +467,19 @@ public static class InstanceColumnConditionBuilder
         throw new ArgumentException($"Invalid Boolean value: {value}");
     }
     
+    /// <summary>
+    /// Create uuid parameter; the Id column is a PostgreSQL uuid, so text binding fails with 42883.
+    /// </summary>
+    private static NpgsqlParameter CreateUuidParameter(string value)
+    {
+        if (Guid.TryParse(value, out var guidValue))
+        {
+            return new NpgsqlParameter { Value = guidValue, NpgsqlDbType = NpgsqlDbType.Uuid };
+        }
+
+        throw new ArgumentException($"Invalid Guid value: {value}");
+    }
+
     /// <summary>
     /// Create Integer parameter with proper parsing
     /// </summary>
