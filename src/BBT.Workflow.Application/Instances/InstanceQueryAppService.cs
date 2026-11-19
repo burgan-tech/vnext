@@ -2559,7 +2559,7 @@ public sealed class InstanceQueryAppService(
     /// nothing), kept so that only an explicit declaration changes the answer (#1266).
     /// </summary>
     private static bool ResolveTransitionViewLoadData(Transition? transition, bool undeclared) =>
-        transition?.View?.Views.FirstOrDefault()?.LoadData ?? undeclared;
+        transition?.View is { Views.Count: > 0 } view ? view.Views[0].LoadData ?? undeclared : undeclared;
 
     /// <summary>
     /// Maps the instance's active scheduled-transition jobs to <c>kind: "scheduled"</c> entries of the
