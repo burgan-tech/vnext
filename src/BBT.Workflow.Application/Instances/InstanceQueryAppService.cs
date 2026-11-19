@@ -1572,17 +1572,17 @@ public sealed class InstanceQueryAppService(
                     var instanceData = instance.FindData(input.Version);
                     var entityEtag = instanceData?.ETag ?? string.Empty;
 
-                    var result = new GetInstanceDataOutput();
-
                     // Data portion: reuse the validated cache entry (already field-filtered for
                     // this caller scope) when available; otherwise filter the resolved row.
                     // Extensions below always run fresh against the RAW instance data.
-                    result.Data = validatedEntry is not null
+                    var exposedData = validatedEntry is not null
                         ? validatedEntry.Data
                         : await instanceDataReadService.ExposeAsync(
-                        flow, instance, instanceData,
-                        new AuthorizationRequestContext(input.Headers, input.QueryParameters),
-                        cancellationToken);
+                            flow, instance, instanceData,
+                            new AuthorizationRequestContext(input.Headers, input.QueryParameters),
+                            cancellationToken);
+
+                    var result = new GetInstanceDataOutput { Data = exposedData, EntityEtag = entityEtag };
 
                     // Active SubFlow: the extensions come from the child's data function, whose ETag
                     // joins this response's ETag below. The fast path's read is reused when it was for
@@ -1607,8 +1607,6 @@ public sealed class InstanceQueryAppService(
 
                         result.Extensions = extensionsResult.Value!;
                     }
-
-                    result.EntityEtag = entityEtag;
 
                     // Same fingerprint the fast path projects. Pinned-version requests hash the
                     // RESOLVED row's ETag instead of the latest one (a write into that version line
