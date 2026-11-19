@@ -7,11 +7,12 @@ services:
         env_file:
             - .env.orchestration.dev
         environment:
-            # Shared with the orchestration sidecar (Dapr local-delivery guard).
-            APP_API_TOKEN: ${VNEXT_APP_API_TOKEN:-}
+            # Dapr local-delivery guard: the app reads the token daprd presents from this mounted file.
+            Workflow__RuntimeCaller__AppApiTokenFile: /run/secrets/vnext/app-api-token
         ports:
             - '4201:5000'
         volumes:
+            - '${VNEXT_APP_API_TOKEN_FILE:-/dev/null}:/run/secrets/vnext/app-api-token:ro'
             - ../..:/app
             - /app/orchestration/BBT.Workflow.Orchestration.HttpApi.Host/obj/
             - /app/orchestration/BBT.Workflow.Orchestration.HttpApi.Host/bin/

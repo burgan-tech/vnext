@@ -76,24 +76,30 @@ need() { command -v "$1" >/dev/null 2>&1 || die "'$1' is required but not instal
 compose() { docker compose -f "$COMPOSE_FILE" "$@"; }
 
 # Per-checkout Dapr app API token (Dapr local-delivery guard). daprd adds it as `dapr-api-token` to every call
-# it makes to the orchestration app; the app reads the expected value from APP_API_TOKEN. A pre-set
-# VNEXT_APP_API_TOKEN wins; otherwise one random token is generated once and kept in a git-ignored,
-# chmod-600 file (.vnext-local/app-api-token; delete it to rotate) so a sidecar that is reused across runs (compose --no-recreate) still matches the app.
-# The value is exported for compose interpolation (${VNEXT_APP_API_TOKEN:-}) and is never printed.
+# it makes to the orchestration app (the sidecar takes it as env APP_API_TOKEN); the app reads the expected value
+# ONLY from the file named by Workflow:RuntimeCaller:AppApiTokenFile. A pre-set VNEXT_APP_API_TOKEN wins; otherwise
+# one random token is generated once and kept in a git-ignored file (.vnext-local/app-api-token; delete it to
+# rotate) so a sidecar reused across runs (compose --no-recreate) still matches the app.
+# The file is ALWAYS rewritten with the effective value. Mode 0644: the stage image runs as non-root `workflowuser`,
+# which could not read a 0600 bind-mounted file owned by the host user; acceptable for a local-dev-only secret in
+# a git-ignored directory. The value is exported (VNEXT_APP_API_TOKEN for the sidecar, VNEXT_APP_API_TOKEN_FILE,
+# an absolute path, for the app mount) and is never printed.
 ensure_app_api_token() {
-  local file="$STATE/app-api-token"
+  local file
+  mkdir -p "$STATE"
+  file="$(cd "$STATE" && pwd)/app-api-token"
   if [ -z "${VNEXT_APP_API_TOKEN:-}" ]; then
-    mkdir -p "$STATE"
     if [ -s "$file" ]; then
       VNEXT_APP_API_TOKEN="$(cat "$file" 2>/dev/null)" || die "cannot read $file (delete it to generate a new Dapr app API token)"
     else
       need openssl
       VNEXT_APP_API_TOKEN="$(openssl rand -hex 32)"
-      rm -f "$file"   # a leftover empty file would keep its old mode; always create fresh under umask 077
-      ( umask 077; printf '%s' "$VNEXT_APP_API_TOKEN" > "$file" ) || die "cannot write $file"
     fi
   fi
+  rm -f "$file"   # always create fresh so a leftover file cannot keep an old mode or value
+  ( umask 022; printf '%s' "$VNEXT_APP_API_TOKEN" > "$file" ) || die "cannot write $file"
   export VNEXT_APP_API_TOKEN
+  export VNEXT_APP_API_TOKEN_FILE="$file"
 }
 
 # A running orchestration sidecar keeps the APP_API_TOKEN it was created with (compose --no-recreate).
@@ -217,7 +223,7 @@ load_env() {
   while IFS= read -r line; do [ -n "$line" ] && ENVS+=("$line"); done < <(profile_env "$project" "$profile")
   ENVS+=("APP_DOMAIN=$domain")
   # Dapr local-delivery guard: the orchestration app expects the token its own sidecar presents (never printed)
-  [ "$(f "$row" 1)" = orchestration ] && [ -n "${VNEXT_APP_API_TOKEN:-}" ] && ENVS+=("APP_API_TOKEN=$VNEXT_APP_API_TOKEN")
+  [ "$(f "$row" 1)" = orchestration ] && [ -n "${VNEXT_APP_API_TOKEN_FILE:-}" ] && ENVS+=("Workflow__RuntimeCaller__AppApiTokenFile=$VNEXT_APP_API_TOKEN_FILE")
   [ -n "$(cohosted "$domain")" ] && ENVS+=("APP_DOMAINS=$(cohosted_names "$domain")")
   # d=db → that co-hosted domain's own database (ConnectionStrings:Domains:<d>), for every host with a database
   if [ "$(f "$row" 5)" = 1 ]; then
@@ -656,7 +662,7 @@ cmd_stack() {
     stage) exec docker compose -f "$HERE/docker-compose.stage.yml" up --build ;;
     dev)   exec docker compose -f "$HERE/docker-compose.dev.yml" up --build ;;
     *)     log "infrastructure only"
-           log "a hand-run orchestration host needs APP_API_TOKEN from $STATE/app-api-token (the sidecar already has it)"
+           log "a hand-run orchestration host needs Workflow__RuntimeCaller__AppApiTokenFile=$STATE/app-api-token (the sidecar already has the token)"
            exec docker compose -f "$COMPOSE_FILE" up --build ;;
   esac
 }
