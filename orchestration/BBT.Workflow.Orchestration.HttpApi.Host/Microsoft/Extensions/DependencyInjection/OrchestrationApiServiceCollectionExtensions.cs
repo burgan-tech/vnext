@@ -75,22 +75,16 @@ public static class OrchestrationApiServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Binds <see cref="DaprLocalDeliveryOptions"/> from <c>Dapr:LocalDelivery</c>. A blank
-    /// <c>AppApiToken</c> falls back to the <c>APP_API_TOKEN</c> environment variable (the same value
-    /// the sidecar is started with), so the token never has to be written into appsettings.
+    /// Binds <see cref="DaprLocalDeliveryOptions"/> from <c>Dapr:LocalDelivery</c> and registers the
+    /// <see cref="DaprAppApiToken"/> singleton, which reads the token only from the mounted file named
+    /// by <c>Workflow:RuntimeCaller:AppApiTokenFile</c> (never configuration or the environment).
     /// </summary>
     internal static IServiceCollection AddDaprLocalDelivery(
         this IServiceCollection services,
         IConfiguration configuration)
     {
         services.Configure<DaprLocalDeliveryOptions>(configuration.GetSection(DaprLocalDeliveryOptions.SectionPath));
-        services.PostConfigure<DaprLocalDeliveryOptions>(options =>
-        {
-            if (string.IsNullOrWhiteSpace(options.AppApiToken))
-            {
-                options.AppApiToken = Environment.GetEnvironmentVariable("APP_API_TOKEN");
-            }
-        });
+        services.TryAddSingleton<DaprAppApiToken>();
         return services;
     }
 

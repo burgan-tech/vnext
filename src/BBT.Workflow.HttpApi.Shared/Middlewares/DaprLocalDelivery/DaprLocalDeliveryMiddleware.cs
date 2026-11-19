@@ -20,23 +20,26 @@ public sealed class DaprLocalDeliveryMiddleware
 
     private readonly RequestDelegate _next;
     private readonly IOptionsMonitor<DaprLocalDeliveryOptions> _options;
+    private readonly DaprAppApiToken _token;
     private readonly ILogger<DaprLocalDeliveryMiddleware> _logger;
 
     public DaprLocalDeliveryMiddleware(
         RequestDelegate next,
         IOptionsMonitor<DaprLocalDeliveryOptions> options,
+        DaprAppApiToken token,
         ILogger<DaprLocalDeliveryMiddleware> logger)
     {
         _next = next;
         _options = options;
+        _token = token;
         _logger = logger;
 
         var current = options.CurrentValue;
-        if (current.Mode == DaprLocalDeliveryMode.Enforce && string.IsNullOrWhiteSpace(current.AppApiToken))
+        if (current.Mode == DaprLocalDeliveryMode.Enforce && !token.IsConfigured)
         {
             _logger.DaprLocalDeliveryEnforcedWithoutToken();
         }
-        else if (current.Mode == DaprLocalDeliveryMode.LogOnly && string.IsNullOrWhiteSpace(current.AppApiToken))
+        else if (current.Mode == DaprLocalDeliveryMode.LogOnly && !token.IsConfigured)
         {
             _logger.DaprLocalDeliveryLogOnlyWithoutToken();
         }
@@ -49,7 +52,7 @@ public sealed class DaprLocalDeliveryMiddleware
 
         if (options.Mode != DaprLocalDeliveryMode.Off && IsGuarded(context.GetEndpoint()))
         {
-            var verdict = DaprLocalDeliveryEvaluator.Evaluate(context.Request.Headers, options.AppApiToken);
+            var verdict = DaprLocalDeliveryEvaluator.Evaluate(context.Request.Headers, _token.Value);
             // LogOnly without a token is announced once at construction; per-request entries would only
             // repeat it for every pubsub, cron and Dapr Scheduler delivery.
             var silent = verdict == DaprLocalDeliveryVerdict.TokenNotConfigured

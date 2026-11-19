@@ -43,7 +43,8 @@ public sealed class DaprLocalDeliveryMiddlewareTests
                     SeenHeaders = ctx.Request.Headers.Keys.ToList();
                     return Task.CompletedTask;
                 },
-                new TestOptionsMonitor(new DaprLocalDeliveryOptions { Mode = mode, AppApiToken = token }),
+                new TestOptionsMonitor(new DaprLocalDeliveryOptions { Mode = mode }),
+                new DaprAppApiToken(token),
                 Logger);
         }
 
@@ -98,7 +99,7 @@ public sealed class DaprLocalDeliveryMiddlewareTests
     [Fact]
     public void Enforce_NoToken_LogsMisconfigurationOnce_AtConstruction()
     {
-        var h = new Harness(DaprLocalDeliveryMode.Enforce, token: " ");
+        var h = new Harness(DaprLocalDeliveryMode.Enforce, token: null);
         h.Logger.EventIds.Count(i => i == 40997).ShouldBe(1);
     }
 

@@ -87,11 +87,10 @@ public class DaprLocalDeliveryEvaluatorTests
             .ShouldBe(DaprLocalDeliveryVerdict.CallerHeaderPresent);
 
     [Fact]
-    public void Options_DefaultsToLogOnlyWithoutToken()
+    public void Options_DefaultToLogOnly()
     {
         var options = new DaprLocalDeliveryOptions();
         options.Mode.ShouldBe(DaprLocalDeliveryMode.LogOnly);
-        options.AppApiToken.ShouldBeNull();
         DaprLocalDeliveryOptions.SectionPath.ShouldBe("Dapr:LocalDelivery");
     }
 }

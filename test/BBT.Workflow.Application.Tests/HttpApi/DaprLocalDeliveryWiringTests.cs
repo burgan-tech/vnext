@@ -1,17 +1,24 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Net;
+using System.Net.Http;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using BBT.Workflow.Orchestration.Controllers.Instances;
+using BBT.Workflow.Runtime;
 using BBT.Workflow.Middlewares;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using NSubstitute;
 using Shouldly;
 using Xunit;
 
@@ -61,11 +68,8 @@ public sealed class DaprLocalDeliveryWiringTests
         var nextCalled = false;
         var middleware = new DaprLocalDeliveryMiddleware(
             _ => { nextCalled = true; return Task.CompletedTask; },
-            new FixedOptionsMonitor(new DaprLocalDeliveryOptions
-            {
-                Mode = DaprLocalDeliveryMode.Enforce,
-                AppApiToken = "s3cret"
-            }),
+            new FixedOptionsMonitor(new DaprLocalDeliveryOptions { Mode = DaprLocalDeliveryMode.Enforce }),
+            new DaprAppApiToken("s3cret"),
             NullLogger<DaprLocalDeliveryMiddleware>.Instance);
 
         var context = new DefaultHttpContext();
@@ -78,33 +82,29 @@ public sealed class DaprLocalDeliveryWiringTests
     }
 
     [Fact]
-    public void Options_BindFromConfiguration()
+    public void Options_BindModeFromConfiguration()
     {
-        var provider = Build(new Dictionary<string, string?>
-        {
-            ["Dapr:LocalDelivery:Mode"] = "Enforce",
-            ["Dapr:LocalDelivery:AppApiToken"] = "from-config"
-        });
+        var provider = Build(new Dictionary<string, string?> { ["Dapr:LocalDelivery:Mode"] = "Enforce" });
 
-        var options = provider.GetRequiredService<IOptions<DaprLocalDeliveryOptions>>().Value;
-        options.Mode.ShouldBe(DaprLocalDeliveryMode.Enforce);
-        options.AppApiToken.ShouldBe("from-config");
+        provider.GetRequiredService<IOptions<DaprLocalDeliveryOptions>>().Value.Mode.ShouldBe(DaprLocalDeliveryMode.Enforce);
     }
 
     [Fact]
-    public void Options_FallBackToAppApiTokenEnvironmentVariable()
+    public void Options_WithoutConfig_DefaultToLogOnly()
+        => Build(new Dictionary<string, string?>()).GetRequiredService<IOptions<DaprLocalDeliveryOptions>>().Value.Mode
+            .ShouldBe(DaprLocalDeliveryMode.LogOnly);
+
+    [Fact]
+    public void EnvironmentVariable_IsIgnored()
     {
         var previous = Environment.GetEnvironmentVariable(EnvName);
         try
         {
             Environment.SetEnvironmentVariable(EnvName, "from-env");
 
-            var provider = Build(new Dictionary<string, string?> { ["Dapr:LocalDelivery:Mode"] = "LogOnly" });
-            provider.GetRequiredService<IOptions<DaprLocalDeliveryOptions>>().Value.AppApiToken.ShouldBe("from-env");
+            var provider = Build(new Dictionary<string, string?>());
 
-            // A configured token wins over the environment variable.
-            var configured = Build(new Dictionary<string, string?> { ["Dapr:LocalDelivery:AppApiToken"] = "from-config" });
-            configured.GetRequiredService<IOptions<DaprLocalDeliveryOptions>>().Value.AppApiToken.ShouldBe("from-config");
+            provider.GetRequiredService<DaprAppApiToken>().IsConfigured.ShouldBeFalse();
         }
         finally
         {
@@ -113,27 +113,77 @@ public sealed class DaprLocalDeliveryWiringTests
     }
 
     [Fact]
-    public void Options_WithoutConfigOrEnvironment_LeaveTokenUnset_AndDefaultToLogOnly()
+    public void TokenFile_IsResolvedFromRuntimeCallerSection()
     {
-        var previous = Environment.GetEnvironmentVariable(EnvName);
+        var file = WriteTokenFile("tok");
         try
         {
-            Environment.SetEnvironmentVariable(EnvName, null);
+            var provider = Build(TokenFileConfig(file));
 
-            var options = Build(new Dictionary<string, string?>()).GetRequiredService<IOptions<DaprLocalDeliveryOptions>>().Value;
-            options.AppApiToken.ShouldBeNullOrWhiteSpace();
-            options.Mode.ShouldBe(DaprLocalDeliveryMode.LogOnly);
+            provider.GetRequiredService<DaprAppApiToken>().Value.ShouldBe("tok");
         }
         finally
         {
-            Environment.SetEnvironmentVariable(EnvName, previous);
+            File.Delete(file);
         }
     }
+
+    [Theory]
+    [InlineData("tok", false)]
+    [InlineData("wrong", true)]
+    public async Task Pipeline_AcceptsTokenFromFile_AndRejectsAnythingElse(string presented, bool rejected)
+    {
+        var file = WriteTokenFile("tok");
+        try
+        {
+            var config = TokenFileConfig(file);
+            config["Dapr:LocalDelivery:Mode"] = "Enforce";
+
+            var builder = WebApplication.CreateBuilder();
+            builder.WebHost.UseTestServer();
+            var configuration = new ConfigurationBuilder().AddInMemoryCollection(config).Build();
+            builder.Services.AddSingleton<IConfiguration>(configuration);
+            builder.Services.AddSingleton(Substitute.For<IRuntimeInfoProvider>());
+            builder.Services.AddRuntimeCallerIdentity(configuration, runsFlowScripts: true);
+            builder.Services.AddDaprLocalDelivery(configuration);
+            await using var app = builder.Build();
+            app.UseMiddleware<DaprLocalDeliveryMiddleware>();
+            app.MapPost("/guarded", () => Results.Ok()).WithMetadata(new DaprLocalDeliveryOnlyAttribute());
+            await app.StartAsync();
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/guarded");
+            request.Headers.Add("dapr-api-token", presented);
+            var response = await app.GetTestClient().SendAsync(request);
+
+            (response.StatusCode == HttpStatusCode.NotFound).ShouldBe(rejected);
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
+    private static string WriteTokenFile(string content)
+    {
+        var file = Path.Combine(Path.GetTempPath(), $"app-api-token-{Guid.NewGuid():N}");
+        File.WriteAllText(file, content);
+        return file;
+    }
+
+    private static Dictionary<string, string?> TokenFileConfig(string file) => new()
+    {
+        ["Workflow:RuntimeCaller:AppApiTokenFile"] = file,
+        ["Scripting:Sandbox:Enabled"] = "true"
+    };
 
     private static ServiceProvider Build(Dictionary<string, string?> values)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
         var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IConfiguration>(configuration);
+        services.AddSingleton(Substitute.For<IRuntimeInfoProvider>());
+        services.AddRuntimeCallerIdentity(configuration, runsFlowScripts: true);
         services.AddDaprLocalDelivery(configuration);
         return services.BuildServiceProvider();
     }

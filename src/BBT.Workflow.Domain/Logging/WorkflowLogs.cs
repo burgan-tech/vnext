@@ -3819,7 +3819,7 @@ public static partial class WorkflowLogs
     [LoggerMessage(
         EventId = 40997,
         Level = LogLevel.Error,
-        Message = "Dapr local delivery guard is in Enforce mode but no app API token is configured (Dapr:LocalDelivery:AppApiToken or the APP_API_TOKEN environment variable); every Dapr-triggered delivery will be rejected")]
+        Message = "Dapr local delivery guard is in Enforce mode but no app API token is configured (Workflow:RuntimeCaller:AppApiTokenFile); every Dapr-triggered delivery will be rejected")]
     public static partial void DaprLocalDeliveryEnforcedWithoutToken(this ILogger logger);
 
     /// <summary>
@@ -3829,7 +3829,7 @@ public static partial class WorkflowLogs
     [LoggerMessage(
         EventId = 40998,
         Level = LogLevel.Information,
-        Message = "Dapr local delivery guard runs in LogOnly mode without a configured app API token (Dapr:LocalDelivery:AppApiToken or the APP_API_TOKEN environment variable); per-request checks are not reported until a token is set")]
+        Message = "Dapr local delivery guard runs in LogOnly mode without a configured app API token (Workflow:RuntimeCaller:AppApiTokenFile); per-request checks are not reported until a token is set")]
     public static partial void DaprLocalDeliveryLogOnlyWithoutToken(this ILogger logger);
 
     #endregion

@@ -24,10 +24,4 @@ public sealed class DaprLocalDeliveryOptions
 
     /// <summary>Guard mode. Default: <see cref="DaprLocalDeliveryMode.LogOnly"/>.</summary>
     public DaprLocalDeliveryMode Mode { get; set; } = DaprLocalDeliveryMode.LogOnly;
-
-    /// <summary>
-    /// The token the sidecar presents in <c>dapr-api-token</c> (the app API token). Null or blank
-    /// means "not configured" and every delivery fails the rule.
-    /// </summary>
-    public string? AppApiToken { get; set; }
 }
