@@ -1552,13 +1552,7 @@ public sealed class InstanceQueryAppService(
         // A validated entry does NOT short-circuit: it supplies the data portion while extensions
         // still run, so this is a build that reused the cached body, not a cache hit.
         InstanceReadActivityHelper.SetReadOutcome(
-            transaction,
-            InstanceReadKinds.Data,
-            validatedEntry is not null
-                ? InstanceReadActivityHelper.FastPathCacheHit
-                : useCache
-                    ? InstanceReadActivityHelper.FastPathBuild
-                    : InstanceReadActivityHelper.FastPathDisabled);
+            transaction, InstanceReadKinds.Data, DataReadOutcome(validatedEntry is not null, useCache));
 
         using var readEnvelope = InstanceReadActivityHelper.StartRead(
             InstanceReadKinds.Data, input.Domain, input.Workflow);
@@ -1583,17 +1577,12 @@ public sealed class InstanceQueryAppService(
                     // Data portion: reuse the validated cache entry (already field-filtered for
                     // this caller scope) when available; otherwise filter the resolved row.
                     // Extensions below always run fresh against the RAW instance data.
-                    if (validatedEntry is not null)
-                    {
-                        result.Data = validatedEntry.Data;
-                    }
-                    else
-                    {
-                        result.Data = await instanceDataReadService.ExposeAsync(
-                            flow, instance, instanceData,
-                            new AuthorizationRequestContext(input.Headers, input.QueryParameters),
-                            cancellationToken);
-                    }
+                    result.Data = validatedEntry is not null
+                        ? validatedEntry.Data
+                        : await instanceDataReadService.ExposeAsync(
+                        flow, instance, instanceData,
+                        new AuthorizationRequestContext(input.Headers, input.QueryParameters),
+                        cancellationToken);
 
                     // Active SubFlow: the extensions come from the child's data function, whose ETag
                     // joins this response's ETag below. The fast path's read is reused when it was for
@@ -1608,22 +1597,8 @@ public sealed class InstanceQueryAppService(
                     else
                     {
                         // No active SubFlow - process extensions locally
-                        var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
-                            .WithWorkflow(flow)
-                            .WithInstance(instance)
-                            .WithRuntime(runtimeInfoProvider)
-                            .WithTransition(string.Empty)
-                            .WithBody(instanceData?.Data ?? new JsonData("{}"))
-                            .WithHeaders(input.Headers)
-                            .WithQueryParameters(input.QueryParameters)
-                            .BuildAsync(cancellationToken);
-
-                        var extensionsResult = await instanceExtensionService.ProcessExtensionsAsync(
-                            input.Extensions,
-                            scriptContext,
-                            flow,
-                            ExtensionScope.GetInstance,
-                            cancellationToken);
+                        var extensionsResult = await RunLocalDataExtensionsAsync(
+                            flow, instance, instanceData, input, cancellationToken);
 
                         if (!extensionsResult.IsSuccess)
                         {
@@ -1658,8 +1633,7 @@ public sealed class InstanceQueryAppService(
                     // A row carrying x-encryption "encrypt" tokens is never cached: an exempt caller's
                     // body holds the plaintext (Redis would keep it at rest), and a body built while a
                     // key was missing holds tokens that must not outlive the key's return.
-                    if (dataCacheKey is not null && instanceData is not null && validatedEntry is null &&
-                        !EncryptedValueFormat.MayContainToken(instanceData.Data.Json))
+                    if (dataCacheKey is not null && validatedEntry is null && IsCacheableDataRow(instanceData))
                     {
                         await dataFunctionCache.SetAsync(dataCacheKey, new Caching.DataFunctionCacheEntry
                         {
@@ -1671,8 +1645,7 @@ public sealed class InstanceQueryAppService(
 
                     var responseEtag = ComposeResponseEtag(etag, childEtag, childEtagUnknown);
 
-                    if (responseEtag is not null && !string.IsNullOrEmpty(input.IfNoneMatch)
-                        && responseEtag.MatchesIfNoneMatch(input.IfNoneMatch))
+                    if (MatchesCallersEtag(responseEtag, input.IfNoneMatch))
                     {
                         return ConditionalResult<GetInstanceDataOutput>.NotModified();
                     }
@@ -1681,6 +1654,52 @@ public sealed class InstanceQueryAppService(
                     return ConditionalResult<GetInstanceDataOutput>.Success(result);
                 },
                 onFailure: ConditionalResult<GetInstanceDataOutput>.Fail);
+    }
+
+    /// <summary>
+    /// The read outcome tag of a data-function build: a validated cache entry supplied the data, the cache
+    /// was consulted and missed, or the cache is off for this request.
+    /// </summary>
+    private static string DataReadOutcome(bool hasValidatedEntry, bool useCache)
+    {
+        if (hasValidatedEntry)
+            return InstanceReadActivityHelper.FastPathCacheHit;
+        return useCache ? InstanceReadActivityHelper.FastPathBuild : InstanceReadActivityHelper.FastPathDisabled;
+    }
+
+    /// <summary>
+    /// A data row may be stored in the body cache unless it carries x-encryption "encrypt" tokens.
+    /// </summary>
+    private static bool IsCacheableDataRow([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] InstanceData? instanceData) =>
+        instanceData is not null && !EncryptedValueFormat.MayContainToken(instanceData.Data.Json);
+
+    /// <summary>True when the served ETag exists and the caller's If-None-Match names it.</summary>
+    private static bool MatchesCallersEtag(string? responseEtag, string? ifNoneMatch) =>
+        responseEtag is not null && !string.IsNullOrEmpty(ifNoneMatch) && responseEtag.MatchesIfNoneMatch(ifNoneMatch);
+
+    /// <summary>
+    /// Without an active SubFlow the data function runs the requested extensions locally, against the
+    /// raw instance data.
+    /// </summary>
+    private async Task<Result<Dictionary<string, object>>> RunLocalDataExtensionsAsync(
+        Definitions.Workflow flow,
+        Instance instance,
+        InstanceData? instanceData,
+        GetInstanceDataInput input,
+        CancellationToken cancellationToken)
+    {
+        var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
+            .WithWorkflow(flow)
+            .WithInstance(instance)
+            .WithRuntime(runtimeInfoProvider)
+            .WithTransition(string.Empty)
+            .WithBody(instanceData?.Data ?? new JsonData("{}"))
+            .WithHeaders(input.Headers)
+            .WithQueryParameters(input.QueryParameters)
+            .BuildAsync(cancellationToken);
+
+        return await instanceExtensionService.ProcessExtensionsAsync(
+            input.Extensions, scriptContext, flow, ExtensionScope.GetInstance, cancellationToken);
     }
 
     /// <summary>
