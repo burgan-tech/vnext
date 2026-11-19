@@ -1806,18 +1806,7 @@ public sealed class InstanceQueryAppService(
             subflow.ParentInstanceId.ToString(),
             TelemetryConstants.DescentFunctions.Data);
 
-        ConditionalResult<GetInstanceDataOutput> result;
-        try
-        {
-            result = await instanceQueryGateway.GetInstanceDataAsync(childInput, cancellationToken);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
-        {
-            // The in-process gateway runs the child's whole read pipeline, so a child-side fault arrives
-            // as an exception; it takes the same fallback as a failed result instead of a parent 500.
-            result = ConditionalResult<GetInstanceDataOutput>.Fail(
-                Error.Transient("subflow_data_read_failed", ex.Message));
-        }
+        var result = await CallChildDataFunctionAsync(childInput, cancellationToken);
 
         // A remote client reports the caller's cancellation as a failed result: stop here rather than
         // build and log a fallback nobody will receive.
@@ -1831,6 +1820,26 @@ public sealed class InstanceQueryAppService(
         }
 
         return new SubFlowDataRead(subflow.SubFlowInstanceId, result);
+    }
+
+    /// <summary>
+    /// The gateway call itself. The in-process gateway runs the child's whole read pipeline, so a
+    /// child-side fault arrives as an exception; it becomes a failed result (the same fallback) instead
+    /// of a parent 500. The caller's own cancellation is not caught.
+    /// </summary>
+    private async Task<ConditionalResult<GetInstanceDataOutput>> CallChildDataFunctionAsync(
+        GetInstanceDataInput childInput,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await instanceQueryGateway.GetInstanceDataAsync(childInput, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            return ConditionalResult<GetInstanceDataOutput>.Fail(
+                Error.Transient("subflow_data_read_failed", ex.Message));
+        }
     }
 
     /// <summary>
