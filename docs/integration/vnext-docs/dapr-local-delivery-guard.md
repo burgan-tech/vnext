@@ -8,7 +8,7 @@ status: pending
 
 ## Context
 
-- vNext PR: burgan-tech/vnext — `feat(security): guard Dapr-triggered endpoints to own-sidecar deliveries`
+- vNext PR: https://github.com/burgan-tech/vnext/pull/1320
 - Milestone: v0.0.107
 - Issue: https://github.com/burgan-tech/vnext/issues/1253
 

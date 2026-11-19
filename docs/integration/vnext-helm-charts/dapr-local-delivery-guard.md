@@ -8,7 +8,7 @@ status: pending
 
 ## Context
 
-- vNext PR: (this branch, link added when the PR is opened)
+- vNext PR: https://github.com/burgan-tech/vnext/pull/1320
 - Milestone: v0.0.107
 - Issue: <https://github.com/burgan-tech/vnext/issues/1253>
 - Related handoff: [Sub-endpoint gate](sub-endpoint-gate.md) (shares the script-sandbox condition)
