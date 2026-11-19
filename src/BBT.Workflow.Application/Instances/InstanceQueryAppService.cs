@@ -2131,7 +2131,7 @@ public sealed class InstanceQueryAppService(
     /// Feeds the <c>correlations</c> response list only — the active-subflow detection below deliberately
     /// keeps using the aggregate, whose active set drives Busy/settlement semantics.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    private async Task<Result<GetInstanceStateOutput>> BuildInstanceStateOutputAsync(
+    private async Task<Result<GetInstanceStateOutput>> BuildInstanceStateOutputAsync( // skipcq: CS-R1140 — assembles the state response from independent, ordered parts
         Instance instance,
         Definitions.Workflow currentWorkflow,
         GetInstanceStateInput input,
