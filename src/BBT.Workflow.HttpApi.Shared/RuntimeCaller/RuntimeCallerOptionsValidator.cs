@@ -1,3 +1,4 @@
+using BBT.Workflow.Middlewares;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 
@@ -18,6 +19,7 @@ internal sealed class RuntimeCallerOptionsValidator(IConfiguration configuration
     private static readonly HashSet<string> KnownKeys = new(StringComparer.OrdinalIgnoreCase)
     {
         nameof(RuntimeCallerOptions.KeyFile),
+        nameof(RuntimeCallerOptions.AppApiTokenFile),
         nameof(RuntimeCallerOptions.Required),
         nameof(RuntimeCallerOptions.MaxClockSkewSeconds),
         nameof(RuntimeCallerOptions.AllowWithoutScriptSandbox)
@@ -35,9 +37,10 @@ internal sealed class RuntimeCallerOptionsValidator(IConfiguration configuration
         {
             if (!KnownKeys.Contains(child.Key)
                 && (child.Key.Contains("key", StringComparison.OrdinalIgnoreCase)
-                    || child.Key.Contains("secret", StringComparison.OrdinalIgnoreCase)))
+                    || child.Key.Contains("secret", StringComparison.OrdinalIgnoreCase)
+                    || child.Key.Contains("token", StringComparison.OrdinalIgnoreCase)))
                 failures.Add($"{RuntimeCallerOptions.SectionName}:{child.Key} looks like key material. Keys belong " +
-                             "in the mounted key file named by KeyFile: flow scripts can read configuration.");
+                             "in the mounted files named by KeyFile and AppApiTokenFile: flow scripts can read configuration.");
         }
 
         if (string.IsNullOrWhiteSpace(options.KeyFile))
@@ -55,15 +58,30 @@ internal sealed class RuntimeCallerOptionsValidator(IConfiguration configuration
             {
                 failures.Add(exception.Message);
             }
-
-            if (runsFlowScripts
-                && !configuration.GetValue<bool>(SandboxEnabledKey)
-                && !options.AllowWithoutScriptSandbox)
-                failures.Add("A runtime-caller key ring is configured on a host that runs flow scripts with " +
-                             $"{SandboxEnabledKey}=false: an unsandboxed script can read the key file. Enable the " +
-                             $"sandbox, or set {RuntimeCallerOptions.SectionName}:AllowWithoutScriptSandbox=true " +
-                             "(logged as Critical at every start).");
         }
+
+        var hasAppApiTokenFile = !string.IsNullOrWhiteSpace(options.AppApiTokenFile);
+        if (hasAppApiTokenFile)
+        {
+            try
+            {
+                DaprAppApiTokenLoader.Load(options.AppApiTokenFile);
+            }
+            catch (InvalidOperationException exception)
+            {
+                failures.Add(exception.Message);
+            }
+        }
+
+        if ((!string.IsNullOrWhiteSpace(options.KeyFile) || hasAppApiTokenFile)
+            && runsFlowScripts
+            && !configuration.GetValue<bool>(SandboxEnabledKey)
+            && !options.AllowWithoutScriptSandbox)
+            failures.Add("A runtime-caller key file (KeyFile) or Dapr app API token file (AppApiTokenFile) is " +
+                         $"configured on a host that runs flow scripts with {SandboxEnabledKey}=false: an " +
+                         "unsandboxed script can read the mounted file. Enable the sandbox, or set " +
+                         $"{RuntimeCallerOptions.SectionName}:AllowWithoutScriptSandbox=true " +
+                         "(logged as Critical at every start).");
 
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
     }
