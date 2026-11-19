@@ -176,6 +176,38 @@ public abstract class InstanceCorrelationRepositoryTests<TEntry> : DomainTestBas
     }
 
     /// <summary>
+    /// The read-only variant finds the same active SubFlow correlation as the tracked one.
+    /// </summary>
+    [Fact]
+    public async Task FindActiveSubFlowByParentAsReadOnlyAsync_ShouldReturnActiveSubFlow()
+    {
+        // Arrange
+        var parentInstance = await CreateTestInstanceAsync("parent");
+        var subInstance = await CreateTestInstanceAsync("sub");
+
+        var correlation = InstanceCorrelation.Create(
+            Guid.NewGuid(),
+            parentInstance.Id,
+            "TestState",
+            subInstance.Id,
+            SubFlowType.SubFlow.Code,
+            "test",
+            "test-workflow",
+            "1.0"
+        );
+
+        await Repository.InsertAsync(correlation, true);
+
+        // Act
+        var result = await Repository.FindActiveSubFlowByParentAsReadOnlyAsync(parentInstance.Id);
+
+        // Assert
+        result.ShouldNotBeNull();
+        result.SubFlowInstanceId.ShouldBe(subInstance.Id);
+        result.SubFlowType.ShouldBe(SubFlowType.SubFlow);
+    }
+
+    /// <summary>
     /// Tests that FindBySubInstanceIdAsync returns the correlation for a SubFlow instance.
     /// </summary>
     [Fact]

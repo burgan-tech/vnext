@@ -1517,6 +1517,8 @@ public sealed class InstanceQueryAppService(
         // an If-None-Match match is answered with 304 from a single projection query — no
         // aggregate load, no extension run, no response build. Pinned-version requests stay on
         // the full path: an older-line write changes their body without moving the latest ETag.
+        // With an active SubFlow the ETag is composed with the child's data ETag (SubFlowDataEtag)
+        // and the 304 needs the child's 304 as well.
         //
         // A validated cache entry does NOT short-circuit the build: it supplies the DATA portion
         // (skipping the x-roles field filtering) while extensions are ALWAYS computed fresh —
@@ -1526,6 +1528,7 @@ public sealed class InstanceQueryAppService(
         var isLatestRequest = InstanceDataVersionComparer.IsRequestingLatest(input.Version);
         string? dataCacheKey = null;
         Caching.DataFunctionCacheEntry? validatedEntry = null;
+        SubFlowDataRead? probedSubFlowRead = null;
 
         // A trigger task's read is an ordinary caller's (its own headers), so it is cached under its own scope.
         var useCache = dataFunctionCache.Enabled && isLatestRequest;
@@ -1542,19 +1545,14 @@ public sealed class InstanceQueryAppService(
             }
 
             validatedEntry = fastPath.ValidatedEntry;
+            probedSubFlowRead = fastPath.SubFlowRead;
             dataCacheKey = dataFunctionCache.BuildKey(input);
         }
 
         // A validated entry does NOT short-circuit: it supplies the data portion while extensions
         // still run, so this is a build that reused the cached body, not a cache hit.
         InstanceReadActivityHelper.SetReadOutcome(
-            transaction,
-            InstanceReadKinds.Data,
-            validatedEntry is not null
-                ? InstanceReadActivityHelper.FastPathCacheHit
-                : useCache
-                    ? InstanceReadActivityHelper.FastPathBuild
-                    : InstanceReadActivityHelper.FastPathDisabled);
+            transaction, InstanceReadKinds.Data, DataReadOutcome(validatedEntry is not null, useCache));
 
         using var readEnvelope = InstanceReadActivityHelper.StartRead(
             InstanceReadKinds.Data, input.Domain, input.Workflow);
@@ -1574,53 +1572,33 @@ public sealed class InstanceQueryAppService(
                     var instanceData = instance.FindData(input.Version);
                     var entityEtag = instanceData?.ETag ?? string.Empty;
 
-                    var result = new GetInstanceDataOutput();
-
                     // Data portion: reuse the validated cache entry (already field-filtered for
                     // this caller scope) when available; otherwise filter the resolved row.
                     // Extensions below always run fresh against the RAW instance data.
-                    if (validatedEntry is not null)
-                    {
-                        result.Data = validatedEntry.Data;
-                    }
-                    else
-                    {
-                        result.Data = await instanceDataReadService.ExposeAsync(
+                    var exposedData = validatedEntry is not null
+                        ? validatedEntry.Data
+                        : await instanceDataReadService.ExposeAsync(
                             flow, instance, instanceData,
                             new AuthorizationRequestContext(input.Headers, input.QueryParameters),
                             cancellationToken);
-                    }
 
-                    // If there's an active SubFlow and extensions are requested, fetch from SubFlow
+                    var result = new GetInstanceDataOutput { Data = exposedData, EntityEtag = entityEtag };
+
+                    // Active SubFlow: the extensions come from the child's data function, whose ETag
+                    // joins this response's ETag below. The fast path's read is reused when it was for
+                    // this same child; it was a full read then (a 304 never reaches the build).
+                    string? childEtag = null;
+                    var childEtagUnknown = false;
                     if (instance.Subflow != null)
                     {
-                        var subFlowExtensionsResult = await GetSubFlowExtensionsAsync(
-                            instance.Subflow,
-                            input.Extensions,
-                            cancellationToken);
-
-                        result.Extensions = subFlowExtensionsResult.Value?.Extensions ??
-                                            new Dictionary<string, object>();
+                        (result.Extensions, childEtag, childEtagUnknown) = await ReadSubFlowExtensionsAsync(
+                            instance.Subflow, input, probedSubFlowRead, cancellationToken);
                     }
                     else
                     {
                         // No active SubFlow - process extensions locally
-                        var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
-                            .WithWorkflow(flow)
-                            .WithInstance(instance)
-                            .WithRuntime(runtimeInfoProvider)
-                            .WithTransition(string.Empty)
-                            .WithBody(instanceData?.Data ?? new JsonData("{}"))
-                            .WithHeaders(input.Headers)
-                            .WithQueryParameters(input.QueryParameters)
-                            .BuildAsync(cancellationToken);
-
-                        var extensionsResult = await instanceExtensionService.ProcessExtensionsAsync(
-                            input.Extensions,
-                            scriptContext,
-                            flow,
-                            ExtensionScope.GetInstance,
-                            cancellationToken);
+                        var extensionsResult = await RunLocalDataExtensionsAsync(
+                            flow, instance, instanceData, input, cancellationToken);
 
                         if (!extensionsResult.IsSuccess)
                         {
@@ -1629,8 +1607,6 @@ public sealed class InstanceQueryAppService(
 
                         result.Extensions = extensionsResult.Value!;
                     }
-
-                    result.EntityEtag = entityEtag;
 
                     // Same fingerprint the fast path projects. Pinned-version requests hash the
                     // RESOLVED row's ETag instead of the latest one (a write into that version line
@@ -1655,8 +1631,7 @@ public sealed class InstanceQueryAppService(
                     // A row carrying x-encryption "encrypt" tokens is never cached: an exempt caller's
                     // body holds the plaintext (Redis would keep it at rest), and a body built while a
                     // key was missing holds tokens that must not outlive the key's return.
-                    if (dataCacheKey is not null && instanceData is not null && validatedEntry is null &&
-                        !EncryptedValueFormat.MayContainToken(instanceData.Data.Json))
+                    if (dataCacheKey is not null && validatedEntry is null && IsCacheableDataRow(instanceData))
                     {
                         await dataFunctionCache.SetAsync(dataCacheKey, new Caching.DataFunctionCacheEntry
                         {
@@ -1666,15 +1641,63 @@ public sealed class InstanceQueryAppService(
                         }, dataFunctionCache.ResolveTtlSeconds(flow.Config?.FunctionCache), cancellationToken);
                     }
 
-                    if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
+                    var responseEtag = ComposeResponseEtag(etag, childEtag, childEtagUnknown);
+
+                    if (MatchesCallersEtag(responseEtag, input.IfNoneMatch))
                     {
                         return ConditionalResult<GetInstanceDataOutput>.NotModified();
                     }
 
-                    result.ETag = etag;
+                    result.ETag = responseEtag;
                     return ConditionalResult<GetInstanceDataOutput>.Success(result);
                 },
                 onFailure: ConditionalResult<GetInstanceDataOutput>.Fail);
+    }
+
+    /// <summary>
+    /// The read outcome tag of a data-function build: a validated cache entry supplied the data, the cache
+    /// was consulted and missed, or the cache is off for this request.
+    /// </summary>
+    private static string DataReadOutcome(bool hasValidatedEntry, bool useCache)
+    {
+        if (hasValidatedEntry)
+            return InstanceReadActivityHelper.FastPathCacheHit;
+        return useCache ? InstanceReadActivityHelper.FastPathBuild : InstanceReadActivityHelper.FastPathDisabled;
+    }
+
+    /// <summary>
+    /// A data row may be stored in the body cache unless it carries x-encryption "encrypt" tokens.
+    /// </summary>
+    private static bool IsCacheableDataRow([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] InstanceData? instanceData) =>
+        instanceData is not null && !EncryptedValueFormat.MayContainToken(instanceData.Data.Json);
+
+    /// <summary>True when the served ETag exists and the caller's If-None-Match names it.</summary>
+    private static bool MatchesCallersEtag(string? responseEtag, string? ifNoneMatch) =>
+        responseEtag is not null && !string.IsNullOrEmpty(ifNoneMatch) && responseEtag.MatchesIfNoneMatch(ifNoneMatch);
+
+    /// <summary>
+    /// Without an active SubFlow the data function runs the requested extensions locally, against the
+    /// raw instance data.
+    /// </summary>
+    private async Task<Result<Dictionary<string, object>>> RunLocalDataExtensionsAsync(
+        Definitions.Workflow flow,
+        Instance instance,
+        InstanceData? instanceData,
+        GetInstanceDataInput input,
+        CancellationToken cancellationToken)
+    {
+        var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
+            .WithWorkflow(flow)
+            .WithInstance(instance)
+            .WithRuntime(runtimeInfoProvider)
+            .WithTransition(string.Empty)
+            .WithBody(instanceData?.Data ?? new JsonData("{}"))
+            .WithHeaders(input.Headers)
+            .WithQueryParameters(input.QueryParameters)
+            .BuildAsync(cancellationToken);
+
+        return await instanceExtensionService.ProcessExtensionsAsync(
+            input.Extensions, scriptContext, flow, ExtensionScope.GetInstance, cancellationToken);
     }
 
     /// <summary>
@@ -1687,30 +1710,43 @@ public sealed class InstanceQueryAppService(
     /// instance was not found (the full path produces the proper error), on a cache miss,
     /// or when the stored entry is stale.
     /// </summary>
-    private async Task<(ConditionalResult<GetInstanceDataOutput>? NotModified, Caching.DataFunctionCacheEntry? ValidatedEntry)>
+    private async Task<(ConditionalResult<GetInstanceDataOutput>? NotModified, Caching.DataFunctionCacheEntry? ValidatedEntry, SubFlowDataRead? SubFlowRead)>
         TryServeDataFromFingerprintAsync(
             GetInstanceDataInput input,
             CancellationToken cancellationToken)
     {
         var fingerprint = await instanceRepository.GetDataFingerprintAsync(input.Instance, cancellationToken);
         if (fingerprint is null)
-            return (null, null);
+            return (null, null, null);
 
         // The 304 decision is made against the representation ETag (state included, because the
         // extension output a 304 withholds is derived from it) ...
         var etag = dataFunctionCache.ComputeEtag(input, fingerprint);
+        SubFlowDataRead? subFlowRead = null;
 
-        if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
+        if (fingerprint.HasActiveSubFlow)
+        {
+            // ... and, with an open SubFlow, against the child's data ETag too: the extensions are
+            // read from the child, whose data moves while the parent's does not. The child answers
+            // from its own fingerprint fast path, so an unchanged chain still runs no extension.
+            subFlowRead = await ProbeActiveSubFlowDataAsync(input, fingerprint.Id, etag, cancellationToken);
+            if (subFlowRead?.Result.IsNotModified == true)
+            {
+                logger.DataFunctionSubFlowEtagNotModified(input.Instance, subFlowRead.ChildInstanceId);
+                return (ConditionalResult<GetInstanceDataOutput>.NotModified(), null, null);
+            }
+        }
+        else if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
         {
             logger.DataFunctionEtagNotModified(input.Instance);
-            return (ConditionalResult<GetInstanceDataOutput>.NotModified(), null);
+            return (ConditionalResult<GetInstanceDataOutput>.NotModified(), null, null);
         }
 
         var entry = await dataFunctionCache.GetAsync(dataFunctionCache.BuildKey(input), cancellationToken);
         if (entry is null)
         {
             logger.DataFunctionCacheMiss(input.Instance);
-            return (null, null);
+            return (null, null, subFlowRead);
         }
 
         // ... while the stored body is validated against the data-only identity, so a transition
@@ -1721,11 +1757,180 @@ public sealed class InstanceQueryAppService(
         if (!string.Equals(entry.Etag, dataEtag, StringComparison.Ordinal))
         {
             logger.DataFunctionCacheInvalidated(input.Instance, entry.Etag, dataEtag);
-            return (null, null);
+            return (null, null, subFlowRead);
         }
 
         logger.DataFunctionCacheHit(input.Instance);
-        return (null, entry);
+        return (null, entry, subFlowRead);
+    }
+
+    /// <summary>
+    /// One read of the active SubFlow child's data function, kept so the build path reuses its
+    /// <c>extensions</c> and ETag instead of descending a second time.
+    /// </summary>
+    private sealed record SubFlowDataRead(Guid ChildInstanceId, ConditionalResult<GetInstanceDataOutput> Result);
+
+    /// <summary>
+    /// Fast-path probe of the active SubFlow: loads the open correlation and asks the child's data
+    /// function, forwarding the child part of the caller's composed ETag as <c>If-None-Match</c> — only
+    /// when the parent part still matches, so a 304 from the child means the whole chain is unchanged.
+    /// Null when the correlation closed between the fingerprint and this read; the build path then
+    /// follows what the loaded aggregate says.
+    /// </summary>
+    private async Task<SubFlowDataRead?> ProbeActiveSubFlowDataAsync(
+        GetInstanceDataInput input,
+        Guid parentInstanceId,
+        string parentEtag,
+        CancellationToken cancellationToken)
+    {
+        var correlation = await instanceCorrelationRepository.FindActiveSubFlowByParentAsReadOnlyAsync(
+            parentInstanceId, cancellationToken);
+        if (correlation is null)
+            return null;
+
+        var childIfNoneMatch = Caching.SubFlowDataEtag.ChildPartFor(input.IfNoneMatch, parentEtag);
+        return await ReadActiveSubFlowDataAsync(correlation, input, childIfNoneMatch, cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads the active SubFlow child's data function through the query gateway (in-process for a
+    /// co-hosted domain, HTTP/Dapr otherwise) as the same caller. The child descends further on its own,
+    /// so its <c>extensions</c> are the leaf's and its ETag is composed down the chain.
+    /// </summary>
+    private async Task<SubFlowDataRead> ReadActiveSubFlowDataAsync(
+        InstanceCorrelation subflow,
+        GetInstanceDataInput input,
+        string? childIfNoneMatch,
+        CancellationToken cancellationToken)
+    {
+        // Version stays null: on the data function it selects a DATA version, and the parent's pinned
+        // version means nothing to the child. Query parameters are not forwarded for the same reason.
+        var childInput = new GetInstanceDataInput
+        {
+            Domain = subflow.SubFlowDomain,
+            Workflow = subflow.SubFlowName,
+            Instance = subflow.SubFlowInstanceId.ToString(),
+            IfNoneMatch = childIfNoneMatch,
+            Extensions = input.Extensions,
+            Headers = WithoutConditionalHeaders(input.Headers),
+            Roles = input.Roles
+        };
+
+        using var descent = StartDescend(
+            subflow.SubFlowDomain,
+            subflow.SubFlowName,
+            subflow.SubFlowInstanceId.ToString(),
+            subflow.ParentInstanceId.ToString(),
+            TelemetryConstants.DescentFunctions.Data);
+
+        var result = await CallChildDataFunctionAsync(childInput, cancellationToken);
+
+        // A remote client reports the caller's cancellation as a failed result: stop here rather than
+        // build and log a fallback nobody will receive.
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!result.IsNotModified && result.Result is not { IsSuccess: true })
+        {
+            // The parent still serves its data with an empty extensions block; mark the hop so that
+            // fallback is not read as a descent that succeeded and returned nothing.
+            InstanceReadActivityHelper.SetUnresolved(descent.Activity, "subflow-data-unavailable");
+        }
+
+        return new SubFlowDataRead(subflow.SubFlowInstanceId, result);
+    }
+
+    /// <summary>
+    /// The gateway call itself. The in-process gateway runs the child's whole read pipeline, so a
+    /// child-side fault arrives as an exception; it becomes a failed result (the same fallback) instead
+    /// of a parent 500. The caller's own cancellation is not caught.
+    /// </summary>
+    private async Task<ConditionalResult<GetInstanceDataOutput>> CallChildDataFunctionAsync(
+        GetInstanceDataInput childInput,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await instanceQueryGateway.GetInstanceDataAsync(childInput, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            return ConditionalResult<GetInstanceDataOutput>.Fail(
+                Error.Transient("subflow_data_read_failed", ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Build path with an active SubFlow: the extensions come from the child's data function, whose ETag
+    /// joins this response's ETag. The fast path's read is reused when it was for this same child; it was
+    /// a full read then (a 304 never reaches the build). A failed read keeps the parent's data served with
+    /// no extensions; it and a successful read that carries no ETag (a grandchild read that failed, or a
+    /// cross-domain child on an older runtime) report <c>EtagUnknown</c>, so that body gets no ETag — the
+    /// parent part alone never stands for a chain whose child part is unknown.
+    /// </summary>
+    private async Task<(Dictionary<string, object> Extensions, string? ChildEtag, bool EtagUnknown)>
+        ReadSubFlowExtensionsAsync(
+            InstanceCorrelation subflow,
+            GetInstanceDataInput input,
+            SubFlowDataRead? probedSubFlowRead,
+            CancellationToken cancellationToken)
+    {
+        var subFlowRead = probedSubFlowRead is { Result.IsNotModified: false } probed
+                          && probed.ChildInstanceId == subflow.SubFlowInstanceId
+            ? probed
+            : await ReadActiveSubFlowDataAsync(subflow, input, null, cancellationToken);
+
+        if (subFlowRead.Result.Result is { IsSuccess: true, Value: { } childOutput })
+        {
+            var extensions = childOutput.Extensions ?? new Dictionary<string, object>();
+            return string.IsNullOrEmpty(childOutput.ETag)
+                ? (extensions, null, true)
+                : (extensions, childOutput.ETag, false);
+        }
+
+        logger.DataFunctionSubFlowReadFailed(
+            input.Instance, subflow.SubFlowInstanceId, subFlowRead.Result.Result.Error.Message);
+        return (new Dictionary<string, object>(), null, true);
+    }
+
+    /// <summary>
+    /// The served ETag. With an active SubFlow the representation is the parent's AND the child's
+    /// (<c>{parent}.{child}</c>); when the child part is unknown (failed read, or a child that served no
+    /// ETag) the body gets no ETag at all. No active SubFlow ⇒ the parent ETag alone.
+    /// </summary>
+    private static string? ComposeResponseEtag(string parentEtag, string? childEtag, bool childEtagUnknown)
+    {
+        if (childEtagUnknown)
+            return null;
+
+        return string.IsNullOrEmpty(childEtag)
+            ? parentEtag
+            : Caching.SubFlowDataEtag.Compose(parentEtag, childEtag);
+    }
+
+    private static readonly HashSet<string> ConditionalRequestHeaders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "If-None-Match", "If-Match", "If-Modified-Since", "If-Unmodified-Since"
+    };
+
+    /// <summary>
+    /// The caller's headers minus its conditional ones. The child's only condition is its own part of the
+    /// composed ETag (<see cref="GetInstanceDataInput.IfNoneMatch"/>); the remote client merges the input
+    /// headers over the request it built, so the caller's own <c>If-None-Match</c> (the composed
+    /// <c>parent.child</c> value) would replace that part and the child could never answer 304.
+    /// </summary>
+    private static Dictionary<string, string?>? WithoutConditionalHeaders(Dictionary<string, string?>? headers)
+    {
+        if (headers is null)
+            return null;
+
+        var filtered = new Dictionary<string, string?>(headers.Comparer);
+        foreach (var (key, value) in headers)
+        {
+            if (!ConditionalRequestHeaders.Contains(key))
+                filtered[key] = value;
+        }
+
+        return filtered;
     }
 
     /// Gets the view definition for rule-based view selection.

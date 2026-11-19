@@ -1,0 +1,7 @@
+{
+  "releaseNote": {
+    "summary": "With an active SubFlow the data function's ETag also carries the child's data ETag, so a child data write in the same state now answers 200 with the new extension output.",
+    "breaking": false,
+    "docs": []
+  }
+}

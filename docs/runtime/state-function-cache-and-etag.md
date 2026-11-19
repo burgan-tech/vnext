@@ -324,14 +324,53 @@ callerHash = h(roles | actor identity | culture | version)   # extensions delibe
 - **`flowVersion` is in the material** because a flow migration can change `x-roles` field
   filtering and extension definitions without a data write.
 - **Extensions are outside the key and the ETag.** The ETag signals the data change point
-  only; requests differing only in the requested extension list share one key and one ETag.
+  only; requests differing only in the requested extension list share one key and one ETag. (With
+  an active SubFlow the child's data ETag joins the served ETag — see below — still a data signal,
+  never a hash of extension output.)
 - **Latest-data requests only.** Pinned-version requests (`?version=X`) bypass the fast path
   and the cache: a write into an *older* version line (`AddDataWithVersion`) creates a new row
   without touching the IsLatest row's ETag, so the latest-based material cannot see it. On the
   full path, pinned requests hash the **resolved** row's ETag instead — correct, because a
   write into that line produces a new row with a new ULID.
-- **No subflow bypass**: the data body is always the parent's own `FindData` result; an active
-  subflow only contributes extension output — which is never cached (below).
+- **Active SubFlow: the ETag is composed with the child's.** The data body is always the parent's
+  own `FindData` result, but its `extensions` come from the active `S` child — and while the child
+  runs, the parent's data and effective state do not move (vnext#1084: a child writing data in the
+  same state left the parent answering 304 to every poll). The ETag served is then
+  `{etag}.{childEtag}` (`SubFlowDataEtag`), where `childEtag` is the child's own data-function ETag,
+  composed the same way when the child itself waits on a SubFlow (`p.c.g`). The child part is the
+  change signal of the child's extension output under the same "source is data" rule: the child's
+  data and state, not its extension output.
+  - **Fast path:** `HasActiveSubFlow` in the fingerprint → load the open correlation
+    (`FindActiveSubFlowByParentAsReadOnlyAsync`, untracked, served by `IX_InstancesCorrelations_ActiveBlockingSubFlow`) and
+    call the child's data function through `IInstanceQueryGateway` (in-process for a co-hosted domain,
+    HTTP/Dapr otherwise) with `If-None-Match` = the child part — only when the parent part still
+    matches. A 304 from the child is the parent's 304; no extension runs anywhere in the chain.
+  - **Build path:** a 200 from that call is reused (one descent per request); otherwise the child is
+    read unconditionally. Its `extensions` and ETag go into the response; the body cache stays
+    data-only and keeps the parent's `dataEtag`.
+  - **Child read fails:** the parent's data is served with an empty `extensions` block, as before, but
+    with **no ETag**, so a client never pins that empty block behind a 304
+    (`DataFunctionSubFlowReadFailed`, EventId 20521). A child-side exception (the in-process gateway
+    runs the child's whole read) takes the same fallback; the caller's own cancellation propagates.
+  - **Child answers without an ETag** (its own grandchild read failed, or a cross-domain child on an
+    older runtime): its `extensions` are served, but the response has **no ETag** — the parent part
+    alone never stands for a chain whose child part is unknown.
+  - **Client rule:** a 200 that carries no ETag replaces the stored one — the client drops its
+    `If-None-Match` until a response brings an ETag again. A client that keeps sending the old
+    composed ETag would get a 304 once the child recovers and keep showing the empty `extensions`.
+  - **Cross-domain:** the same gateway call — the remote client forwards `If-None-Match` and maps
+    304; the child's ETag rides in the response body (`GetInstanceDataOutput.ETag`). Verified on the
+    cross-domain lab with both discovery providers (`dapr`, `http`). The caller's own conditional
+    headers (`If-None-Match`, `If-Match`, `If-Modified-Since`, `If-Unmodified-Since`) are removed from
+    the headers handed to the child: the remote client merges input headers over the request it built,
+    so the caller's composed `parent.child` value would replace the child part and the child would
+    never answer 304 (the result stayed correct, but every poll ran the child's extensions). A
+    cross-domain 304 is one service-invocation hop to the child's fingerprint path — measured locally
+    over Dapr at ~4 ms p50 against ~2.4 ms for a co-hosted child.
+  - **Cost:** an unchanged poll is three indexed reads (parent fingerprint, correlation, child
+    fingerprint) instead of one; instances without an active SubFlow are untouched — same code path,
+    same ETag bytes, no generation bump. A parent-only ETag issued before the SubFlow opened (or by an
+    older runtime) gets one 200.
 - A 304 answered from the fingerprint skips the aggregate load, the authorization gate, field
   filtering **and the extension run** — including always-on Global extensions, which are the
   most expensive part of a data read.
@@ -418,12 +457,13 @@ callerHash  = h(roles | actor identity | culture | version)   # no extensions di
 
 These rules cover what the state function and its sibling read surfaces serve and from which level.
 
-### Every built-in function descends — except `data`
+### Every built-in function descends — `data` only for its ETag and `extensions`
 
-- **Every built-in instance function descends an active subflow — except `data`.** The client holds
-  the ROOT and never the leaf, so `state`, `authorize`, `view`, `schema`, `master` and `extensions`
-  all walk into the active correlation. `data` does not, and the state body's own `data.href`
-  addresses the polled instance, so a client following the link it was given reads the root's
+- **Every built-in instance function descends an active subflow; `data` descends only for its ETag
+  and `extensions`.** The client holds the ROOT and never the leaf, so `state`, `authorize`, `view`,
+  `schema`, `master` and `extensions` all walk into the active correlation. The **content** of `data`
+  does not (its ETag and `extensions` do — [Data function](#data-function)), and the state body's own
+  `data.href` addresses the polled instance, so a client following the link it was given reads the root's
   attributes while looking at the leaf's state. Measured, and pinned by
   `TheStateFunctionDescendsButTheDataFunctionDoesNot`; whether a client wants the case's data or the
   leaf's working copy is a product decision, not a settled one.
