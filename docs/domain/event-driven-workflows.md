@@ -142,11 +142,16 @@ run, so it never reaches scripts, instance data or logs.
 | Setting | Meaning |
 |---|---|
 | `Dapr:LocalDelivery:Mode` | `Off`, `LogOnly` (**default**: a failing request is served and logged as EventId 40996 "would reject") or `Enforce` (a failing request gets `404`). |
-| `Dapr:LocalDelivery:AppApiToken` | The token the sidecar presents. Falls back to the `APP_API_TOKEN` environment variable. `Enforce` with no token rejects every guarded request and logs EventId 40997 at startup. `LogOnly` with no token logs EventId 40998 (Information) once at startup and nothing per request. |
+| `Workflow:RuntimeCaller:AppApiTokenFile` | Path to a mounted file that holds the token the sidecar presents. The app reads it once at start and trims it; it is never reloaded. There is no env or configuration value for the token itself, because flow scripts can read both. If the path is set and the file is missing, unreadable or empty, startup fails. Any other token-, key- or secret-named entry under `Workflow:RuntimeCaller` also fails startup. On the Orchestration host the token file also needs `Scripting:Sandbox:Enabled=true`; otherwise startup fails unless `Workflow:RuntimeCaller:AllowWithoutScriptSandbox=true` is set (Critical log at every start). Same condition as in [Sub-endpoint gate](../runtime/sub-endpoint-gate.md). With the path unset, `Enforce` rejects every guarded request and logs EventId 40997 at startup; `LogOnly` logs EventId 40998 (Information) once at startup and nothing per request. Both messages name this key. |
 
-The sidecar must hold the same token: set `APP_API_TOKEN` on `daprd`. On Kubernetes that is the
-annotation `dapr.io/app-token-secret: <secret>` (key `token`); the injector gives the secret only to
-`daprd`, so the app container needs the same secret through its own `secretKeyRef`.
+The sidecar must hold the same token: `daprd` takes it from its `APP_API_TOKEN` environment variable. The app
+does **not** read `APP_API_TOKEN`. On Kubernetes:
+
+- one Secret per domain, key `token`;
+- the annotation `dapr.io/app-token-secret: <secret>` on the **orchestration** Deployment only; the injector gives the Secret to `daprd` only;
+- the same Secret mounted read-only into the orchestration container, with `Workflow__RuntimeCaller__AppApiTokenFile` set to the mount path.
+
+Rotation: change the Secret, then restart the orchestration Deployment. There is no in-place reload.
 
 **The sidecar's own API is inside the boundary.** A call made to this runtime's own sidecar
 (`POST <sidecar>/v1.0/invoke/<own-app-id>/method/...`) reaches the app with the token and without
@@ -160,7 +165,8 @@ Rollout: ship the runtime in `LogOnly`, enable the sidecar token (Helm), watch E
 zero, then set `Mode=Enforce`. Rollback is `Mode=LogOnly`. Scope of this phase: the orchestration host
 only; the execution, inbox and outbox hosts and the vNext-to-vNext internal endpoints (for example
 `transitions/{key}/enqueue`) are not yet covered. Local runs through `etc/docker/run-docker.sh` get a
-per-checkout token in the git-ignored `.vnext-local/app-api-token` (delete the file to rotate).
+per-checkout token in the git-ignored `.vnext-local/app-api-token` (delete the file to rotate). The script passes the file
+path to a host-run orchestration and bind-mounts it read-only at `/run/secrets/vnext/app-api-token` into `vnext-app` containers; the mount defaults to `/dev/null`, so a container started without the script fails at startup on the empty file.
 
 ### The response is a Dapr protocol body, not an instance envelope
 
@@ -312,7 +318,7 @@ exercised without a broker:
 ```bash
 curl -X POST "http://localhost:4201/api/v1/morph-touch/workflows/event-driven-workflow/instances/events?action=start" \
   -H "Content-Type: application/json" \
-  -H "dapr-api-token: $APP_API_TOKEN" \
+  -H "dapr-api-token: $(cat .vnext-local/app-api-token)" \
   -d '{"orderId":"ord-1","amount":250}'
 ```
 

@@ -18,9 +18,11 @@ status: pending
   `/job/{jobName}` accept only a delivery from the domain's own Dapr sidecar: exactly one
   `dapr-api-token` header equal to the app API token, and no `dapr-caller-app-id` header. Anything else
   gets an empty-body `404` (in `Enforce`).
-- `Dapr:LocalDelivery:Mode` = `Off` | `LogOnly` (default) | `Enforce`; `Dapr:LocalDelivery:AppApiToken`,
-  falling back to env `APP_API_TOKEN`. `LogOnly` serves the request and logs EventId 40996 (with no token it logs EventId 40998 once at
-  startup and nothing per request); `Enforce` with no token rejects everything and logs EventId 40997 at
+- `Dapr:LocalDelivery:Mode` = `Off` | `LogOnly` (default) | `Enforce`. The token comes only from the file named by
+  `Workflow:RuntimeCaller:AppApiTokenFile`, read once at start and trimmed; the app no longer reads `APP_API_TOKEN` and
+  there is no `Dapr:LocalDelivery:AppApiToken`. A set path with a missing or empty file fails startup. `LogOnly` serves
+  the request and logs EventId 40996 (path unset: it logs EventId 40998 once at startup and nothing per request);
+  `Enforce` with the path unset rejects everything and logs EventId 40997 at
   startup. The `dapr-api-token` header is removed right after routing, before controllers and any Dapr
   job handler run.
 - A DROP response body's `reason` is now only the error code; the full message is in the EventId 40994 log.
@@ -38,9 +40,7 @@ Source of truth: `docs/domain/event-driven-workflows.md` § Who can call it, `do
 
 - Event-driven and scheduled-start pages: state the own-sidecar rule, show `dapr-api-token` on every
   direct `curl`, and note that a direct call without it gets `404` in `Enforce`.
-- Deployment/security pages: document the sidecar side (`APP_API_TOKEN` on daprd; Kubernetes annotation
-  `dapr.io/app-token-secret: <secret>`, key `token`, plus the same secret on the app container via
-  `secretKeyRef`), the requirement to keep the sidecar API on loopback, and the rollout: `LogOnly` -> enable the sidecar token -> EventId 40996 at zero -> `Enforce`.
+- Deployment/security pages: document the sidecar side (`APP_API_TOKEN` on daprd only; Kubernetes: one Secret per domain, key `token`, annotation `dapr.io/app-token-secret: <secret>` on the orchestration Deployment only, and the same Secret mounted read-only into the orchestration container with `Workflow__RuntimeCaller__AppApiTokenFile` pointing at it; no `APP_API_TOKEN` in the app container), the script-sandbox condition, restart-based rotation, the requirement to keep the sidecar API on loopback, and the rollout: `LogOnly` -> enable the sidecar token -> EventId 40996 at zero -> `Enforce`.
 - Change any example that shows `"reason": "Code: message"` to the code-only form.
 - Release blog for v0.0.107: a security fix, non-breaking while `LogOnly`; operators should plan the `Enforce` step.
 
@@ -49,7 +49,7 @@ Source of truth: `docs/domain/event-driven-workflows.md` § Who can call it, `do
 ```bash
 curl -X POST "http://localhost:4201/api/v1/{domain}/workflows/{workflow}/instances/events?action=start" \
   -H "Content-Type: application/json" \
-  -H "dapr-api-token: $APP_API_TOKEN" \
+  -H "dapr-api-token: $(cat <token file>)" \
   -d '{"orderId":"ord-1"}'
 ```
 

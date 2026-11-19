@@ -283,7 +283,7 @@ A hand-made tick needs the header too:
 
 ```bash
 curl -X POST "http://localhost:4201/api/v1/morph-touch/workflows/nightly-report/instances/schedule?scheduleId=manual-1" \
-  -H "dapr-api-token: $APP_API_TOKEN"
+  -H "dapr-api-token: $(cat .vnext-local/app-api-token)"
 ```
 
 ## Response
