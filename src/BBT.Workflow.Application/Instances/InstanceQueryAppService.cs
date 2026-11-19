@@ -77,15 +77,6 @@ public sealed class InstanceQueryAppService(
     private static readonly ConcurrentDictionary<string, BuildGate> ActiveSubflowBuildGates = new();
 
     /// <summary>
-    /// Conditional request headers removed from what a parent hands its SubFlow child (see
-    /// <see cref="WithoutConditionalHeaders"/>).
-    /// </summary>
-    private static readonly HashSet<string> ConditionalRequestHeaders = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "If-None-Match", "If-Match", "If-Modified-Since", "If-Unmodified-Since"
-    };
-
-    /// <summary>
     /// Converts a failed query validation into a 400-mapping <see cref="Error"/>, carrying every
     /// rejection reason so the caller can fix them all in one round trip.
     /// </summary>
@@ -1915,6 +1906,11 @@ public sealed class InstanceQueryAppService(
             ? parentEtag
             : Caching.SubFlowDataEtag.Compose(parentEtag, childEtag);
     }
+
+    private static readonly HashSet<string> ConditionalRequestHeaders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "If-None-Match", "If-Match", "If-Modified-Since", "If-Unmodified-Since"
+    };
 
     /// <summary>
     /// The caller's headers minus its conditional ones. The child's only condition is its own part of the
