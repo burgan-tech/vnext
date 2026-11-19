@@ -24,6 +24,9 @@ public static class OrchestrationApiApplicationBuilderExtensions
             app.UseHsts();
         }
         app.UseExceptionHandler();
+        // Before anything reads or logs request headers (UseCurrentUser, UseHttpBodyLogging) and before
+        // any endpoint copies them into instance headers: the runtime-caller token never travels further.
+        app.UseRuntimeCallerTokenStrip();
         app.UseAppResponseCompression();
         app.UseCloudEvents();
         app.MapSubscribeHandler();

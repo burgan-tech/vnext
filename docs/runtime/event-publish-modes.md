@@ -19,7 +19,7 @@ canonical reference for how a distributed event gets from "committed" to "handle
 | Mode | Declared by | Behavior |
 |---|---|---|
 | **Outbox** (default, ALL events) | nothing | transactional outbox row → wakeup nudge → Outbox worker publish → broker → Inbox worker (in-process nudge) → Inbox handler |
-| **Outbox + PostCommitRelay** | a `IPostCommitEventRelay<TEvent>` REGISTRATION in DI | everything above PLUS: the runner relays the event as a **command** immediately after commit via `PostCommitRelayDispatcher` → `IInstanceCommandGateway` (routed in-process or via Dapr service invocation); the Inbox handler is demoted to a durable backup, deduplicated by the receiver's own guard |
+| **Outbox + PostCommitRelay** | a `IPostCommitEventRelay<TEvent>` REGISTRATION in DI | everything above PLUS: the runner relays the event as a **command** immediately after commit via `PostCommitRelayDispatcher` → `IInstanceCommandGateway` (routed in-process or via Dapr service invocation); the Inbox handler is demoted to a durable backup (within one domain; see Failure semantics), deduplicated by the receiver's own guard |
 
 There is no third mode. Nothing publishes synchronously inline anymore — `TraceStampingDistributedEventBus`
 (the renamed, shrunk `HookedDistributedEventBus`) only stamps trace context and delegates to the
@@ -72,8 +72,11 @@ a council row; the default for a new event stays Outbox-only.
 - **Failure semantics**: relay exceptions (and gateway calls that return a failed `Result` without
   throwing) are logged and swallowed — the child is already committed as terminal, so the response
   must not lie about that. The outbox row, written unconditionally pre-commit, guarantees the
-  Inbox backup picks the work up shortly after. Relay calls are bounded by the gateway's existing
-  invocation timeouts.
+  Inbox backup picks the work up shortly after — **within one domain**. Topics are per publishing
+  domain and a child domain's Inbox drops a terminal event whose parent is hosted elsewhere (the
+  handlers' domain guard), so a failed **cross-domain** relay has no durable backup: the parent stays
+  parked until the completion is re-driven ([Sub-Endpoint Gate § Failure modes](sub-endpoint-gate.md#failure-modes)).
+  Relay calls are bounded by the gateway's existing invocation timeouts.
 - Observability: each relay attempt opens a `PostCommit.EventRelay` activity (see
   [Observability contract](#observability-contract) below) and logs
   `PostCommitEventRelayed` (EventId 40124) on success, `PostCommitEventRelayFailed` (40125,

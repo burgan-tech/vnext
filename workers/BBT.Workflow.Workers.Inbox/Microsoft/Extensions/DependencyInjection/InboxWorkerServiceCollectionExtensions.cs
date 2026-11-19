@@ -39,7 +39,9 @@ public static class InboxWorkerServiceCollectionExtensions
             .AddExceptionHandling()
             .AddRuntimeMiddleware()
             .AddHeaderService()
-            .AddAppHealthChecks();
+            .AddAppHealthChecks()
+            // vnext#1265: signs the completion backup forward (DaprOrchestrationForwarder). Runs no flow scripts.
+            .AddRuntimeCallerIdentity(configuration, runsFlowScripts: false);
 
         // Inbox = thin forwarder: deliver events to Orchestration via Dapr service invocation.
         // Singleton — depends only on configuration/logger and owns one Dapr-invokable HttpClient.

@@ -31,7 +31,9 @@ public static class ExecutionApiServiceCollectionExtensions
             .AddExceptionHandling()
             .AddExecutionHealthChecks()
             .AddDaprNotification(configuration)
-            .AddTaskInvokers(configuration);
+            .AddTaskInvokers(configuration)
+            // vnext#1265: signs cross-domain SubProcess starts (SubProcessRemoteInvoker). Runs no flow scripts.
+            .AddRuntimeCallerIdentity(configuration, runsFlowScripts: false);
 
         services.AddSingleton<IRuntimeInfoProvider, RuntimeInfoProvider>();
         services.AddScoped<TaskInvokeHandler>();

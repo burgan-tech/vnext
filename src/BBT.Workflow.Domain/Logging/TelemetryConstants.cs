@@ -127,14 +127,46 @@ public static class TelemetryConstants
 
         /// <summary>
         /// How an Inbox forward ended: <c>ok</c>, <c>transient</c> (will be re-delivered),
-        /// <c>non_transient</c> (dropped on purpose), <c>timeout</c> or <c>unreachable</c>. All five
-        /// currently collapse into a generic HTTP client span, which is why a delayed delivery
-        /// cannot be told from a dropped one.
+        /// <c>gate_refused</c> (the sub-endpoint gate refused it; will be re-delivered),
+        /// <c>non_transient</c> (dropped on purpose), <c>timeout</c> or <c>unreachable</c>. All of
+        /// them would otherwise collapse into a generic HTTP client span, which is why a delayed
+        /// delivery cannot be told from a dropped one.
         /// </summary>
         public const string ForwardOutcome = "vnext.forward.outcome";
 
         /// <summary>HTTP status of a forward that got a response, for the two failing outcomes.</summary>
         public const string ForwardStatusCode = "vnext.forward.status_code";
+
+        /// <summary>
+        /// The sub-endpoint gate's decision on a runtime-internal call (vnext#1265):
+        /// <c>admitted_runtime</c>, <c>admitted_grant</c>, <c>would_refuse</c>, <c>refused</c> or
+        /// <c>unavailable</c>.
+        /// </summary>
+        public const string GateDecision = "vnext.gate.decision";
+
+        /// <summary>
+        /// Why the grants did not admit the caller: <c>grant_denied</c> or <c>roles_unavailable</c>. Set only on
+        /// <c>would_refuse</c>, <c>refused</c> and <c>unavailable</c>; the token verdict is <see cref="RuntimeCallerVerdict"/>.
+        /// </summary>
+        public const string GateReason = "vnext.gate.reason";
+
+        /// <summary>
+        /// The runtime-caller token verdict on a gated call: <c>valid</c>, <c>missing</c>, <c>malformed</c>,
+        /// <c>unknown_key</c>, <c>bad_signature</c> or <c>clock_skew</c>.
+        /// </summary>
+        public const string RuntimeCallerVerdict = "vnext.runtime_caller.verdict";
+
+        /// <summary>The runtime path a runtime-caller token claims: <c>subflow</c>, <c>subprocess</c>, <c>relay</c>, <c>inbox</c>.</summary>
+        public const string RuntimeCallerClass = "vnext.runtime_caller.class";
+
+        /// <summary>The domain a runtime-caller token claims to come from.</summary>
+        public const string RuntimeCallerDomain = "vnext.runtime_caller.domain";
+
+        /// <summary>The key id a runtime-caller token names (never the key).</summary>
+        public const string RuntimeCallerKeyId = "vnext.runtime_caller.kid";
+
+        /// <summary>Receiver clock minus token timestamp, in seconds, for a genuine token.</summary>
+        public const string RuntimeCallerSkewSeconds = "vnext.runtime_caller.skew_s";
 
         /// <summary>Which event action an intake handled: <c>start</c> or <c>transition</c>.</summary>
         public const string EventAction = "vnext.event.action";

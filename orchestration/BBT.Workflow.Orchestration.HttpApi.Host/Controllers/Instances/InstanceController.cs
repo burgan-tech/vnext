@@ -14,6 +14,7 @@ using BBT.Workflow.Domain.Shared;
 using BBT.Workflow.Events;
 using BBT.Workflow.Execution.Cancellation;
 using BBT.Workflow.Execution.Events;
+using BBT.Workflow.Execution.RuntimeCaller;
 using BBT.Workflow.Gateway;
 using BBT.Workflow.HttpApi.Results;
 using BBT.Workflow.Instances;
@@ -200,6 +201,7 @@ public sealed class InstanceController(
 
     [ApiExplorerSettings(IgnoreApi = true)]
     [HttpPost("{domain}/workflows/{workflow}/sub/instances/start")]
+    [SubEndpointGate(RuntimeCallOperations.SubStart)]
     public async Task<IActionResult> StartSubAsync(
         [FromRoute] string domain,
         [FromRoute] string workflow,
@@ -256,6 +258,7 @@ public sealed class InstanceController(
 
     [ApiExplorerSettings(IgnoreApi = true)]
     [HttpPost("{domain}/workflows/{workflow}/instances/{instance}/complete")]
+    [SubEndpointGate(RuntimeCallOperations.Complete)]
     public async Task<IActionResult> CompleteSubAsync(
         [FromRoute] string domain,
         [FromRoute] string workflow,
