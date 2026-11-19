@@ -520,39 +520,35 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
         // Arrange
         var instance = InstanceFactory.CreateDefault();
         const int threadCount = 5;
-        var barrier = new Barrier(threadCount);
-        var tasks = new List<Task>();
+        var timeout = TimeSpan.FromSeconds(30);
+        using var barrier = new Barrier(threadCount);
         var latestDataResults = new ConcurrentBag<InstanceData?>();
 
-        // Act - Add data and read LatestData concurrently
-        for (int i = 0; i < threadCount; i++)
+        // Act - Add data and read LatestData concurrently. Dedicated threads (LongRunning), not pool work items:
+        // every worker blocks on the barrier until all have started, so pool items could wait behind unrelated
+        // suite load. Both waits are bounded so a stall fails the test instead of hanging the test host.
+        var tasks = Enumerable.Range(0, threadCount).Select(threadIndex => Task.Factory.StartNew(() =>
         {
-            int threadIndex = i;
-            var task = Task.Run(() =>
-            {
-                // Add some data first
-                var data = JsonData.CreateFrom($"{{\"thread\":{threadIndex}}}");
-                instance.SeedData(Guid.NewGuid(), data, VersionStrategy.IncreasePatch);
-                
-                // Synchronize all threads
-                barrier.SignalAndWait();
-                
-                // All threads read LatestData simultaneously
-                var latestData = instance.LatestData;
-                latestDataResults.Add(latestData);
-            });
-            tasks.Add(task);
-        }
+            // Add some data first
+            var data = JsonData.CreateFrom($"{{\"thread\":{threadIndex}}}");
+            instance.SeedData(Guid.NewGuid(), data, VersionStrategy.IncreasePatch);
 
-        Task.WaitAll(tasks.ToArray());
+            // Synchronize all threads
+            Assert.True(barrier.SignalAndWait(timeout), "Not every worker reached the barrier.");
+
+            // All threads read LatestData simultaneously
+            latestDataResults.Add(instance.LatestData);
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray();
+
+        Assert.True(Task.WaitAll(tasks, timeout), "Concurrent LatestData workers did not finish.");
 
         // Assert
         Assert.Equal(threadCount, instance.DataList.Count);
         Assert.Equal(threadCount, latestDataResults.Count);
-        
+
         // All results should be valid (not null)
         Assert.All(latestDataResults, result => Assert.NotNull(result));
-        
+
         // Latest data should be consistently returned
         var actualLatest = instance.LatestData;
         Assert.NotNull(actualLatest);
