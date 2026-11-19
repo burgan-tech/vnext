@@ -154,14 +154,14 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
+        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
             InstanceReadKinds.Instance, input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, input.Version, cancellationToken)
             .MatchAsync(
                 onSuccess: async instance =>
                 {
-                    using var instanceScope = BeginInstanceScope(instance);
+                    using var instanceScope = BeginInstanceScope(instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
                     // Row security (vnext#1107) is decided before the body, extensions, ETag and 304: an instance
                     // the caller may not see answers exactly the missing-instance 404.
@@ -215,7 +215,7 @@ public sealed class InstanceQueryAppService(
 
         // Captured before the read envelope opens, so the tag lands on the transaction like the data
         // function's read outcome does.
-        using var read = InstanceReadActivityHelper.StartRead(
+        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
             InstanceReadKinds.List, input.Domain, input.Workflow);
 
         // Validate before any query is built. A filter the runtime cannot honor must be rejected,
@@ -619,7 +619,7 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
+        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
             InstanceReadKinds.IncidentActive, input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
@@ -628,7 +628,7 @@ public sealed class InstanceQueryAppService(
                     .MapAsync(workflow => (instance, workflow)))
             .BindAsync(async data =>
             {
-                using var instanceScope = BeginInstanceScope(data.instance);
+                using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
 
                 // Trust the row, not the flag: the two are written in one unit of work, but a resolve
@@ -653,7 +653,7 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
+        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
             InstanceReadKinds.TaskHistory, input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
@@ -662,7 +662,7 @@ public sealed class InstanceQueryAppService(
                     .MapAsync(workflow => (instance, workflow)))
             .BindAsync(async data =>
             {
-                using var instanceScope = BeginInstanceScope(data.instance);
+                using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
 
                 var rows = await instanceTaskRepository.GetHistoryByInstanceIdAsync(
@@ -687,7 +687,7 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
+        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
             InstanceReadKinds.ActionHistory, input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
@@ -696,7 +696,7 @@ public sealed class InstanceQueryAppService(
                     .MapAsync(workflow => (instance, workflow)))
             .BindAsync(async data =>
             {
-                using var instanceScope = BeginInstanceScope(data.instance);
+                using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
                 // history: none (vnext#1006) keeps no task journal: an empty list, not a 404.
                 if (data.workflow.SuppressesHistory)
@@ -725,13 +725,13 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
+        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
             InstanceReadKinds.TransitionMetrics, input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(async instance =>
             {
-                using var instanceScope = BeginInstanceScope(instance);
+                using var instanceScope = BeginInstanceScope(instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
                 // Slim rows only (no Body/Header jsonb), filtered to this transition key in SQL so a
                 // single-key read does not materialize the instance's whole transition history. Every
@@ -774,13 +774,13 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
+        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
             InstanceReadKinds.StateMetrics, input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(async instance =>
             {
-                using var instanceScope = BeginInstanceScope(instance);
+                using var instanceScope = BeginInstanceScope(instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
                 // Unlike transition-metrics, this cannot filter by a single key in SQL: a visit is
                 // bounded by the transition that ENTERED the state and the (differently-keyed) one that
@@ -920,7 +920,7 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
+        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
             InstanceReadKinds.IncidentHistory, input.Domain, input.Workflow);
 
         var page = input.Page < 1 ? 1 : input.Page;
@@ -932,7 +932,7 @@ public sealed class InstanceQueryAppService(
                     .MapAsync(workflow => (instance, workflow)))
             .BindAsync(async data =>
             {
-                using var instanceScope = BeginInstanceScope(data.instance);
+                using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
 
                 var paged = await instanceIncidentRepository.GetHistoryPagedAsync(
@@ -962,7 +962,7 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
+        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
             InstanceReadKinds.DataHistory, input.Domain, input.Workflow);
 
         var page = input.Page < 1 ? 1 : input.Page;
@@ -974,7 +974,7 @@ public sealed class InstanceQueryAppService(
                     .MapAsync(workflow => (instance, workflow)))
             .BindAsync(async data =>
             {
-                using var instanceScope = BeginInstanceScope(data.instance);
+                using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
                 var paged = await instanceRepository.GetDataHistoryPagedAsync(
                     data.instance.Id, page, pageSize, cancellationToken);
@@ -1007,7 +1007,7 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
+        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
             InstanceReadKinds.DataHistory, input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
@@ -1016,7 +1016,7 @@ public sealed class InstanceQueryAppService(
                     .MapAsync(workflow => (instance, workflow)))
             .BindAsync(async data =>
             {
-                using var instanceScope = BeginInstanceScope(data.instance);
+                using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
                 var row = await instanceRepository.FindDataRowAsync(data.instance.Id, input.RowId, cancellationToken);
 
@@ -1043,13 +1043,13 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
+        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
             InstanceReadKinds.History, input.Domain, input.Workflow);
 
         return await GetInstanceWithFullHistoryAsync(input.Instance, cancellationToken)
             .ThenAsync(async instance =>
             {
-                using var instanceScope = BeginInstanceScope(instance);
+                using var instanceScope = BeginInstanceScope(instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
                 var transitions = await instanceTransitionRepository.GetByInstanceIdAsync(instance.Id, cancellationToken);
 
                 var dtoList = transitions
@@ -1224,7 +1224,7 @@ public sealed class InstanceQueryAppService(
                 Roles = callerRoles.Value
             };
 
-            using var descent = StartDescend(
+            using var descent = StartDescend( // skipcq: CS-W1100 — held for its scope; disposing ends the descent span
                 activeSubFlowCorrelation.SubFlowDomain,
                 activeSubFlowCorrelation.SubFlowName,
                 activeSubFlowCorrelation.SubFlowInstanceId.ToString(),
@@ -1568,7 +1568,7 @@ public sealed class InstanceQueryAppService(
                 onSuccess: async data =>
                 {
                     var (flow, instance) = data;
-                    using var instanceScope = BeginInstanceScope(instance);
+                    using var instanceScope = BeginInstanceScope(instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
 
                     var instanceData = instance.FindData(input.Version);
@@ -1853,7 +1853,7 @@ public sealed class InstanceQueryAppService(
         try
         {
             // Opened only here, after the fast path has declined: the envelope measures a build.
-            using var read = InstanceReadActivityHelper.StartRead(
+            using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
                 InstanceReadKinds.State, input.Domain, input.Workflow);
 
             return await GetInstanceWithAllCorrelationsAsync(input.Instance, cancellationToken)
@@ -1863,7 +1863,7 @@ public sealed class InstanceQueryAppService(
             .MatchAsync(
                 onSuccess: async data =>
                 {
-                    using var instanceScope = BeginInstanceScope(data.instance);
+                    using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
                     // Full correlation set (active + completed), ordered by creation time. It comes from
                     // the same single correlation query that filled the aggregate's open-only
@@ -2361,7 +2361,7 @@ public sealed class InstanceQueryAppService(
         var viewDefinition = currentStateValue.View;
         var firstViewEntry = viewDefinition?.Views.FirstOrDefault();
         var viewExtensions = firstViewEntry?.Extensions ?? [];
-        var viewLoadData = firstViewEntry?.LoadData ?? false;
+        var viewLoadData = firstViewEntry?.LoadData == true;
         var stateHasView = viewDefinition is { Views.Count: > 0 };
         var allExtensions = subFlowStateInfo.SubFlowData != null
             ? ExtractExtensionsFromDataHref(subFlowStateInfo.SubFlowData.Href)
@@ -2800,13 +2800,11 @@ public sealed class InstanceQueryAppService(
             return null;
 
         // Only signal on the main-flow current state view, not a subflow terminal view.
+        // displayedState may be a role alias of the current state; still allow when it aliases it.
         if (!string.Equals(displayedState, instance.CurrentState, StringComparison.Ordinal)
-            && displayedState is not null)
-        {
-            // displayedState may be a role alias of the current state; still allow when it aliases it.
-            if (currentStateValue.Aliases.Count == 0)
-                return null;
-        }
+            && displayedState is not null
+            && currentStateValue.Aliases.Count == 0)
+            return null;
 
         // The gate owns the arm selection (rule, else roles, else allow). This surface's roles are
         // already provider-resolved on the input, so the factory just hands them over.
@@ -2896,7 +2894,7 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
+        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
             InstanceReadKinds.View, input.Domain, input.Workflow);
 
         // Railway chain: Get Instance → Get Workflow → Resolve State → Get View
@@ -2906,7 +2904,7 @@ public sealed class InstanceQueryAppService(
                     .MapAsync(workflow => (instance, workflow)))
             .ThenAsync(async data =>
             {
-                using var instanceScope = BeginInstanceScope(data.instance);
+                using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
                 return await ResolveViewAsync(data.instance, data.workflow, input, transitionKey, cancellationToken);
             });
     }
@@ -2925,7 +2923,7 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
+        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
             InstanceReadKinds.Schema, input.Domain, input.Workflow);
 
         // Fast path: the ETag is a deterministic hash of the data fingerprint (instance id +
@@ -2949,7 +2947,7 @@ public sealed class InstanceQueryAppService(
             .MatchAsync(
                 onSuccess: async data =>
                 {
-                    using var instanceScope = BeginInstanceScope(data.instance);
+                    using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
                     var buildResult = await BuildSchemaOutputAsync(data.instance, data.workflow, input, transitionKey, cancellationToken);
                     if (!buildResult.IsSuccess)
                         return ConditionalResult<GetSchemaOutput>.Fail(buildResult.Error);
@@ -3068,7 +3066,7 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
+        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
             InstanceReadKinds.Extensions, input.Domain, input.Workflow);
 
         // Railway chain: Get Instance → Get Workflow → Build Extensions Output
@@ -3078,7 +3076,7 @@ public sealed class InstanceQueryAppService(
                     .MapAsync(workflow => (instance, workflow)))
             .ThenAsync(async data =>
             {
-                using var instanceScope = BeginInstanceScope(data.instance);
+                using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
                 return await BuildExtensionsOutputAsync(data.instance, data.workflow, input, cancellationToken);
             });
     }
@@ -3093,7 +3091,7 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
+        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
             InstanceReadKinds.Master, input.Domain, input.Workflow);
 
         // Fast path: the master ETag is a deterministic hash of the data fingerprint
@@ -3117,7 +3115,7 @@ public sealed class InstanceQueryAppService(
             .MatchAsync(
                 onSuccess: async data =>
                 {
-                    using var instanceScope = BeginInstanceScope(data.instance);
+                    using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
                     var buildResult = await BuildMasterOutputAsync(data.instance, data.workflow, input, cancellationToken);
                     if (!buildResult.IsSuccess)
                         return ConditionalResult<GetSchemaOutput>.Fail(buildResult.Error);
@@ -3244,7 +3242,7 @@ public sealed class InstanceQueryAppService(
             Roles = callerRoles.Value
         };
 
-        using var descent = StartDescend(
+        using var descent = StartDescend( // skipcq: CS-W1100 — held for its scope; disposing ends the descent span
             subflow.SubFlowDomain,
             subflow.SubFlowName,
             subflow.SubFlowInstanceId.ToString(),
@@ -3329,7 +3327,7 @@ public sealed class InstanceQueryAppService(
             Roles = callerRoles.Value
         };
 
-        using var descent = StartDescend(
+        using var descent = StartDescend( // skipcq: CS-W1100 — held for its scope; disposing ends the descent span
             subflow.SubFlowDomain,
             subflow.SubFlowName,
             subflow.SubFlowInstanceId.ToString(),
@@ -3444,7 +3442,7 @@ public sealed class InstanceQueryAppService(
             Roles = callerRoles.Value
         };
 
-        using var descent = StartDescend(
+        using var descent = StartDescend( // skipcq: CS-W1100 — held for its scope; disposing ends the descent span
             subflow.SubFlowDomain,
             subflow.SubFlowName,
             subflow.SubFlowInstanceId.ToString(),
@@ -3652,7 +3650,7 @@ public sealed class InstanceQueryAppService(
         if (!callerRoles.IsSuccess)
             return null;
 
-        using var descent = StartDescend(
+        using var descent = StartDescend( // skipcq: CS-W1100 — held for its scope; disposing ends the descent span
             instance.Subflow!.SubFlowDomain,
             instance.Subflow!.SubFlowName,
             instance.Subflow!.SubFlowInstanceId.ToString(),
@@ -3716,7 +3714,7 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
+        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
             InstanceReadKinds.InstanceCorrelation, input.Domain, input.Workflow);
 
         var instanceResult = await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken);
@@ -3790,7 +3788,7 @@ public sealed class InstanceQueryAppService(
         runtimeInfoProvider.Check(domain);
 
         var transaction = Activity.Current;
-        using var read = InstanceReadActivityHelper.StartRead(
+        using var read = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
             InstanceReadKinds.HumanTasks, domain);
 
         var bounds = humanTaskOptions.Value;
@@ -3832,12 +3830,11 @@ public sealed class InstanceQueryAppService(
             }
         }
 
+        var buildOutcome = bypass ? HumanTaskBypassOutcome : InstanceReadActivityHelper.FastPathBuild;
         InstanceReadActivityHelper.SetReadOutcome(
             transaction,
             InstanceReadKinds.HumanTasks,
-            !cacheEnabled ? InstanceReadActivityHelper.FastPathDisabled
-            : bypass ? HumanTaskBypassOutcome
-            : InstanceReadActivityHelper.FastPathBuild);
+            cacheEnabled ? buildOutcome : InstanceReadActivityHelper.FastPathDisabled);
 
         // Single-flight. A fixed TTL synchronises expiry, so without this every caller whose entry
         // expires in the same second starts its own full fan-out over every workflow schema.
