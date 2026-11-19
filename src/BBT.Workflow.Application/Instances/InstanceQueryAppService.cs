@@ -1602,26 +1602,8 @@ public sealed class InstanceQueryAppService(
                     var childReadFailed = false;
                     if (instance.Subflow != null)
                     {
-                        var subFlowRead = probedSubFlowRead?.ChildInstanceId == instance.Subflow.SubFlowInstanceId
-                                          && !probedSubFlowRead.Result.IsNotModified
-                            ? probedSubFlowRead
-                            : await ReadActiveSubFlowDataAsync(instance.Subflow, input, null, cancellationToken);
-
-                        if (subFlowRead.Result.Result is { IsSuccess: true, Value: { } childOutput })
-                        {
-                            result.Extensions = childOutput.Extensions ?? new Dictionary<string, object>();
-                            childEtag = childOutput.ETag;
-                        }
-                        else
-                        {
-                            // Kept as before: the parent's data is still served, with no extensions. Such a
-                            // body gets no ETag, so a client never pins the empty block behind a 304.
-                            childReadFailed = true;
-                            result.Extensions = new Dictionary<string, object>();
-                            logger.DataFunctionSubFlowReadFailed(
-                                input.Instance, instance.Subflow.SubFlowInstanceId,
-                                subFlowRead.Result.Result.Error.Message);
-                        }
+                        (result.Extensions, childEtag, childReadFailed) = await ReadSubFlowExtensionsAsync(
+                            instance.Subflow, input, probedSubFlowRead, cancellationToken);
                     }
                     else
                     {
@@ -1687,10 +1669,7 @@ public sealed class InstanceQueryAppService(
                         }, dataFunctionCache.ResolveTtlSeconds(flow.Config?.FunctionCache), cancellationToken);
                     }
 
-                    // With an active SubFlow the representation is the parent's AND the child's.
-                    var responseEtag = childReadFailed
-                        ? null
-                        : string.IsNullOrEmpty(childEtag) ? etag : Caching.SubFlowDataEtag.Compose(etag, childEtag);
+                    var responseEtag = ComposeResponseEtag(etag, childEtag, childReadFailed);
 
                     if (responseEtag is not null && !string.IsNullOrEmpty(input.IfNoneMatch)
                         && responseEtag.MatchesIfNoneMatch(input.IfNoneMatch))
@@ -1831,7 +1810,50 @@ public sealed class InstanceQueryAppService(
         return new SubFlowDataRead(subflow.SubFlowInstanceId, result);
     }
 
-    private static readonly HashSet<string> ConditionalRequestHeaders = new(StringComparer.OrdinalIgnoreCase)
+    /// <summary>
+    /// Build path with an active SubFlow: the extensions come from the child's data function, whose ETag
+    /// joins this response's ETag. The fast path's read is reused when it was for this same child; it was
+    /// a full read then (a 304 never reaches the build). A failed read keeps the parent's data served with
+    /// no extensions, and reports <c>ReadFailed</c> so that body gets no ETag — a client never pins the
+    /// empty block behind a 304.
+    /// </summary>
+    private async Task<(Dictionary<string, object> Extensions, string? ChildEtag, bool ReadFailed)>
+        ReadSubFlowExtensionsAsync(
+            InstanceCorrelation subflow,
+            GetInstanceDataInput input,
+            SubFlowDataRead? probedSubFlowRead,
+            CancellationToken cancellationToken)
+    {
+        var subFlowRead = probedSubFlowRead is { Result.IsNotModified: false } probed
+                          && probed.ChildInstanceId == subflow.SubFlowInstanceId
+            ? probed
+            : await ReadActiveSubFlowDataAsync(subflow, input, null, cancellationToken);
+
+        if (subFlowRead.Result.Result is { IsSuccess: true, Value: { } childOutput })
+        {
+            return (childOutput.Extensions ?? new Dictionary<string, object>(), childOutput.ETag, false);
+        }
+
+        logger.DataFunctionSubFlowReadFailed(
+            input.Instance, subflow.SubFlowInstanceId, subFlowRead.Result.Result.Error.Message);
+        return (new Dictionary<string, object>(), null, true);
+    }
+
+    /// <summary>
+    /// The served ETag. With an active SubFlow the representation is the parent's AND the child's
+    /// (<c>{parent}.{child}</c>); a failed child read serves no ETag at all.
+    /// </summary>
+    private static string? ComposeResponseEtag(string parentEtag, string? childEtag, bool childReadFailed)
+    {
+        if (childReadFailed)
+            return null;
+
+        return string.IsNullOrEmpty(childEtag)
+            ? parentEtag
+            : Caching.SubFlowDataEtag.Compose(parentEtag, childEtag);
+    }
+
+    private static readonly HashSet<string> ConditionalRequestHeaders =new(StringComparer.OrdinalIgnoreCase)
     {
         "If-None-Match", "If-Match", "If-Modified-Since", "If-Unmodified-Since"
     };
