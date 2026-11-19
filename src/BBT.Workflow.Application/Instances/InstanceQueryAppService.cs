@@ -2284,7 +2284,7 @@ public sealed class InstanceQueryAppService(
                     {
                         transition = currentWorkflow.ResolveTransition(key, currentStateValue);
                         hasView = transition?.View is { Views.Count: > 0 };
-                        loadData = false;
+                        loadData = ResolveTransitionViewLoadData(transition, undeclared: false);
                         hasSchema = transition?.HasSchema == true;
                         annotations = transition?.Annotations;
                     }
@@ -2344,7 +2344,8 @@ public sealed class InstanceQueryAppService(
                     {
                         Href = urlTemplateBuilder.BuildViewUrl(input.Domain, input.Workflow, instance.Id.ToString(),
                             transitionKey),
-                        HasView = hasView
+                        HasView = hasView,
+                        LoadData = ResolveTransitionViewLoadData(transition, undeclared: true)
                     },
                     Schema = new SchemaHref
                     {
@@ -2549,6 +2550,16 @@ public sealed class InstanceQueryAppService(
             History = history
         };
     }
+
+    /// <summary>
+    /// The <c>loadData</c> a transition's view link carries: the value declared on its view binding.
+    /// The state function does not evaluate view rules, so — like the state's own view link — the
+    /// first entry's declaration decides. <paramref name="undeclared"/> is what the calling path
+    /// emitted before the binding was read (a transition without a view, or a binding that declares
+    /// nothing), kept so that only an explicit declaration changes the answer (#1266).
+    /// </summary>
+    private static bool ResolveTransitionViewLoadData(Transition? transition, bool undeclared) =>
+        transition?.View?.Views.FirstOrDefault()?.LoadData ?? undeclared;
 
     /// <summary>
     /// Maps the instance's active scheduled-transition jobs to <c>kind: "scheduled"</c> entries of the

@@ -1583,6 +1583,112 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         output.Transitions.Single().View!.HasView.ShouldBeFalse();
     }
 
+    /// <summary>
+    /// #1266: a transition's view link carries the <c>loadData</c> declared on its view binding.
+    /// A binding that declares nothing, and a transition with no view, keep today's <c>true</c>.
+    /// </summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(null, true)]
+    public async Task GetInstanceStateAsync_TransitionViewLink_CarriesTheBindingsLoadData(
+        bool? declared, bool expected)
+    {
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        var transition = Transition.Create("request-info", TestState, "$self", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code);
+        transition.SetView(ViewDefinition.CreateDefault(
+            new Reference("request-info-view", TestDomain, "sys-views", TestVersion),
+            loadData: declared));
+        state.AddTransition(transition);
+        state.AddTransition(Transition.Create("update-fields", TestState, "$self", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code));
+        instance.ChangeState(state);
+        SetupCommonMocks(instance, BuildWorkflow(state));
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        var transitions = result.Result.Value!.Transitions.ToDictionary(t => t.Name);
+        transitions["request-info"].View!.HasView.ShouldBeTrue();
+        transitions["request-info"].View!.LoadData.ShouldBe(expected);
+        // No view: shape unchanged.
+        transitions["update-fields"].View!.HasView.ShouldBeFalse();
+        transitions["update-fields"].View!.LoadData.ShouldBeTrue();
+    }
+
+    /// <summary>
+    /// With several view entries the state function cannot evaluate their rules, so — like the
+    /// state's own view link — the first entry's declaration decides.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceStateAsync_TransitionViewLink_WithSeveralEntries_TakesTheFirstEntrysLoadData()
+    {
+        var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
+        var state = State.Create(TestState, StateType.Intermediate, StateSubType.None,
+            VersionStrategy.IncreaseMinor.Code);
+        var transition = Transition.Create("return", TestState, "$self", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code);
+        transition.SetView(ViewDefinition.CreateWithViews(
+            ViewEntry.CreateWithRule(
+                new Reference("return-view-a", TestDomain, "sys-views", TestVersion),
+                new ScriptCode("inline", "return true;"),
+                loadData: false),
+            ViewEntry.CreateDefault(
+                new Reference("return-view-b", TestDomain, "sys-views", TestVersion),
+                loadData: true)));
+        state.AddTransition(transition);
+        instance.ChangeState(state);
+        SetupCommonMocks(instance, BuildWorkflow(state));
+
+        var result = await _service.GetInstanceStateAsync(
+            CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.Transitions.Single(t => t.Name == "return").View!.LoadData.ShouldBeFalse();
+    }
+
+    /// <summary>
+    /// While a subflow is active, a parent-added shared transition is described against the parent's
+    /// definition: its view link carries the parent binding's <c>loadData</c>. An undeclared binding
+    /// keeps this path's existing <c>false</c>.
+    /// </summary>
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(null, false)]
+    public async Task GetInstanceStateAsync_WhenSubFlowIsActive_ParentSharedTransitionViewLinkCarriesTheBindingsLoadData(
+        bool? declared, bool expected)
+    {
+        var (instance, workflow) = CreateParentWithActiveSubFlow();
+        var shared = Transition.Create("add-note", null, "$self", TriggerType.Manual,
+            VersionStrategy.IncreasePatch.Code);
+        shared.SetView(ViewDefinition.CreateDefault(
+            new Reference("add-note-view", TestDomain, "sys-views", TestVersion),
+            loadData: declared));
+        workflow.AddSharedTransition(shared);
+        SetupCommonMocks(instance, workflow);
+        _instanceQueryGateway
+            .GetFunctionWithStateAsync(Arg.Any<GetFunctionWithInstanceInput>(), Arg.Any<CancellationToken>())
+            .Returns(ConditionalResult<GetInstanceStateOutput>.Success(new GetInstanceStateOutput
+            {
+                Status = InstanceStatus.Active,
+                State = "sub-review",
+                ActiveCorrelations = [],
+                Transitions = []
+            }));
+
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        var entry = result.Result.Value!.Transitions.Single(t => t.Name == "add-note");
+        entry.View!.HasView.ShouldBeTrue();
+        entry.View!.LoadData.ShouldBe(expected);
+    }
+
     [Fact]
     public async Task GetViewAsync_WhenWizardStateWithTransitionKey_ReturnsTransitionView()
     {

@@ -85,8 +85,12 @@ public sealed class StateFunctionCache(
     /// already covers, or, for a subflow's state, part of the live descended body that the
     /// displayed-state member of the subflow ETag variant covers — so, like v12's annotations, only the
     /// shape change needed invalidating.
+    /// v15 made each <c>transitions[]</c> entry's <c>view.loadData</c> carry the value declared on
+    /// the transition's view binding (#1266); before it, a transition outside an active subflow
+    /// always answered <c>true</c> and a parent-added shared transition always <c>false</c>. The value
+    /// comes from the flow version, so only the change in what the field means needed invalidating.
     /// </remarks>
-    private const string ResponseShapeVersion = "v14";
+    private const string ResponseShapeVersion = "v15";
 
     private const string KeyPrefix = $"state-fn:{ResponseShapeVersion}:";
 
