@@ -36,6 +36,15 @@ Source of truth: `vnext-meta` migration `transition-view-load-data-honoured`;
   value declared on the transition's view binding, with the table below.
 - In the workflow authoring page for transition views, state that `loadData: false` makes the form
   open empty and that an undeclared `loadData` is treated as `true` for a transition form.
+- In the same authoring page, state the first-entry rule: with several view entries the view
+  function picks the entry by its rules, but the state function reports the **first** entry's
+  `loadData`. Authors who need a specific value should give every entry the same `loadData`;
+  otherwise a form served from a later entry can open empty (or pre-filled) against that entry's
+  declaration.
+- In the release / upgrade notes, state the rollout order: a subflow's own entries carry the
+  subflow runtime's answer, relayed by the parent. Deploy a subflow's domain before (or with) its
+  parent's — a subflow still on an older runtime keeps answering `true`, and the parent's cache
+  version bump does not change that.
 
 ## Contract and examples
 
@@ -53,9 +62,14 @@ State function entry:
 |---|---|---|
 | `loadData: false` | true | false |
 | `loadData: true` | true | true |
-| no `loadData` | true | true |
-| no view | false | true |
+| no `loadData` | true | true ¹ |
+| no view | false | true ¹ |
 | several entries | true | the first entry's |
+| subflow's own entry (subflow active) | as the subflow answers | as the subflow answers |
+
+¹ For the instance's own transitions. A shared transition the **parent** adds while a subflow is
+active answers `false` in both rows (`hasView` stays as shown). This per-path difference is
+deliberate and unchanged; one platform-wide default is a separate product decision.
 
 ## Acceptance
 

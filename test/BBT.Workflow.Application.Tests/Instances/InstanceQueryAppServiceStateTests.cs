@@ -1689,6 +1689,50 @@ public class InstanceQueryAppServiceStateTests : IDisposable
         entry.View!.LoadData.ShouldBe(expected);
     }
 
+    /// <summary>
+    /// While a subflow is active the parent relays the subflow's own entries: their <c>view.loadData</c>
+    /// is the subflow's own state-function answer, passed through unchanged, never re-derived from the
+    /// parent's definition (#1266).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GetInstanceStateAsync_WhenSubFlowIsActive_RelaysTheSubFlowEntrysLoadData(bool childLoadData)
+    {
+        var (instance, workflow) = CreateParentWithActiveSubFlow();
+        SetupCommonMocks(instance, workflow);
+        _instanceQueryGateway
+            .GetFunctionWithStateAsync(Arg.Any<GetFunctionWithInstanceInput>(), Arg.Any<CancellationToken>())
+            .Returns(ConditionalResult<GetInstanceStateOutput>.Success(new GetInstanceStateOutput
+            {
+                Status = InstanceStatus.Active,
+                State = "sub-review",
+                ActiveCorrelations = [],
+                Transitions =
+                [
+                    new Shared.TransitionItem
+                    {
+                        Name = "sub-done",
+                        Kind = "stateTransition",
+                        Href = "https://sub-transition-url",
+                        View = new ViewHref
+                        {
+                            Href = "https://sub-view-url",
+                            HasView = true,
+                            LoadData = childLoadData
+                        }
+                    }
+                ]
+            }));
+
+        var result = await _service.GetInstanceStateAsync(CreateInput(instance.Id.ToString()), CancellationToken.None);
+
+        result.Result.IsSuccess.ShouldBeTrue();
+        var entry = result.Result.Value!.Transitions.Single(t => t.Name == "sub-done");
+        entry.View!.HasView.ShouldBeTrue();
+        entry.View!.LoadData.ShouldBe(childLoadData);
+    }
+
     [Fact]
     public async Task GetViewAsync_WhenWizardStateWithTransitionKey_ReturnsTransitionView()
     {
