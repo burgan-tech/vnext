@@ -3916,14 +3916,15 @@ public static partial class WorkflowLogs
     public static partial void RuntimeCallerIdentityNotConfigured(this ILogger logger);
 
     /// <summary>
-    /// Logs at every start of a host that runs flow scripts and holds a runtime-caller key ring with
-    /// the script sandbox off, under the explicit <c>AllowWithoutScriptSandbox</c> bypass: any flow
-    /// script on this host can read the key and mint runtime calls for every domain sharing it.
+    /// Logs at every start of a host that runs flow scripts and holds a runtime-caller key ring or a
+    /// Dapr app API token file with the script sandbox off, under the explicit
+    /// <c>AllowWithoutScriptSandbox</c> bypass: any flow script on this host can read the file (the key
+    /// ring mints runtime calls for every domain sharing it).
     /// </summary>
     [LoggerMessage(
         EventId = 50049,
         Level = LogLevel.Critical,
-        Message = "Runtime-caller key ring loaded with the script sandbox disabled (AllowWithoutScriptSandbox); flow scripts on this host can read the key")]
+        Message = "A runtime-caller key ring or Dapr app API token file is loaded on a host that runs flow scripts with the script sandbox disabled (Workflow:RuntimeCaller:AllowWithoutScriptSandbox=true); an unsandboxed script can read these files")]
     public static partial void RuntimeCallerKeyRingWithoutScriptSandbox(this ILogger logger);
 
     /// <summary>

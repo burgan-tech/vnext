@@ -47,7 +47,7 @@ services:
       "--app-channel-address", "host.orb.local"
     ]
     environment:
-      # Shared with the orchestration app so daprd's calls to it carry dapr-api-token (Dapr local-delivery guard).
+      # Same value the orchestration app reads from .vnext-local/app-api-token (mounted file), so daprd's calls to it carry dapr-api-token (Dapr local-delivery guard).
       APP_API_TOKEN: ${VNEXT_APP_API_TOKEN:-}
     volumes:
       - "../../etc/orchestration/dapr/components:/components"

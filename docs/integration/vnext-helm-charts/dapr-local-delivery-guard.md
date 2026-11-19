@@ -38,11 +38,13 @@ Source of truth:
 - **Secret per domain.** Name it `<release>-app-api-token`, key `token`.
   - Take the value from `lookup`, so an existing Secret is reused; otherwise `randAlphaNum 64` on first install.
   - Never put the value in values files.
+  - The value must not end in a newline. The app trims it, but daprd sends `APP_API_TOKEN` raw as a header value and Go rejects CR/LF. `randAlphaNum` is safe; a hand-made `--from-file` may not be.
 - **Annotation.** Set `dapr.io/app-token-secret: <that secret>` on the **orchestration** Deployment only.
 - **Mount.** Mount the same Secret read-only into the orchestration container at a fixed path, and set `Workflow__RuntimeCaller__AppApiTokenFile` to that path.
   - The image runs as the non-root `workflowuser` and a Secret's files are owned by root. Set the pod's `securityContext.fsGroup` and the volume's `defaultMode: 0440`. A plain `0400` without `fsGroup` is unreadable and the pod fails to start (same rule as in the sub-endpoint gate handoff).
 - **Remove `APP_API_TOKEN`.** No `APP_API_TOKEN` in the app container's env.
-- **Scope of the Secret.** Every replica of a domain shares the Secret; each domain has its own. Never reuse the environment-wide key ring of the sub-endpoint gate.
+- **Scope of the Secret.** Every replica of a domain shares the Secret; each domain has its own.
+  - "One Secret per domain" means one per orchestration Deployment (host set): domains co-hosted on one host set (`--with` locally, one Deployment) share its sidecar and therefore its token. Never reuse the environment-wide key ring of the sub-endpoint gate.
 - **Rotation.** Change or delete the Secret, then `rollout restart` the orchestration Deployment. There is no in-place reload.
 - **Script sandbox.** Keep `Scripting__Sandbox__Enabled=true` on Orchestration. This is the same condition as in [Sub-endpoint gate](sub-endpoint-gate.md).
 - **Sidecar API.** Keep `dapr.io/sidecar-listen-addresses` on its loopback default (`[::1],127.0.0.1`).

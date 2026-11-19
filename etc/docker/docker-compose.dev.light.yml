@@ -8,7 +8,8 @@ services:
             - .env.orchestration.dev
         environment:
             # Dapr local-delivery guard: the app reads the token daprd presents from this mounted file.
-            Workflow__RuntimeCaller__AppApiTokenFile: /run/secrets/vnext/app-api-token
+            # Conditional here: run-docker.sh never starts dev.light, so unset means not configured (LogOnly).
+            Workflow__RuntimeCaller__AppApiTokenFile: ${VNEXT_APP_API_TOKEN_FILE:+/run/secrets/vnext/app-api-token}
         ports:
             - '4201:5000'
         volumes:
