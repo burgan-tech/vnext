@@ -343,7 +343,11 @@ callerHash = h(roles | actor identity | culture | version)   # extensions delibe
     data-only and keeps the parent's `dataEtag`.
   - **Child read fails:** the parent's data is served with an empty `extensions` block, as before, but
     with **no ETag**, so a client never pins that empty block behind a 304
-    (`DataFunctionSubFlowReadFailed`, EventId 20521).
+    (`DataFunctionSubFlowReadFailed`, EventId 20521). A child-side exception (the in-process gateway
+    runs the child's whole read) takes the same fallback; the caller's own cancellation propagates.
+  - **Child answers without an ETag** (its own grandchild read failed, or a cross-domain child on an
+    older runtime): its `extensions` are served, but the response has **no ETag** — the parent part
+    alone never stands for a chain whose child part is unknown.
   - **Cross-domain:** the same gateway call — the remote client forwards `If-None-Match` and maps
     304; the child's ETag rides in the response body (`GetInstanceDataOutput.ETag`). Verified on the
     cross-domain lab with both discovery providers (`dapr`, `http`). The caller's own conditional

@@ -1599,10 +1599,10 @@ public sealed class InstanceQueryAppService(
                     // joins this response's ETag below. The fast path's read is reused when it was for
                     // this same child; it was a full read then (a 304 never reaches the build).
                     string? childEtag = null;
-                    var childReadFailed = false;
+                    var childEtagUnknown = false;
                     if (instance.Subflow != null)
                     {
-                        (result.Extensions, childEtag, childReadFailed) = await ReadSubFlowExtensionsAsync(
+                        (result.Extensions, childEtag, childEtagUnknown) = await ReadSubFlowExtensionsAsync(
                             instance.Subflow, input, probedSubFlowRead, cancellationToken);
                     }
                     else
@@ -1669,7 +1669,7 @@ public sealed class InstanceQueryAppService(
                         }, dataFunctionCache.ResolveTtlSeconds(flow.Config?.FunctionCache), cancellationToken);
                     }
 
-                    var responseEtag = ComposeResponseEtag(etag, childEtag, childReadFailed);
+                    var responseEtag = ComposeResponseEtag(etag, childEtag, childEtagUnknown);
 
                     if (responseEtag is not null && !string.IsNullOrEmpty(input.IfNoneMatch)
                         && responseEtag.MatchesIfNoneMatch(input.IfNoneMatch))
@@ -1806,7 +1806,23 @@ public sealed class InstanceQueryAppService(
             subflow.ParentInstanceId.ToString(),
             TelemetryConstants.DescentFunctions.Data);
 
-        var result = await instanceQueryGateway.GetInstanceDataAsync(childInput, cancellationToken);
+        ConditionalResult<GetInstanceDataOutput> result;
+        try
+        {
+            result = await instanceQueryGateway.GetInstanceDataAsync(childInput, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            // The in-process gateway runs the child's whole read pipeline, so a child-side fault arrives
+            // as an exception; it takes the same fallback as a failed result instead of a parent 500.
+            result = ConditionalResult<GetInstanceDataOutput>.Fail(
+                Error.Transient("subflow_data_read_failed", ex.Message));
+        }
+
+        // A remote client reports the caller's cancellation as a failed result: stop here rather than
+        // build and log a fallback nobody will receive.
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (!result.IsNotModified && result.Result is not { IsSuccess: true })
         {
             // The parent still serves its data with an empty extensions block; mark the hop so that
@@ -1821,10 +1837,11 @@ public sealed class InstanceQueryAppService(
     /// Build path with an active SubFlow: the extensions come from the child's data function, whose ETag
     /// joins this response's ETag. The fast path's read is reused when it was for this same child; it was
     /// a full read then (a 304 never reaches the build). A failed read keeps the parent's data served with
-    /// no extensions, and reports <c>ReadFailed</c> so that body gets no ETag — a client never pins the
-    /// empty block behind a 304.
+    /// no extensions; it and a successful read that carries no ETag (a grandchild read that failed, or a
+    /// cross-domain child on an older runtime) report <c>EtagUnknown</c>, so that body gets no ETag — the
+    /// parent part alone never stands for a chain whose child part is unknown.
     /// </summary>
-    private async Task<(Dictionary<string, object> Extensions, string? ChildEtag, bool ReadFailed)>
+    private async Task<(Dictionary<string, object> Extensions, string? ChildEtag, bool EtagUnknown)>
         ReadSubFlowExtensionsAsync(
             InstanceCorrelation subflow,
             GetInstanceDataInput input,
@@ -1838,7 +1855,10 @@ public sealed class InstanceQueryAppService(
 
         if (subFlowRead.Result.Result is { IsSuccess: true, Value: { } childOutput })
         {
-            return (childOutput.Extensions ?? new Dictionary<string, object>(), childOutput.ETag, false);
+            var extensions = childOutput.Extensions ?? new Dictionary<string, object>();
+            return string.IsNullOrEmpty(childOutput.ETag)
+                ? (extensions, null, true)
+                : (extensions, childOutput.ETag, false);
         }
 
         logger.DataFunctionSubFlowReadFailed(
@@ -1848,11 +1868,12 @@ public sealed class InstanceQueryAppService(
 
     /// <summary>
     /// The served ETag. With an active SubFlow the representation is the parent's AND the child's
-    /// (<c>{parent}.{child}</c>); a failed child read serves no ETag at all.
+    /// (<c>{parent}.{child}</c>); when the child part is unknown (failed read, or a child that served no
+    /// ETag) the body gets no ETag at all. No active SubFlow ⇒ the parent ETag alone.
     /// </summary>
-    private static string? ComposeResponseEtag(string parentEtag, string? childEtag, bool childReadFailed)
+    private static string? ComposeResponseEtag(string parentEtag, string? childEtag, bool childEtagUnknown)
     {
-        if (childReadFailed)
+        if (childEtagUnknown)
             return null;
 
         return string.IsNullOrEmpty(childEtag)

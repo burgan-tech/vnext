@@ -629,6 +629,85 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
     }
 
     /// <summary>
+    /// A child that answers with a body but no ETag (its own grandchild read failed, or a cross-domain
+    /// child on an older runtime) leaves the child part unknown: its extensions are served, but the body
+    /// gets no ETag, so the parent part alone never turns into a 304 while the child moves.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceDataAsync_ActiveSubFlow_ChildServesNoEtag_ServesWithoutEtagAndNever304()
+    {
+        var instance = CreateInstanceWithData(out _);
+        AddActiveSubFlow(instance);
+        SetupFullPathMocks(instance);
+        _dataFunctionCache
+            .ComputeEtag(Arg.Any<GetInstanceDataInput>(), Arg.Any<InstanceDataFingerprint>())
+            .Returns("etag-current");
+        SetupChildData(null, new Dictionary<string, object> { ["otpInput"] = "wrong-otp" });
+
+        var input = CreateInput(instance.Id.ToString());
+        input.IfNoneMatch = "\"etag-current\"";
+
+        var result = await _service.GetInstanceDataAsync(input, CancellationToken.None);
+
+        result.IsNotModified.ShouldBeFalse();
+        result.Result.Value!.ETag.ShouldBeNull();
+        result.Result.Value.Extensions!["otpInput"].ShouldBe("wrong-otp");
+    }
+
+    /// <summary>
+    /// The in-process gateway runs the child's read pipeline, so a child-side fault arrives as an
+    /// exception. It takes the failed-read fallback (parent data, empty extensions, no ETag), not a 500.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceDataAsync_ActiveSubFlow_ChildReadThrows_ServesWithoutEtag()
+    {
+        var instance = CreateInstanceWithData(out _);
+        var correlation = AddActiveSubFlow(instance);
+        EnableCache();
+        SetupFingerprint(instance.Id, hasActiveSubFlow: true);
+        SetupFullPathMocks(instance);
+        _instanceCorrelationRepository.FindActiveSubFlowByParentAsync(instance.Id, Arg.Any<CancellationToken>())
+            .Returns(correlation);
+        _instanceQueryGateway.GetInstanceDataAsync(Arg.Any<GetInstanceDataInput>(), Arg.Any<CancellationToken>())
+            .Returns<ConditionalResult<GetInstanceDataOutput>>(_ => throw new TimeoutException("db timeout"));
+
+        var input = CreateInput(instance.Id.ToString());
+        input.IfNoneMatch = "\"etag-current.child-1\"";
+
+        var result = await _service.GetInstanceDataAsync(input, CancellationToken.None);
+
+        result.IsNotModified.ShouldBeFalse();
+        result.Result.IsSuccess.ShouldBeTrue();
+        result.Result.Value!.ETag.ShouldBeNull();
+        result.Result.Value.Extensions!.ShouldBeEmpty();
+    }
+
+    /// <summary>
+    /// The caller's cancellation propagates, whether the gateway throws it or (remote client) reports it
+    /// as a failed result — no fallback body is built for a request nobody waits on.
+    /// </summary>
+    [Fact]
+    public async Task GetInstanceDataAsync_ActiveSubFlow_CallerCancelled_Propagates()
+    {
+        var instance = CreateInstanceWithData(out _);
+        AddActiveSubFlow(instance);
+        SetupFullPathMocks(instance);
+        _dataFunctionCache
+            .ComputeEtag(Arg.Any<GetInstanceDataInput>(), Arg.Any<InstanceDataFingerprint>())
+            .Returns("etag-current");
+        using var cts = new CancellationTokenSource();
+        _instanceQueryGateway.GetInstanceDataAsync(Arg.Any<GetInstanceDataInput>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                cts.Cancel();
+                return ConditionalResult<GetInstanceDataOutput>.Fail(Error.Transient("remote_network_error", "cancelled"));
+            });
+
+        await Should.ThrowAsync<OperationCanceledException>(
+            () => _service.GetInstanceDataAsync(CreateInput(instance.Id.ToString()), cts.Token));
+    }
+
+    /// <summary>
     /// Regression guard for the hot path: without an active SubFlow nothing new is queried or called.
     /// </summary>
     [Fact]
@@ -668,7 +747,7 @@ public class InstanceQueryAppServiceDataCacheTests : IDisposable
         return correlation;
     }
 
-    private void SetupChildData(string childEtag, Dictionary<string, object> extensions) =>
+    private void SetupChildData(string? childEtag, Dictionary<string, object> extensions) =>
         _instanceQueryGateway.GetInstanceDataAsync(Arg.Any<GetInstanceDataInput>(), Arg.Any<CancellationToken>())
             .Returns(ConditionalResult<GetInstanceDataOutput>.Success(new GetInstanceDataOutput
             {
