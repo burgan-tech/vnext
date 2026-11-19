@@ -3858,6 +3858,98 @@ public static partial class WorkflowLogs
         string domain,
         string workflow);
 
+    /// <summary>
+    /// Logs at host start which runtime-caller key signs this host's runtime-internal calls (vnext#1265).
+    /// Operators compare the key id across the Orchestration, Execution and Inbox hosts of every
+    /// domain before turning the sub-endpoint gate on. Never logs key material.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50047,
+        Level = LogLevel.Information,
+        Message = "Runtime-caller identity loaded. ActiveKeyId: {KeyId}, Keys: {KeyCount}")]
+    public static partial void RuntimeCallerIdentityLoaded(this ILogger logger, string keyId, int keyCount);
+
+    /// <summary>
+    /// Logs at host start that no runtime-caller key ring is configured: this host sends its
+    /// runtime-internal calls unsigned, and a gated peer in <c>Enforce</c> refuses them.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50048,
+        Level = LogLevel.Information,
+        Message = "Runtime-caller identity not configured; runtime-internal calls are sent unsigned")]
+    public static partial void RuntimeCallerIdentityNotConfigured(this ILogger logger);
+
+    /// <summary>
+    /// Logs at every start of a host that runs flow scripts and holds a runtime-caller key ring with
+    /// the script sandbox off, under the explicit <c>AllowWithoutScriptSandbox</c> bypass: any flow
+    /// script on this host can read the key and mint runtime calls for every domain sharing it.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50049,
+        Level = LogLevel.Critical,
+        Message = "Runtime-caller key ring loaded with the script sandbox disabled (AllowWithoutScriptSandbox); flow scripts on this host can read the key")]
+    public static partial void RuntimeCallerKeyRingWithoutScriptSandbox(this ILogger logger);
+
+    /// <summary>
+    /// Logs a call the sub-endpoint gate refused in <c>Enforce</c> (vnext#1265). <paramref name="reason"/> is
+    /// why the grants did not admit the caller (<c>grant_denied</c> or <c>roles_unavailable</c>);
+    /// <paramref name="tokenReason"/> is the token verdict (<c>missing</c>, <c>malformed</c>,
+    /// <c>unknown_key</c>, <c>bad_signature</c>, <c>clock_skew</c>). The caller domain and class come from
+    /// the token and are <c>-</c> unless its signature verified. <paramref name="instanceId"/> is the parent
+    /// instance of a <c>complete</c> call (<c>-</c> for sub-start), the one to re-drive by hand. The token, the
+    /// key and the caller's roles are never logged.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50050,
+        Level = LogLevel.Warning,
+        Message = "Sub-endpoint gate refused {Operation} on {Domain}/{Workflow}, instance {InstanceId}. Reason: {Reason}, CallerClass: {CallerClass}, CallerDomain: {CallerDomain}, TokenReason: {TokenReason}")]
+    public static partial void SubEndpointGateRefused(
+        this ILogger logger,
+        string operation,
+        string domain,
+        string workflow,
+        string instanceId,
+        string reason,
+        string callerClass,
+        string callerDomain,
+        string tokenReason);
+
+    /// <summary>
+    /// Logs a call the sub-endpoint gate would have refused but admitted because the mode is
+    /// <c>Observe</c>; same fields as <see cref="SubEndpointGateRefused"/>. A runtime call here (a caller
+    /// class other than <c>-</c>, or <paramref name="tokenReason"/> <c>missing</c> from a peer known to sign)
+    /// blocks the move to <c>Enforce</c>.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50051,
+        Level = LogLevel.Warning,
+        Message = "Sub-endpoint gate would refuse {Operation} on {Domain}/{Workflow}, instance {InstanceId} (Observe). Reason: {Reason}, CallerClass: {CallerClass}, CallerDomain: {CallerDomain}, TokenReason: {TokenReason}")]
+    public static partial void SubEndpointGateWouldRefuse(
+        this ILogger logger,
+        string operation,
+        string domain,
+        string workflow,
+        string instanceId,
+        string reason,
+        string callerClass,
+        string callerDomain,
+        string tokenReason);
+
+    /// <summary>
+    /// Logs an Inbox forward the Orchestration's sub-endpoint gate refused (403 <c>Authorization:110001</c>).
+    /// Unlike every other 4xx it is redelivered, so a key-ring rollout gap delays a completion instead of
+    /// dropping it; after the inbox's retry budget it is dead-lettered and can be replayed.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50052,
+        Level = LogLevel.Warning,
+        Message = "Inbox forward {Method} {Route} for instance {InstanceId} refused by the sub-endpoint gate; will re-deliver")]
+    public static partial void InboxForwardRefusedByGate(
+        this ILogger logger,
+        string method,
+        string route,
+        Guid instanceId);
+
     #endregion
 
     #region View Resolution

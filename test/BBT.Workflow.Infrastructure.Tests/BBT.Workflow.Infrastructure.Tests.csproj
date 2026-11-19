@@ -32,13 +32,17 @@
       (round 1 review finding): it depends only on Domain/Events.Contracts/Aether types already
       referenced here, so its highest-risk behavior — forcing/restoring a root Activity — can be
       pinned with a real ActivityListener instead of relying solely on Faz C's OpenObserve
-      acceptance checks.
+      acceptance checks. The Forwarding pair is included for the same reason: the Inbox's runtime-caller
+      signing and its gate-refusal redelivery (vnext#1265) are pinned against a stub HttpClient.
     -->
     <ItemGroup>
         <Compile Include="../Shared/LegacyAttributeIndexFixture.cs" Link="Fixtures/LegacyAttributeIndexFixture.cs"/>
         <Compile Include="..\..\workers\BBT.Workflow.Workers.Inbox\Tracing\EventTraceMode.cs" Link="Tracing\EventTraceMode.cs"/>
         <Compile Include="..\..\workers\BBT.Workflow.Workers.Inbox\Tracing\EventTraceParenting.cs" Link="Tracing\EventTraceParenting.cs"/>
         <Compile Include="..\..\workers\BBT.Workflow.Workers.Inbox\Tracing\EventTraceScope.cs" Link="Tracing\EventTraceScope.cs"/>
+        <Compile Include="..\..\workers\BBT.Workflow.Workers.Inbox\Forwarding\IOrchestrationForwarder.cs" Link="Forwarding\IOrchestrationForwarder.cs"/>
+        <Compile Include="..\..\workers\BBT.Workflow.Workers.Inbox\Forwarding\DaprOrchestrationForwarder.cs" Link="Forwarding\DaprOrchestrationForwarder.cs"/>
+        <Compile Include="..\..\workers\BBT.Workflow.Workers.Inbox\Forwarding\GatedOrchestrationRoutes.cs" Link="Forwarding\GatedOrchestrationRoutes.cs"/>
     </ItemGroup>
 
 </Project>

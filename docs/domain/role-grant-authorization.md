@@ -6,14 +6,17 @@ the **caller's roles**. The grant sets differ by surface, the rule does not.
 | Surface | Grant set | Enforced at |
 |---|---|---|
 | Custom function call | `function.roles` | **Not enforced.** `FunctionAccessPolicy` checks scope only; `function.roles` is evaluated by `authorize` alone |
-| Built-in `state` / `view` / `data` / `schema` / `master` / `tasks` / `actions` / `incidents` | state `queryRoles`, else workflow `queryRoles` | `InstanceQueryAppService.IsInstanceQueryAllowedAsync` → 403 `QueryAccessDenied` — **behind the in-process enforcement switch** |
+| Built-in `state` / `view` / `data` / `schema` / `master` / `tasks` / `actions` / `incidents` | state `queryRoles`, else workflow `queryRoles` | **Not enforced in process.** Answered by `authorize?queryRoles=true`; the Internal Gateway enforces it (next section) |
 | `availableTransitions` discovery | `transition.roles` | `FilterAuthorizedTransitionKeysAsync` (filtered out, not rejected) |
 | `functions/authorize` | any of the above, by target | `AuthorizeAppService` → 403 |
 | Human-task list | leaf state `queryRoles` (stamped parent override first) | `HumanTaskLeafResolver` (dropped from the list; **fail-closed** — an undeclared `queryRoles` drops the leaf) |
 | Schema field visibility | schema `x-roles` per property path | `SchemaFieldFilterService` (field pruned from the body) |
-| Long-poll acknowledge | `state.interaction.longPoll` — `roles` **or** one `rule` | `InstanceCommandAppService` → 403 `LongPollAckAccessDenied` — **behind the in-process enforcement switch** |
+| Long-poll acknowledge | `state.interaction.longPoll` — `roles` **or** one `rule` | **Not enforced in process.** Answered by `authorize?ack=true` through `ILongPollInteractionGate`; the Internal Gateway enforces it |
+| Runtime-internal `sub/instances/start` and `instances/{instance}/complete` | `Workflow:SubEndpointGate:Grants` (domain configuration), after the runtime-caller token | `SubEndpointGate` authorization filter → 403 `SubEndpointAccessDenied` — **Off by default** ([Sub-Endpoint Gate](../runtime/sub-endpoint-gate.md)) |
 
-Two rows above were wrong for several releases and are corrected here: custom-function calls stopped
+The `queryRoles` and long-poll rows used to say "behind the in-process enforcement switch"; that
+switch no longer exists, and neither `IsInstanceQueryAllowedAsync` nor `LongPollAckAccessDenied` has a
+caller. Two further rows above were wrong for several releases and are corrected here: custom-function calls stopped
 being role-gated when `FunctionAccessPolicy` was reduced to scope enforcement (`WorkflowErrors.FunctionAccessDenied`
 has had no production caller since), and the human-task list reads `queryRoles`, not `transition.roles`.
 
@@ -73,12 +76,25 @@ Consequences to design around:
   (`SharedTransitionAvailabilitySpecification`, `WellKnownTransitionSpecification`). Only the role half
   is discovery-only. So `availableIn` is the one place where a definition can impose a real
   server-side restriction on *where* a transition may run, even though it cannot restrict *who*.
-- Anything that must be an actual boundary belongs in `queryRoles` (which **is** enforced, with 403),
-  in a function's `roles` (also 403), or in the transition's own task logic.
+- Anything that must be an actual boundary belongs in `queryRoles` (enforced by the Internal Gateway
+  through `authorize`, see above) or in the transition's own task logic.
 - Clients that need a pre-flight answer call the `authorize` function; that is what it exists for.
 - The gate cannot be retrofitted as an `ITransitionSpecification`: `IsSatisfiedBy` is synchronous, while
   role evaluation is async (a `$PreviousUser` grant costs a repository read). It would have to sit in
   `TransitionAsync` alongside `ValidateTransitionRequestAsync`.
+
+## Runtime-internal endpoints: an in-process gate, on purpose
+
+`sub/instances/start` and `instances/{instance}/complete` are the one place where a role grant is
+enforced in process by design (vnext#1265). This is not a second decision point beside the gateway's:
+the runtime's own calls to these endpoints are not expected to pass the Internal Gateway (they go over
+Dapr service invocation or straight to `/api/v1/…`; confirmed per environment before Enforce), so there
+the gateway would see only the clients. The gate admits a
+call carrying a valid runtime-caller token before any grant is read, and decides every other caller by
+`Workflow:SubEndpointGate:Grants` with the same rule as everything on this page
+(`TransitionAuthorizationManager.EvaluateRolesStatic`). A grant set based on roles alone could not be
+used: the Inbox completion backup carries no user, and an allow grant refuses a role-less caller.
+Design, token, enable order and failure modes: [Sub-Endpoint Gate](../runtime/sub-endpoint-gate.md).
 
 ## The canonical rule
 

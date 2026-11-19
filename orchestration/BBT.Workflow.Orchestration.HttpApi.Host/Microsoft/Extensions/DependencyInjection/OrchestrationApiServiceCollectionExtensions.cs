@@ -54,7 +54,10 @@ public static class OrchestrationApiServiceCollectionExtensions
             .AddHeaderService()
             .AddHostedServices(configuration)
             .AddAppHealthChecks()
-            .AddOrchestrationDbHealthCheck(configuration);
+            .AddOrchestrationDbHealthCheck(configuration)
+            // vnext#1265: sign this runtime's calls to a peer's runtime-internal endpoints and gate our own.
+            .AddRuntimeCallerIdentity(configuration, runsFlowScripts: true)
+            .AddSubEndpointGate();
         return services;
     }
 

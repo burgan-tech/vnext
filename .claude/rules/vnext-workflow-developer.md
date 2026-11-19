@@ -208,6 +208,9 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 - The `queryRoles` gate reads the instance's OWN `CurrentState`, never `EffectiveState`.
 - `transition.roles` is not enforced at execution, by design — do not "fix" it. `cancel`/`exit` are
   parent-retained. Under `morph-idm` a non-blank `role` header replaces the service's answer.
+- `sub/instances/start` + `instances/{instance}/complete` carry `[SubEndpointGate(op)]` (Off by default); a valid
+  `x-vnext-runtime-token` admits before any grant. A runtime caller of them stamps last via `IRuntimeCallerSigner`;
+  never forward or log that header. Full guide: `docs/runtime/sub-endpoint-gate.md`.
 - Instance-call credential (SubFlow start, SubProcess/Start/DirectTrigger/Get* tasks): the mapping decides, blank included; only an ABSENT credential is filled from the caller. Never read blank as "not set"; never fill from baggage (`HttpTaskInvocation.ResolveInstanceCallCredential`). Full guide: `docs/domain/role-grant-authorization.md#caller-credential-on-instance-calls`.
 - Full guide: `docs/domain/role-grant-authorization.md`, `docs/domain/authorize-function.md`.
 

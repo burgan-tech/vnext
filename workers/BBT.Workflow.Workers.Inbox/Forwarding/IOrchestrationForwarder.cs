@@ -1,3 +1,9 @@
+using System;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
+using BBT.Workflow.Execution.RuntimeCaller;
+
 namespace BBT.Workflow.Workers.Inbox.Forwarding;
 
 /// <summary>
@@ -14,7 +20,11 @@ public interface IOrchestrationForwarder
     /// Adds the <c>X-Workflow</c> header (domain/workflow/version/instance) so Orchestration
     /// resolves the correct flow schema. Throws only on transient failures (service unreachable or a
     /// transient status: 5xx, 408, 429) so the inbox processor re-delivers (at-least-once);
-    /// non-transient error responses (e.g. 4xx) are logged and ignored.
+    /// non-transient error responses (e.g. 4xx) are logged and ignored — except a SIGNED forward (one given a
+    /// <c>runtimeCallTarget</c>) that the Orchestration's sub-endpoint gate refuses (403 <c>Authorization:110001</c>),
+    /// which is re-delivered.
+    /// Pass <c>runtimeCallTarget</c> when the route is a gated runtime-internal endpoint: the request
+    /// then carries a runtime-caller token for that target (vnext#1265).
     /// </summary>
     Task ForwardAsync<TBody>(
         HttpMethod method,
@@ -24,5 +34,6 @@ public interface IOrchestrationForwarder
         string workflow,
         string? version,
         Guid instanceId,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        RuntimeCallTarget? runtimeCallTarget = null);
 }
