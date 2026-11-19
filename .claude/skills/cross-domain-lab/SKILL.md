@@ -77,7 +77,7 @@ and §7. Port offsets and the domain runbook are in `AGENTS.md` § *Runbook: "br
   keep the field, know the gap.
 - **Registry entry** (`DomainRegistrationService`): `{domainName, baseUrl=vNextApi:BaseUrl, healthUrl,
   appId=DAPR_APP_ID}` → `{ServiceDiscovery:BaseUrl}/{Domain}/workflows/{RegistryFlow}/instances/start?sync=true`.
-- Function descent across domains follows the same rule as in one domain (`data` does not descend) —
-  see `.claude/rules/vnext-workflow-developer.md` § Long-Polling / State Function.
+- Function descent across domains follows the same rules as in one domain —
+  `docs/runtime/state-function-cache-and-etag.md` § State body and descent rules.
 - **Lab offsets:** core 0 · partner 10 · discovery 30 (partner API `:4211`, discovery `:4231`);
   orchestration Dapr HTTP is `42110+offset*100`.

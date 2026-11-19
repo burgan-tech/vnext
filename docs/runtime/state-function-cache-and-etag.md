@@ -334,7 +334,7 @@ callerHash = h(roles | actor identity | culture | version)   # extensions delibe
   change signal of the child's extension output under the same "source is data" rule: the child's
   data and state, not its extension output.
   - **Fast path:** `HasActiveSubFlow` in the fingerprint → load the open correlation
-    (`FindActiveSubFlowByParentAsync`, served by `IX_InstancesCorrelations_ActiveBlockingSubFlow`) and
+    (`FindActiveSubFlowByParentAsReadOnlyAsync`, untracked, served by `IX_InstancesCorrelations_ActiveBlockingSubFlow`) and
     call the child's data function through `IInstanceQueryGateway` (in-process for a co-hosted domain,
     HTTP/Dapr otherwise) with `If-None-Match` = the child part — only when the parent part still
     matches. A 304 from the child is the parent's 304; no extension runs anywhere in the chain.
@@ -348,6 +348,9 @@ callerHash = h(roles | actor identity | culture | version)   # extensions delibe
   - **Child answers without an ETag** (its own grandchild read failed, or a cross-domain child on an
     older runtime): its `extensions` are served, but the response has **no ETag** — the parent part
     alone never stands for a chain whose child part is unknown.
+  - **Client rule:** a 200 that carries no ETag replaces the stored one — the client drops its
+    `If-None-Match` until a response brings an ETag again. A client that keeps sending the old
+    composed ETag would get a 304 once the child recovers and keep showing the empty `extensions`.
   - **Cross-domain:** the same gateway call — the remote client forwards `If-None-Match` and maps
     304; the child's ETag rides in the response body (`GetInstanceDataOutput.ETag`). Verified on the
     cross-domain lab with both discovery providers (`dapr`, `http`). The caller's own conditional
@@ -447,12 +450,13 @@ callerHash  = h(roles | actor identity | culture | version)   # no extensions di
 
 These rules cover what the state function and its sibling read surfaces serve and from which level.
 
-### Every built-in function descends — except `data`
+### Every built-in function descends — `data` only for its ETag and `extensions`
 
-- **Every built-in instance function descends an active subflow — except `data`.** The client holds
-  the ROOT and never the leaf, so `state`, `authorize`, `view`, `schema`, `master` and `extensions`
-  all walk into the active correlation. `data` does not, and the state body's own `data.href`
-  addresses the polled instance, so a client following the link it was given reads the root's
+- **Every built-in instance function descends an active subflow; `data` descends only for its ETag
+  and `extensions`.** The client holds the ROOT and never the leaf, so `state`, `authorize`, `view`,
+  `schema`, `master` and `extensions` all walk into the active correlation. The **content** of `data`
+  does not (its ETag and `extensions` do — [Data function](#data-function)), and the state body's own
+  `data.href` addresses the polled instance, so a client following the link it was given reads the root's
   attributes while looking at the leaf's state. Measured, and pinned by
   `TheStateFunctionDescendsButTheDataFunctionDoesNot`; whether a client wants the case's data or the
   leaf's working copy is a product decision, not a settled one.

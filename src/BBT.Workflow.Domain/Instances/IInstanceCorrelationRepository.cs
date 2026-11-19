@@ -82,6 +82,17 @@ public interface IInstanceCorrelationRepository : IRepository<InstanceCorrelatio
     Task<InstanceCorrelation?> FindActiveSubFlowByParentAsync(
         Guid parentInstanceId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Read-only variant of <see cref="FindActiveSubFlowByParentAsync"/> (AsNoTracking) for read paths
+    /// that only need the child's identity, such as the data function's per-poll SubFlow probe.
+    /// </summary>
+    /// <param name="parentInstanceId">The unique identifier of the parent workflow instance.</param>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
+    /// <returns>The untracked active SubFlow correlation, or null when the parent has none.</returns>
+    Task<InstanceCorrelation?> FindActiveSubFlowByParentAsReadOnlyAsync(
+        Guid parentInstanceId,
+        CancellationToken cancellationToken = default);
     
     /// <summary>
     /// Finds a correlation by SubFlow instance ID.

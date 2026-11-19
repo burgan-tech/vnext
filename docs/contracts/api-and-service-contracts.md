@@ -152,7 +152,8 @@ There is no per-built-in-function selector: `state`, `data`, `view`, `schema`, `
 may not read `data` either.
 
 `data` is the one asymmetry worth stating explicitly: its **content** does not descend (it serves the
-polled instance's attributes) while its **authorization** does. Authorization follows where the
+polled instance's attributes) while its **authorization**, its ETag and its `extensions` do
+([state-function-cache-and-etag](../runtime/state-function-cache-and-etag.md)). Authorization follows where the
 instance actually is; content follows what the client holds.
 
 Starting an instance has its own, workflow-scoped route, because there is no instance to address yet:

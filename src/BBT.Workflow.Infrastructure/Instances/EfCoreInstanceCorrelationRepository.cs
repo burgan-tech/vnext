@@ -93,6 +93,20 @@ public sealed class EfCoreInstanceCorrelationRepository(
     }
 
     /// <inheritdoc />
+    public async Task<InstanceCorrelation?> FindActiveSubFlowByParentAsReadOnlyAsync(
+        Guid parentInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        return await (await GetDbSetAsync())
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c =>
+                    c.ParentInstanceId == parentInstanceId
+                    && !c.IsCompleted
+                    && c.SubFlowType == SubFlowType.SubFlow,
+                cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<InstanceCorrelation?> FindBySubInstanceIdAsync(
         Guid subInstanceId,
         CancellationToken cancellationToken = default)

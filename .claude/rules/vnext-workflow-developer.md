@@ -115,7 +115,8 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   ETag: `LatestData?.ETag` (entity), `IRepresentationEtagService.Generate(output)` (representation).
 - Bump `StateFunctionCache.ResponseShapeVersion` (currently `v14`) in the same commit as any change to
   what the state body carries — otherwise parked pollers keep getting 304.
-- Every built-in instance function descends an active subflow — except `data`.
+- Every built-in instance function descends an active subflow; `data` descends only for its ETag and
+  `extensions` — its content stays the polled instance's.
 - Parent overrides resolve in ONE place per kind and REPLACE (never merge): `IsQueryAllowedAsync`,
   `TransitionAuthorizationManager.EffectiveTransitionGrants`, `GetSubFlowViewWithOverrideAsync`.
 - `effectiveStatus` is served CLAMPED via `Instance.GetEffectiveStatus` (`InstanceStatus.IsTerminal`
