@@ -41,20 +41,23 @@ internal static class DaprAppApiTokenLoader
         if (string.IsNullOrWhiteSpace(path))
             return null;
 
-        string content;
+        var content = ReadTrimmed(path);
+        if (content.Length == 0)
+            throw new InvalidOperationException($"The Dapr app API token file '{path}' is empty.");
+
+        return content;
+    }
+
+    private static string ReadTrimmed(string path)
+    {
         try
         {
-            content = File.ReadAllText(path).Trim();
+            return File.ReadAllText(path).Trim();
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             throw new InvalidOperationException(
                 $"The Dapr app API token file '{path}' cannot be read: {exception.GetType().Name}.");
         }
-
-        if (content.Length == 0)
-            throw new InvalidOperationException($"The Dapr app API token file '{path}' is empty.");
-
-        return content;
     }
 }

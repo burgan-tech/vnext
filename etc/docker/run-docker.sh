@@ -88,8 +88,8 @@ ensure_app_api_token() {
   local file
   mkdir -p "$STATE"
   file="$(cd "$STATE" && pwd)/app-api-token"
-  if [ -z "${VNEXT_APP_API_TOKEN:-}" ]; then
-    if [ -s "$file" ]; then
+  if [[ -z "${VNEXT_APP_API_TOKEN:-}" ]]; then
+    if [[ -s "$file" ]]; then
       VNEXT_APP_API_TOKEN="$(cat "$file" 2>/dev/null)" || die "cannot read $file (delete it to generate a new Dapr app API token)"
     else
       need openssl
@@ -105,12 +105,12 @@ ensure_app_api_token() {
 # A running orchestration sidecar keeps the APP_API_TOKEN it was created with (compose --no-recreate).
 # Recreate it when that differs from the token this run gives the app. Compares silently.
 sync_sidecar_token() {   # <container> <compose service> <compose -f file>
-  local cur
-  cur="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$1" 2>/dev/null | grep '^APP_API_TOKEN=' || true)"
-  [ "$cur" = "APP_API_TOKEN=$VNEXT_APP_API_TOKEN" ] && return 0
-  log "recreating $1 (Dapr app API token changed)"
-  docker compose -f "$3" up -d --force-recreate --no-deps --quiet-pull "$2" >> "$DDIR/logs/infra.log" 2>&1 \
-    || { tail -n 20 "$DDIR/logs/infra.log" >&2; die "could not recreate $1 — see $DDIR/logs/infra.log"; }
+  local container="$1" service="$2" compose_file="$3" cur
+  cur="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$container" 2>/dev/null | grep '^APP_API_TOKEN=' || true)"
+  [[ "$cur" = "APP_API_TOKEN=$VNEXT_APP_API_TOKEN" ]] && return 0
+  log "recreating $container (Dapr app API token changed)"
+  docker compose -f "$compose_file" up -d --force-recreate --no-deps --quiet-pull "$service" >> "$DDIR/logs/infra.log" 2>&1 \
+    || { tail -n 20 "$DDIR/logs/infra.log" >&2; die "could not recreate $container — see $DDIR/logs/infra.log"; }
 }
 f() { printf '%s' "$1" | cut -d'|' -f"$2"; }          # f <row> <field>
 
@@ -223,7 +223,7 @@ load_env() {
   while IFS= read -r line; do [ -n "$line" ] && ENVS+=("$line"); done < <(profile_env "$project" "$profile")
   ENVS+=("APP_DOMAIN=$domain")
   # Dapr local-delivery guard: the orchestration app expects the token its own sidecar presents (never printed)
-  [ "$(f "$row" 1)" = orchestration ] && [ -n "${VNEXT_APP_API_TOKEN_FILE:-}" ] && ENVS+=("Workflow__RuntimeCaller__AppApiTokenFile=$VNEXT_APP_API_TOKEN_FILE")
+  [[ "$(f "$row" 1)" = orchestration && -n "${VNEXT_APP_API_TOKEN_FILE:-}" ]] && ENVS+=("Workflow__RuntimeCaller__AppApiTokenFile=$VNEXT_APP_API_TOKEN_FILE")
   [ -n "$(cohosted "$domain")" ] && ENVS+=("APP_DOMAINS=$(cohosted_names "$domain")")
   # d=db → that co-hosted domain's own database (ConnectionStrings:Domains:<d>), for every host with a database
   if [ "$(f "$row" 5)" = 1 ]; then
