@@ -124,6 +124,50 @@ POST /api/v1/{domain}/workflows/{workflow}/instances/events
 
 Body: the raw event payload (CloudEvent envelopes are unwrapped automatically).
 
+### Who can call it: the domain's own Dapr sidecar
+
+The endpoint is a delivery target, not a public API. It accepts a request only when it came from this
+runtime's **own Dapr sidecar**:
+
+- exactly one `dapr-api-token` header whose value equals the configured app API token
+  (compared in constant time), **and**
+- no `dapr-caller-app-id` header. Dapr stamps that header on service-invocation calls from *another*
+  app; pub/sub, binding and job deliveries from the app's own sidecar do not carry it.
+
+Anything else is answered with an empty-body `403`. Not `404`: Dapr pub/sub drops a message for good on `404` and retries on any other status, so a delivery from our own sidecar that fails the rule through misconfiguration (missing annotation, mismatched token) stays retryable instead of being lost. The same rule guards
+`POST .../instances/schedule` and Dapr Scheduler's `/job/{jobName}` callback. The
+`dapr-api-token` header is removed from every request right after routing, before controllers and any Dapr job handler
+run, so it never reaches scripts, instance data or logs.
+
+| Setting | Meaning |
+|---|---|
+| `Dapr:LocalDelivery:Mode` | `Off`, `LogOnly` (**default**: a failing request is served and logged as EventId 40996 "would reject") or `Enforce` (a failing request gets `403`, which Dapr retries). |
+| `Workflow:RuntimeCaller:AppApiTokenFile` | Path to a mounted file that holds the token the sidecar presents. The app reads it once at start and trims it; it is never reloaded. There is no env or configuration value for the token itself, because flow scripts can read both. If the path is set and the file is missing, unreadable or empty, startup fails. Any other token-, key- or secret-named entry under `Workflow:RuntimeCaller` also fails startup. On the Orchestration host the token file also needs `Scripting:Sandbox:Enabled=true`; otherwise startup fails unless `Workflow:RuntimeCaller:AllowWithoutScriptSandbox=true` is set (Critical log at every start). Same condition as in [Sub-endpoint gate](../runtime/sub-endpoint-gate.md). With the path unset, `Enforce` fails startup (options validation), because such a pod would look healthy while rejecting every delivery; if a configuration reload puts a running host into that state, every guarded request is rejected and logs EventId 40997 (Error); `LogOnly` logs EventId 40998 (Information) once at startup and nothing per request. Both messages name this key. |
+
+The sidecar must hold the same token: `daprd` takes it from its `APP_API_TOKEN` environment variable. The app
+does **not** read `APP_API_TOKEN`. On Kubernetes:
+
+- one Secret per domain, key `token`;
+- the annotation `dapr.io/app-token-secret: <secret>` on the **orchestration** Deployment only; the injector gives the Secret to `daprd` only;
+- the same Secret mounted read-only into the orchestration container, with `Workflow__RuntimeCaller__AppApiTokenFile` set to the mount path.
+
+Rotation: change the Secret, then restart the orchestration Deployment. There is no in-place reload.
+
+**The sidecar's own API is inside the boundary.** A call made to this runtime's own sidecar
+(`POST <sidecar>/v1.0/invoke/<own-app-id>/method/...`) reaches the app with the token and without
+`dapr-caller-app-id`, so the guard accepts it (measured on daprd 1.16.19). On Kubernetes the sidecar
+API listens on `[::1],127.0.0.1` by default, so only processes inside the pod can make that call.
+Keep it that way: do not set `dapr.io/sidecar-listen-addresses` to a non-loopback address, or protect
+the sidecar API with `dapr.io/api-token-secret` if you must. Locally, `etc/docker` publishes the
+sidecar ports to the host, so on a developer machine anything that can reach `localhost` is trusted.
+
+Rollout: ship the runtime in `LogOnly`, enable the sidecar token (Helm), watch EventId 40996 fall to
+zero, then set `Mode=Enforce`. Rollback is `Mode=LogOnly`. Scope of this phase: the orchestration host
+only; the execution, inbox and outbox hosts and the vNext-to-vNext internal endpoints (for example
+`transitions/{key}/enqueue`) are not yet covered. Local runs through `etc/docker/run-docker.sh` get a
+per-checkout token in the git-ignored `.vnext-local/app-api-token` (delete the file to rotate). The script passes the file
+path to a host-run orchestration and bind-mounts it read-only at `/run/secrets/vnext/app-api-token` into `vnext-app` containers; the mount defaults to `/dev/null`, so a container started without the script fails at startup on the empty file.
+
 ### The response is a Dapr protocol body, not an instance envelope
 
 Dapr reads the **top-level `status` field of the subscriber's JSON response** as its delivery signal
@@ -135,7 +179,7 @@ is an `InstanceStatus` code (`"A"`, `"B"`, `"C"`, `"F"`, `"P"`). So this endpoin
 
 ```jsonc
 { "status": "SUCCESS" }                       // processed, or intentionally ignored
-{ "status": "DROP", "reason": "TransitionNotFound: …" }   // unprocessable, discarded
+{ "status": "DROP", "reason": "TransitionNotFound" }   // unprocessable, discarded (reason = the error code only)
 { "status": "SUCCESS", "instance": { "id": "…", "key": "…", "status": "C" } }  // sync=true only
 ```
 
@@ -244,8 +288,8 @@ Notes:
 - The 200-on-no-match rule is deliberate: an abort event for an already-completed instance must
   evaporate, not redeliver forever.
 - Every `DROP` is logged as a **Warning** (`EventDeliveryDropped`, EventId 40994) with the error code
-  and reason, and the reason is echoed in the response body — a discarded message is still
-  diagnosable. Alert on that log; a silently dropped event is worse than a noisy one.
+  and the full message; the response body carries only the error code as `reason` (the message can name
+  flows and transitions, so it stays in the log) — a discarded message is still diagnosable. Alert on that log; a silently dropped event is worse than a noisy one.
 - A mapping script that throws deterministically is in the *retry* class, so it will be redelivered
   until the resiliency policy gives up. Bound it: give the subscription a `maxRetries` policy and a
   `deadLetterTopic` so the poison message ends up somewhere inspectable instead of consuming the
@@ -274,10 +318,13 @@ exercised without a broker:
 ```bash
 curl -X POST "http://localhost:4201/api/v1/morph-touch/workflows/event-driven-workflow/instances/events?action=start" \
   -H "Content-Type: application/json" \
+  -H "dapr-api-token: $(cat .vnext-local/app-api-token)" \
   -d '{"orderId":"ord-1","amount":250}'
 ```
 
-Expect `200 {"status":"SUCCESS"}`. Add `&sync=true` to also get the `instance` snapshot back. Because
+Send the app API token the sidecar uses (`.vnext-local/app-api-token` for a `run-docker.sh` stack). In
+`Enforce` mode a direct call without a matching `dapr-api-token` gets an empty `403`; in `LogOnly` it is
+served and logged (EventId 40996). Expect `200 {"status":"SUCCESS"}`. Add `&sync=true` to also get the `instance` snapshot back. Because
 unprocessable messages answer `200 DROP` rather than 4xx, read the `status` field — not just the
 status code — when testing by hand: a `DROP` means the delivery was discarded, and the `reason` says
 why.
@@ -302,7 +349,7 @@ startup — restart the Dapr sidecar after adding or changing a YAML.
   reads the top-level `status` field as its signal, so an `InstanceStatus` code there (`"B"`) causes
   endless redelivery. Processed or no-active-match ⇒ `200 {"status":"SUCCESS"}`; permanently
   unprocessable (bad `transitionKey`/action/domain, non-JSON body, missing event definition) ⇒
-  `200 {"status":"DROP","reason":…}` + `EventDeliveryDropped` warning; transient failures keep non-2xx
+  `200 {"status":"DROP","reason":<error code>}` + `EventDeliveryDropped` warning; transient failures keep non-2xx
   so the broker retries. Full guide: `docs/domain/event-driven-workflows.md`.
 
 ## References
