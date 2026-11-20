@@ -69,30 +69,30 @@ public sealed class DaprLocalDeliveryMiddlewareTests
     }
 
     [Fact]
-    public async Task Enforce_GuardedEndpoint_CallerHeader_Returns404_DoesNotCallNext()
+    public async Task Enforce_GuardedEndpoint_CallerHeader_Returns403_DoesNotCallNext()
     {
         var h = new Harness(DaprLocalDeliveryMode.Enforce);
         await h.Run(Guarded(), Token, caller: "other");
-        h.Context.Response.StatusCode.ShouldBe(404);
+        h.Context.Response.StatusCode.ShouldBe(403);
         h.NextCalled.ShouldBeFalse();
         h.Context.Request.Headers.ContainsKey("dapr-api-token").ShouldBeFalse();
     }
 
     [Fact]
-    public async Task Enforce_JobRouteEndpoint_NoToken_Returns404()
+    public async Task Enforce_JobRouteEndpoint_NoToken_Returns403()
     {
         var h = new Harness(DaprLocalDeliveryMode.Enforce);
         await h.Run(JobRoute());
-        h.Context.Response.StatusCode.ShouldBe(404);
+        h.Context.Response.StatusCode.ShouldBe(403);
         h.NextCalled.ShouldBeFalse();
     }
 
     [Fact]
-    public async Task Enforce_TokenNotConfigured_Returns404()
+    public async Task Enforce_TokenNotConfigured_Returns403()
     {
         var h = new Harness(DaprLocalDeliveryMode.Enforce, token: null);
         await h.Run(Guarded(), Token);
-        h.Context.Response.StatusCode.ShouldBe(404);
+        h.Context.Response.StatusCode.ShouldBe(403);
         h.NextCalled.ShouldBeFalse();
     }
 
@@ -104,10 +104,12 @@ public sealed class DaprLocalDeliveryMiddlewareTests
     }
 
     [Fact]
-    public async Task Rejection_Is404_WithEmptyBody()
+    public async Task Rejection_Is403_WithEmptyBody()
     {
         var h = new Harness(DaprLocalDeliveryMode.Enforce);
         await h.Run(Guarded());
+        // Not 404: Dapr pub/sub drops a message for good on 404; any other status is retried.
+        h.Context.Response.StatusCode.ShouldBe(403);
         h.Context.Response.ContentLength.ShouldBeNull();
         h.Context.Response.Body.Length.ShouldBe(0);
     }
@@ -202,7 +204,7 @@ public sealed class DaprLocalDeliveryMiddlewareTests
     {
         var h = new Harness(DaprLocalDeliveryMode.Enforce);
         await h.Run(Guarded(), path: path);
-        h.Context.Response.StatusCode.ShouldBe(404);
+        h.Context.Response.StatusCode.ShouldBe(403);
 
         var ok = new Harness(DaprLocalDeliveryMode.Enforce);
         await ok.Run(Guarded(), Token, path: path);

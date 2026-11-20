@@ -134,14 +134,14 @@ runtime's **own Dapr sidecar**:
 - no `dapr-caller-app-id` header. Dapr stamps that header on service-invocation calls from *another*
   app; pub/sub, binding and job deliveries from the app's own sidecar do not carry it.
 
-Anything else is answered with an empty-body `404`. The same rule guards
+Anything else is answered with an empty-body `403`. Not `404`: Dapr pub/sub drops a message for good on `404` and retries on any other status, so a delivery from our own sidecar that fails the rule through misconfiguration (missing annotation, mismatched token) stays retryable instead of being lost. The same rule guards
 `POST .../instances/schedule` and Dapr Scheduler's `/job/{jobName}` callback. The
 `dapr-api-token` header is removed from every request right after routing, before controllers and any Dapr job handler
 run, so it never reaches scripts, instance data or logs.
 
 | Setting | Meaning |
 |---|---|
-| `Dapr:LocalDelivery:Mode` | `Off`, `LogOnly` (**default**: a failing request is served and logged as EventId 40996 "would reject") or `Enforce` (a failing request gets `404`). |
+| `Dapr:LocalDelivery:Mode` | `Off`, `LogOnly` (**default**: a failing request is served and logged as EventId 40996 "would reject") or `Enforce` (a failing request gets `403`, which Dapr retries). |
 | `Workflow:RuntimeCaller:AppApiTokenFile` | Path to a mounted file that holds the token the sidecar presents. The app reads it once at start and trims it; it is never reloaded. There is no env or configuration value for the token itself, because flow scripts can read both. If the path is set and the file is missing, unreadable or empty, startup fails. Any other token-, key- or secret-named entry under `Workflow:RuntimeCaller` also fails startup. On the Orchestration host the token file also needs `Scripting:Sandbox:Enabled=true`; otherwise startup fails unless `Workflow:RuntimeCaller:AllowWithoutScriptSandbox=true` is set (Critical log at every start). Same condition as in [Sub-endpoint gate](../runtime/sub-endpoint-gate.md). With the path unset, `Enforce` rejects every guarded request and logs EventId 40997 at startup; `LogOnly` logs EventId 40998 (Information) once at startup and nothing per request. Both messages name this key. |
 
 The sidecar must hold the same token: `daprd` takes it from its `APP_API_TOKEN` environment variable. The app
@@ -323,7 +323,7 @@ curl -X POST "http://localhost:4201/api/v1/morph-touch/workflows/event-driven-wo
 ```
 
 Send the app API token the sidecar uses (`.vnext-local/app-api-token` for a `run-docker.sh` stack). In
-`Enforce` mode a direct call without a matching `dapr-api-token` gets an empty `404`; in `LogOnly` it is
+`Enforce` mode a direct call without a matching `dapr-api-token` gets an empty `403`; in `LogOnly` it is
 served and logged (EventId 40996). Expect `200 {"status":"SUCCESS"}`. Add `&sync=true` to also get the `instance` snapshot back. Because
 unprocessable messages answer `200 DROP` rather than 4xx, read the `status` field — not just the
 status code — when testing by hand: a `DROP` means the delivery was discarded, and the `reason` says

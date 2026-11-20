@@ -12,7 +12,9 @@ namespace BBT.Workflow.Middlewares;
 /// Lets Dapr-triggered endpoints accept only deliveries from the domain's own sidecar. An endpoint
 /// is guarded when it carries <see cref="DaprLocalDeliveryOnlyAttribute"/> or is the Dapr jobs
 /// callback route; the decision is by endpoint, never by path. The <c>dapr-api-token</c> header is
-/// removed from every request so it never reaches application code. Rejection is a bodiless 404.
+/// removed from every request so it never reaches application code. Rejection is a bodiless 403, never 404:
+/// Dapr pub/sub drops a message for good on 404 and retries on any other status, so a misconfigured
+/// token on our own sidecar must stay a retryable failure rather than a silent loss.
 /// </summary>
 public sealed class DaprLocalDeliveryMiddleware
 {
@@ -73,7 +75,7 @@ public sealed class DaprLocalDeliveryMiddleware
 
         if (rejected)
         {
-            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
             return;
         }
 

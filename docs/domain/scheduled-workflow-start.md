@@ -275,7 +275,7 @@ has consequences, assert that the expected instance exists rather than trusting 
 
 Like the event endpoint, `instances/schedule` accepts only a delivery from the domain's own Dapr
 sidecar: exactly one `dapr-api-token` header equal to the app API token and no `dapr-caller-app-id`
-header (Dapr's service-invocation marker). Anything else gets an empty-body `404` in `Enforce` mode;
+header (Dapr's service-invocation marker). Anything else gets an empty-body `403` in `Enforce` mode (retryable for Dapr, unlike `404`);
 `LogOnly` (the default) serves it and logs EventId 40996 (without a configured token, `LogOnly` logs EventId 40998 once at startup and nothing per request). Settings, sidecar setup and rollout:
 [Event-Driven Workflows § Who can call it](event-driven-workflows.md#who-can-call-it-the-domains-own-dapr-sidecar).
 

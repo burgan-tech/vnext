@@ -17,7 +17,7 @@ status: pending
 - `POST {domain}/workflows/{workflow}/instances/events`, `.../instances/schedule` and Dapr Scheduler's
   `/job/{jobName}` accept only a delivery from the domain's own Dapr sidecar: exactly one
   `dapr-api-token` header equal to the app API token, and no `dapr-caller-app-id` header. Anything else
-  gets an empty-body `404` (in `Enforce`).
+  gets an empty-body `403` (in `Enforce`); not `404`, so Dapr retries a misconfigured own-sidecar delivery instead of dropping it.
 - `Dapr:LocalDelivery:Mode` = `Off` | `LogOnly` (default) | `Enforce`. The token comes only from the file named by
   `Workflow:RuntimeCaller:AppApiTokenFile`, read once at start and trimmed; the app no longer reads `APP_API_TOKEN` and
   there is no `Dapr:LocalDelivery:AppApiToken`. A set path with a missing or empty file fails startup. `LogOnly` serves
@@ -39,7 +39,7 @@ Source of truth: `docs/domain/event-driven-workflows.md` § Who can call it, `do
 ## What this product must do
 
 - Event-driven and scheduled-start pages: state the own-sidecar rule, show `dapr-api-token` on every
-  direct `curl`, and note that a direct call without it gets `404` in `Enforce`.
+  direct `curl`, and note that a direct call without it gets `403` in `Enforce`.
 - Deployment/security pages: document the sidecar side (`APP_API_TOKEN` on daprd only; Kubernetes: one Secret per domain, key `token`, annotation `dapr.io/app-token-secret: <secret>` on the orchestration Deployment only, and the same Secret mounted read-only into the orchestration container with `Workflow__RuntimeCaller__AppApiTokenFile` pointing at it; no `APP_API_TOKEN` in the app container), the script-sandbox condition, restart-based rotation, the requirement to keep the sidecar API on loopback, and the rollout: `LogOnly` -> enable the sidecar token -> EventId 40996 at zero -> `Enforce`.
 - Change any example that shows `"reason": "Code: message"` to the code-only form.
 - Release blog for v0.0.107: a security fix, non-breaking while `LogOnly`; operators should plan the `Enforce` step.

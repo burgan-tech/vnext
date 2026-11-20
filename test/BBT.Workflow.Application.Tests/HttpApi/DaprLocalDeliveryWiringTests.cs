@@ -76,7 +76,7 @@ public sealed class DaprLocalDeliveryWiringTests
         context.SetEndpoint(job);
         await middleware.InvokeAsync(context); // no token: a guarded endpoint must be rejected
 
-        context.Response.StatusCode.ShouldBe(StatusCodes.Status404NotFound);
+        context.Response.StatusCode.ShouldBe(StatusCodes.Status403Forbidden);
         nextCalled.ShouldBeFalse();
         job.RoutePattern.RawText.ShouldBe("/job/{jobName}");
     }
@@ -155,7 +155,7 @@ public sealed class DaprLocalDeliveryWiringTests
             request.Headers.Add("dapr-api-token", presented);
             var response = await app.GetTestClient().SendAsync(request);
 
-            (response.StatusCode == HttpStatusCode.NotFound).ShouldBe(rejected);
+            (response.StatusCode == HttpStatusCode.Forbidden).ShouldBe(rejected);
         }
         finally
         {
