@@ -231,6 +231,16 @@ public sealed class InstanceDataWriteOptions
     /// </para>
     /// </summary>
     public bool PreserveNumericPrecision { get; set; }
+
+    /// <summary>
+    /// Kill-switch for the master-schema preview at transition intake (vnext#1255): true ⇒ a manual
+    /// request's body is merged onto the latest data in memory and the result validated against the
+    /// flow's master schema BEFORE admission, so a body the write funnel would refuse answers
+    /// <c>400</c> with <c>validationErrors</c> and the instance is untouched. false ⇒ only the write
+    /// funnel validates, inside the pipeline, where the same failure faults the instance. The funnel's
+    /// own validation runs under either setting. Default: true.
+    /// </summary>
+    public bool IntakeMasterSchemaPreview { get; set; } = true;
 }
 
 /// <summary>
