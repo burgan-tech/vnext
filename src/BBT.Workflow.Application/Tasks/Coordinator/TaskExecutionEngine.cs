@@ -24,6 +24,9 @@ namespace BBT.Workflow.Tasks.Coordinator;
 /// </remarks>
 public sealed class TaskExecutionEngine : ITaskExecutionEngine
 {
+    // The task type an error is attributed to when the failure happened before, or outside, a typed run.
+    private const string UnknownTaskType = "Unknown";
+
     private readonly ITaskExecutorRegistry _executorRegistry;
     private readonly ITaskFactory _taskFactory;
     private readonly ITaskPersistenceStrategyFactory _persistenceStrategyFactory;
@@ -171,7 +174,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 if (executionError == null)
                 {
                     executionError = _errorFactory.CreateFromError(
-                        result.Error, taskKey, "Unknown", (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds);
+                        result.Error, taskKey, UnknownTaskType, (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds);
                 }
 
                 var retryPolicy = GetRetryPolicyForError(boundaryChain, executionError.NormalizedError);
@@ -213,7 +216,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             Activity.Current?.RecordExceptionWithStatus(ex, $"Task {taskKey} threw unhandled exception");
 
             var durationMs = (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds;
-            var taskError = _errorFactory.CreateFromException(ex, taskKey, "Unknown", durationMs);
+            var taskError = _errorFactory.CreateFromException(ex, taskKey, UnknownTaskType, durationMs);
             return UnhandledFailure(onExecuteTask, taskError, durationMs, options);
         }
     }
@@ -231,7 +234,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         if (!options.ReportUnhandledFailureAsOutcome)
             return Result<TasksExecutionResult>.Fail(error.ToError());
 
-        var rederived = _errorFactory.CreateFromError(error.ToError(), onExecuteTask.Task.Key, "Unknown", durationMs)
+        var rederived = _errorFactory.CreateFromError(error.ToError(), onExecuteTask.Task.Key, UnknownTaskType, durationMs)
             with { StackTrace = error.StackTrace };
         return Result<TasksExecutionResult>.Ok(
             TasksExecutionResult.Failure(onExecuteTask, rederived, totalDurationMs: durationMs));
@@ -267,7 +270,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         {
             // Infrastructure error - create from Result.Error
             executionError = _errorFactory.CreateFromError(
-                failedResult.Error, taskKey, "Unknown", totalDurationMs);
+                failedResult.Error, taskKey, UnknownTaskType, totalDurationMs);
         }
 
         if (attemptsMade > 0)
@@ -602,7 +605,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 var error = _errorFactory.CreateFromException(
                     new InvalidOperationException(taskResult.Error.Message ?? "Failed to create task"),
                     onExecuteTask.Task.Key,
-                    "Unknown",
+                    UnknownTaskType,
                     (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
 
                 TaskExecutionActivityHelper.AddFailedEvent(Activity.Current, error.ErrorMessage, "TaskFactoryError");
@@ -685,28 +688,10 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         var (executeResult, failureTrace) = await ExecuteTakingFailureCauseAsync(
             executorResult.Value!, executorContext, task.Key, taskTypeStr, cancellationToken);
 
-        // B8: task TANIMI (mapping ScriptCode dahil) transition record'a kopyalanmaz — tanım zaten
-        // component store'dadır; referans yeterli. Monitor tarafı Request'i JsonElement passthrough
-        // gösterir (alan-parse etmez — keşifle doğrulandı), "Task" anahtarı korunur.
         // Journal payloads are built only when a journal row is persisted: without a persistence
         // strategy (history: none, or an origin with no journal) instanceTask never leaves this method.
         if (capturesJournal)
-        {
-            var requestPayload = new
-            {
-                Task = new { task.Key, task.Version, task.Domain, task.Flow, Type = task.GetTaskType().ToString() },
-                executorContext.InputResponse
-            };
-            var requestJson = new JsonData(JsonSerializer.Serialize(
-                requestPayload,
-                JsonSerializerConstants.JsonOptions));
-            instanceTask.SetRequest(requestJson);
-
-            if (executorContext.RawInvocationResult is { } rawInvocationResult)
-            {
-                instanceTask.SetInvocationResult(rawInvocationResult);
-            }
-        }
+            CaptureJournalRequest(instanceTask, task, executorContext);
 
 
         // 9. Handle infrastructure error - return without boundary resolution (not retriable)
@@ -797,6 +782,31 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         }
 
         return Result<TasksExecutionResult>.Ok(executionResult);
+    }
+
+    /// <summary>
+    /// Fills the journal row's request — the task reference and the input handler's response — and
+    /// the raw invocation result, when the executor captured one.
+    /// </summary>
+    private static void CaptureJournalRequest(InstanceTask instanceTask, WorkflowTask task, TaskExecutorContext executorContext)
+    {
+        // B8: task TANIMI (mapping ScriptCode dahil) transition record'a kopyalanmaz — tanım zaten
+        // component store'dadır; referans yeterli. Monitor tarafı Request'i JsonElement passthrough
+        // gösterir (alan-parse etmez — keşifle doğrulandı), "Task" anahtarı korunur.
+        var requestPayload = new
+        {
+            Task = new { task.Key, task.Version, task.Domain, task.Flow, Type = task.GetTaskType().ToString() },
+            executorContext.InputResponse
+        };
+        var requestJson = new JsonData(JsonSerializer.Serialize(
+            requestPayload,
+            JsonSerializerConstants.JsonOptions));
+        instanceTask.SetRequest(requestJson);
+
+        if (executorContext.RawInvocationResult is { } rawInvocationResult)
+        {
+            instanceTask.SetInvocationResult(rawInvocationResult);
+        }
     }
 
     /// <summary>
