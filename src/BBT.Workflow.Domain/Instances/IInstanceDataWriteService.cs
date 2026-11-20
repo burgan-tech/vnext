@@ -1,3 +1,5 @@
+using BBT.Aether.Results;
+
 namespace BBT.Workflow.Instances;
 
 /// <summary>
@@ -96,5 +98,35 @@ public interface IInstanceDataWriteService
         Instance instance,
         Definitions.Workflow? workflow,
         Func<CancellationToken, Task>? inSameTransaction = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Side-effect-free preview of <see cref="AppendAsync"/> (vnext#1255): merges
+    /// <paramref name="delta"/> onto the aggregate's in-memory latest data with the append's own
+    /// rules and validates the result against the flow's master schema. Nothing is locked, written
+    /// or changed on <paramref name="instance"/>. Used at transition intake so a request body the
+    /// append would refuse is answered as a validation failure before admission.
+    /// </summary>
+    /// <remarks>
+    /// An early refusal only, never the authority: the head is the caller's loaded snapshot, not the
+    /// one read under the row lock, and <see cref="AppendAsync"/> validates again. Whenever the preview
+    /// cannot reproduce what the append would validate it accepts and leaves the verdict to the append:
+    /// no master schema or one that failed to load, a schema with <c>x-encryption</c> paths or data
+    /// already carrying protected values, a delta carrying a file node (<c>x-storage</c> is swapped
+    /// after validation), a non-object delta, or a merge that changes nothing (the append writes and
+    /// validates nothing then). An unexpected failure of the preview itself is accepted the same way
+    /// and logged (<c>IntakeMasterSchemaPreviewSkipped</c>); only cancellation propagates.
+    /// </remarks>
+    /// <param name="instance">The aggregate whose latest data is the merge base; not modified.</param>
+    /// <param name="delta">The data the append would receive.</param>
+    /// <param name="workflow">The instance's workflow definition, naming the master schema.</param>
+    /// <param name="culture">Culture for the validation messages; <c>null</c> uses the default.</param>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
+    /// <returns>Success, or the master-schema validation failure with its validation errors.</returns>
+    Task<Result> PreviewAppendAsync(
+        Instance instance,
+        JsonData delta,
+        Definitions.Workflow workflow,
+        string? culture = null,
         CancellationToken cancellationToken = default);
 }
