@@ -24,6 +24,9 @@ namespace BBT.Workflow.Application.Tests.Execution.Transitions.Services;
 /// </summary>
 public sealed class TransitionDataMapperTests
 {
+    private static readonly JsonSerializerOptions DefinitionJson =
+        new() { PropertyNameCaseInsensitive = true, Converters = { new JsonStringEnumConverter() } };
+
     private readonly IScriptEngine _scriptEngine = Substitute.For<IScriptEngine>();
     private readonly IScriptContextFactory _scriptContextFactory = Substitute.For<IScriptContextFactory>();
 
@@ -41,7 +44,7 @@ public sealed class TransitionDataMapperTests
     }
 
     private TransitionDataMapper CreateMapper() =>
-        new(_scriptEngine, _scriptContextFactory, Substitute.For<IInstanceRepository>());
+        new(_scriptEngine, _scriptContextFactory, Substitute.For<IInstanceRepository>(), Substitute.For<IRuntimeInfoProvider>());
 
     [Fact]
     public async Task MappingThatThrows_ReportsTheSameError_AndHandsTheExceptionToTheCaller()
@@ -55,7 +58,7 @@ public sealed class TransitionDataMapperTests
 
         var result = await CreateMapper().MapTransitionDataAsync(
             new { amount = 1 }, transition, workflow, Instance.Create(Guid.NewGuid(), workflow.Key, "1.0.0"),
-            Substitute.For<IRuntimeInfoProvider>(), onScriptFailure: ex => received = ex);
+            onScriptFailure: ex => received = ex);
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.ExecutionStepFailed);
@@ -75,7 +78,7 @@ public sealed class TransitionDataMapperTests
 
         var result = await CreateMapper().MapTransitionDataAsync(
             new { amount = 1 }, transition, workflow, Instance.Create(Guid.NewGuid(), workflow.Key, "1.0.0"),
-            Substitute.For<IRuntimeInfoProvider>(), onScriptFailure: _ => calls++);
+            onScriptFailure: _ => calls++);
 
         result.IsSuccess.ShouldBeTrue();
         calls.ShouldBe(0);
@@ -96,8 +99,7 @@ public sealed class TransitionDataMapperTests
             "startTransition": {"key": "start", "from": null, "target": "state1", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [], "view": null}
         }
         """;
-        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, Converters = { new JsonStringEnumConverter() } };
-        var workflow = JsonSerializer.Deserialize<Definitions.Workflow>(json, options)!;
+        var workflow = JsonSerializer.Deserialize<Definitions.Workflow>(json, DefinitionJson)!;
         workflow.SetReference(new Reference("mapping-flow", "test-domain", "sys-flows", "1.0.0"));
         return (workflow, workflow.GetState("state1").Value!.Transitions.First(t => t.Key == "tr1"));
     }
@@ -113,7 +115,7 @@ public sealed class TransitionDataMapperTests
 
         var result = await CreateMapper().MapTransitionDataAsync(
             new { amount = 1 }, transition, workflow, Instance.Create(Guid.NewGuid(), workflow.Key, "1.0.0"),
-            Substitute.For<IRuntimeInfoProvider>(), onScriptFailure: _ => calls++);
+            onScriptFailure: _ => calls++);
 
         result.Error.Code.ShouldBe(WorkflowErrorCodes.ExecutionStepFailed);
         calls.ShouldBe(0, "a cancellation the script sees is not its failure");

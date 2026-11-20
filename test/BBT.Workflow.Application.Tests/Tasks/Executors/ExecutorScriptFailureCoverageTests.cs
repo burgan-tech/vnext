@@ -13,11 +13,11 @@ namespace BBT.Workflow.Application.Tests.Tasks.Executors;
 /// the script context. An executor that builds the <c>Error</c> from the exception itself loses the
 /// trace silently — no behaviour test of another executor would notice — so the source is checked.
 /// </summary>
-public sealed class ExecutorScriptFailureCoverageTests
+public sealed partial class ExecutorScriptFailureCoverageTests
 {
     // An Error built from a script exception: `Error.Failure(..., ScriptDiagnostics.Explain(ex)...)`.
-    private static readonly Regex ErrorFromExplainedException =
-        new(@"Error\.\w+\([^;]*?ScriptDiagnostics\.Explain\(", RegexOptions.Singleline | RegexOptions.Compiled);
+    [GeneratedRegex(@"Error\.\w+\([^;]*?ScriptDiagnostics\.Explain\(", RegexOptions.Singleline)]
+    private static partial Regex ErrorFromExplainedException();
 
     [Fact]
     public void NoTaskExecutor_BuildsAnErrorFromAScriptException_ItReportsItThroughTaskScriptError()
@@ -25,7 +25,7 @@ public sealed class ExecutorScriptFailureCoverageTests
         var tasksDirectory = Path.Combine(RepositoryRoot(), "src", "BBT.Workflow.Application", "Tasks");
 
         var offenders = Directory.EnumerateFiles(tasksDirectory, "*.cs", SearchOption.AllDirectories)
-            .Where(file => ErrorFromExplainedException.IsMatch(File.ReadAllText(file)))
+            .Where(file => ErrorFromExplainedException().IsMatch(File.ReadAllText(file)))
             .Select(file => Path.GetRelativePath(tasksDirectory, file))
             .ToList();
 

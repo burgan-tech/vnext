@@ -21,8 +21,9 @@ public sealed class InstanceIncidentFactoryTests
             "ready", "case-task-input", "eb-script-fail-task", "Script input handler failed", "Task:Script:x", "Task",
             stackTrace: trace);
 
-        incident.StackTrace!.Length.ShouldBe(InstanceIncidentConstants.MaxStackTraceLength);
-        incident.StackTrace.ShouldStartWith(head);
+        var stored = incident.StackTrace.ShouldNotBeNull();
+        stored.Length.ShouldBe(InstanceIncidentConstants.MaxStackTraceLength);
+        stored.ShouldStartWith(head);
     }
 
     [Fact]

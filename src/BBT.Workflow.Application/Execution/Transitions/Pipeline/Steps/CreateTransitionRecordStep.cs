@@ -4,7 +4,6 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Files;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Runtime;
 using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Logging;
@@ -22,7 +21,6 @@ public sealed class CreateTransitionRecordStep(
     IInstanceDataWriteService instanceDataWriteService,
     IGuidGenerator guidGenerator,
     ITransitionDataMapper transitionDataMapper,
-    IRuntimeInfoProvider runtimeInfoProvider,
     IFileOffloadService fileOffloadService,
     ILogger<CreateTransitionRecordStep> logger,
     Persistence.IBookkeepingWriter? bookkeepingWriter = null) : ITransitionStep
@@ -179,7 +177,6 @@ public sealed class CreateTransitionRecordStep(
             transition,
             context.Workflow,
             context.Instance,
-            runtimeInfoProvider,
             context.Headers,
             onScriptFailure: ex => context.FailureCause = ex,
             cancellationToken: cancellationToken);

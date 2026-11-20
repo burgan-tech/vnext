@@ -121,7 +121,7 @@ public sealed class InstanceCommandAppServiceStartMappingFailureTests : IDisposa
         var mappingError = Error.Failure(WorkflowErrorCodes.ExecutionStepFailed, "Failed to execute transition mapping: " + thrown.Message);
         _dataMapper.MapTransitionDataAsync(
                 Arg.Any<object?>(), Arg.Any<Transition?>(), Arg.Any<Definitions.Workflow>(),
-                Arg.Any<Instance>(), Arg.Any<IRuntimeInfoProvider>(),
+                Arg.Any<Instance>(),
                 Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<Action<Exception>?>(), Arg.Any<CancellationToken>())
             .Returns(call =>
             {

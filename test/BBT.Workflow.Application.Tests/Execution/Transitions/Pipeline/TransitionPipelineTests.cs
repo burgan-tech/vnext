@@ -1644,8 +1644,9 @@ public class TransitionPipelineTests
 
         var incident = context.Instance.GetLoadedIncidents().ShouldHaveSingleItem();
         incident.ErrorCode.ShouldBe(nameof(InvalidOperationException));
-        incident.StackTrace.ShouldBe(thrown.ToString());
-        incident.StackTrace.ShouldContain(nameof(FormatException));
+        var trace = incident.StackTrace.ShouldNotBeNull();
+        trace.ShouldBe(thrown.ToString());
+        trace.ShouldContain(nameof(FormatException));
     }
 
     /// <summary>

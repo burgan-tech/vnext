@@ -214,21 +214,23 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
 
             var durationMs = (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds;
             var taskError = _errorFactory.CreateFromException(ex, taskKey, "Unknown", durationMs);
-            return options.ReportUnhandledFailureAsOutcome
-                ? UnhandledOutcome(onExecuteTask, taskError, durationMs)
-                : Result<TasksExecutionResult>.Fail(taskError.ToError());
+            return UnhandledFailure(onExecuteTask, taskError, durationMs, options);
         }
     }
 
     /// <summary>
-    /// The unhandled-failure outcome for a caller that asked for one
-    /// (<see cref="TaskEngineExecutionOptions.ReportUnhandledFailureAsOutcome"/>): the error is
-    /// re-derived from <see cref="ExecutionError.ToError"/> exactly as the coordinator re-derives a
-    /// failed <see cref="Result{T}"/>, so the incident's code and message stay what they were, and the
-    /// stack trace — which an <see cref="Error"/> cannot carry — is kept (vnext#1268).
+    /// Reports a failure no boundary handles. By default a failed <see cref="Result{T}"/>. A caller
+    /// that asked for an outcome (<see cref="TaskEngineExecutionOptions.ReportUnhandledFailureAsOutcome"/>)
+    /// gets the error re-derived from <see cref="ExecutionError.ToError"/> exactly as the coordinator
+    /// re-derives a failed <see cref="Result{T}"/>, so the incident's code and message stay what they
+    /// were, and the stack trace — which an <see cref="Error"/> cannot carry — is kept (vnext#1268).
     /// </summary>
-    private Result<TasksExecutionResult> UnhandledOutcome(OnExecuteTask onExecuteTask, ExecutionError error, long durationMs)
+    private Result<TasksExecutionResult> UnhandledFailure(
+        OnExecuteTask onExecuteTask, ExecutionError error, long durationMs, TaskEngineExecutionOptions options)
     {
+        if (!options.ReportUnhandledFailureAsOutcome)
+            return Result<TasksExecutionResult>.Fail(error.ToError());
+
         var rederived = _errorFactory.CreateFromError(error.ToError(), onExecuteTask.Task.Key, "Unknown", durationMs)
             with { StackTrace = error.StackTrace };
         return Result<TasksExecutionResult>.Ok(
@@ -298,9 +300,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             TaskExecutionActivityHelper.AddFailedEvent(Activity.Current, executionError?.ErrorMessage, executionError?.TaskType, executionError?.StatusCode);
 
             // Return failure without boundary action - pipeline will fault
-            return options.ReportUnhandledFailureAsOutcome
-                ? UnhandledOutcome(onExecuteTask, executionError!, totalDurationMs)
-                : Result<TasksExecutionResult>.Fail(executionError!.ToError());
+            return UnhandledFailure(onExecuteTask, executionError!, totalDurationMs, options);
         }
 
         // Execute matched action (Abort, Notify, Rollback, Log, Ignore)
@@ -682,22 +682,8 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         };
 
         // 8. Execute task
-        Result<StandardTaskResponse> executeResult;
-        Exception? failureCause;
-        try
-        {
-            executeResult = await executorResult.Value!.ExecuteAsync(executorContext, cancellationToken);
-        }
-        finally
-        {
-            // A script that threw during this run left its exception on the context (vnext#1268).
-            // Taken here — even when the executor throws — so it belongs to this run alone and never
-            // reaches the next task on a shared context.
-            failureCause = context.TakeFailureCause();
-        }
-
-        if (failureCause is not null)
-            _logger.TaskScriptFailed(task.Key, taskTypeStr, context.Instance?.Id ?? Guid.Empty, failureCause);
+        var (executeResult, failureTrace) = await ExecuteTakingFailureCauseAsync(
+            executorResult.Value!, executorContext, task.Key, taskTypeStr, cancellationToken);
 
         // B8: task TANIMI (mapping ScriptCode dahil) transition record'a kopyalanmaz — tanım zaten
         // component store'dadır; referans yeterli. Monitor tarafı Request'i JsonElement passthrough
@@ -731,7 +717,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
 
             var infraError = _errorFactory.CreateFromError(
                 executeResult.Error, task.Key, taskTypeStr, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds)
-                with { StackTrace = failureCause?.ToString() };
+                with { StackTrace = failureTrace };
 
             TaskExecutionActivityHelper.AddFailedEvent(Activity.Current, infraError.ErrorMessage, taskTypeStr);
 
@@ -773,7 +759,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         {
             var executionError = _errorFactory.CreateFromResponse(
                 response, task.Key, taskTypeStr, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds)
-                with { StackTrace = failureCause?.ToString() };
+                with { StackTrace = failureTrace };
 
             // One shape with or without a boundary: TaskError set, no BoundaryAction yet. With a
             // boundary the engine's retry loop resolves it; without one the loop returns it as an
@@ -811,5 +797,35 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         }
 
         return Result<TasksExecutionResult>.Ok(executionResult);
+    }
+
+    /// <summary>
+    /// Runs the executor and takes the exception a failing script left on the script context
+    /// (vnext#1268): it is logged here and returned rendered, for the task error's stack trace.
+    /// </summary>
+    private async Task<(Result<StandardTaskResponse> Result, string? FailureTrace)> ExecuteTakingFailureCauseAsync(
+        ITaskExecutor executor,
+        TaskExecutorContext executorContext,
+        string taskKey,
+        string taskType,
+        CancellationToken cancellationToken)
+    {
+        var scriptContext = executorContext.ScriptContext;
+        try
+        {
+            var result = await executor.ExecuteAsync(executorContext, cancellationToken);
+            var cause = scriptContext.TakeFailureCause();
+            if (cause is null)
+                return (result, null);
+
+            _logger.TaskScriptFailed(taskKey, taskType, scriptContext.Instance?.Id ?? Guid.Empty, cause);
+            return (result, cause.ToString());
+        }
+        finally
+        {
+            // Also when the executor threw (the catch-all records that exception): a cause belongs to
+            // this run alone and must never reach the next task on a shared context.
+            scriptContext.FailureCause = null;
+        }
     }
 }

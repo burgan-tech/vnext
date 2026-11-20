@@ -35,7 +35,7 @@ public sealed class TaskExecutionEngineFailureCauseTests
     private readonly ITaskFactory _taskFactory = Substitute.For<ITaskFactory>();
     private readonly ITaskPersistenceStrategyFactory _persistenceStrategyFactory = Substitute.For<ITaskPersistenceStrategyFactory>();
     private readonly IGuidGenerator _guidGenerator = Substitute.For<IGuidGenerator>();
-    private readonly IExecutionErrorFactory _errorFactory = new ExecutionErrorFactory(new ErrorNormalizer());
+    private readonly ExecutionErrorFactory _errorFactory = new(new ErrorNormalizer());
     private readonly ITaskExecutor _executor = Substitute.For<ITaskExecutor>();
     private readonly WorkflowTask _task = WorkflowTaskFactory.CreateHttpTask(TaskKey);
 
@@ -129,8 +129,9 @@ public sealed class TaskExecutionEngineFailureCauseTests
         var error = outcome.Value!.TaskError.ShouldNotBeNull();
         outcome.Value.BoundaryAction.ShouldBeNull();
         outcome.Value.IsSuccess.ShouldBeFalse();
-        error.StackTrace.ShouldBe(exception.ToString());
-        error.StackTrace.ShouldContain(nameof(FormatException));
+        var trace = error.StackTrace.ShouldNotBeNull();
+        trace.ShouldBe(exception.ToString());
+        trace.ShouldContain(nameof(FormatException));
         ShouldMatchVisibly(error, AsTheCoordinatorRederivesIt(legacy));
         error.NormalizedError.Code.ShouldBe($"Task:Http:{TaskKey}");
         context.FailureCause.ShouldBeNull("the engine takes the cause, so it cannot reach the next task");

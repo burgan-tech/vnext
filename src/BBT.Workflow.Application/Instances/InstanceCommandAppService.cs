@@ -450,7 +450,6 @@ public sealed class InstanceCommandAppService(
                 data.Workflow.StartTransition,
                 data.Workflow,
                 data.Instance,
-                runtimeInfoProvider,
                 input.Headers,
                 onScriptFailure: ex => logger.StartTransitionMappingFailed(
                     data.Workflow.Key, data.Workflow.StartTransition.Key, data.Instance.Id, ex),

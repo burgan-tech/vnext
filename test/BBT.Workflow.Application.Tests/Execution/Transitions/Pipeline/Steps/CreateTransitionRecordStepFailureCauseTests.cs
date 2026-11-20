@@ -26,6 +26,12 @@ namespace BBT.Workflow.Application.Tests.Execution.Transitions.Pipeline.Steps;
 [Collection(BBT.Workflow.Application.Tests.TracingDetailLevelCollection.Name)]
 public class CreateTransitionRecordStepFailureCauseTests
 {
+    private static readonly JsonSerializerOptions DefinitionJson = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+    };
+
     [Fact]
     public async Task MappingThatThrows_FailsTheStep_AndLeavesTheExceptionOnTheHop()
     {
@@ -34,7 +40,7 @@ public class CreateTransitionRecordStepFailureCauseTests
         var dataMapper = Substitute.For<ITransitionDataMapper>();
         dataMapper.MapTransitionDataAsync(
                 Arg.Any<object?>(), Arg.Any<Transition?>(), Arg.Any<Definitions.Workflow>(),
-                Arg.Any<Instance>(), Arg.Any<IRuntimeInfoProvider>(),
+                Arg.Any<Instance>(),
                 Arg.Any<Dictionary<string, string?>>(), Arg.Any<Action<Exception>?>(), Arg.Any<CancellationToken>())
             .Returns(call =>
             {
@@ -47,7 +53,6 @@ public class CreateTransitionRecordStepFailureCauseTests
             Substitute.For<IInstanceDataWriteService>(),
             Substitute.For<IGuidGenerator>(),
             dataMapper,
-            Substitute.For<IRuntimeInfoProvider>(),
             BBT.Workflow.Application.Files.FileTestDoubles.PassThroughOffload(),
             Substitute.For<ILogger<CreateTransitionRecordStep>>());
         var context = CreateContext();
@@ -74,12 +79,7 @@ public class CreateTransitionRecordStepFailureCauseTests
                 "startTransition": {"key": "start", "from": null, "target": "state1", "triggerType": "Manual", "versionStrategy": "Patch", "labels": [], "onExecutionTasks": [], "view": null}
             }
             """;
-        var options = new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true,
-            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
-        };
-        var workflow = JsonSerializer.Deserialize<Definitions.Workflow>(json, options)!;
+        var workflow = JsonSerializer.Deserialize<Definitions.Workflow>(json, DefinitionJson)!;
         workflow.SetReference(new Reference("test-workflow", "test-domain", "sys-flows", "1.0.0"));
         var instance = Instance.Create(Guid.NewGuid(), "test-workflow", "1.0.0");
         var state = workflow.GetState("state1").Value!;

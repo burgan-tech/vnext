@@ -35,9 +35,10 @@ public sealed class ExecutionErrorFactoryStackTraceTests
 
         var error = factory.CreateFromException(thrown, "read-amount", "Script", 3);
 
-        error.StackTrace.ShouldBe(thrown.ToString());
-        error.StackTrace.ShouldContain(nameof(FormatException));
-        error.StackTrace.ShouldContain(nameof(CreateFromException_KeepsTheInnerExceptionInTheStackTrace));
+        var trace = error.StackTrace.ShouldNotBeNull();
+        trace.ShouldBe(thrown.ToString());
+        trace.ShouldContain(nameof(FormatException));
+        trace.ShouldContain(nameof(CreateFromException_KeepsTheInnerExceptionInTheStackTrace));
         error.ErrorMessage.ShouldBe("the input handler could not read the amount");
     }
 }
