@@ -786,7 +786,8 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Guid instanceId,
         string? errorCode,
-        string? errorMessage);
+        string? errorMessage,
+        Exception? cause);
 
     /// <summary>
     /// Logs when an instance has been successfully persisted as faulted.
@@ -841,6 +842,52 @@ public static partial class WorkflowLogs
         string taskKey,
         string taskType,
         Guid instanceId);
+
+    /// <summary>
+    /// Logs the exception of a task script that threw — an input/output mapping, a script task, a
+    /// cache key — with its stack trace, the same detail the incident keeps (vnext#1268).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10268,
+        Level = LogLevel.Error,
+        Message = "Task script failed. TaskKey={TaskKey}, TaskType={TaskType}, InstanceId={InstanceId}")]
+    public static partial void TaskScriptFailed(
+        this ILogger logger,
+        string taskKey,
+        string taskType,
+        Guid instanceId,
+        Exception exception);
+
+    /// <summary>
+    /// Logs the exception of a transition mapping that threw while an instance was being started:
+    /// the start answers with the error and records no incident, so the log is where its stack trace
+    /// goes (vnext#1268).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10269,
+        Level = LogLevel.Error,
+        Message = "Start transition mapping failed. Workflow={WorkflowKey}, TransitionKey={TransitionKey}, InstanceId={InstanceId}")]
+    public static partial void StartTransitionMappingFailed(
+        this ILogger logger,
+        string workflowKey,
+        string transitionKey,
+        Guid instanceId,
+        Exception exception);
+
+    /// <summary>
+    /// Logs the exception of a condition script that threw. An automatic-transition rule that fails
+    /// counts as not satisfied and records no incident, so the log is where its stack trace goes
+    /// (vnext#1268).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10270,
+        Level = LogLevel.Error,
+        Message = "Condition script failed. InstanceId={InstanceId}, TransitionKey={TransitionKey}")]
+    public static partial void ConditionScriptFailed(
+        this ILogger logger,
+        Guid instanceId,
+        string? transitionKey,
+        Exception exception);
 
     /// <summary>
     /// Logs when task input mapping/handler fails.

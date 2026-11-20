@@ -104,6 +104,9 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   (`Instance.AcceptLoadedIncidents` keeps them detached — attaching caused `23505 PK_InstanceIncidents`).
 - A task step records the incident BEFORE its own `UpdateAsync(instance, autoSave: true)`; nothing
   records one after a save. Resolve is set-based (`Instance.ResolveOpenIncidents()`), never single-row.
+- A script's exception never goes into a new `Error` (`Detail` reaches HTTP bodies; SubFlow mapping errors are the
+  old exception): task scripts report through `ScriptDiagnostics.TaskScriptError` (the engine takes the cause),
+  pipeline failures set `TransitionExecutionContext.FailureCause`; the incident's `StackTrace` comes from there.
 - Retry loads no-tracking (`GetResultAsReadOnlyAsync`) and unfaults with the `TryUnfaultAsync` CAS,
   committed before `ExecuteRetryAsync`. Never mutate an ambient-tracked aggregate and leave the write
   to an inner `RequiresNew` scope (`Instance:100027`).

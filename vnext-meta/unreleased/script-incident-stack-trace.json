@@ -1,0 +1,45 @@
+{
+  "releaseNote": {
+    "summary": "Incidents raised by a failing script now keep its stack trace — inner exceptions and script line numbers included — and the log carries the same detail.",
+    "breaking": false,
+    "docs": []
+  },
+  "migrations": [
+    {
+      "id": "script-incident-stack-trace",
+      "type": "behavior",
+      "component": "script",
+      "path": "InstanceIncidents.StackTrace",
+      "since": "next",
+      "severity": "info",
+      "title": "Script incidents keep the exception's stack trace",
+      "description": "An incident raised by a script that threw — a task input/output mapping, a script task, a FanOut selector or mapping, a cache key, a transition mapping, a resource-lock key script, a timer script, or an exception escaping a pipeline step or automatic-rule evaluation — now stores the exception in InstanceIncidents.StackTrace: type, message and inner exceptions, innermost first, each with its frames, capped at 4096 characters. Script frames carry the line in the author's source. Before, the column was empty for every script failure. Any other exception the task engine catches now stores the same full rendering instead of the outer frames only. The trace also reaches a parent's incident through InstanceSubFaultedEvent.IncidentStackTrace, across domains too. No API serves the column, and the incident's code, message, layer, task and boundary fields are unchanged. A rule script that throws still counts as not satisfied and records no incident; its exception is logged (ConditionScriptFailed, 10270).",
+      "action": "None required. Read the trace from the incident row or from the log line with the incident's trace id.",
+      "documentation": "docs/runtime/instance-incident-persistence.md"
+    },
+    {
+      "id": "script-failure-log-events",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "log EventIds 10130, 10268, 10269, 10270",
+      "since": "next",
+      "severity": "info",
+      "title": "Script failures are logged with the exception",
+      "description": "TaskScriptFailed (10268) logs a task script's exception once per failure; StartTransitionMappingFailed (10269) logs a start mapping that fails (the start answers with the error and records no incident); InstanceFaultedDueToPipelineError (10130) now carries the exception behind a pipeline fault; ConditionScriptFailed (10270) replaces the unstructured 'Condition script evaluation failed: {Error}' line and carries the exception. A cancellation a script sees is not logged as a script failure.",
+      "action": "Move a log query or alert that matched the text 'Condition script evaluation failed' to EventId 10270.",
+      "documentation": "docs/runtime/instance-incident-persistence.md"
+    },
+    {
+      "id": "script-assemblies-embed-debug-information",
+      "type": "behavior",
+      "component": "script",
+      "path": "Scripting compile (CSharpEvaluator)",
+      "since": "next",
+      "severity": "info",
+      "title": "Compiled scripts embed debug information for line numbers",
+      "description": "Every compiled script and helper assembly embeds a portable PDB so stack traces carry script line numbers. A script still has no file name, so its compile errors and sandbox messages are unchanged; a helper's compile errors now report the helper's own line numbers instead of numbers shifted by the engine's using directives. Measured with a scratch Roslyn benchmark outside the repo: a loaded assembly is about 8 KB larger whatever the script's size, and the one-time compile takes about 0.3 ms longer; script execution is unchanged.",
+      "action": "None required. Include about 8 KB per loaded script when sizing a runtime that loads thousands of scripts.",
+      "documentation": "docs/runtime/script-context-and-engine.md"
+    }
+  ]
+}
