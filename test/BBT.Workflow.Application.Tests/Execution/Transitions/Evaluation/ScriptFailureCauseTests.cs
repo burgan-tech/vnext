@@ -75,6 +75,33 @@ public sealed class ScriptFailureCauseTests
     }
 
     [Fact]
+    public async Task RuleScriptThatThrows_IsNotSatisfied_AndLeavesNoCauseOnTheHop()
+    {
+        // The condition evaluator catches the rule script's exception, logs it (10270) and fails the
+        // Result: the rule reads as not satisfied and the hop goes on. A cause left here would be taken
+        // by a LATER, unrelated failure of the same hop as its stack trace.
+        var conditions = Substitute.For<ITaskConditionService>();
+        conditions.ExecuteConditionAsync(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<bool>.Fail(Error.Failure("Task:Execution", "the rule script threw")));
+        var evaluator = new AutoConditionEvaluator(
+            conditions,
+            Substitute.For<IScriptContextFactory>(),
+            Substitute.For<IInstanceRepository>(),
+            NullLogger<AutoConditionEvaluator>.Instance,
+            Substitute.For<IRuntimeInfoProvider>());
+        var rule = Transition.Create("to-approved", "review", "approved", TriggerType.Automatic, "Patch");
+        rule.SetRule("./IsApprover.csx", "return true;");
+        var context = Context();
+
+        var result = await evaluator.EvaluateAsync(rule, context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Status.ShouldBe(AutoConditionStatus.NotSatisfied);
+        context.FailureCause.ShouldBeNull();
+        _shared.FailureCause.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task TimerScriptThatThrows_MovesItsExceptionFromTheScriptContextToTheHop()
     {
         var thrown = new InvalidOperationException("the timer script has no window");
