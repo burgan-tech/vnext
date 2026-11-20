@@ -20,7 +20,7 @@ public sealed class DaprLocalDeliveryMiddlewareTests
     private static Endpoint Guarded() =>
         new(_ => Task.CompletedTask, new EndpointMetadataCollection(new DaprLocalDeliveryOnlyAttribute()), "x");
 
-    private static Endpoint JobRoute() =>
+    private static RouteEndpoint JobRoute() =>
         new RouteEndpoint(_ => Task.CompletedTask, RoutePatternFactory.Parse("/job/{jobName}"), 0,
             EndpointMetadataCollection.Empty, "job");
 
