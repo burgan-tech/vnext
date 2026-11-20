@@ -1,0 +1,32 @@
+{
+  "releaseNote": {
+    "summary": "Transition history now filters each recorded body with the master schema (x-roles, x-masking, x-encryption) and can reduce the returned headers by configuration.",
+    "breaking": false,
+    "docs": []
+  },
+  "features": {
+    "engine": {
+      "transitionHistoryHeaderLists": {
+        "since": "next",
+        "status": "stable",
+        "description": "Workflow:TransitionHistory:Headers:Read {Allow, Deny}: header names (exact, case-insensitive) applied to the recorded request headers that GET {domain}/workflows/{flow}/instances/{instance}/transitions returns. Deny always drops; a non-empty Allow keeps only the listed names. Both empty (default) returns every recorded header, as before. Response only: the recorded header set and context.CurrentTransition.Header are unchanged.",
+        "apiEndpoints": [
+          "GET {domain}/workflows/{flow}/instances/{instance}/transitions"
+        ]
+      }
+    }
+  },
+  "migrations": [
+    {
+      "id": "transition-history-body-field-filter",
+      "type": "behavior",
+      "component": "instance",
+      "path": "GET {domain}/workflows/{flow}/instances/{instance}/transitions → transitions[].body",
+      "since": "next",
+      "severity": "warning",
+      "title": "Transition history filters each recorded body with the master schema",
+      "description": "Each transitions[].body now passes the caller's exposure plan from the workflow's master schema, as instance GET, list and the data function do: x-roles fields the caller may not see are pruned, x-masking fields are masked, and x-encryption fields are masked for non-exempt callers (the recorded body is plaintext, so there is no stored token to serve). When the plan cannot be decided — the workflow definition or its master schema cannot be read — body is null; the row is still returned. A workflow without a master schema or without rules returns bodies as recorded. A SubFlow child's start row is filtered by the child's master schema. Before, every recorded body was returned unfiltered to any caller (vnext#1260). The response shape is unchanged.",
+      "action": "None for callers entitled to the fields. A client that read a guarded field from history must read it as a caller granted by the schema. A domain whose SubFlow child carries parent fields guarded with x-roles must guard them in the child's master schema too. To drop credential and identity headers from the history response, set Workflow:TransitionHistory:Headers:Read:Deny (or Allow)."
+    }
+  ]
+}

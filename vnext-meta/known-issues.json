@@ -197,7 +197,7 @@
       "component": "runtime",
       "path": "InstanceDataWriteService",
       "title": "x-encryption 'encrypt' covers InstancesData only: InstanceTransition.Body/Header, InstanceTask.Request/Response/InvocationResult, outbox InstanceSubCompleted/Faulted payloads, job payloads and the human-task cache still hold the plaintext",
-      "workaround": "Treat encrypt as InstanceData field encryption, not 'PII encrypted at rest'. Restrict database/backup access accordingly; Phase 2 extends encryption to these copies.",
+      "workaround": "Treat encrypt as InstanceData field encryption, not 'PII encrypted at rest'. Restrict database/backup access accordingly; Phase 2 extends encryption to these copies. The transition history response filters the recorded body with the master schema (x-roles, x-masking, x-encryption) and returns the recorded headers through Workflow:TransitionHistory:Headers; the stored rows stay plaintext.",
       "fixedIn": null
     },
     {

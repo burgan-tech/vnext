@@ -71,7 +71,8 @@ public sealed class InstanceQueryAppService(
     Execution.Validation.ITransitionSchemaResolver transitionSchemaResolver,
     ILogger<InstanceQueryAppService> logger,
     IRowSecurityService? rowSecurityService = null,
-    ICallerAccessorFactory? callerAccessorFactory = null)
+    ICallerAccessorFactory? callerAccessorFactory = null,
+    History.ITransitionHistoryHeaderPolicy? transitionHistoryHeaderPolicy = null)
     : ApplicationService(serviceProvider), IInstanceQueryAppService
 {
     private static readonly ConcurrentDictionary<string, BuildGate> ActiveSubflowBuildGates = new();
@@ -1037,6 +1038,14 @@ public sealed class InstanceQueryAppService(
             });
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Each recorded body is exposed through <see cref="IInstanceDataReadService.CreateHistoryBodyReaderAsync"/> — the
+    /// master schema's <c>x-roles</c> → <c>x-masking</c> → <c>x-encryption</c> plan for this caller, decided once — and is
+    /// withheld when the plan cannot be decided (a recorded body is plaintext, so serving it as stored is never a safe
+    /// fallback). Recorded headers pass <see cref="History.ITransitionHistoryHeaderPolicy"/>. The instance is loaded
+    /// latest-only: no stored data version is read here.
+    /// </remarks>
     public async Task<Result<GetInstanceHistoryOutput>> GetInstanceHistoryAsync(
         GetInstanceHistoryInput input,
         CancellationToken cancellationToken = default)
@@ -1046,11 +1055,20 @@ public sealed class InstanceQueryAppService(
         using var read = InstanceReadActivityHelper.StartRead(
             InstanceReadKinds.History, input.Domain, input.Workflow);
 
-        return await GetInstanceWithFullHistoryAsync(input.Instance, cancellationToken)
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .ThenAsync(async instance =>
             {
+                // A definition that cannot be loaded leaves the plan undecided: the bodies are withheld, the rows served.
+                var flowResult = await componentCacheStore.GetFlowAsync(
+                    input.Domain, input.Workflow, instance.FlowVersion, cancellationToken);
+                var workflow = flowResult is { IsSuccess: true } ? flowResult.Value : null;
+
                 using var instanceScope = BeginInstanceScope(instance);
                 var transitions = await instanceTransitionRepository.GetByInstanceIdAsync(instance.Id, cancellationToken);
+
+                var bodies = await instanceDataReadService.CreateHistoryBodyReaderAsync(
+                    workflow, instance, new AuthorizationRequestContext(input.Headers, input.QueryParameters),
+                    cancellationToken);
 
                 var dtoList = transitions
                     .Select(t => new InstanceTransitionDto
@@ -1067,8 +1085,10 @@ public sealed class InstanceQueryAppService(
                         FinishedAt = t.FinishedAt,
                         DurationSeconds = t.Duration?.TotalSeconds,
                         TriggerType = t.TriggerType,
-                        Body = t.Body.JsonElement,
-                        Header = t.Header.JsonElement,
+                        Body = bodies.Expose(t.Body.JsonElement),
+                        Header = transitionHistoryHeaderPolicy is null
+                            ? t.Header.JsonElement
+                            : transitionHistoryHeaderPolicy.Apply(t.Header.JsonElement),
                         CreatedAt = t.CreatedAt,
                         CreatedBy = t.CreatedBy,
                         CreatedByBehalfOf = t.CreatedByBehalfOf
@@ -1418,8 +1438,8 @@ public sealed class InstanceQueryAppService(
     }
 
     /// <summary>
-    /// Loads an instance with the full DataList history (no IsLatest filter). Dedicated to
-    /// <see cref="GetInstanceHistoryAsync"/>; runtime hot-paths must keep using
+    /// Loads an instance with the full DataList history (no IsLatest filter). Only for a read that asks for a
+    /// specific, non-latest data version; transition history and runtime hot-paths must keep using
     /// <see cref="GetInstanceByIdOrKeyAsync(string, CancellationToken)"/> which loads only the latest snapshot.
     /// </summary>
     private async Task<Result<Instance>> GetInstanceWithFullHistoryAsync(

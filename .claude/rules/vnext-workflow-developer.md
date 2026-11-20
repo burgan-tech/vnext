@@ -140,7 +140,8 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 - `x-masking.roles` / `x-encryption.roles` are allow-only exemption lists; `deny` is rejected at publish;
   a role-less caller never satisfies a role-bound grant (`IsUnprovableRoleBoundGrant`).
 - ONE read path: `IInstanceDataReadService` (GET, list, data function, sync response, Get* tasks). Do not
-  call the filter from a surface directly. Get* tasks read as their header set.
+  call the filter from a surface directly. Get* tasks read as their header set. Transition history bodies are
+  plaintext: `CreateHistoryBodyReaderAsync` withholds them when the plan is `Unavailable`, never serves them as stored.
 - `InstanceData.Data` is the column as stored (tokens included). Decrypt only via
   `IInstanceDataProtector.UnprotectAsync` / `context.Instance.DecryptAsync`; never reintroduce a plaintext
   member; never write `InstancesData."Data"` outside `InstanceDataWriteService`. Prefix-driven, never schema-driven.

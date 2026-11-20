@@ -155,6 +155,13 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
                 "Workflow:SubFlow:CarriedHeaders requires a non-null AdditionalDenied and positive MaxEntries and MaxValueLength.")
             .ValidateOnStart();
         services.AddSingleton<BBT.Workflow.SubFlow.Headers.ICarriedHeaderPolicy, BBT.Workflow.SubFlow.Headers.CarriedHeaderPolicy>();
+        // Transition history header lists (Workflow:TransitionHistory:Headers): response only; empty lists keep every header.
+        services.AddOptions<BBT.Workflow.Instances.History.TransitionHistoryHeaderOptions>()
+            .BindConfiguration(BBT.Workflow.Instances.History.TransitionHistoryHeaderOptions.SectionName)
+            .Validate(o => o.Read is { Allow: not null, Deny: not null },
+                "Workflow:TransitionHistory:Headers requires non-null Read.Allow and Read.Deny lists.")
+            .ValidateOnStart();
+        services.AddSingleton<BBT.Workflow.Instances.History.ITransitionHistoryHeaderPolicy, BBT.Workflow.Instances.History.TransitionHistoryHeaderPolicy>();
         // Journal tunables (Workflow:FunctionExecutionJournal): QueueCapacity + BatchSize.
         services.AddOptions<FunctionExecutionJournalOptions>()
             .BindConfiguration(FunctionExecutionJournalOptions.SectionName);

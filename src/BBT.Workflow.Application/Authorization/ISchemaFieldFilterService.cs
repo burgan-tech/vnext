@@ -40,6 +40,23 @@ public interface ISchemaFieldFilterService
         AuthorizationRequestContext? requestContext = null,
         CancellationToken cancellationToken = default,
         IReadOnlyDictionary<string, string>? storedTokens = null);
+
+    /// <summary>
+    /// Decides the caller's exposure plan once — the same role resolution, evaluator and rules
+    /// <see cref="ApplyAsync"/> uses — so it can be applied to many objects of one instance. Unlike
+    /// <see cref="ApplyAsync"/> it tells "no rules" (<see cref="SchemaExposureOutcome.NoRules"/>) apart from "the schema
+    /// could not be read" (<see cref="SchemaExposureOutcome.Unavailable"/>). Never call it from a read surface: go through
+    /// <see cref="Instances.IInstanceDataReadService"/>, which owns each surface's fallback.
+    /// </summary>
+    /// <param name="workflow">The workflow whose master schema carries the field rules.</param>
+    /// <param name="instance">Optional instance, for predefined and dynamic grants (as for <see cref="ApplyAsync"/>).</param>
+    /// <param name="requestContext">The request context the surrounding read was authorized with.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<SchemaExposurePlan> PrepareAsync(
+        Definitions.Workflow? workflow,
+        Instance? instance = null,
+        AuthorizationRequestContext? requestContext = null,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>Creates an isolated list operation that reuses schema metadata, never visibility decisions.</summary>
