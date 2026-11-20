@@ -25,7 +25,7 @@ sidecar can call them. The guard compares the `dapr-api-token` header with an ap
   - the path is set and the file is missing, unreadable or empty;
   - another token-, key- or secret-named entry is set under `Workflow:RuntimeCaller` (the known keys are excepted);
   - the path is set on Orchestration with `Scripting:Sandbox:Enabled=false`, unless `Workflow:RuntimeCaller:AllowWithoutScriptSandbox=true` (Critical log at every start).
-- **Path unset.** `LogOnly` logs EventId 40998 once at startup. `Enforce` logs EventId 40997 and rejects every guarded request.
+- **Path unset.** `LogOnly` logs EventId 40998 once at startup. `Enforce` fails startup (the pod never becomes ready), so the chart must never render `Enforce` without the token file path.
 - **daprd** still takes the token from its own `APP_API_TOKEN` env. On Kubernetes that is the annotation `dapr.io/app-token-secret`.
 
 Source of truth:

@@ -84,9 +84,41 @@ public sealed class DaprLocalDeliveryWiringTests
     [Fact]
     public void Options_BindModeFromConfiguration()
     {
+        var file = WriteTokenFile("s3cret");
+        try
+        {
+            var config = TokenFileConfig(file);
+            config["Dapr:LocalDelivery:Mode"] = "Enforce";
+            var provider = Build(config);
+
+            provider.GetRequiredService<IOptions<DaprLocalDeliveryOptions>>().Value.Mode
+                .ShouldBe(DaprLocalDeliveryMode.Enforce);
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
+    [Fact]
+    public void Options_EnforceWithoutTokenFile_FailValidation()
+    {
         var provider = Build(new Dictionary<string, string?> { ["Dapr:LocalDelivery:Mode"] = "Enforce" });
 
-        provider.GetRequiredService<IOptions<DaprLocalDeliveryOptions>>().Value.Mode.ShouldBe(DaprLocalDeliveryMode.Enforce);
+        var error = Should.Throw<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<DaprLocalDeliveryOptions>>().Value);
+        error.Message.ShouldContain("Workflow:RuntimeCaller:AppApiTokenFile");
+    }
+
+    [Fact]
+    public void Registration_ValidatesOnStart_AndAddsStartupCheck()
+    {
+        var provider = Build(new Dictionary<string, string?> { ["Dapr:LocalDelivery:Mode"] = "Enforce" });
+
+        provider.GetServices<Microsoft.Extensions.Hosting.IHostedService>()
+            .ShouldContain(s => s is DaprLocalDeliveryStartupCheck);
+        // ValidateOnStart: the host runs this before serving, so the pod never comes up.
+        Should.Throw<OptionsValidationException>(() => provider.GetRequiredService<IStartupValidator>().Validate());
     }
 
     [Fact]

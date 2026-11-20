@@ -79,14 +79,21 @@ public static class OrchestrationApiServiceCollectionExtensions
     /// <see cref="DaprAppApiToken"/> singleton, which reads the token only from the mounted file named
     /// by <c>Workflow:RuntimeCaller:AppApiTokenFile</c> (never configuration or the environment).
     /// Relies on <c>AddRuntimeCallerIdentity</c> having been registered first: it binds that option,
-    /// validates the file and applies the script-sandbox rule.
+    /// validates the file and applies the script-sandbox rule. <c>Enforce</c> without that path fails startup
+    /// (<see cref="DaprLocalDeliveryOptionsValidator"/>); <c>LogOnly</c> without it is announced once by
+    /// <see cref="DaprLocalDeliveryStartupCheck"/>.
     /// </summary>
     internal static IServiceCollection AddDaprLocalDelivery(
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        services.Configure<DaprLocalDeliveryOptions>(configuration.GetSection(DaprLocalDeliveryOptions.SectionPath));
+        services.AddOptions<DaprLocalDeliveryOptions>()
+            .Bind(configuration.GetSection(DaprLocalDeliveryOptions.SectionPath))
+            .ValidateOnStart();
+        services.TryAddEnumerable(ServiceDescriptor
+            .Singleton<IValidateOptions<DaprLocalDeliveryOptions>, DaprLocalDeliveryOptionsValidator>());
         services.TryAddSingleton<DaprAppApiToken>();
+        services.AddHostedService<DaprLocalDeliveryStartupCheck>();
         return services;
     }
 

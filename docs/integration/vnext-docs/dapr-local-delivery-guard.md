@@ -22,8 +22,8 @@ status: pending
   `Workflow:RuntimeCaller:AppApiTokenFile`, read once at start and trimmed; the app no longer reads `APP_API_TOKEN` and
   there is no `Dapr:LocalDelivery:AppApiToken`. A set path with a missing or empty file fails startup. `LogOnly` serves
   the request and logs EventId 40996 (path unset: it logs EventId 40998 once at startup and nothing per request);
-  `Enforce` with the path unset rejects everything and logs EventId 40997 at
-  startup. The `dapr-api-token` header is removed right after routing, before controllers and any Dapr
+  `Enforce` with the path unset fails startup; a configuration reload into that state rejects every
+  guarded request and logs EventId 40997. The `dapr-api-token` header is removed right after routing, before controllers and any Dapr
   job handler run.
 - A DROP response body's `reason` is now only the error code; the full message is in the EventId 40994 log.
 - A call through the runtime's OWN sidecar API (`/v1.0/invoke/<own-app-id>/...`) passes the guard (no

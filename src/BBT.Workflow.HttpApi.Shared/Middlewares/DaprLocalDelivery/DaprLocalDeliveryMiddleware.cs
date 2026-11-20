@@ -35,39 +35,29 @@ public sealed class DaprLocalDeliveryMiddleware
         _options = options;
         _token = token;
         _logger = logger;
-
-        var current = options.CurrentValue;
-        if (current.Mode == DaprLocalDeliveryMode.Enforce && !token.IsConfigured)
-        {
-            _logger.DaprLocalDeliveryEnforcedWithoutToken();
-        }
-        else if (current.Mode == DaprLocalDeliveryMode.LogOnly && !token.IsConfigured)
-        {
-            _logger.DaprLocalDeliveryLogOnlyWithoutToken();
-        }
     }
 
     public async Task InvokeAsync(HttpContext context)
     {
-        var options = _options.CurrentValue;
         var rejected = false;
+        var mode = IsGuarded(context.GetEndpoint()) ? CurrentMode() : DaprLocalDeliveryMode.Off;
 
-        if (options.Mode != DaprLocalDeliveryMode.Off && IsGuarded(context.GetEndpoint()))
+        if (mode != DaprLocalDeliveryMode.Off)
         {
             var verdict = DaprLocalDeliveryEvaluator.Evaluate(context.Request.Headers, _token.Value);
-            // LogOnly without a token is announced once at construction; per-request entries would only
+            // LogOnly without a token is announced once at startup (DaprLocalDeliveryStartupCheck); per-request entries would only
             // repeat it for every pubsub, cron and Dapr Scheduler delivery.
             var silent = verdict == DaprLocalDeliveryVerdict.TokenNotConfigured
-                         && options.Mode == DaprLocalDeliveryMode.LogOnly;
+                         && mode == DaprLocalDeliveryMode.LogOnly;
             if (verdict != DaprLocalDeliveryVerdict.Accepted && !silent)
             {
                 _logger.DaprLocalDeliveryRejected(
-                    options.Mode.ToString(),
+                    mode.ToString(),
                     verdict.ToString(),
                     context.Request.Path.Value,
                     context.Connection.RemoteIpAddress?.ToString(),
                     context.Request.Headers[DaprLocalDeliveryEvaluator.CallerAppIdHeader].FirstOrDefault());
-                rejected = options.Mode == DaprLocalDeliveryMode.Enforce;
+                rejected = mode == DaprLocalDeliveryMode.Enforce;
             }
         }
 
@@ -80,6 +70,25 @@ public sealed class DaprLocalDeliveryMiddleware
         }
 
         await _next(context);
+    }
+
+    /// <summary>
+    /// The configured mode. Enforce without a token file fails startup
+    /// (<see cref="DaprLocalDeliveryOptionsValidator"/>); a later configuration reload into that state
+    /// makes the options invalid, so the read throws. That is the only invalid combination, so the guard
+    /// fails closed as Enforce and logs EventId 40997 rather than letting the exception fail the request.
+    /// </summary>
+    private DaprLocalDeliveryMode CurrentMode()
+    {
+        try
+        {
+            return _options.CurrentValue.Mode;
+        }
+        catch (OptionsValidationException)
+        {
+            _logger.DaprLocalDeliveryEnforcedWithoutToken();
+            return DaprLocalDeliveryMode.Enforce;
+        }
     }
 
     private static bool IsGuarded(Endpoint? endpoint) =>

@@ -3813,8 +3813,9 @@ public static partial class WorkflowLogs
         string? callerAppId);
 
     /// <summary>
-    /// Logs once at startup that the Dapr local-delivery guard is in Enforce mode without an app API
-    /// token, so every guarded request is rejected.
+    /// Logs, per guarded request, that a configuration reload put the Dapr local-delivery guard into
+    /// Enforce mode without an app API token file, so the request is rejected. At startup the same
+    /// combination fails validation instead.
     /// </summary>
     [LoggerMessage(
         EventId = 40997,

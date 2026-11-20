@@ -35,6 +35,11 @@ public sealed class DaprLocalDeliveryMiddlewareTests
         public DaprLocalDeliveryMiddleware Middleware;
 
         public Harness(DaprLocalDeliveryMode mode, string? token = Token)
+            : this(new TestOptionsMonitor(new DaprLocalDeliveryOptions { Mode = mode }), token)
+        {
+        }
+
+        public Harness(IOptionsMonitor<DaprLocalDeliveryOptions> monitor, string? token = Token)
         {
             Middleware = new DaprLocalDeliveryMiddleware(
                 ctx =>
@@ -43,7 +48,7 @@ public sealed class DaprLocalDeliveryMiddlewareTests
                     SeenHeaders = ctx.Request.Headers.Keys.ToList();
                     return Task.CompletedTask;
                 },
-                new TestOptionsMonitor(new DaprLocalDeliveryOptions { Mode = mode }),
+                monitor,
                 new DaprAppApiToken(token),
                 Logger);
         }
@@ -97,10 +102,30 @@ public sealed class DaprLocalDeliveryMiddlewareTests
     }
 
     [Fact]
-    public void Enforce_NoToken_LogsMisconfigurationOnce_AtConstruction()
+    public void Construction_LogsNothing()
     {
-        var h = new Harness(DaprLocalDeliveryMode.Enforce, token: null);
-        h.Logger.EventIds.Count(i => i == 40997).ShouldBe(1);
+        new Harness(DaprLocalDeliveryMode.Enforce, token: null).Logger.EventIds.ShouldBeEmpty();
+        new Harness(DaprLocalDeliveryMode.LogOnly, token: null).Logger.EventIds.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task OptionsInvalidAfterReload_GuardedEndpoint_FailsClosed_Logs40997()
+    {
+        var h = new Harness(new InvalidOptionsMonitor(), token: null);
+        await h.Run(Guarded(), Token);
+        h.Context.Response.StatusCode.ShouldBe(403);
+        h.NextCalled.ShouldBeFalse();
+        h.Logger.EventIds.ShouldContain(40997);
+    }
+
+    [Fact]
+    public async Task OptionsInvalidAfterReload_PlainEndpoint_IsServed_WithoutReadingOptions()
+    {
+        var h = new Harness(new InvalidOptionsMonitor(), token: null);
+        await h.Run(Plain(), Token);
+        h.NextCalled.ShouldBeTrue();
+        h.SeenHeaders.ShouldNotContain("dapr-api-token");
+        h.Logger.EventIds.ShouldBeEmpty();
     }
 
     [Fact]
@@ -122,15 +147,7 @@ public sealed class DaprLocalDeliveryMiddlewareTests
         await h.Run(Guarded(), Token);
         h.NextCalled.ShouldBeTrue();
         h.SeenHeaders.ShouldNotContain("dapr-api-token");
-        h.Logger.EventIds.ShouldNotContain(40996);
-        h.Logger.EventIds.Count(i => i == 40998).ShouldBe(1);
-    }
-
-    [Fact]
-    public void LogOnly_TokenConfigured_DoesNotLog40998()
-    {
-        var h = new Harness(DaprLocalDeliveryMode.LogOnly);
-        h.Logger.EventIds.ShouldNotContain(40998);
+        h.Logger.EventIds.ShouldBeEmpty();
     }
 
     [Fact]
@@ -225,6 +242,17 @@ public sealed class DaprLocalDeliveryMiddlewareTests
     {
         public DaprLocalDeliveryOptions CurrentValue => value;
         public DaprLocalDeliveryOptions Get(string? name) => value;
+        public IDisposable? OnChange(Action<DaprLocalDeliveryOptions, string?> listener) => null;
+    }
+
+    /// <summary>What <see cref="IOptionsMonitor{T}"/> does after a reload fails validation.</summary>
+    private sealed class InvalidOptionsMonitor : IOptionsMonitor<DaprLocalDeliveryOptions>
+    {
+        private static OptionsValidationException Invalid() =>
+            new(Options.DefaultName, typeof(DaprLocalDeliveryOptions), ["Enforce without a token file"]);
+
+        public DaprLocalDeliveryOptions CurrentValue => throw Invalid();
+        public DaprLocalDeliveryOptions Get(string? name) => throw Invalid();
         public IDisposable? OnChange(Action<DaprLocalDeliveryOptions, string?> listener) => null;
     }
 
