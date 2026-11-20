@@ -46,7 +46,7 @@ public class CreateTransitionRecordStepFileTests
         _dataMapper.MapTransitionDataAsync(
                 Arg.Any<object?>(), Arg.Any<Transition?>(), Arg.Any<Definitions.Workflow>(),
                 Arg.Any<Instance>(), Arg.Any<IRuntimeInfoProvider>(),
-                Arg.Any<Dictionary<string, string?>>(), Arg.Any<CancellationToken>())
+                Arg.Any<Dictionary<string, string?>>(), Arg.Any<Action<Exception>?>(), Arg.Any<CancellationToken>())
             .Returns(Result<object?>.Ok(JsonDocument.Parse(Mapped).RootElement.Clone()));
         _offload.GetFieldsAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<CancellationToken>())
             .Returns(Result<IReadOnlyList<FileStorageField>>.Ok([new FileStorageField(["passport"], "vnext-blob-local")]));
@@ -191,7 +191,7 @@ public class CreateTransitionRecordStepFileTests
         => _dataMapper.MapTransitionDataAsync(
                 Arg.Any<object?>(), Arg.Any<Transition?>(), Arg.Any<Definitions.Workflow>(),
                 Arg.Any<Instance>(), Arg.Any<IRuntimeInfoProvider>(),
-                Arg.Any<Dictionary<string, string?>>(), Arg.Any<CancellationToken>())
+                Arg.Any<Dictionary<string, string?>>(), Arg.Any<Action<Exception>?>(), Arg.Any<CancellationToken>())
             .Returns(Result<object?>.Ok(JsonDocument.Parse(json).RootElement.Clone()));
 
     private static ActivityListener Listen(List<Activity> spans)

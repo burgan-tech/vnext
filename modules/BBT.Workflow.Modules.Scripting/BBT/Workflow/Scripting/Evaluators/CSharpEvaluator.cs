@@ -17,6 +17,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.Extensions.Logging;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Emit;
 
 namespace BBT.Workflow.Scripting.Evaluators;
 
@@ -75,6 +76,11 @@ public class CSharpEvaluator : IEvaluator
     /// Parse options for C# 12 language features (collection expressions, etc.)
     /// </summary>
     private static readonly CSharpParseOptions ParseOptions = new(LanguageVersion.CSharp12);
+
+    // Script frames in a stack trace carry line numbers (vnext#1268): each script assembly embeds a
+    // portable PDB, which the runtime reads when it formats a trace. Cost and measurement:
+    // docs/runtime/script-context-and-engine.md § Observability.
+    private static readonly EmitOptions EmbeddedDebugInformation = new(debugInformationFormat: DebugInformationFormat.Embedded);
 
     /// <summary>
     /// Assigns each shared <see cref="AssemblyLoadContext"/> a stable scope id, on first use, so the
@@ -247,7 +253,8 @@ public class CSharpEvaluator : IEvaluator
         var usingPrefix = BuildUsingPrefix(usingDirectives);
         var trees = sources
             .Select(s => CSharpSyntaxTree.ParseText(
-                usingPrefix + s.Code, options: ParseOptions, path: s.Path, cancellationToken: cancellationToken))
+                WithUsingPrefix(usingPrefix, s.Code), options: ParseOptions, path: s.Path, encoding: Encoding.UTF8,
+                cancellationToken: cancellationToken))
             .ToList();
 
         var assemblyName = $"Helpers_{Convert.ToHexString(SHA256.HashData(
@@ -296,7 +303,9 @@ public class CSharpEvaluator : IEvaluator
     {
         Interlocked.Increment(ref _compileInvocationCount);
 
-        var syntaxTree = CSharpSyntaxTree.ParseText(code, options: ParseOptions);
+        // The encoding is what debug information needs. No path: compile errors and sandbox messages
+        // would start naming one, and the frame's class and method already say which script it is.
+        var syntaxTree = CSharpSyntaxTree.ParseText(code, options: ParseOptions, encoding: Encoding.UTF8);
 
         // MERGE the supplied using directives with the author's own — never replace them.
         // WithUsings would overwrite the compilation unit's using list, silently dropping every
@@ -522,7 +531,7 @@ public class CSharpEvaluator : IEvaluator
     private static byte[] EmitToImage(Compilation compilation, CancellationToken cancellationToken)
     {
         using var ms = new MemoryStream();
-        var emitResult = compilation.Emit(ms, cancellationToken: cancellationToken);
+        var emitResult = compilation.Emit(ms, options: EmbeddedDebugInformation, cancellationToken: cancellationToken);
 
         if (!emitResult.Success)
         {
@@ -545,6 +554,13 @@ public class CSharpEvaluator : IEvaluator
             ? string.Empty
             : string.Concat(usingDirectives.Distinct().Select(u => $"using {u};\n"));
     }
+
+    /// <summary>
+    /// Puts <paramref name="usingPrefix"/> in front of <paramref name="code"/> and restarts the line
+    /// count after it, so the helper's own lines keep their numbers in stack traces and compile errors.
+    /// </summary>
+    private static string WithUsingPrefix(string usingPrefix, string code)
+        => usingPrefix.Length == 0 ? code : $"{usingPrefix}#line 1\n{code}";
 
     /// <summary>
     /// Derives the cache-key scope for a load context, assigning a stable id on first use. Returns

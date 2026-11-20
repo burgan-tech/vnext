@@ -40,7 +40,7 @@ public class CreateTransitionRecordStepModifiedAtTests
         dataMapper.MapTransitionDataAsync(
                 Arg.Any<object?>(), Arg.Any<Transition?>(), Arg.Any<Definitions.Workflow>(),
                 Arg.Any<Instance>(), Arg.Any<IRuntimeInfoProvider>(),
-                Arg.Any<Dictionary<string, string?>>(), Arg.Any<CancellationToken>())
+                Arg.Any<Dictionary<string, string?>>(), Arg.Any<Action<Exception>?>(), Arg.Any<CancellationToken>())
             .Returns(Result<object?>.Ok(JsonDocument.Parse("""{"amount":1}""").RootElement.Clone()));
 
         _step = new CreateTransitionRecordStep(

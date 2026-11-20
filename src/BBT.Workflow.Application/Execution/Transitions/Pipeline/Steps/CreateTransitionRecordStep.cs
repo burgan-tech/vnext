@@ -181,7 +181,8 @@ public sealed class CreateTransitionRecordStep(
             context.Instance,
             runtimeInfoProvider,
             context.Headers,
-            cancellationToken);
+            onScriptFailure: ex => context.FailureCause = ex,
+            cancellationToken: cancellationToken);
     }
 
     /// <summary>

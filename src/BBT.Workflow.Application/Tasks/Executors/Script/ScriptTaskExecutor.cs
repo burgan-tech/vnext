@@ -48,9 +48,7 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
             var scriptRunner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
 
             return await scriptRunner.InputHandler(task, context.ScriptContext);
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Script input handler failed: {ScriptDiagnostics.Explain(ex)}"));
+        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "Script input handler failed"));
 
         if (!result.IsSuccess)
         {
@@ -88,9 +86,7 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
             return TaskInvocationResult.Success(
                 data: outputResponse.Data,
                 taskType: TaskType.ToString());
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Script output handler failed: {ScriptDiagnostics.Explain(ex)}"));
+        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "Script output handler failed"));
 
         if (!result.IsSuccess)
         {

@@ -29,6 +29,7 @@ public sealed class TransitionDataMapper(
         Instance instance,
         IRuntimeInfoProvider runtimeInfoProvider,
         IReadOnlyDictionary<string, string?>? headers = null,
+        Action<Exception>? onScriptFailure = null,
         CancellationToken cancellationToken = default)
     {
         // Guard: No mapping defined - return payload as-is
@@ -38,7 +39,7 @@ public sealed class TransitionDataMapper(
         // Execute mapping script safely using TryAsync
         return ExecuteMappingScriptAsync(
             payload, transition, workflow, instance,
-            runtimeInfoProvider, headers, cancellationToken);
+            runtimeInfoProvider, headers, onScriptFailure, cancellationToken);
     }
 
     /// <summary>
@@ -52,6 +53,7 @@ public sealed class TransitionDataMapper(
         Instance instance,
         IRuntimeInfoProvider runtimeInfoProvider,
         IReadOnlyDictionary<string, string?>? headers,
+        Action<Exception>? onScriptFailure,
         CancellationToken cancellationToken)
     {
         using var activity = ScriptActivityHelper.StartExecuteActivity("transitionMapping");
@@ -74,7 +76,12 @@ public sealed class TransitionDataMapper(
                 }
             },
             cancellationToken,
-            CreateMappingError);
+            ex =>
+            {
+                if (ex is not OperationCanceledException)
+                    onScriptFailure?.Invoke(ex);
+                return CreateMappingError(ex);
+            });
 
         if (!result.IsSuccess)
             activity.SetResultError(result.Error.Code, result.Error.Message);

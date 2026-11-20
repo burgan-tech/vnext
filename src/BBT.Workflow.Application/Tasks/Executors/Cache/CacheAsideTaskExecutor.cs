@@ -95,9 +95,7 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
                 var scriptRunner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
 
                 return await scriptRunner.InputHandler(task, context.ScriptContext);
-            }, cancellationToken, ex => Error.Failure(
-                WorkflowErrorCodes.TaskExecution,
-                $"CacheAside task input handler failed: {ScriptDiagnostics.Explain(ex)}"));
+            }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "CacheAside task input handler failed"));
 
             if (!result.IsSuccess)
             {
@@ -271,9 +269,7 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
             var runner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
             var output = await runner.OutputHandler(context.ScriptContext);
             return output.Data;
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"CacheAside task output handler failed: {ScriptDiagnostics.Explain(ex)}"));
+        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "CacheAside task output handler failed"));
     }
 
     /// <summary>

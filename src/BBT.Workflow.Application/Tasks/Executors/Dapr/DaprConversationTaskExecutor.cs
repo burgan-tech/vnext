@@ -50,9 +50,7 @@ public sealed class DaprConversationTaskExecutor : TaskExecutorBase<DaprConversa
             var scriptRunner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
 
             return await scriptRunner.InputHandler(task, context.ScriptContext);
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"DaprConversation task input handler failed: {ScriptDiagnostics.Explain(ex)}"));
+        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "DaprConversation task input handler failed"));
 
         if (!result.IsSuccess)
         {
@@ -125,9 +123,7 @@ public sealed class DaprConversationTaskExecutor : TaskExecutorBase<DaprConversa
 
             var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
             return outputResponse.Data;
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"DaprConversation task output handler failed: {ScriptDiagnostics.Explain(ex)}"));
+        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "DaprConversation task output handler failed"));
 
         if (!result.IsSuccess)
         {

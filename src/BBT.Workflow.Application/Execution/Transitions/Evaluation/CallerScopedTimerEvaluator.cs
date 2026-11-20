@@ -49,6 +49,11 @@ public sealed class CallerScopedTimerEvaluator(
                      ?? NullCallerAccessor.Instance;
         var schedule = await ExecuteWithCallerAsync(scheduledTransition, scriptContext, caller, cancellationToken);
 
+        // A timer script that threw left its exception on the script context; it becomes the cause
+        // of this hop's failure, for the fault incident's stack trace (vnext#1268).
+        if (scriptContext.TakeFailureCause() is { } cause)
+            context.FailureCause = cause;
+
         return caller.ResolutionFailed
             ? Result<TimerSchedule>.Fail(WorkflowErrors.CallerRolesUnavailable())
             : schedule;

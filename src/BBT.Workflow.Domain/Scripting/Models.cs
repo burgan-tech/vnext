@@ -537,6 +537,23 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     }
 
     /// <summary>
+    /// The exception of a script that failed on this context, kept for the incident's stack trace
+    /// (vnext#1268). The <c>Error</c> the failure is reported as cannot carry it: its detail is written
+    /// into HTTP error bodies. Whoever ran the script takes it with <see cref="TakeFailureCause"/>
+    /// right after the run, so it never outlives that run. Internal so a script cannot see it, and not
+    /// copied by <see cref="CreateParallelBranch"/>: each branch keeps its own.
+    /// </summary>
+    internal Exception? FailureCause { get; set; }
+
+    /// <summary>Returns <see cref="FailureCause"/> and clears it.</summary>
+    internal Exception? TakeFailureCause()
+    {
+        var cause = FailureCause;
+        FailureCause = null;
+        return cause;
+    }
+
+    /// <summary>
     /// The workflow definition that describes the structure, states, transitions, and tasks
     /// for the current workflow execution context.
     /// </summary>

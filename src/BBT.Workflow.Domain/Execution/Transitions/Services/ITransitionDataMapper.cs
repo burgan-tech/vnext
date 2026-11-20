@@ -21,6 +21,10 @@ public interface ITransitionDataMapper
     /// <param name="instance">The workflow instance</param>
     /// <param name="runtimeInfoProvider">Runtime information provider for script context</param>
     /// <param name="headers">Request headers for script context</param>
+    /// <param name="onScriptFailure">
+    /// Receives the exception when the mapping script throws, for the incident's stack trace or the
+    /// log (vnext#1268); the returned error carries only its message.
+    /// </param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Result containing the mapped JsonData or an error if mapping execution fails</returns>
     Task<Result<object?>> MapTransitionDataAsync(
@@ -30,5 +34,6 @@ public interface ITransitionDataMapper
         Instance instance,
         IRuntimeInfoProvider runtimeInfoProvider,
         IReadOnlyDictionary<string, string?>? headers = null,
+        Action<Exception>? onScriptFailure = null,
         CancellationToken cancellationToken = default);
 }
