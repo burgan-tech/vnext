@@ -9,8 +9,13 @@
         <ElasticApmPackageVersion>1.31.0</ElasticApmPackageVersion>
         <!-- Microsoft packages -->
         <MicrosoftPackageVersion>10.0.*</MicrosoftPackageVersion>
-        <!-- EF Core pinned to avoid CS1705 (assembly version mismatch) across projects -->
-        <EfCorePackageVersion>10.0.4.0</EfCorePackageVersion>
+        <!-- EF Core pinned to avoid CS1705 (assembly version mismatch) across projects.
+             Must satisfy the floor of NpgsqlEfCorePackageVersion: Npgsql.EntityFrameworkCore.PostgreSQL 10.0.4
+             requires EF Core >= 10.0.15, a lower pin fails the build with NU1605 (package downgrade). -->
+        <EfCorePackageVersion>10.0.15</EfCorePackageVersion>
+        <!-- Pinned, not floating: a floating 10.0.* picked up a newly published Npgsql provider overnight
+             and broke the nightly build with NU1605. Bump it together with EfCorePackageVersion. -->
+        <NpgsqlEfCorePackageVersion>10.0.4</NpgsqlEfCorePackageVersion>
         <!-- HealthChecks packages - currently only support .NET 9.0 -->
         <HealthChecksPackageVersion>9.0.0</HealthChecksPackageVersion>
         <!-- Dapr packages -->
