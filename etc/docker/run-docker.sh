@@ -75,6 +75,17 @@ need() { command -v "$1" >/dev/null 2>&1 || die "'$1' is required but not instal
 
 compose() { docker compose -f "$COMPOSE_FILE" "$@"; }
 
+# Local file store (Dapr binding `vnext-blob-local`, bindings.localstorage, rootPath /blobs). The orchestration sidecar
+# mounts ./data/blobs and daprd runs as non-root uid 65532. If the directory does not exist, the Docker daemon creates it
+# owned by root; on Linux (CI runners) the sidecar then cannot write, every x-storage write answers 503 "File store is
+# unavailable". Docker Desktop / OrbStack remap ownership, which is why it only fails on Linux. Create it up front,
+# writable for the sidecar user; the directory is git-ignored local scratch.
+ensure_blob_dir() {
+  local dir="$HERE/data/blobs"
+  mkdir -p "$dir" || die "cannot create $dir"
+  chmod 0777 "$dir" || die "cannot make $dir writable for the Dapr sidecar (uid 65532)"
+}
+
 # Per-checkout Dapr app API token (Dapr local-delivery guard). daprd adds it as `dapr-api-token` to every call
 # it makes to the orchestration app (the sidecar takes it as env APP_API_TOKEN); the app reads the expected value
 # ONLY from the file named by Workflow:RuntimeCaller:AppApiTokenFile. A pre-set VNEXT_APP_API_TOKEN wins; otherwise
@@ -592,6 +603,7 @@ cmd_up() {
   domain="$(resolve_domain "${1:-}")"; offset="$(resolve_offset "$domain" "${OFFSET_ARG:-}")"; db="$(db_for_domain "$domain")"
   DDIR="$(dom_dir "$domain")"; mkdir -p "$DDIR/logs" "$DDIR/pids" "$STATE"
   ensure_app_api_token
+  ensure_blob_dir
   print_plan "$domain" "$offset" "$db"
   if domain_running "$domain"; then log "stopping running $domain hosts"; stop_domain "$domain"; fi
   printf '%s' "$offset" > "$DDIR/offset"; printf '%s' "$db" > "$DDIR/db"; printf '%s' "$(cohosted "$domain")" > "$DDIR/cohosted"
@@ -652,6 +664,7 @@ cmd_stack() {
   docker network create bbt-development >/dev/null 2>&1 || true
   local mode="$1" domain db
   ensure_app_api_token
+  ensure_blob_dir
   if [ "$mode" = dev ] || [ "$mode" = stage ]; then
     domain="$(resolve_domain "${2:-}")"; db="$(db_for_domain "$domain")"
     mkdir -p "$STATE"; printf '%s' "$domain" > "$STATE/last"
