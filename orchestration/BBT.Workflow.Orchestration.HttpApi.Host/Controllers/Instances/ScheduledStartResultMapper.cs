@@ -70,10 +70,11 @@ internal static class ScheduledStartResultMapper
 
         if (PermanentErrorPrefixes.Contains(result.Error.Prefix))
         {
-            var reason = $"{result.Error.Code}: {result.Error.Message}";
+            // Body carries only the code; the full message stays in the log (EventId 40994).
+            var logReason = $"{result.Error.Code}: {result.Error.Message}";
             logger.EventDeliveryDropped(
-                input.Domain, input.Workflow, transitionKey: null, result.Error.Code, reason);
-            return new OkObjectResult(EventDeliveryResponse.Dropped(reason));
+                input.Domain, input.Workflow, transitionKey: null, result.Error.Code, logReason);
+            return new OkObjectResult(EventDeliveryResponse.Dropped(result.Error.Code));
         }
 
         // Transient failure. Non-2xx is the honest answer even though nothing will retry it.

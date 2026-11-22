@@ -83,14 +83,20 @@ public sealed class EventDeliveryResultMapperTests
     [Fact]
     public void ToActionResult_ValidationError_DropsInsteadOfRetrying()
     {
-        var result = Result<object?>.Fail(Error.Validation(
-            "NotAnEventTransition", "Transition 'abort' is not an event transition."));
+        var error = Error.Validation(
+            "NotAnEventTransition", "Transition 'approve' is not an event transition of flow 'north-star'.");
+        var logger = new CapturingLogger();
 
-        var body = ShouldBeOkWith(Map(result, Input(sync: false)));
+        var body = ShouldBeOkWith(EventDeliveryResultMapper.ToActionResult(
+            Result<object?>.Fail(error), Input(sync: false), BuildHttpContext(), logger));
 
         body.Status.ShouldBe(DaprPubSubStatus.Drop);
-        body.Reason!.ShouldContain("NotAnEventTransition");
-        body.Reason!.ShouldContain("is not an event transition");
+        body.Reason.ShouldBe(error.Code);
+        body.Reason!.ShouldNotContain("north-star");
+        body.Reason!.ShouldNotContain("approve");
+        logger.Entries.ShouldContain(e => e.EventId == 40994
+            && e.Message.Contains("is not an event transition")
+            && e.Message.Contains("NotAnEventTransition"));
     }
 
     [Fact]
@@ -102,22 +108,25 @@ public sealed class EventDeliveryResultMapperTests
         var body = ShouldBeOkWith(Map(result, Input(sync: false)));
 
         body.Status.ShouldBe(DaprPubSubStatus.Drop);
-        body.Reason!.ShouldContain("TransitionNotFound");
+        body.Reason.ShouldBe("TransitionNotFound");
     }
 
     [Fact]
     public void Drop_ReturnsOkDropSignalWithReason()
     {
+        var logger = new CapturingLogger();
         var actionResult = EventDeliveryResultMapper.Drop(
+            "InvalidEventAction",
             "InvalidEventAction: action must be 'start' or 'transition'. Received: 'strat'.",
-            "orders", "order-flow", null, "InvalidEventAction", NullLogger.Instance);
+            "orders", "order-flow", null, logger);
 
         var objectResult = actionResult.ShouldBeAssignableTo<ObjectResult>()!;
         objectResult.StatusCode.ShouldBe(StatusCodes.Status200OK);
 
         var body = objectResult.Value.ShouldBeOfType<EventDeliveryResponse>();
         body.Status.ShouldBe(DaprPubSubStatus.Drop);
-        body.Reason!.ShouldContain("InvalidEventAction");
+        body.Reason.ShouldBe("InvalidEventAction");
+        logger.Entries.ShouldContain(e => e.EventId == 40994 && e.Message.Contains("Received: 'strat'"));
     }
 
     [Fact]
@@ -184,5 +193,22 @@ public sealed class EventDeliveryResultMapperTests
         services.AddSingleton(factory);
 
         return new DefaultHttpContext { RequestServices = services.BuildServiceProvider() };
+    }
+
+    internal sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        public System.Collections.Generic.List<(int EventId, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel,
+            Microsoft.Extensions.Logging.EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Entries.Add((eventId.Id, formatter(state, exception)));
     }
 }

@@ -67,11 +67,11 @@ internal static class EventDeliveryResultMapper
 
         if (PermanentErrorPrefixes.Contains(result.Error.Prefix))
             return Drop(
+                result.Error.Code,
                 $"{result.Error.Code}: {result.Error.Message}",
                 input.Domain,
                 input.Workflow,
                 input.TransitionKey,
-                result.Error.Code,
                 logger);
 
         // Transient / infrastructure failure: keep the ProblemDetails response. Non-2xx already means
@@ -83,16 +83,21 @@ internal static class EventDeliveryResultMapper
     /// Builds a <c>200 DROP</c> response for a delivery that can never succeed, logging why so the
     /// discarded message remains diagnosable even though the status code is a success.
     /// </summary>
+    /// <remarks>
+    /// The response body carries only <paramref name="errorCode"/>: the endpoint is reachable by
+    /// whoever can reach the Dapr sidecar port, so flow keys, transition names and exception text
+    /// must not leave through it. <paramref name="logReason"/> (the full message) goes to the log only.
+    /// </remarks>
     internal static IActionResult Drop(
-        string reason,
+        string errorCode,
+        string logReason,
         string? domain,
         string? workflow,
         string? transitionKey,
-        string? errorCode,
         ILogger logger)
     {
-        logger.EventDeliveryDropped(domain, workflow, transitionKey, errorCode, reason);
-        return new OkObjectResult(EventDeliveryResponse.Dropped(reason));
+        logger.EventDeliveryDropped(domain, workflow, transitionKey, errorCode, logReason);
+        return new OkObjectResult(EventDeliveryResponse.Dropped(errorCode));
     }
 
     private static EventDeliveryInstance? ToInstance(object? value)
