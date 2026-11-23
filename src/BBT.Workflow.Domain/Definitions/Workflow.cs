@@ -576,6 +576,23 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
                ?? States.SelectMany(s => s.Transitions).FirstOrDefault(p => p.Key == key);
     }
 
+    /// <summary>
+    /// Resolves a key the way a caller sitting in <paramref name="stateKey"/> sees it: the transition
+    /// that state declares wins, and only when it declares none does the state-blind
+    /// <see cref="FindTransitionInContext"/> answer.
+    /// <para>
+    /// A key may legally be declared on several states with different grants. The state-blind lookup
+    /// returns the first one in definition order, so role evaluation used another state's grants and
+    /// refused a caller the current state admits (#1334). A null or unknown state falls back to it,
+    /// which keeps workflow-scoped lookups unchanged.
+    /// </para>
+    /// </summary>
+    public Transition? FindTransitionInState(string key, string? stateKey)
+    {
+        var declared = string.IsNullOrEmpty(stateKey) ? null : FindState(stateKey)?.FindTransition(key);
+        return declared ?? FindTransitionInContext(key);
+    }
+
     public List<string> GetSharedTransitionKeys(string state)
     {
         return SharedTransitions.Where(s => s.Key == state).Select(s => s.Key).ToList();
