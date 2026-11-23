@@ -942,6 +942,9 @@ public static class TelemetryConstants
         public const string Schema = "schema";
         public const string View = "view";
         public const string Extensions = "extensions";
+
+        /// <summary>The data function reading the active SubFlow child's data (its extensions and ETag).</summary>
+        public const string Data = "data";
         public const string Authorize = "authorize";
 
         /// <summary>The authorization matrix forward — the sibling of <see cref="Authorize"/>.</summary>

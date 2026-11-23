@@ -155,14 +155,14 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
-            InstanceReadKinds.Instance, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.Instance, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, input.Version, cancellationToken)
             .MatchAsync(
                 onSuccess: async instance =>
                 {
-                    using var instanceScope = BeginInstanceScope(instance);
+                    using var instanceScope = BeginInstanceScope(instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
                     // Row security (vnext#1107) is decided before the body, extensions, ETag and 304: an instance
                     // the caller may not see answers exactly the missing-instance 404.
@@ -216,8 +216,8 @@ public sealed class InstanceQueryAppService(
 
         // Captured before the read envelope opens, so the tag lands on the transaction like the data
         // function's read outcome does.
-        using var read = InstanceReadActivityHelper.StartRead(
-            InstanceReadKinds.List, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.List, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         // Validate before any query is built. A filter the runtime cannot honor must be rejected,
         // never silently ignored — ignoring it widens the result set instead of narrowing it.
@@ -620,8 +620,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
-            InstanceReadKinds.IncidentActive, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.IncidentActive, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
@@ -629,7 +629,7 @@ public sealed class InstanceQueryAppService(
                     .MapAsync(workflow => (instance, workflow)))
             .BindAsync(async data =>
             {
-                using var instanceScope = BeginInstanceScope(data.instance);
+                using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
 
                 // Trust the row, not the flag: the two are written in one unit of work, but a resolve
@@ -654,8 +654,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
-            InstanceReadKinds.TaskHistory, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.TaskHistory, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
@@ -663,7 +663,7 @@ public sealed class InstanceQueryAppService(
                     .MapAsync(workflow => (instance, workflow)))
             .BindAsync(async data =>
             {
-                using var instanceScope = BeginInstanceScope(data.instance);
+                using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
 
                 var rows = await instanceTaskRepository.GetHistoryByInstanceIdAsync(
@@ -688,8 +688,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
-            InstanceReadKinds.ActionHistory, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.ActionHistory, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
@@ -697,7 +697,7 @@ public sealed class InstanceQueryAppService(
                     .MapAsync(workflow => (instance, workflow)))
             .BindAsync(async data =>
             {
-                using var instanceScope = BeginInstanceScope(data.instance);
+                using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
                 // history: none (vnext#1006) keeps no task journal: an empty list, not a 404.
                 if (data.workflow.SuppressesHistory)
@@ -726,13 +726,13 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
-            InstanceReadKinds.TransitionMetrics, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.TransitionMetrics, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(async instance =>
             {
-                using var instanceScope = BeginInstanceScope(instance);
+                using var instanceScope = BeginInstanceScope(instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
                 // Slim rows only (no Body/Header jsonb), filtered to this transition key in SQL so a
                 // single-key read does not materialize the instance's whole transition history. Every
@@ -775,13 +775,13 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
-            InstanceReadKinds.StateMetrics, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.StateMetrics, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(async instance =>
             {
-                using var instanceScope = BeginInstanceScope(instance);
+                using var instanceScope = BeginInstanceScope(instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
                 // Unlike transition-metrics, this cannot filter by a single key in SQL: a visit is
                 // bounded by the transition that ENTERED the state and the (differently-keyed) one that
@@ -921,8 +921,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
-            InstanceReadKinds.IncidentHistory, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.IncidentHistory, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         var page = input.Page < 1 ? 1 : input.Page;
         var pageSize = Math.Clamp(input.PageSize, 1, GetInstanceIncidentsInput.MaxPageSize);
@@ -933,7 +933,7 @@ public sealed class InstanceQueryAppService(
                     .MapAsync(workflow => (instance, workflow)))
             .BindAsync(async data =>
             {
-                using var instanceScope = BeginInstanceScope(data.instance);
+                using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
 
                 var paged = await instanceIncidentRepository.GetHistoryPagedAsync(
@@ -963,8 +963,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
-            InstanceReadKinds.DataHistory, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.DataHistory, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         var page = input.Page < 1 ? 1 : input.Page;
         var pageSize = Math.Clamp(input.PageSize, 1, GetInstanceDataHistoryInput.MaxPageSize);
@@ -975,7 +975,7 @@ public sealed class InstanceQueryAppService(
                     .MapAsync(workflow => (instance, workflow)))
             .BindAsync(async data =>
             {
-                using var instanceScope = BeginInstanceScope(data.instance);
+                using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
                 var paged = await instanceRepository.GetDataHistoryPagedAsync(
                     data.instance.Id, page, pageSize, cancellationToken);
@@ -1008,8 +1008,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
-            InstanceReadKinds.DataHistory, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.DataHistory, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .BindAsync(instance =>
@@ -1017,7 +1017,7 @@ public sealed class InstanceQueryAppService(
                     .MapAsync(workflow => (instance, workflow)))
             .BindAsync(async data =>
             {
-                using var instanceScope = BeginInstanceScope(data.instance);
+                using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
                 var row = await instanceRepository.FindDataRowAsync(data.instance.Id, input.RowId, cancellationToken);
 
@@ -1053,8 +1053,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
-            InstanceReadKinds.History, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.History, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .ThenAsync(async instance =>
@@ -1064,7 +1064,7 @@ public sealed class InstanceQueryAppService(
                     input.Domain, input.Workflow, instance.FlowVersion, cancellationToken);
                 var workflow = flowResult is { IsSuccess: true } ? flowResult.Value : null;
 
-                using var instanceScope = BeginInstanceScope(instance);
+                using var instanceScope = BeginInstanceScope(instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
                 var transitions = await instanceTransitionRepository.GetByInstanceIdAsync(instance.Id, cancellationToken);
 
                 var bodies = await instanceDataReadService.CreateHistoryBodyReaderAsync(
@@ -1245,7 +1245,7 @@ public sealed class InstanceQueryAppService(
                 Roles = callerRoles.Value
             };
 
-            using var descent = StartDescend(
+            using var descent = StartDescend( // skipcq: CS-W1100 — held for its scope; disposing ends the descent span
                 activeSubFlowCorrelation.SubFlowDomain,
                 activeSubFlowCorrelation.SubFlowName,
                 activeSubFlowCorrelation.SubFlowInstanceId.ToString(),
@@ -1538,6 +1538,8 @@ public sealed class InstanceQueryAppService(
         // an If-None-Match match is answered with 304 from a single projection query — no
         // aggregate load, no extension run, no response build. Pinned-version requests stay on
         // the full path: an older-line write changes their body without moving the latest ETag.
+        // With an active SubFlow the ETag is composed with the child's data ETag (SubFlowDataEtag)
+        // and the 304 needs the child's 304 as well.
         //
         // A validated cache entry does NOT short-circuit the build: it supplies the DATA portion
         // (skipping the x-roles field filtering) while extensions are ALWAYS computed fresh —
@@ -1547,6 +1549,7 @@ public sealed class InstanceQueryAppService(
         var isLatestRequest = InstanceDataVersionComparer.IsRequestingLatest(input.Version);
         string? dataCacheKey = null;
         Caching.DataFunctionCacheEntry? validatedEntry = null;
+        SubFlowDataRead? probedSubFlowRead = null;
 
         // A trigger task's read is an ordinary caller's (its own headers), so it is cached under its own scope.
         var useCache = dataFunctionCache.Enabled && isLatestRequest;
@@ -1563,19 +1566,14 @@ public sealed class InstanceQueryAppService(
             }
 
             validatedEntry = fastPath.ValidatedEntry;
+            probedSubFlowRead = fastPath.SubFlowRead;
             dataCacheKey = dataFunctionCache.BuildKey(input);
         }
 
         // A validated entry does NOT short-circuit: it supplies the data portion while extensions
         // still run, so this is a build that reused the cached body, not a cache hit.
         InstanceReadActivityHelper.SetReadOutcome(
-            transaction,
-            InstanceReadKinds.Data,
-            validatedEntry is not null
-                ? InstanceReadActivityHelper.FastPathCacheHit
-                : useCache
-                    ? InstanceReadActivityHelper.FastPathBuild
-                    : InstanceReadActivityHelper.FastPathDisabled);
+            transaction, InstanceReadKinds.Data, DataReadOutcome(validatedEntry is not null, useCache));
 
         using var readEnvelope = InstanceReadActivityHelper.StartRead(
             InstanceReadKinds.Data, input.Domain, input.Workflow);
@@ -1589,59 +1587,39 @@ public sealed class InstanceQueryAppService(
                 onSuccess: async data =>
                 {
                     var (flow, instance) = data;
-                    using var instanceScope = BeginInstanceScope(instance);
+                    using var instanceScope = BeginInstanceScope(instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
 
                     var instanceData = instance.FindData(input.Version);
                     var entityEtag = instanceData?.ETag ?? string.Empty;
 
-                    var result = new GetInstanceDataOutput();
-
                     // Data portion: reuse the validated cache entry (already field-filtered for
                     // this caller scope) when available; otherwise filter the resolved row.
                     // Extensions below always run fresh against the RAW instance data.
-                    if (validatedEntry is not null)
-                    {
-                        result.Data = validatedEntry.Data;
-                    }
-                    else
-                    {
-                        result.Data = await instanceDataReadService.ExposeAsync(
+                    var exposedData = validatedEntry is not null
+                        ? validatedEntry.Data
+                        : await instanceDataReadService.ExposeAsync(
                             flow, instance, instanceData,
                             new AuthorizationRequestContext(input.Headers, input.QueryParameters),
                             cancellationToken);
-                    }
 
-                    // If there's an active SubFlow and extensions are requested, fetch from SubFlow
+                    var result = new GetInstanceDataOutput { Data = exposedData, EntityEtag = entityEtag };
+
+                    // Active SubFlow: the extensions come from the child's data function, whose ETag
+                    // joins this response's ETag below. The fast path's read is reused when it was for
+                    // this same child; it was a full read then (a 304 never reaches the build).
+                    string? childEtag = null;
+                    var childEtagUnknown = false;
                     if (instance.Subflow != null)
                     {
-                        var subFlowExtensionsResult = await GetSubFlowExtensionsAsync(
-                            instance.Subflow,
-                            input.Extensions,
-                            cancellationToken);
-
-                        result.Extensions = subFlowExtensionsResult.Value?.Extensions ??
-                                            new Dictionary<string, object>();
+                        (result.Extensions, childEtag, childEtagUnknown) = await ReadSubFlowExtensionsAsync(
+                            instance.Subflow, input, probedSubFlowRead, cancellationToken);
                     }
                     else
                     {
                         // No active SubFlow - process extensions locally
-                        var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
-                            .WithWorkflow(flow)
-                            .WithInstance(instance)
-                            .WithRuntime(runtimeInfoProvider)
-                            .WithTransition(string.Empty)
-                            .WithBody(instanceData?.Data ?? new JsonData("{}"))
-                            .WithHeaders(input.Headers)
-                            .WithQueryParameters(input.QueryParameters)
-                            .BuildAsync(cancellationToken);
-
-                        var extensionsResult = await instanceExtensionService.ProcessExtensionsAsync(
-                            input.Extensions,
-                            scriptContext,
-                            flow,
-                            ExtensionScope.GetInstance,
-                            cancellationToken);
+                        var extensionsResult = await RunLocalDataExtensionsAsync(
+                            flow, instance, instanceData, input, cancellationToken);
 
                         if (!extensionsResult.IsSuccess)
                         {
@@ -1650,8 +1628,6 @@ public sealed class InstanceQueryAppService(
 
                         result.Extensions = extensionsResult.Value!;
                     }
-
-                    result.EntityEtag = entityEtag;
 
                     // Same fingerprint the fast path projects. Pinned-version requests hash the
                     // RESOLVED row's ETag instead of the latest one (a write into that version line
@@ -1676,8 +1652,7 @@ public sealed class InstanceQueryAppService(
                     // A row carrying x-encryption "encrypt" tokens is never cached: an exempt caller's
                     // body holds the plaintext (Redis would keep it at rest), and a body built while a
                     // key was missing holds tokens that must not outlive the key's return.
-                    if (dataCacheKey is not null && instanceData is not null && validatedEntry is null &&
-                        !EncryptedValueFormat.MayContainToken(instanceData.Data.Json))
+                    if (dataCacheKey is not null && validatedEntry is null && IsCacheableDataRow(instanceData))
                     {
                         await dataFunctionCache.SetAsync(dataCacheKey, new Caching.DataFunctionCacheEntry
                         {
@@ -1687,15 +1662,63 @@ public sealed class InstanceQueryAppService(
                         }, dataFunctionCache.ResolveTtlSeconds(flow.Config?.FunctionCache), cancellationToken);
                     }
 
-                    if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
+                    var responseEtag = ComposeResponseEtag(etag, childEtag, childEtagUnknown);
+
+                    if (MatchesCallersEtag(responseEtag, input.IfNoneMatch))
                     {
                         return ConditionalResult<GetInstanceDataOutput>.NotModified();
                     }
 
-                    result.ETag = etag;
+                    result.ETag = responseEtag;
                     return ConditionalResult<GetInstanceDataOutput>.Success(result);
                 },
                 onFailure: ConditionalResult<GetInstanceDataOutput>.Fail);
+    }
+
+    /// <summary>
+    /// The read outcome tag of a data-function build: a validated cache entry supplied the data, the cache
+    /// was consulted and missed, or the cache is off for this request.
+    /// </summary>
+    private static string DataReadOutcome(bool hasValidatedEntry, bool useCache)
+    {
+        if (hasValidatedEntry)
+            return InstanceReadActivityHelper.FastPathCacheHit;
+        return useCache ? InstanceReadActivityHelper.FastPathBuild : InstanceReadActivityHelper.FastPathDisabled;
+    }
+
+    /// <summary>
+    /// A data row may be stored in the body cache unless it carries x-encryption "encrypt" tokens.
+    /// </summary>
+    private static bool IsCacheableDataRow([System.Diagnostics.CodeAnalysis.NotNullWhen(true)] InstanceData? instanceData) =>
+        instanceData is not null && !EncryptedValueFormat.MayContainToken(instanceData.Data.Json);
+
+    /// <summary>True when the served ETag exists and the caller's If-None-Match names it.</summary>
+    private static bool MatchesCallersEtag(string? responseEtag, string? ifNoneMatch) =>
+        responseEtag is not null && !string.IsNullOrEmpty(ifNoneMatch) && responseEtag.MatchesIfNoneMatch(ifNoneMatch);
+
+    /// <summary>
+    /// Without an active SubFlow the data function runs the requested extensions locally, against the
+    /// raw instance data.
+    /// </summary>
+    private async Task<Result<Dictionary<string, object>>> RunLocalDataExtensionsAsync(
+        Definitions.Workflow flow,
+        Instance instance,
+        InstanceData? instanceData,
+        GetInstanceDataInput input,
+        CancellationToken cancellationToken)
+    {
+        var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
+            .WithWorkflow(flow)
+            .WithInstance(instance)
+            .WithRuntime(runtimeInfoProvider)
+            .WithTransition(string.Empty)
+            .WithBody(instanceData?.Data ?? new JsonData("{}"))
+            .WithHeaders(input.Headers)
+            .WithQueryParameters(input.QueryParameters)
+            .BuildAsync(cancellationToken);
+
+        return await instanceExtensionService.ProcessExtensionsAsync(
+            input.Extensions, scriptContext, flow, ExtensionScope.GetInstance, cancellationToken);
     }
 
     /// <summary>
@@ -1708,30 +1731,43 @@ public sealed class InstanceQueryAppService(
     /// instance was not found (the full path produces the proper error), on a cache miss,
     /// or when the stored entry is stale.
     /// </summary>
-    private async Task<(ConditionalResult<GetInstanceDataOutput>? NotModified, Caching.DataFunctionCacheEntry? ValidatedEntry)>
+    private async Task<(ConditionalResult<GetInstanceDataOutput>? NotModified, Caching.DataFunctionCacheEntry? ValidatedEntry, SubFlowDataRead? SubFlowRead)>
         TryServeDataFromFingerprintAsync(
             GetInstanceDataInput input,
             CancellationToken cancellationToken)
     {
         var fingerprint = await instanceRepository.GetDataFingerprintAsync(input.Instance, cancellationToken);
         if (fingerprint is null)
-            return (null, null);
+            return (null, null, null);
 
         // The 304 decision is made against the representation ETag (state included, because the
         // extension output a 304 withholds is derived from it) ...
         var etag = dataFunctionCache.ComputeEtag(input, fingerprint);
+        SubFlowDataRead? subFlowRead = null;
 
-        if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
+        if (fingerprint.HasActiveSubFlow)
+        {
+            // ... and, with an open SubFlow, against the child's data ETag too: the extensions are
+            // read from the child, whose data moves while the parent's does not. The child answers
+            // from its own fingerprint fast path, so an unchanged chain still runs no extension.
+            subFlowRead = await ProbeActiveSubFlowDataAsync(input, fingerprint.Id, etag, cancellationToken);
+            if (subFlowRead?.Result.IsNotModified == true)
+            {
+                logger.DataFunctionSubFlowEtagNotModified(input.Instance, subFlowRead.ChildInstanceId);
+                return (ConditionalResult<GetInstanceDataOutput>.NotModified(), null, null);
+            }
+        }
+        else if (!string.IsNullOrEmpty(input.IfNoneMatch) && etag.MatchesIfNoneMatch(input.IfNoneMatch))
         {
             logger.DataFunctionEtagNotModified(input.Instance);
-            return (ConditionalResult<GetInstanceDataOutput>.NotModified(), null);
+            return (ConditionalResult<GetInstanceDataOutput>.NotModified(), null, null);
         }
 
         var entry = await dataFunctionCache.GetAsync(dataFunctionCache.BuildKey(input), cancellationToken);
         if (entry is null)
         {
             logger.DataFunctionCacheMiss(input.Instance);
-            return (null, null);
+            return (null, null, subFlowRead);
         }
 
         // ... while the stored body is validated against the data-only identity, so a transition
@@ -1742,11 +1778,180 @@ public sealed class InstanceQueryAppService(
         if (!string.Equals(entry.Etag, dataEtag, StringComparison.Ordinal))
         {
             logger.DataFunctionCacheInvalidated(input.Instance, entry.Etag, dataEtag);
-            return (null, null);
+            return (null, null, subFlowRead);
         }
 
         logger.DataFunctionCacheHit(input.Instance);
-        return (null, entry);
+        return (null, entry, subFlowRead);
+    }
+
+    /// <summary>
+    /// One read of the active SubFlow child's data function, kept so the build path reuses its
+    /// <c>extensions</c> and ETag instead of descending a second time.
+    /// </summary>
+    private sealed record SubFlowDataRead(Guid ChildInstanceId, ConditionalResult<GetInstanceDataOutput> Result);
+
+    /// <summary>
+    /// Fast-path probe of the active SubFlow: loads the open correlation and asks the child's data
+    /// function, forwarding the child part of the caller's composed ETag as <c>If-None-Match</c> — only
+    /// when the parent part still matches, so a 304 from the child means the whole chain is unchanged.
+    /// Null when the correlation closed between the fingerprint and this read; the build path then
+    /// follows what the loaded aggregate says.
+    /// </summary>
+    private async Task<SubFlowDataRead?> ProbeActiveSubFlowDataAsync(
+        GetInstanceDataInput input,
+        Guid parentInstanceId,
+        string parentEtag,
+        CancellationToken cancellationToken)
+    {
+        var correlation = await instanceCorrelationRepository.FindActiveSubFlowByParentAsReadOnlyAsync(
+            parentInstanceId, cancellationToken);
+        if (correlation is null)
+            return null;
+
+        var childIfNoneMatch = Caching.SubFlowDataEtag.ChildPartFor(input.IfNoneMatch, parentEtag);
+        return await ReadActiveSubFlowDataAsync(correlation, input, childIfNoneMatch, cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads the active SubFlow child's data function through the query gateway (in-process for a
+    /// co-hosted domain, HTTP/Dapr otherwise) as the same caller. The child descends further on its own,
+    /// so its <c>extensions</c> are the leaf's and its ETag is composed down the chain.
+    /// </summary>
+    private async Task<SubFlowDataRead> ReadActiveSubFlowDataAsync(
+        InstanceCorrelation subflow,
+        GetInstanceDataInput input,
+        string? childIfNoneMatch,
+        CancellationToken cancellationToken)
+    {
+        // Version stays null: on the data function it selects a DATA version, and the parent's pinned
+        // version means nothing to the child. Query parameters are not forwarded for the same reason.
+        var childInput = new GetInstanceDataInput
+        {
+            Domain = subflow.SubFlowDomain,
+            Workflow = subflow.SubFlowName,
+            Instance = subflow.SubFlowInstanceId.ToString(),
+            IfNoneMatch = childIfNoneMatch,
+            Extensions = input.Extensions,
+            Headers = WithoutConditionalHeaders(input.Headers),
+            Roles = input.Roles
+        };
+
+        using var descent = StartDescend(
+            subflow.SubFlowDomain,
+            subflow.SubFlowName,
+            subflow.SubFlowInstanceId.ToString(),
+            subflow.ParentInstanceId.ToString(),
+            TelemetryConstants.DescentFunctions.Data);
+
+        var result = await CallChildDataFunctionAsync(childInput, cancellationToken);
+
+        // A remote client reports the caller's cancellation as a failed result: stop here rather than
+        // build and log a fallback nobody will receive.
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!result.IsNotModified && result.Result is not { IsSuccess: true })
+        {
+            // The parent still serves its data with an empty extensions block; mark the hop so that
+            // fallback is not read as a descent that succeeded and returned nothing.
+            InstanceReadActivityHelper.SetUnresolved(descent.Activity, "subflow-data-unavailable");
+        }
+
+        return new SubFlowDataRead(subflow.SubFlowInstanceId, result);
+    }
+
+    /// <summary>
+    /// The gateway call itself. The in-process gateway runs the child's whole read pipeline, so a
+    /// child-side fault arrives as an exception; it becomes a failed result (the same fallback) instead
+    /// of a parent 500. The caller's own cancellation is not caught.
+    /// </summary>
+    private async Task<ConditionalResult<GetInstanceDataOutput>> CallChildDataFunctionAsync(
+        GetInstanceDataInput childInput,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await instanceQueryGateway.GetInstanceDataAsync(childInput, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            return ConditionalResult<GetInstanceDataOutput>.Fail(
+                Error.Transient("subflow_data_read_failed", ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Build path with an active SubFlow: the extensions come from the child's data function, whose ETag
+    /// joins this response's ETag. The fast path's read is reused when it was for this same child; it was
+    /// a full read then (a 304 never reaches the build). A failed read keeps the parent's data served with
+    /// no extensions; it and a successful read that carries no ETag (a grandchild read that failed, or a
+    /// cross-domain child on an older runtime) report <c>EtagUnknown</c>, so that body gets no ETag — the
+    /// parent part alone never stands for a chain whose child part is unknown.
+    /// </summary>
+    private async Task<(Dictionary<string, object> Extensions, string? ChildEtag, bool EtagUnknown)>
+        ReadSubFlowExtensionsAsync(
+            InstanceCorrelation subflow,
+            GetInstanceDataInput input,
+            SubFlowDataRead? probedSubFlowRead,
+            CancellationToken cancellationToken)
+    {
+        var subFlowRead = probedSubFlowRead is { Result.IsNotModified: false } probed
+                          && probed.ChildInstanceId == subflow.SubFlowInstanceId
+            ? probed
+            : await ReadActiveSubFlowDataAsync(subflow, input, null, cancellationToken);
+
+        if (subFlowRead.Result.Result is { IsSuccess: true, Value: { } childOutput })
+        {
+            var extensions = childOutput.Extensions ?? new Dictionary<string, object>();
+            return string.IsNullOrEmpty(childOutput.ETag)
+                ? (extensions, null, true)
+                : (extensions, childOutput.ETag, false);
+        }
+
+        logger.DataFunctionSubFlowReadFailed(
+            input.Instance, subflow.SubFlowInstanceId, subFlowRead.Result.Result.Error.Message);
+        return (new Dictionary<string, object>(), null, true);
+    }
+
+    /// <summary>
+    /// The served ETag. With an active SubFlow the representation is the parent's AND the child's
+    /// (<c>{parent}.{child}</c>); when the child part is unknown (failed read, or a child that served no
+    /// ETag) the body gets no ETag at all. No active SubFlow ⇒ the parent ETag alone.
+    /// </summary>
+    private static string? ComposeResponseEtag(string parentEtag, string? childEtag, bool childEtagUnknown)
+    {
+        if (childEtagUnknown)
+            return null;
+
+        return string.IsNullOrEmpty(childEtag)
+            ? parentEtag
+            : Caching.SubFlowDataEtag.Compose(parentEtag, childEtag);
+    }
+
+    private static readonly HashSet<string> ConditionalRequestHeaders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "If-None-Match", "If-Match", "If-Modified-Since", "If-Unmodified-Since"
+    };
+
+    /// <summary>
+    /// The caller's headers minus its conditional ones. The child's only condition is its own part of the
+    /// composed ETag (<see cref="GetInstanceDataInput.IfNoneMatch"/>); the remote client merges the input
+    /// headers over the request it built, so the caller's own <c>If-None-Match</c> (the composed
+    /// <c>parent.child</c> value) would replace that part and the child could never answer 304.
+    /// </summary>
+    private static Dictionary<string, string?>? WithoutConditionalHeaders(Dictionary<string, string?>? headers)
+    {
+        if (headers is null)
+            return null;
+
+        var filtered = new Dictionary<string, string?>(headers.Comparer);
+        foreach (var (key, value) in headers)
+        {
+            if (!ConditionalRequestHeaders.Contains(key))
+                filtered[key] = value;
+        }
+
+        return filtered;
     }
 
     /// Gets the view definition for rule-based view selection.
@@ -1874,8 +2079,8 @@ public sealed class InstanceQueryAppService(
         try
         {
             // Opened only here, after the fast path has declined: the envelope measures a build.
-            using var read = InstanceReadActivityHelper.StartRead(
-                InstanceReadKinds.State, input.Domain, input.Workflow);
+            using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.State, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+                input.Domain, input.Workflow);
 
             return await GetInstanceWithAllCorrelationsAsync(input.Instance, cancellationToken)
             .BindAsync(loaded =>
@@ -1884,7 +2089,7 @@ public sealed class InstanceQueryAppService(
             .MatchAsync(
                 onSuccess: async data =>
                 {
-                    using var instanceScope = BeginInstanceScope(data.instance);
+                    using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
 
                     // Full correlation set (active + completed), ordered by creation time. It comes from
                     // the same single correlation query that filled the aggregate's open-only
@@ -2152,7 +2357,7 @@ public sealed class InstanceQueryAppService(
     /// Feeds the <c>correlations</c> response list only — the active-subflow detection below deliberately
     /// keeps using the aggregate, whose active set drives Busy/settlement semantics.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    private async Task<Result<GetInstanceStateOutput>> BuildInstanceStateOutputAsync(
+    private async Task<Result<GetInstanceStateOutput>> BuildInstanceStateOutputAsync( // skipcq: CS-R1140 — assembles the state response from independent, ordered parts
         Instance instance,
         Definitions.Workflow currentWorkflow,
         GetInstanceStateInput input,
@@ -2382,7 +2587,7 @@ public sealed class InstanceQueryAppService(
         var viewDefinition = currentStateValue.View;
         var firstViewEntry = viewDefinition?.Views.FirstOrDefault();
         var viewExtensions = firstViewEntry?.Extensions ?? [];
-        var viewLoadData = firstViewEntry?.LoadData ?? false;
+        var viewLoadData = firstViewEntry?.LoadData == true;
         var stateHasView = viewDefinition is { Views.Count: > 0 };
         var allExtensions = subFlowStateInfo.SubFlowData != null
             ? ExtractExtensionsFromDataHref(subFlowStateInfo.SubFlowData.Href)
@@ -2821,13 +3026,11 @@ public sealed class InstanceQueryAppService(
             return null;
 
         // Only signal on the main-flow current state view, not a subflow terminal view.
+        // displayedState may be a role alias of the current state; still allow when it aliases it.
         if (!string.Equals(displayedState, instance.CurrentState, StringComparison.Ordinal)
-            && displayedState is not null)
-        {
-            // displayedState may be a role alias of the current state; still allow when it aliases it.
-            if (currentStateValue.Aliases.Count == 0)
-                return null;
-        }
+            && displayedState is not null
+            && currentStateValue.Aliases.Count == 0)
+            return null;
 
         // The gate owns the arm selection (rule, else roles, else allow). This surface's roles are
         // already provider-resolved on the input, so the factory just hands them over.
@@ -2917,8 +3120,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
-            InstanceReadKinds.View, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.View, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         // Railway chain: Get Instance → Get Workflow → Resolve State → Get View
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
@@ -2927,7 +3130,7 @@ public sealed class InstanceQueryAppService(
                     .MapAsync(workflow => (instance, workflow)))
             .ThenAsync(async data =>
             {
-                using var instanceScope = BeginInstanceScope(data.instance);
+                using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
                 return await ResolveViewAsync(data.instance, data.workflow, input, transitionKey, cancellationToken);
             });
     }
@@ -2946,8 +3149,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
-            InstanceReadKinds.Schema, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.Schema, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         // Fast path: the ETag is a deterministic hash of the data fingerprint (instance id +
         // latest data ETag + effective state + flow version) plus caller scope and transition
@@ -2970,7 +3173,7 @@ public sealed class InstanceQueryAppService(
             .MatchAsync(
                 onSuccess: async data =>
                 {
-                    using var instanceScope = BeginInstanceScope(data.instance);
+                    using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
                     var buildResult = await BuildSchemaOutputAsync(data.instance, data.workflow, input, transitionKey, cancellationToken);
                     if (!buildResult.IsSuccess)
                         return ConditionalResult<GetSchemaOutput>.Fail(buildResult.Error);
@@ -3089,8 +3292,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
-            InstanceReadKinds.Extensions, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.Extensions, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         // Railway chain: Get Instance → Get Workflow → Build Extensions Output
         return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
@@ -3099,7 +3302,7 @@ public sealed class InstanceQueryAppService(
                     .MapAsync(workflow => (instance, workflow)))
             .ThenAsync(async data =>
             {
-                using var instanceScope = BeginInstanceScope(data.instance);
+                using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
                 return await BuildExtensionsOutputAsync(data.instance, data.workflow, input, cancellationToken);
             });
     }
@@ -3114,8 +3317,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
-            InstanceReadKinds.Master, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.Master, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         // Fast path: the master ETag is a deterministic hash of the data fingerprint
         // (instance id + latest data ETag + flow version) plus the caller scope — the
@@ -3138,7 +3341,7 @@ public sealed class InstanceQueryAppService(
             .MatchAsync(
                 onSuccess: async data =>
                 {
-                    using var instanceScope = BeginInstanceScope(data.instance);
+                    using var instanceScope = BeginInstanceScope(data.instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
                     var buildResult = await BuildMasterOutputAsync(data.instance, data.workflow, input, cancellationToken);
                     if (!buildResult.IsSuccess)
                         return ConditionalResult<GetSchemaOutput>.Fail(buildResult.Error);
@@ -3265,7 +3468,7 @@ public sealed class InstanceQueryAppService(
             Roles = callerRoles.Value
         };
 
-        using var descent = StartDescend(
+        using var descent = StartDescend( // skipcq: CS-W1100 — held for its scope; disposing ends the descent span
             subflow.SubFlowDomain,
             subflow.SubFlowName,
             subflow.SubFlowInstanceId.ToString(),
@@ -3350,7 +3553,7 @@ public sealed class InstanceQueryAppService(
             Roles = callerRoles.Value
         };
 
-        using var descent = StartDescend(
+        using var descent = StartDescend( // skipcq: CS-W1100 — held for its scope; disposing ends the descent span
             subflow.SubFlowDomain,
             subflow.SubFlowName,
             subflow.SubFlowInstanceId.ToString(),
@@ -3465,7 +3668,7 @@ public sealed class InstanceQueryAppService(
             Roles = callerRoles.Value
         };
 
-        using var descent = StartDescend(
+        using var descent = StartDescend( // skipcq: CS-W1100 — held for its scope; disposing ends the descent span
             subflow.SubFlowDomain,
             subflow.SubFlowName,
             subflow.SubFlowInstanceId.ToString(),
@@ -3673,7 +3876,7 @@ public sealed class InstanceQueryAppService(
         if (!callerRoles.IsSuccess)
             return null;
 
-        using var descent = StartDescend(
+        using var descent = StartDescend( // skipcq: CS-W1100 — held for its scope; disposing ends the descent span
             instance.Subflow!.SubFlowDomain,
             instance.Subflow!.SubFlowName,
             instance.Subflow!.SubFlowInstanceId.ToString(),
@@ -3737,8 +3940,8 @@ public sealed class InstanceQueryAppService(
     {
         runtimeInfoProvider.Check(input.Domain);
 
-        using var read = InstanceReadActivityHelper.StartRead(
-            InstanceReadKinds.InstanceCorrelation, input.Domain, input.Workflow);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.InstanceCorrelation, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         var instanceResult = await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken);
         if (!instanceResult.IsSuccess)
@@ -3811,8 +4014,8 @@ public sealed class InstanceQueryAppService(
         runtimeInfoProvider.Check(domain);
 
         var transaction = Activity.Current;
-        using var read = InstanceReadActivityHelper.StartRead(
-            InstanceReadKinds.HumanTasks, domain);
+        using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.HumanTasks, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            domain);
 
         var bounds = humanTaskOptions.Value;
 
@@ -3853,12 +4056,11 @@ public sealed class InstanceQueryAppService(
             }
         }
 
+        var buildOutcome = bypass ? HumanTaskBypassOutcome : InstanceReadActivityHelper.FastPathBuild;
         InstanceReadActivityHelper.SetReadOutcome(
             transaction,
             InstanceReadKinds.HumanTasks,
-            !cacheEnabled ? InstanceReadActivityHelper.FastPathDisabled
-            : bypass ? HumanTaskBypassOutcome
-            : InstanceReadActivityHelper.FastPathBuild);
+            cacheEnabled ? buildOutcome : InstanceReadActivityHelper.FastPathDisabled);
 
         // Single-flight. A fixed TTL synchronises expiry, so without this every caller whose entry
         // expires in the same second starts its own full fan-out over every workflow schema.

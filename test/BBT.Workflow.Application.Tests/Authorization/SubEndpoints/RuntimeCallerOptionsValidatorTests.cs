@@ -105,6 +105,49 @@ public sealed class RuntimeCallerOptionsValidatorTests : IDisposable
     }
 
     [Fact]
+    public void Validator_FailsOnMissingFile()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"vnext-missing-{Guid.NewGuid():N}.txt");
+
+        Failures(new RuntimeCallerOptions { AppApiTokenFile = path }).ShouldContain(f => f.Contains(path));
+    }
+
+    [Fact]
+    public void Validator_FailsOnTokenMaterialInConfiguration()
+        => Failures(new RuntimeCallerOptions(), Config(($"{RuntimeCallerOptions.SectionName}:AppApiToken", "x")))
+            .ShouldContain(f => f.Contains("looks like key material"));
+
+    [Fact]
+    public void Validator_AcceptsAppApiTokenFileKey()
+    {
+        File.WriteAllText(_keyFile, "tok\n");
+
+        Failures(new RuntimeCallerOptions { AppApiTokenFile = _keyFile },
+            Config(($"{RuntimeCallerOptions.SectionName}:AppApiTokenFile", _keyFile))).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Validator_FailsOnTokenFileWithoutSandbox()
+    {
+        File.WriteAllText(_keyFile, "tok");
+        var sandboxOff = Config(("Scripting:Sandbox:Enabled", "false"));
+
+        Failures(new RuntimeCallerOptions { AppApiTokenFile = _keyFile }, sandboxOff, runsFlowScripts: true)
+            .ShouldContain(f => f.Contains("AppApiTokenFile") && f.Contains("Scripting:Sandbox:Enabled"));
+        Failures(new RuntimeCallerOptions { AppApiTokenFile = _keyFile, AllowWithoutScriptSandbox = true },
+            sandboxOff, runsFlowScripts: true).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Validator_IgnoresSandboxWhenNoFileOnNonScriptHost()
+    {
+        File.WriteAllText(_keyFile, "tok");
+
+        Failures(new RuntimeCallerOptions { AppApiTokenFile = _keyFile },
+            Config(("Scripting:Sandbox:Enabled", "false")), runsFlowScripts: false).ShouldBeEmpty();
+    }
+
+    [Fact]
     public void Stamp_ShouldReplaceAnySameNamedHeader_WithAFreshToken()
     {
         var identity = Identity(DefaultRing(), domain: "core");
