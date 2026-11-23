@@ -54,6 +54,66 @@ ProblemDetails response. An empty list therefore costs the caller **both** the f
 Member names are **instance paths** (`root`, `customer`, `customer.ownerUserId`), never keyword
 names. `required` is a keyword; a client cannot bind a message to it.
 
+## Two Validation Layers at Transition Intake
+
+A request body is checked twice before the instance is admitted (before the Busy flip, before an
+async job is queued, before a start persists the instance row). Both failures answer `400` with
+`validationErrors[].members`, and the instance is untouched.
+
+Order at intake: transition schema → state-machine policy → master-schema preview. The preview runs
+last on purpose: it reads the stored document, so a request the policy refuses (wrong state,
+unauthorized actor) never reaches it and is never answered with a master-schema message. If the
+preview itself fails unexpectedly it accepts and logs `IntakeMasterSchemaPreviewSkipped` (10268) —
+the write funnel validates the same content.
+
+| Layer | Schema | Validates | Where |
+| --- | --- | --- | --- |
+| 1 | Transition schema (`schema` / `schemas[]`) | The body as sent | `TransitionValidationService` |
+| 2 | Master schema (the flow's `schema`) | A preview of the body merged onto the latest data | `IInstanceDataWriteService.PreviewAppendAsync` |
+
+Layer 2 exists because the master schema is otherwise only checked when the merged data is written,
+inside the pipeline, where a failure faults the instance: one field a closed master schema
+(`additionalProperties: false`) does not allow used to end in a faulted instance instead of a `400`
+(vnext#1255). The preview runs the write funnel's own merge and validation in memory and writes
+nothing. **The funnel still validates every write and stays the authority** — the preview reads the
+loaded snapshot, not the head under the row lock, and is only the early refusal.
+
+The preview covers the caller's own body and nothing else. It accepts, and leaves the verdict to the
+funnel, whenever it cannot reproduce what the funnel would validate:
+
+| Not previewed | Why |
+| --- | --- |
+| Transition with a `mapping` | The mapping's output is what is written, and previewing it would run the script before admission. **Known gap, see below.** |
+| Automatic / Scheduled / Event hops | Not a client request to answer with `400`. |
+| Request relayed to an active SubFlow | The leaf records the body and previews it against its own master schema. |
+| No master schema, or one that failed to load | Not validated by the funnel either (unchanged). |
+| Master schema with `x-encryption` paths, or data carrying `ENCRYPTED:` / `HASHED:` values | The funnel validates the opened, re-hashed document, which needs the instance secret. |
+| Body carrying an `x-storage` file node | The file swap runs after validation; the master schema describes the stored handle. |
+| A merge that changes nothing | The funnel writes and validates nothing for a duplicate. |
+
+### Known gap: transitions with a `mapping`
+
+The same kind of violation has two outcomes, depending on something the caller cannot see:
+
+| Transition | A body that leads to a master-schema violation |
+| --- | --- |
+| No `mapping` | Refused at intake: `400` `App:900002`, instance untouched, nothing queued. |
+| With a `mapping` | Not previewed. The violation is found only when the mapped output is written, inside the pipeline and after admission: the request is not answered `400` and the instance is faulted. |
+
+A caller's body is usually an input of the mapping, so a client request can cause the second outcome;
+it is not only an authoring mistake. The mapping is not run at intake because a mapping script is not
+side-effect free (it can write files, call bindings and read related instances) and intake runs before
+the instance is reserved.
+
+This is a recorded gap, **subject to change and not a contract** — do not build on the faulted outcome.
+Decision: council session `2026-11-23-mapped-transition-master-schema-preview`
+([decision log](../agent-council/sessions/README.md)). Getting a faulted instance out of that state is
+vnext#1252; preventing the fault for mapped transitions is a separate task.
+
+`WorkflowExecution:InstanceDataWrite:IntakeMasterSchemaPreview` (default `true`) switches layer 2
+off; the funnel's validation is unaffected. The validation runs under the `Schema.ValidateMaster`
+span.
+
 ## Failure Modes
 
 - Schema parse failure indicates invalid schema configuration.

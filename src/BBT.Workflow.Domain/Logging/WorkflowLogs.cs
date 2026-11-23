@@ -397,6 +397,20 @@ public static partial class WorkflowLogs
         string? error);
 
     /// <summary>
+    /// Logs when the master-schema preview at transition intake (vnext#1255) could not evaluate a
+    /// request and accepted it, leaving the verdict to the write funnel.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10268,
+        Level = LogLevel.Warning,
+        Message = "Master-schema intake preview skipped for instance {InstanceId} (schema {SchemaKey}); the write funnel validates instead")]
+    public static partial void IntakeMasterSchemaPreviewSkipped(
+        this ILogger logger,
+        Exception exception,
+        Guid instanceId,
+        string? schemaKey);
+
+    /// <summary>
     /// Logs when the write funnel demoted a stale latest row (written by a concurrent
     /// transaction) under the FOR UPDATE lock before inserting the new head.
     /// </summary>
