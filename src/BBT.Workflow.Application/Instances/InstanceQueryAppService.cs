@@ -1575,7 +1575,7 @@ public sealed class InstanceQueryAppService(
         InstanceReadActivityHelper.SetReadOutcome(
             transaction, InstanceReadKinds.Data, DataReadOutcome(validatedEntry is not null, useCache));
 
-        using var readEnvelope = InstanceReadActivityHelper.StartRead(
+        using var readEnvelope = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
             InstanceReadKinds.Data, input.Domain, input.Workflow);
 
         // Railway chain: Get Instance → Load Flow (using instance.FlowVersion) → Match to ConditionalResult
@@ -2497,13 +2497,13 @@ public sealed class InstanceQueryAppService(
                 {
                     var subFlowItem = subFlowItemsByName.GetValueOrDefault(key);
                     Transition? transition = null;
-                    bool hasView, loadData, hasSchema;
+                    bool hasView, loadData, hasSchema; // skipcq: CS-W1022 — definitely assigned on both branches below
                     Dictionary<string, string>? annotations;
                     if (subFlowItem != null)
                     {
-                        hasView = subFlowItem.View?.HasView ?? false;
-                        loadData = subFlowItem.View?.LoadData ?? false;
-                        hasSchema = subFlowItem.Schema?.HasSchema ?? false;
+                        hasView = subFlowItem.View?.HasView == true;
+                        loadData = subFlowItem.View?.LoadData == true;
+                        hasSchema = subFlowItem.Schema?.HasSchema == true;
                         annotations = subFlowItem.Annotations;
                     }
                     else
@@ -4085,7 +4085,7 @@ public sealed class InstanceQueryAppService(
         }
 
         // Only now, on a real miss, is any database touched.
-        List<string> workflowSchemas;
+        List<string> workflowSchemas; // skipcq: CS-W1022 — assigned inside the schema scope below
         using (currentSchema.Change(RuntimeSysSchemaInfo.Flows))
         {
             workflowSchemas = await instanceRepository.GetActiveFlowKeysAsync(cancellationToken);
@@ -4121,7 +4121,7 @@ public sealed class InstanceQueryAppService(
         // The work is not serialised by this, it MOVES: the database evaluates the UNION ALL arms
         // itself and answers in one round trip instead of N, so the scan is strictly faster than the
         // parallel form while holding one connection instead of FanoutParallelism of them.
-        List<HumanTaskCandidate> allCandidates;
+        List<HumanTaskCandidate> allCandidates; // skipcq: CS-W1022 — assigned inside the scan scope below
         using (var scan = InstanceReadActivityHelper.StartHumanTaskScan(domain))
         {
             allCandidates = await scopeFactory.ExecuteInIsolatedUnitOfWorkAsync(async (sp, innerCt) =>
@@ -4177,7 +4177,7 @@ public sealed class InstanceQueryAppService(
             // Acquired BEFORE the unit of work, so a branch waiting for a slot is not waiting while
             // holding a connection. This is the only ceiling that spans requests; without it the
             // per-request width multiplies by however many callers happen to coincide.
-            using var slot = await descentLimiter.AcquireAsync(ct);
+            using var slot = await descentLimiter.AcquireAsync(ct); // skipcq: CS-W1100 — held for its scope; disposing releases the descent slot
 
             var descent = await scopeFactory.ExecuteInIsolatedUnitOfWorkAsync(async (sp, innerCt) =>
             {
