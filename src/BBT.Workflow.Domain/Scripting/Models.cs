@@ -748,7 +748,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             var value = ToDynamic(output, JsonScriptBodyOptions);
             if (value != null)
             {
-                OutputResponse[taskKey!] = value;
+                OutputResponse[taskKey] = value;
             }
         }
     }
@@ -970,7 +970,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             OutputResponse[key] = CloneDynamic(value);
 
         foreach (var (key, value) in metadataWrites)
-            MetaData[key] = CloneDynamic(value)!;
+            MetaData[key] = CloneDynamic(value);
 
         foreach (var branch in branches)
         {

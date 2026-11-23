@@ -207,7 +207,7 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
         var instance = scriptContext.Instance;
         var workflow = scriptContext.Workflow;
         var domain = !string.IsNullOrWhiteSpace(workflow?.Domain)
-            ? workflow!.Domain
+            ? workflow.Domain
             : scriptContext.Runtime.Domain;
 
         // The identity propagated to the remote task comes from the request as it arrived, not from the script view,

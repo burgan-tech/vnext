@@ -93,12 +93,9 @@ public sealed class CarriedHeaderPolicy(
 
     private static bool IsDenied(string lower, List<string> additional)
     {
-        foreach (var s in DeniedSubstrings)
+        if (DeniedSubstrings.Any(s => lower.Contains(s, StringComparison.Ordinal)))
         {
-            if (lower.Contains(s, StringComparison.Ordinal))
-            {
-                return true;
-            }
+            return true;
         }
 
         if (additional.Any(name => string.Equals(name, lower, StringComparison.OrdinalIgnoreCase)))
@@ -116,12 +113,9 @@ public sealed class CarriedHeaderPolicy(
             return true;
         }
 
-        foreach (var p in ExcludedPrefixes)
+        if (ExcludedPrefixes.Any(p => lower.StartsWith(p, StringComparison.Ordinal)))
         {
-            if (lower.StartsWith(p, StringComparison.Ordinal))
-            {
-                return true;
-            }
+            return true;
         }
 
         return false;

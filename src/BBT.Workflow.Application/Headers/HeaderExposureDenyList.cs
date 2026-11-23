@@ -54,11 +54,8 @@ public sealed class HeaderExposureDenyList : IHeaderExposureDenyList
         using (var writer = new Utf8JsonWriter(buffer))
         {
             writer.WriteStartObject();
-            foreach (var header in element.EnumerateObject())
-            {
-                if (!_deny.Contains(header.Name))
-                    header.WriteTo(writer);
-            }
+            foreach (var header in element.EnumerateObject().Where(h => !_deny.Contains(h.Name)))
+                header.WriteTo(writer);
 
             writer.WriteEndObject();
         }
