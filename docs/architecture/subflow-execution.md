@@ -221,8 +221,8 @@ read. Do not replace these reads with the old parent object: it may still say Bu
   preassigned id. Before, the failed child stayed committed in its initial state without its data. The
   parent's fault faulted it too, so the retry found a faulted child, unfaulted the parent and handed the
   retry to that child, which could not succeed: the parent was left Active, with no incident, waiting on
-  a dead child. A leftover no parent fault reached stayed Busy: a SubProcess child (the parent records
-  its correlation only after a successful start) or a direct `sub/instances/start` call.
+  a dead child. A leftover no parent fault reached stayed Busy: a SubProcess child (a parent's fault
+  cascades only to its SubFlow children) or a direct `sub/instances/start` call.
   The child's start transition runs after that commit, and its own failure keeps the committed child, as
   before: faulted when one of its steps fails, unstarted when it fails before its first step (context,
   admission, an async enqueue).
