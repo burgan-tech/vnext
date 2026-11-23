@@ -1575,8 +1575,8 @@ public sealed class InstanceQueryAppService(
         InstanceReadActivityHelper.SetReadOutcome(
             transaction, InstanceReadKinds.Data, DataReadOutcome(validatedEntry is not null, useCache));
 
-        using var readEnvelope = InstanceReadActivityHelper.StartRead( // skipcq: CS-W1100 — held for its scope; disposing ends the read span
-            InstanceReadKinds.Data, input.Domain, input.Workflow);
+        using var readEnvelope = InstanceReadActivityHelper.StartRead(InstanceReadKinds.Data, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         // Railway chain: Get Instance → Load Flow (using instance.FlowVersion) → Match to ConditionalResult
         return await GetInstanceByIdOrKeyAsync(input.Instance, input.Version, cancellationToken)
