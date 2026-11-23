@@ -83,13 +83,32 @@ funnel, whenever it cannot reproduce what the funnel would validate:
 
 | Not previewed | Why |
 | --- | --- |
-| Transition with a `mapping` | The mapping's output is what is written and the flow author decides it; previewing it would run the script before admission. A master-schema failure there is an authoring fault, not a client error. |
+| Transition with a `mapping` | The mapping's output is what is written, and previewing it would run the script before admission. **Known gap, see below.** |
 | Automatic / Scheduled / Event hops | Not a client request to answer with `400`. |
 | Request relayed to an active SubFlow | The leaf records the body and previews it against its own master schema. |
 | No master schema, or one that failed to load | Not validated by the funnel either (unchanged). |
 | Master schema with `x-encryption` paths, or data carrying `ENCRYPTED:` / `HASHED:` values | The funnel validates the opened, re-hashed document, which needs the instance secret. |
 | Body carrying an `x-storage` file node | The file swap runs after validation; the master schema describes the stored handle. |
 | A merge that changes nothing | The funnel writes and validates nothing for a duplicate. |
+
+### Known gap: transitions with a `mapping`
+
+The same kind of violation has two outcomes, depending on something the caller cannot see:
+
+| Transition | A body that leads to a master-schema violation |
+| --- | --- |
+| No `mapping` | Refused at intake: `400` `App:900002`, instance untouched, nothing queued. |
+| With a `mapping` | Not previewed. The violation is found only when the mapped output is written, inside the pipeline and after admission: the request is not answered `400` and the instance is faulted. |
+
+A caller's body is usually an input of the mapping, so a client request can cause the second outcome;
+it is not only an authoring mistake. The mapping is not run at intake because a mapping script is not
+side-effect free (it can write files, call bindings and read related instances) and intake runs before
+the instance is reserved.
+
+This is a recorded gap, **subject to change and not a contract** — do not build on the faulted outcome.
+Decision: council session `2026-11-23-mapped-transition-master-schema-preview`
+([decision log](../agent-council/sessions/README.md)). Getting a faulted instance out of that state is
+vnext#1252; preventing the fault for mapped transitions is a separate task.
 
 `WorkflowExecution:InstanceDataWrite:IntakeMasterSchemaPreview` (default `true`) switches layer 2
 off; the funnel's validation is unaffected. The validation runs under the `Schema.ValidateMaster`
