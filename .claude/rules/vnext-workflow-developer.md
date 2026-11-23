@@ -329,6 +329,8 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
   (`docs/runtime/event-publish-modes.md#substate-changed-is-emitted-once-per-activation-episode`).
 - Never remove the explicit flush at creation in `InstanceCommandAppService` — it is the parent's only
   notification when the start transition targets the initial state.
+- `PrepareInstanceAsync` commits the creation (row, initial data, that flush) only on success and rolls it
+  back otherwise; never commit a failed result. Full guide: `docs/architecture/subflow-execution.md`.
 - `SubflowStateService` takes the per-sub-item lock; equal `ChangedAt` is re-applied, only older rejected.
 - Never add a correlation-first CAS before the parent load — write order stays P → C (40P01 otherwise).
 - Full guide: `docs/runtime/event-publish-modes.md`.
