@@ -27,6 +27,7 @@ a pruned path is skipped before its value is read.
 | Surface | `x-roles` | `x-masking` | `encrypt` | `hash` |
 |---|---|---|---|---|
 | Instance GET, instance list, data function, sync start/transition response | pruned | allow-listed → clear, others masked | allow-listed → plaintext, others the stored token; legacy plaintext → full mask | stored digest; legacy plaintext → full mask |
+| Transition history `body` (`GET …/instances/{id}/transitions`) | pruned | allow-listed → clear, others masked | allow-listed → plaintext, others full mask (the recorded body is plaintext; there is no token) | full mask (the recorded value is raw) |
 | Trigger tasks `GetInstance`, `GetInstances`, `GetInstanceData` (same domain and cross-domain) | same, for the task's credential | same | same | same |
 | Scripts: `context.Instance.Data`, and `context.Body` where the runtime fills it with instance data | not applied | not applied | **the stored token**; open with `context.Instance.DecryptAsync(path)` | digest |
 
@@ -53,7 +54,20 @@ Nothing else of the caller travels. HTTP, SOAP and Dapr tasks carry the credenti
 - So a task with no headers reads as its caller; set `role` (or the whole credential) in the input mapping to read as
   someone else, e.g. a service role.
 
-Not covered (the row as stored): transition history, `context.Related`, custom functions, the human-task list
+**Transition history.** Each recorded transition `body` is the plaintext request (or, for a transition with a mapping,
+the mapped instance-shaped data), so it reads through its own member of the same service,
+`IInstanceDataReadService.CreateHistoryBodyReaderAsync`: the caller's plan is decided once per request
+(`ISchemaFieldFilterService.PrepareAsync` — one role resolution, one evaluator, one schema read) and applied to every
+row. Its fallback is the opposite of instance data's: when the plan cannot be decided — the workflow definition or its
+master schema cannot be read — every non-empty body is **withheld** (`null`); serving it as stored would serve every
+guarded field in clear. A workflow without a master schema, or without rules, serves the bodies as recorded. A SubFlow
+child's `start` row (data its parent carried) is filtered by the **child's** master schema: a field the parent guards is
+hidden there only if the child's schema guards it too. Only fields the master schema declares are protected: a body field the
+master schema does not declare is served as recorded. The recorded `header` set is not field-filtered; names listed in
+`Workflow:HeaderExposure:Deny` are never recorded and are removed from older rows on read
+([Header exposure](../runtime/header-exposure.md)). `createdBy` / `createdByBehalfOf` are returned as recorded.
+
+Not covered (the row as stored): `context.Related`, custom functions, the human-task list
 (`humanTask.title`/`description`), outbox events and internal endpoints (network isolation is the boundary). A value a
 script copies into another field loses its protection; a task mapping that copies an `encrypt` token into another field
 is refused by the write funnel (`EncryptedValueReservedException`).
@@ -206,7 +220,8 @@ raw value, so `hash` takes no `roles`.
 | Where | What is there |
 |---|---|
 | `InstancesData."Data"` column | `ENCRYPTED:AES256:i1:<base64url(0x01 ‖ nonce ‖ ciphertext ‖ tag)>` |
-| `InstanceData.Data` everywhere in the engine (the aggregate, scripts, runtime-filled `context.Body`, dynamic role grants, human-task text, transition history) | the stored token |
+| `InstanceData.Data` everywhere in the engine (the aggregate, scripts, runtime-filled `context.Body`, dynamic role grants, human-task text) | the stored token |
+| `InstanceTransition.Body` (the recorded request) | plaintext — see [Honest scope](#honest-scope); transition history serves it through the exposure plan |
 | Write funnel (merge, dedup, schema validation) | plaintext, opened inside the funnel and never kept |
 | Scripts, on request | `await context.Instance.DecryptAsync(path, ct)` opens the instance's own value |
 | Guarded surfaces (GET, list, data function, sync response, Get* tasks), allow-listed caller | plaintext |
@@ -264,7 +279,7 @@ Only `InstancesData` rows written after a field became `hash`/`encrypt` are prot
 
 | Copy | Phase |
 |---|---|
-| `InstanceTransition.Body`/`Header` — the request, often the very delta just protected | 2 |
+| `InstanceTransition.Body`/`Header` — the request, often the very delta just protected (the body is stored in plaintext and filtered by the history response; `Workflow:HeaderExposure:Deny` names are never recorded) | 2 |
 | `InstanceTask.Request`/`Response`/`InvocationResult` | 2 |
 | Outbox/Inbox `InstanceSubCompleted`/`InstanceSubFaulted.InstanceData`, job payloads | 2 |
 | Redis human-task cache; the data-function cache never stores a row that carries tokens | 2 |
@@ -313,6 +328,9 @@ switch: new values are stored plain (existing tokens keep decrypting while their
 declaring `hash`/`encrypt` cannot be published. Decryption and the value served to non-allow-listed callers can
 never be switched off. No switch touches `x-roles`.
 
+Recorded request headers in transition history are governed by `Workflow:HeaderExposure:Deny`, which also keeps the
+listed names out of script and mapping contexts: [Header exposure](../runtime/header-exposure.md).
+
 ## Engine
 
 `IFieldMaskingEngine` is the Application port for `mask`/`replace`; `TasmanianDevilFieldMaskingEngine`
@@ -337,6 +355,10 @@ The implementation rules the developer quick-reference card points at, kept here
   it serves the row as stored — `ISchemaFieldFilterService.ApplyAsync` returns `null` for "nothing applied" precisely so
   no caller can fall back to a plaintext. It opens a row (`UnprotectAsync`) only when the row carries tokens, so the
   filter can serve an allow-listed caller the plaintext. Do not call the filter from a surface directly.
+- Transition history reads its recorded bodies through `IInstanceDataReadService.CreateHistoryBodyReaderAsync`, built on
+  `ISchemaFieldFilterService.PrepareAsync`, whose outcome keeps "no rules" (`NoRules`) apart from "rules unknown"
+  (`Unavailable`). A recorded body is plaintext, so `Unavailable` (or an unloadable definition) **withholds** the body —
+  never fall back to the recorded value there.
 - `x-encryption.type: "hash"` is applied on **WRITE**: the funnel stores `HASHED:SHA256:<hex>` (HMAC under the
   instance's own salt), the read path serves the digest; no `roles`, no validation keywords, one transform per field.
 - Per-instance key + salt live in the flow schema's `InstanceSecrets` table, created ONLY by the write funnel

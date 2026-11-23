@@ -141,7 +141,8 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 - `x-masking.roles` / `x-encryption.roles` are allow-only exemption lists; `deny` is rejected at publish;
   a role-less caller never satisfies a role-bound grant (`IsUnprovableRoleBoundGrant`).
 - ONE read path: `IInstanceDataReadService` (GET, list, data function, sync response, Get* tasks). Do not
-  call the filter from a surface directly. Get* tasks read as their header set.
+  call the filter from a surface directly. Get* tasks read as their header set. Transition history bodies are
+  plaintext: `CreateHistoryBodyReaderAsync` withholds them when the plan is `Unavailable`, never serves them as stored.
 - `InstanceData.Data` is the column as stored (tokens included). Decrypt only via
   `IInstanceDataProtector.UnprotectAsync` / `context.Instance.DecryptAsync`; never reintroduce a plaintext
   member; never write `InstancesData."Data"` outside `InstanceDataWriteService`. Prefix-driven, never schema-driven.
@@ -213,6 +214,9 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   `x-vnext-runtime-token` admits before any grant. A runtime caller of them stamps last via `IRuntimeCallerSigner`;
   never forward or log that header. Full guide: `docs/runtime/sub-endpoint-gate.md`.
 - Instance-call credential (SubFlow start, SubProcess/Start/DirectTrigger/Get* tasks): the mapping decides, blank included; only an ABSENT credential is filled from the caller. Never read blank as "not set"; never fill from baggage (`HttpTaskInvocation.ResolveInstanceCallCredential`). Full guide: `docs/domain/role-grant-authorization.md#caller-credential-on-instance-calls`.
+- `Workflow:HeaderExposure:Deny` (deny only, empty = no change) reduces EXPOSURE only: the transition record, history
+  read, `ScriptContext.Headers`, carried headers. Never reduce `TransitionExecutionContext.Headers`; a runtime read from a
+  script context uses `GetTransportHeadersAsDictionary`, never the script view. Full guide: `docs/runtime/header-exposure.md`.
 - Full guide: `docs/domain/role-grant-authorization.md`, `docs/domain/authorize-function.md`.
 
 ## Sync vs Async

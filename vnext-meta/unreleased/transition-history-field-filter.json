@@ -1,0 +1,43 @@
+{
+  "releaseNote": {
+    "summary": "Transition history filters recorded bodies with the master schema; Workflow:HeaderExposure:Deny keeps listed headers out of history and script contexts.",
+    "breaking": false,
+    "docs": []
+  },
+  "features": {
+    "engine": {
+      "headerExposureDenyList": {
+        "since": "next",
+        "status": "stable",
+        "description": "Workflow:HeaderExposure:Deny: request header names (exact, case-insensitive) that are never written to the transition record, are removed from every row's header in GET {domain}/workflows/{flow}/instances/{instance}/transitions (older rows included; stored rows are not rewritten), are absent from context.Headers in every script and mapping, and are not carried from a settling SubFlow child to its parent. Deny only; empty (the default) changes nothing, and the runtime ships no default list. The runtime's own reads (caller roles, current user, the instance-call credential it forwards, the identity it propagates, parent/root ids, tracing) keep the request as it arrived.",
+        "apiEndpoints": [
+          "GET {domain}/workflows/{flow}/instances/{instance}/transitions"
+        ]
+      }
+    }
+  },
+  "migrations": [
+    {
+      "id": "transition-history-body-field-filter",
+      "type": "behavior",
+      "component": "instance",
+      "path": "GET {domain}/workflows/{flow}/instances/{instance}/transitions → transitions[].body",
+      "since": "next",
+      "severity": "warning",
+      "title": "Transition history filters each recorded body with the master schema",
+      "description": "Each transitions[].body now passes the caller's exposure plan from the workflow's master schema, as instance GET, list and the data function do: x-roles fields the caller may not see are pruned, x-masking fields are masked, and x-encryption fields are masked for non-exempt callers (the recorded body is plaintext, so there is no stored token to serve). When the plan cannot be decided — the workflow definition or its master schema cannot be read — body is null; the row is still returned. A workflow without a master schema or without rules returns bodies as recorded, and a body field the master schema does not declare is returned as recorded. A SubFlow child's start row is filtered by the child's master schema. Before, every recorded body was returned unfiltered to any caller (vnext#1260). The response shape is unchanged.",
+      "action": "None for callers entitled to the fields. A client that read a guarded field from history must read it as a caller granted by the schema. A domain that wants a body field (an actor or audit field, for example) protected declares it in the master schema. A domain whose SubFlow child carries parent fields guarded with x-roles must guard them in the child's master schema too."
+    },
+    {
+      "id": "header-exposure-deny-list",
+      "type": "behavior",
+      "component": "instance",
+      "path": "Workflow:HeaderExposure:Deny",
+      "since": "next",
+      "severity": "info",
+      "title": "Request headers can be kept out of transition history and script contexts",
+      "description": "A new, empty-by-default list. Names on it are not recorded on the transition, are removed from transition history (older rows on read), are absent from context.Headers in every script and mapping, and are not carried to a SubFlow parent. Nothing changes until a domain sets it; the runtime ships no default.",
+      "action": "Set Workflow:HeaderExposure:Deny to the credential and identity headers your gateway forwards (for example authorization, cookie, x-api-key, x-actor). Before listing a header, check that no mapping reads it: a mapping that forwarded a listed header (an Authorization pass-through, for example) no longer sees it."
+    }
+  ]
+}

@@ -211,7 +211,7 @@ public abstract class TriggerTaskExecutorBase<TTask>(
     protected static Dictionary<string, string?> BuildReadCredential(JsonElement? taskHeaders, ScriptContext? scriptContext)
         => HttpTaskInvocation.BuildOutgoingHeaders(
             ConvertTaskHeadersToDictionary(taskHeaders),
-            scriptContext?.Headers is null ? null : scriptContext.GetHeadersAsDictionary());
+            scriptContext?.Headers is null ? null : scriptContext.GetTransportHeadersAsDictionary());
 
     /// <summary>
     /// The same credential as <see cref="BuildReadCredential"/> (rule:
@@ -237,7 +237,7 @@ public abstract class TriggerTaskExecutorBase<TTask>(
         }
 
         return JsonSerializer.Serialize(HttpTaskInvocation.BuildOutgoingHeaders(
-            bindingHeaders, scriptContext?.Headers is null ? null : scriptContext.GetHeadersAsDictionary()));
+            bindingHeaders, scriptContext?.Headers is null ? null : scriptContext.GetTransportHeadersAsDictionary()));
     }
 
     /// <summary>

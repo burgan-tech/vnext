@@ -108,7 +108,11 @@ public sealed class InstanceReadEnvelopeTests
     private static string ReadQueryServiceSource()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, ".git")))
+        // `.git` is a directory in a clone and a file in a worktree; accepting only the directory would
+        // walk past a worktree to the main checkout and test that checkout's source instead.
+        while (directory is not null
+               && !Directory.Exists(Path.Combine(directory.FullName, ".git"))
+               && !File.Exists(Path.Combine(directory.FullName, ".git")))
             directory = directory.Parent;
 
         directory.ShouldNotBeNull("could not locate the repository root");

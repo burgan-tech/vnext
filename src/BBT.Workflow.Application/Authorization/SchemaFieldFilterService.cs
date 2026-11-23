@@ -61,13 +61,27 @@ public sealed class SchemaFieldFilterService(
         if (element.ValueKind != JsonValueKind.Object)
             return null;
 
+        var plan = await PrepareAsync(workflow, instance, requestContext, cancellationToken);
+        return plan.Outcome == SchemaExposureOutcome.Ready ? plan.Apply(element, storedTokens) : null;
+    }
+
+    /// <inheritdoc />
+    public async Task<SchemaExposurePlan> PrepareAsync(
+        Definitions.Workflow? workflow,
+        Instance? instance = null,
+        AuthorizationRequestContext? requestContext = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (workflow?.Schema is null)
+            return SchemaExposurePlan.WithoutRules;
+
         var reference = workflow.Schema;
         var key = (reference.Domain, reference.Flow, reference.Key, reference.Version);
         SchemaExposureMetadata? metadata = null;
         if (_listMetadata?.TryGetValue(key, out metadata) != true)
         {
             var schemaResult = await componentCacheStore.GetSchemaAsync(reference, cancellationToken);
-            if (!schemaResult.IsSuccess) return null;
+            if (!schemaResult.IsSuccess) return SchemaExposurePlan.Unreadable;
             metadata = SchemaRolesParser.ParseExposure(schemaResult.Value!.Schema);
             _listMetadata?.Add(key, metadata);
         }
@@ -75,7 +89,7 @@ public sealed class SchemaFieldFilterService(
         var pathRoleGrants = metadata!.PathRoleGrants;
         var maskRules = SelectEnabledRules(metadata.PathMaskRules, maskingOptions.Value.Enabled);
         if (pathRoleGrants.Count == 0 && maskRules.Count == 0)
-            return null;
+            return SchemaExposurePlan.WithoutRules;
 
         // The role set must match how the surrounding read was authorized and cache-keyed, otherwise
         // the same cache entry can be filled with differently-filtered bodies — hence the shared resolver
@@ -90,8 +104,8 @@ public sealed class SchemaFieldFilterService(
         // has no failure channel, and the alternative — serving the data unfiltered — would leak exactly
         // the fields the schema guards.
         if (!callerRolesResult.IsSuccess)
-            return InstanceDataRoleFilter.Apply(
-                element, pathsWithRoles, new HashSet<string>(0), maskRules, maskingEngine, storedTokens);
+            return new SchemaExposurePlan(
+                SchemaExposureOutcome.Ready, pathsWithRoles, new HashSet<string>(0), maskRules, maskingEngine);
 
         // One evaluator for the whole schema: the union of every guarded path's grants AND every exemption
         // list decides the single prefetch, so a $PreviousUser exemption can match.
@@ -107,8 +121,8 @@ public sealed class SchemaFieldFilterService(
             ? new HashSet<string>(0)
             : SchemaFieldVisibilityService.GetVisiblePaths(pathRoleGrants, callerRoles, evaluator);
 
-        return InstanceDataRoleFilter.Apply(
-            element, pathsWithRoles, visiblePaths, ResolveActiveMaskRules(maskRules, callerRoles, evaluator), maskingEngine, storedTokens);
+        return new SchemaExposurePlan(
+            SchemaExposureOutcome.Ready, pathsWithRoles, visiblePaths, ResolveActiveMaskRules(maskRules, callerRoles, evaluator), maskingEngine);
     }
 
     /// <summary>

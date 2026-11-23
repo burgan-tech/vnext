@@ -71,7 +71,8 @@ public sealed class InstanceQueryAppService(
     Execution.Validation.ITransitionSchemaResolver transitionSchemaResolver,
     ILogger<InstanceQueryAppService> logger,
     IRowSecurityService? rowSecurityService = null,
-    ICallerAccessorFactory? callerAccessorFactory = null)
+    ICallerAccessorFactory? callerAccessorFactory = null,
+    Headers.IHeaderExposureDenyList? headerExposureDenyList = null)
     : ApplicationService(serviceProvider), IInstanceQueryAppService
 {
     private static readonly ConcurrentDictionary<string, BuildGate> ActiveSubflowBuildGates = new();
@@ -1037,6 +1038,15 @@ public sealed class InstanceQueryAppService(
             });
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Each recorded body is exposed through <see cref="IInstanceDataReadService.CreateHistoryBodyReaderAsync"/> — the
+    /// master schema's <c>x-roles</c> → <c>x-masking</c> → <c>x-encryption</c> plan for this caller, decided once — and is
+    /// withheld when the plan cannot be decided (a recorded body is plaintext, so serving it as stored is never a safe
+    /// fallback). Recorded headers pass <see cref="Headers.IHeaderExposureDenyList"/>, which also covers rows recorded before the
+    /// list was configured (those are never rewritten). The instance is loaded
+    /// latest-only: no stored data version is read here.
+    /// </remarks>
     public async Task<Result<GetInstanceHistoryOutput>> GetInstanceHistoryAsync(
         GetInstanceHistoryInput input,
         CancellationToken cancellationToken = default)
@@ -1046,11 +1056,20 @@ public sealed class InstanceQueryAppService(
         using var read = InstanceReadActivityHelper.StartRead(InstanceReadKinds.History, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
             input.Domain, input.Workflow);
 
-        return await GetInstanceWithFullHistoryAsync(input.Instance, cancellationToken)
+        return await GetInstanceByIdOrKeyAsync(input.Instance, cancellationToken)
             .ThenAsync(async instance =>
             {
+                // A definition that cannot be loaded leaves the plan undecided: the bodies are withheld, the rows served.
+                var flowResult = await componentCacheStore.GetFlowAsync(
+                    input.Domain, input.Workflow, instance.FlowVersion, cancellationToken);
+                var workflow = flowResult is { IsSuccess: true } ? flowResult.Value : null;
+
                 using var instanceScope = BeginInstanceScope(instance); // skipcq: CS-W1100 — held for its scope; disposing ends the instance log scope
                 var transitions = await instanceTransitionRepository.GetByInstanceIdAsync(instance.Id, cancellationToken);
+
+                var bodies = await instanceDataReadService.CreateHistoryBodyReaderAsync(
+                    workflow, instance, new AuthorizationRequestContext(input.Headers, input.QueryParameters),
+                    cancellationToken);
 
                 var dtoList = transitions
                     .Select(t => new InstanceTransitionDto
@@ -1067,8 +1086,10 @@ public sealed class InstanceQueryAppService(
                         FinishedAt = t.FinishedAt,
                         DurationSeconds = t.Duration?.TotalSeconds,
                         TriggerType = t.TriggerType,
-                        Body = t.Body.JsonElement,
-                        Header = t.Header.JsonElement,
+                        Body = bodies.Expose(t.Body.JsonElement),
+                        Header = headerExposureDenyList is null
+                            ? t.Header.JsonElement
+                            : headerExposureDenyList.Apply(t.Header.JsonElement),
                         CreatedAt = t.CreatedAt,
                         CreatedBy = t.CreatedBy,
                         CreatedByBehalfOf = t.CreatedByBehalfOf
@@ -1418,8 +1439,8 @@ public sealed class InstanceQueryAppService(
     }
 
     /// <summary>
-    /// Loads an instance with the full DataList history (no IsLatest filter). Dedicated to
-    /// <see cref="GetInstanceHistoryAsync"/>; runtime hot-paths must keep using
+    /// Loads an instance with the full DataList history (no IsLatest filter). Only for a read that asks for a
+    /// specific, non-latest data version; transition history and runtime hot-paths must keep using
     /// <see cref="GetInstanceByIdOrKeyAsync(string, CancellationToken)"/> which loads only the latest snapshot.
     /// </summary>
     private async Task<Result<Instance>> GetInstanceWithFullHistoryAsync(
@@ -1554,8 +1575,8 @@ public sealed class InstanceQueryAppService(
         InstanceReadActivityHelper.SetReadOutcome(
             transaction, InstanceReadKinds.Data, DataReadOutcome(validatedEntry is not null, useCache));
 
-        using var readEnvelope = InstanceReadActivityHelper.StartRead(
-            InstanceReadKinds.Data, input.Domain, input.Workflow);
+        using var readEnvelope = InstanceReadActivityHelper.StartRead(InstanceReadKinds.Data, // skipcq: CS-W1100 — held for its scope; disposing ends the read span
+            input.Domain, input.Workflow);
 
         // Railway chain: Get Instance → Load Flow (using instance.FlowVersion) → Match to ConditionalResult
         return await GetInstanceByIdOrKeyAsync(input.Instance, input.Version, cancellationToken)
@@ -2476,13 +2497,13 @@ public sealed class InstanceQueryAppService(
                 {
                     var subFlowItem = subFlowItemsByName.GetValueOrDefault(key);
                     Transition? transition = null;
-                    bool hasView, loadData, hasSchema;
+                    bool hasView, loadData, hasSchema; // skipcq: CS-W1022 — definitely assigned on both branches below
                     Dictionary<string, string>? annotations;
                     if (subFlowItem != null)
                     {
-                        hasView = subFlowItem.View?.HasView ?? false;
-                        loadData = subFlowItem.View?.LoadData ?? false;
-                        hasSchema = subFlowItem.Schema?.HasSchema ?? false;
+                        hasView = subFlowItem.View?.HasView == true;
+                        loadData = subFlowItem.View?.LoadData == true;
+                        hasSchema = subFlowItem.Schema?.HasSchema == true;
                         annotations = subFlowItem.Annotations;
                     }
                     else
@@ -4064,7 +4085,7 @@ public sealed class InstanceQueryAppService(
         }
 
         // Only now, on a real miss, is any database touched.
-        List<string> workflowSchemas;
+        List<string> workflowSchemas; // skipcq: CS-W1022 — assigned inside the schema scope below
         using (currentSchema.Change(RuntimeSysSchemaInfo.Flows))
         {
             workflowSchemas = await instanceRepository.GetActiveFlowKeysAsync(cancellationToken);
@@ -4100,7 +4121,7 @@ public sealed class InstanceQueryAppService(
         // The work is not serialised by this, it MOVES: the database evaluates the UNION ALL arms
         // itself and answers in one round trip instead of N, so the scan is strictly faster than the
         // parallel form while holding one connection instead of FanoutParallelism of them.
-        List<HumanTaskCandidate> allCandidates;
+        List<HumanTaskCandidate> allCandidates; // skipcq: CS-W1022 — assigned inside the scan scope below
         using (var scan = InstanceReadActivityHelper.StartHumanTaskScan(domain))
         {
             allCandidates = await scopeFactory.ExecuteInIsolatedUnitOfWorkAsync(async (sp, innerCt) =>
@@ -4156,7 +4177,7 @@ public sealed class InstanceQueryAppService(
             // Acquired BEFORE the unit of work, so a branch waiting for a slot is not waiting while
             // holding a connection. This is the only ceiling that spans requests; without it the
             // per-request width multiplies by however many callers happen to coincide.
-            using var slot = await descentLimiter.AcquireAsync(ct);
+            using var slot = await descentLimiter.AcquireAsync(ct); // skipcq: CS-W1100 — held for its scope; disposing releases the descent slot
 
             var descent = await scopeFactory.ExecuteInIsolatedUnitOfWorkAsync(async (sp, innerCt) =>
             {
