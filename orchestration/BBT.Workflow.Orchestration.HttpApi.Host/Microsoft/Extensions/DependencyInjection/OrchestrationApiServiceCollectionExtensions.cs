@@ -3,6 +3,7 @@ using BBT.Workflow.Controllers.Instances;
 using BBT.Workflow.Formatters;
 using BBT.Workflow.HostedServices;
 using BBT.Workflow.HttpApi.Shared.HealthChecks;
+using BBT.Workflow.Middlewares;
 using BBT.Workflow.Orchestration.Services;
 using HealthChecks.NpgSql;
 using Microsoft.AspNetCore.Mvc;
@@ -57,7 +58,8 @@ public static class OrchestrationApiServiceCollectionExtensions
             .AddOrchestrationDbHealthCheck(configuration)
             // vnext#1265: sign this runtime's calls to a peer's runtime-internal endpoints and gate our own.
             .AddRuntimeCallerIdentity(configuration, runsFlowScripts: true)
-            .AddSubEndpointGate();
+            .AddSubEndpointGate()
+            .AddDaprLocalDelivery(configuration);
         return services;
     }
 
@@ -69,6 +71,29 @@ public static class OrchestrationApiServiceCollectionExtensions
     {
         services.Configure<MvcOptions>(options =>
             options.InputFormatters.Insert(0, new FormUrlEncodedJsonElementInputFormatter()));
+        return services;
+    }
+
+    /// <summary>
+    /// Binds <see cref="DaprLocalDeliveryOptions"/> from <c>Dapr:LocalDelivery</c> and registers the
+    /// <see cref="DaprAppApiToken"/> singleton, which reads the token only from the mounted file named
+    /// by <c>Workflow:RuntimeCaller:AppApiTokenFile</c> (never configuration or the environment).
+    /// Relies on <c>AddRuntimeCallerIdentity</c> having been registered first: it binds that option,
+    /// validates the file and applies the script-sandbox rule. <c>Enforce</c> without that path fails startup
+    /// (<see cref="DaprLocalDeliveryOptionsValidator"/>); <c>LogOnly</c> without it is announced once by
+    /// <see cref="DaprLocalDeliveryStartupCheck"/>.
+    /// </summary>
+    internal static IServiceCollection AddDaprLocalDelivery(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        services.AddOptions<DaprLocalDeliveryOptions>()
+            .Bind(configuration.GetSection(DaprLocalDeliveryOptions.SectionPath))
+            .ValidateOnStart();
+        services.TryAddEnumerable(ServiceDescriptor
+            .Singleton<IValidateOptions<DaprLocalDeliveryOptions>, DaprLocalDeliveryOptionsValidator>());
+        services.TryAddSingleton<DaprAppApiToken>();
+        services.AddHostedService<DaprLocalDeliveryStartupCheck>();
         return services;
     }
 

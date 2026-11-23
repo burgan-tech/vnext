@@ -27,6 +27,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Middlewares;
 using BBT.Workflow.Schedule;
 
 using BBT.Workflow.Instances.HumanTask;
@@ -994,6 +995,7 @@ public sealed class InstanceController(
     /// <response code="500">Transient failure — the broker should redeliver.</response>
     [ApiExplorerSettings(IgnoreApi = true)]
     [HttpPost("{domain}/workflows/{workflow}/instances/events")]
+    [DaprLocalDeliveryOnly]
     [ProducesResponseType(typeof(EventDeliveryResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> HandleEventAsync(
@@ -1008,8 +1010,9 @@ public sealed class InstanceController(
         // is a permanent defect: retrying it can never succeed, so drop instead of wedging the topic.
         if (!Enum.TryParse<EventAction>(action, ignoreCase: true, out var eventAction))
             return EventDeliveryResultMapper.Drop(
+                "InvalidEventAction",
                 $"InvalidEventAction: action must be 'start' or 'transition'. Received: '{action}'.",
-                domain, workflow, transitionKey, "InvalidEventAction", Logger);
+                domain, workflow, transitionKey, Logger);
 
         JsonElement payload;
         try
@@ -1019,8 +1022,9 @@ public sealed class InstanceController(
         catch (JsonException exception)
         {
             return EventDeliveryResultMapper.Drop(
+                "InvalidEventPayload",
                 $"InvalidEventPayload: the request body could not be parsed as JSON: {exception.Message}",
-                domain, workflow, transitionKey, "InvalidEventPayload", Logger);
+                domain, workflow, transitionKey, Logger);
         }
 
         var input = new EventInput
@@ -1094,6 +1098,7 @@ public sealed class InstanceController(
     /// <response code="500">Transient failure.</response>
     [ApiExplorerSettings(IgnoreApi = true)]
     [HttpPost("{domain}/workflows/{workflow}/instances/schedule")]
+    [DaprLocalDeliveryOnly]
     [ProducesResponseType(typeof(EventDeliveryResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> ScheduleStartAsync(

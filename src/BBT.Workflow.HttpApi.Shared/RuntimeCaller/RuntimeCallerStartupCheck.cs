@@ -21,12 +21,12 @@ internal sealed class RuntimeCallerStartupCheck(
     public Task StartAsync(CancellationToken cancellationToken)
     {
         if (!identity.IsConfigured)
-        {
             logger.RuntimeCallerIdentityNotConfigured();
-            return Task.CompletedTask;
-        }
 
-        if (runsFlowScripts
+        var holdsMountedSecret = identity.IsConfigured
+                                 || !string.IsNullOrWhiteSpace(options.Value.AppApiTokenFile);
+        if (holdsMountedSecret
+            && runsFlowScripts
             && options.Value.AllowWithoutScriptSandbox
             && !configuration.GetValue<bool>("Scripting:Sandbox:Enabled"))
             logger.RuntimeCallerKeyRingWithoutScriptSandbox();

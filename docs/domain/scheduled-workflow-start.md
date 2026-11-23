@@ -271,6 +271,21 @@ configuration defect, not an outage.
 **A dropped tick is a lost occurrence.** There is no redelivery and no dead letter. If a missed run
 has consequences, assert that the expected instance exists rather than trusting the schedule.
 
+## Who can call it
+
+Like the event endpoint, `instances/schedule` accepts only a delivery from the domain's own Dapr
+sidecar: exactly one `dapr-api-token` header equal to the app API token and no `dapr-caller-app-id`
+header (Dapr's service-invocation marker). Anything else gets an empty-body `403` in `Enforce` mode (retryable for Dapr, unlike `404`);
+`LogOnly` (the default) serves it and logs EventId 40996 (without a configured token, `LogOnly` logs EventId 40998 once at startup and nothing per request). Settings, sidecar setup and rollout:
+[Event-Driven Workflows § Who can call it](event-driven-workflows.md#who-can-call-it-the-domains-own-dapr-sidecar).
+
+A hand-made tick needs the header too:
+
+```bash
+curl -X POST "http://localhost:4201/api/v1/morph-touch/workflows/nightly-report/instances/schedule?scheduleId=manual-1" \
+  -H "dapr-api-token: $(cat .vnext-local/app-api-token)"
+```
+
 ## Response
 
 The endpoint answers with the Dapr-shaped body the event endpoint uses, so it is safe for any Dapr
@@ -281,7 +296,7 @@ caller even though cron ignores it:
 ```
 
 `DROP` for a tick that can never be processed (unknown workflow, failed start validation, wrong
-domain) — logged with the reason. A non-2xx means a transient failure.
+domain) — the full reason is logged; the body carries only the error code. A non-2xx means a transient failure.
 
 ## Observability
 
