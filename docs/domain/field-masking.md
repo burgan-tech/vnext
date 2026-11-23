@@ -62,9 +62,10 @@ row. Its fallback is the opposite of instance data's: when the plan cannot be de
 master schema cannot be read — every non-empty body is **withheld** (`null`); serving it as stored would serve every
 guarded field in clear. A workflow without a master schema, or without rules, serves the bodies as recorded. A SubFlow
 child's `start` row (data its parent carried) is filtered by the **child's** master schema: a field the parent guards is
-hidden there only if the child's schema guards it too. The recorded `header` set is not field-filtered; it passes the
-configured lists of `Workflow:TransitionHistory:Headers` ([Configuration](#configuration)). `createdBy` /
-`createdByBehalfOf` are returned as recorded.
+hidden there only if the child's schema guards it too. Only fields the master schema declares are protected: a body field the
+master schema does not declare is served as recorded. The recorded `header` set is not field-filtered; names listed in
+`Workflow:HeaderExposure:Deny` are never recorded and are removed from older rows on read
+([Header exposure](../runtime/header-exposure.md)). `createdBy` / `createdByBehalfOf` are returned as recorded.
 
 Not covered (the row as stored): `context.Related`, custom functions, the human-task list
 (`humanTask.title`/`description`), outbox events and internal endpoints (network isolation is the boundary). A value a
@@ -278,7 +279,7 @@ Only `InstancesData` rows written after a field became `hash`/`encrypt` are prot
 
 | Copy | Phase |
 |---|---|
-| `InstanceTransition.Body`/`Header` — the request, often the very delta just protected (stored in plaintext; the history **response** filters the body and applies the header lists) | 2 |
+| `InstanceTransition.Body`/`Header` — the request, often the very delta just protected (the body is stored in plaintext and filtered by the history response; `Workflow:HeaderExposure:Deny` names are never recorded) | 2 |
 | `InstanceTask.Request`/`Response`/`InvocationResult` | 2 |
 | Outbox/Inbox `InstanceSubCompleted`/`InstanceSubFaulted.InstanceData`, job payloads | 2 |
 | Redis human-task cache; the data-function cache never stores a row that carries tokens | 2 |
@@ -327,21 +328,8 @@ switch: new values are stored plain (existing tokens keep decrypting while their
 declaring `hash`/`encrypt` cannot be published. Decryption and the value served to non-allow-listed callers can
 never be switched off. No switch touches `x-roles`.
 
-Recorded request headers in transition history:
-
-```json
-"Workflow": {
-  "TransitionHistory": {
-    "Headers": { "Read": { "Allow": [ "x-request-id", "x-correlation-id" ], "Deny": [ "authorization", "cookie", "x-actor" ] } }
-  }
-}
-```
-
-Names match exactly and case-insensitively; a `Deny` name is always dropped; a non-empty `Allow` keeps only the names it
-lists. **Both lists empty (the default) returns every recorded header, as before the setting existed** — set at least a
-`Deny` list for credential and identity headers (`authorization`, `cookie`, `x-api-key`, `x-actor`, `sub`, `act_sub`,
-`user_reference`), or an `Allow` list. The setting shapes the response only: the recorded header set and what scripts read
-from `context.CurrentTransition.Header` are unchanged.
+Recorded request headers in transition history are governed by `Workflow:HeaderExposure:Deny`, which also keeps the
+listed names out of script and mapping contexts: [Header exposure](../runtime/header-exposure.md).
 
 ## Engine
 

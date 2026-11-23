@@ -60,18 +60,28 @@ public static class ScriptContextExtensions
     /// <param name="context">The script context.</param>
     /// <returns>A Dictionary representation of the headers, or empty dictionary if conversion fails.</returns>
     public static Dictionary<string, string> GetHeadersAsDictionary(this ScriptContext context)
+        => ToHeaderDictionary(context.Headers);
+
+    /// <summary>
+    /// The request headers as they arrived — not the script view, which omits the <c>Workflow:HeaderExposure:Deny</c>
+    /// names. For the runtime's own reads only: the instance-call credential it forwards and the identity it propagates.
+    /// </summary>
+    internal static Dictionary<string, string> GetTransportHeadersAsDictionary(this ScriptContext context)
+        => ToHeaderDictionary((object?)context.TransportHeaders ?? (object?)context.Headers);
+
+    private static Dictionary<string, string> ToHeaderDictionary(object? headers)
     {
         try
         {
-            if (context.Headers == null)
+            if (headers == null)
                 return new Dictionary<string, string>();
 
             // If Headers is already a Dictionary<string, string>, return it directly
-            if (context.Headers is Dictionary<string, string> headerDict)
+            if (headers is Dictionary<string, string> headerDict)
                 return headerDict;
 
             // If Headers is a string (JSON), parse it
-            if (context.Headers is string jsonString)
+            if (headers is string jsonString)
             {
                 if (string.IsNullOrWhiteSpace(jsonString))
                     return new Dictionary<string, string>();
@@ -81,7 +91,7 @@ public static class ScriptContextExtensions
             }
 
             // For other types, try to serialize then deserialize
-            var serialized = JsonSerializer.Serialize(context.Headers);
+            var serialized = JsonSerializer.Serialize(headers);
             return JsonSerializer.Deserialize<Dictionary<string, string>>(serialized) 
                    ?? new Dictionary<string, string>();
         }

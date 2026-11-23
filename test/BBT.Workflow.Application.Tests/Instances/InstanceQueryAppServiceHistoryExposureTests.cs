@@ -26,6 +26,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using BBT.Workflow.Headers;
 using Shouldly;
 using Xunit;
 
@@ -120,20 +121,20 @@ public sealed class InstanceQueryAppServiceHistoryExposureTests : IDisposable
             descentLimiter: new HumanTaskDescentLimiter(Options.Create(new HumanTaskFunctionOptions())),
             transitionSchemaResolver: Substitute.For<BBT.Workflow.Execution.Validation.ITransitionSchemaResolver>(),
             logger: Substitute.For<ILogger<InstanceQueryAppService>>(),
-            transitionHistoryHeaderPolicy: new DeferredHeaderPolicy(() => _headerPolicy));
+            headerExposureDenyList: new DeferredDenyList(() => _denyList));
     }
 
-    /// <summary>The real policy, replaceable per test; the default is the one built from empty configuration.</summary>
-    private ITransitionHistoryHeaderPolicy _headerPolicy = HeaderPolicy();
+    /// <summary>The real deny list, replaceable per test; the default is the one built from empty configuration.</summary>
+    private IHeaderExposureDenyList _denyList = DenyList();
 
-    private static TransitionHistoryHeaderPolicy HeaderPolicy(string[]? allow = null, string[]? deny = null) =>
-        new(Options.Create(new TransitionHistoryHeaderOptions
-        {
-            Read = new TransitionHistoryHeaderLists { Allow = [.. allow ?? []], Deny = [.. deny ?? []] }
-        }));
+    private static HeaderExposureDenyList DenyList(params string[] deny) =>
+        new(Options.Create(new HeaderExposureOptions { Deny = [.. deny] }));
 
-    private sealed class DeferredHeaderPolicy(Func<ITransitionHistoryHeaderPolicy> current) : ITransitionHistoryHeaderPolicy
+    private sealed class DeferredDenyList(Func<IHeaderExposureDenyList> current) : IHeaderExposureDenyList
     {
+        public bool IsEmpty => current().IsEmpty;
+        public bool IsDenied(string name) => current().IsDenied(name);
+        public Dictionary<string, string?> Filter(IEnumerable<KeyValuePair<string, string?>> headers) => current().Filter(headers);
         public JsonElement? Apply(JsonElement? recorded) => current().Apply(recorded);
     }
 
@@ -180,7 +181,7 @@ public sealed class InstanceQueryAppServiceHistoryExposureTests : IDisposable
     }
 
     /// <summary>
-    /// R2b — compatibility pin for <c>Workflow:TransitionHistory:Headers</c>: with no configuration the recorded header
+    /// R2b — compatibility pin for <c>Workflow:HeaderExposure:Deny</c>: with no configuration the recorded header
     /// set is served exactly as before the setting existed. A secure default is a Chair decision (K2), not this change.
     /// </summary>
     [Fact]
@@ -223,7 +224,10 @@ public sealed class InstanceQueryAppServiceHistoryExposureTests : IDisposable
         row.Body.ShouldBeNull("an unreadable plan must withhold the plaintext body, never serve it as stored");
     }
 
-    /// <summary>R2a — a configured deny list keeps the credential and identity headers out of the history response.</summary>
+    /// <summary>
+    /// R2a — a configured deny list keeps the credential and identity headers out of the history response. This is what
+    /// protects rows recorded before the list was configured: they are never rewritten.
+    /// </summary>
     [Fact]
     public async Task R2a_ConfiguredDenyList_DropsTheDeniedHeadersFromTheResponse()
     {
@@ -232,29 +236,13 @@ public sealed class InstanceQueryAppServiceHistoryExposureTests : IDisposable
             header: $$"""{ "authorization": "Bearer test-token", "x-actor": "{{NationalId}}", "x-request-id": "abc" }""");
         GivenTheMasterSchemaCanBeRead();
         GivenTheCallerHasRoles(Reader);
-        _headerPolicy = HeaderPolicy(deny: ["Authorization", "x-actor"]);
+        _denyList = DenyList("Authorization", "x-actor");
 
         var row = await ReadTheOnlyHistoryRowAsync(instance);
 
         row.Header!.Value.TryGetProperty("authorization", out _).ShouldBeFalse();
         row.Header.Value.TryGetProperty("x-actor", out _).ShouldBeFalse();
         row.Header.Value.GetProperty("x-request-id").GetString().ShouldBe("abc");
-    }
-
-    /// <summary>A configured allow list returns only the listed headers.</summary>
-    [Fact]
-    public async Task ConfiguredAllowList_ReturnsOnlyTheListedHeaders()
-    {
-        var instance = GivenAnInstanceWithOneTransition(
-            body: "{}",
-            header: """{ "authorization": "Bearer test-token", "x-request-id": "abc", "x-correlation-id": "c-1" }""");
-        GivenTheMasterSchemaCanBeRead();
-        GivenTheCallerHasRoles(Reader);
-        _headerPolicy = HeaderPolicy(allow: ["x-request-id", "x-correlation-id"]);
-
-        var row = await ReadTheOnlyHistoryRowAsync(instance);
-
-        row.Header!.Value.EnumerateObject().Select(p => p.Name).ShouldBe(["x-request-id", "x-correlation-id"]);
     }
 
     /// <summary>

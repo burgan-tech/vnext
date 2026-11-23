@@ -210,8 +210,10 @@ public sealed class RemoteInvokerService : IRemoteInvokerService
             ? workflow!.Domain
             : scriptContext.Runtime.Domain;
 
+        // The identity propagated to the remote task comes from the request as it arrived, not from the script view,
+        // which omits the Workflow:HeaderExposure:Deny names.
         var headers = scriptContext.Headers != null
-            ? scriptContext.GetHeadersAsDictionary()
+            ? scriptContext.GetTransportHeadersAsDictionary()
             : null;
 
         string? requestId = _correlationIdProvider.Get();

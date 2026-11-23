@@ -417,5 +417,5 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
 
     /// <summary>The caller's request headers, the source of the forwarded credential (never provider-resolved roles).</summary>
     protected static IReadOnlyDictionary<string, string>? CallerHeadersOf(ScriptContext? scriptContext) =>
-        scriptContext?.Headers is null ? null : scriptContext.GetHeadersAsDictionary();
+        scriptContext?.Headers is null ? null : scriptContext.GetTransportHeadersAsDictionary();
 }

@@ -72,7 +72,7 @@ public sealed class InstanceQueryAppService(
     ILogger<InstanceQueryAppService> logger,
     IRowSecurityService? rowSecurityService = null,
     ICallerAccessorFactory? callerAccessorFactory = null,
-    History.ITransitionHistoryHeaderPolicy? transitionHistoryHeaderPolicy = null)
+    Headers.IHeaderExposureDenyList? headerExposureDenyList = null)
     : ApplicationService(serviceProvider), IInstanceQueryAppService
 {
     private static readonly ConcurrentDictionary<string, BuildGate> ActiveSubflowBuildGates = new();
@@ -1043,7 +1043,8 @@ public sealed class InstanceQueryAppService(
     /// Each recorded body is exposed through <see cref="IInstanceDataReadService.CreateHistoryBodyReaderAsync"/> — the
     /// master schema's <c>x-roles</c> → <c>x-masking</c> → <c>x-encryption</c> plan for this caller, decided once — and is
     /// withheld when the plan cannot be decided (a recorded body is plaintext, so serving it as stored is never a safe
-    /// fallback). Recorded headers pass <see cref="History.ITransitionHistoryHeaderPolicy"/>. The instance is loaded
+    /// fallback). Recorded headers pass <see cref="Headers.IHeaderExposureDenyList"/>, which also covers rows recorded before the
+    /// list was configured (those are never rewritten). The instance is loaded
     /// latest-only: no stored data version is read here.
     /// </remarks>
     public async Task<Result<GetInstanceHistoryOutput>> GetInstanceHistoryAsync(
@@ -1086,9 +1087,9 @@ public sealed class InstanceQueryAppService(
                         DurationSeconds = t.Duration?.TotalSeconds,
                         TriggerType = t.TriggerType,
                         Body = bodies.Expose(t.Body.JsonElement),
-                        Header = transitionHistoryHeaderPolicy is null
+                        Header = headerExposureDenyList is null
                             ? t.Header.JsonElement
-                            : transitionHistoryHeaderPolicy.Apply(t.Header.JsonElement),
+                            : headerExposureDenyList.Apply(t.Header.JsonElement),
                         CreatedAt = t.CreatedAt,
                         CreatedBy = t.CreatedBy,
                         CreatedByBehalfOf = t.CreatedByBehalfOf
