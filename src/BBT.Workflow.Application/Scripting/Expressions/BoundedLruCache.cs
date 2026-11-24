@@ -12,8 +12,9 @@ namespace BBT.Workflow.Scripting.Expressions;
 /// </summary>
 /// <remarks>
 /// Single-threaded use is exact LRU (stamps are strictly increasing). Under concurrency it is approximate: a hit that
-/// races an eviction scan may lose its entry although it was just used, which only costs a recompile. The capacity
-/// bound is exact — every insert and every removal happens under the lock.
+/// races an eviction scan may lose its entry although it was just used, which only costs a recompile. Capacity: the cache
+/// never exceeds capacity once an insert returns (inserts and evictions run under the lock); a concurrent
+/// <see cref="Count"/> may momentarily read capacity + 1, between an insert and its eviction.
 /// </remarks>
 /// <typeparam name="TKey">Key type.</typeparam>
 /// <typeparam name="TValue">Value type.</typeparam>

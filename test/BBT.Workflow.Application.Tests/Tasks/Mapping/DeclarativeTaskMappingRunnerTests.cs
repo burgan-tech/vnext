@@ -256,10 +256,10 @@ public sealed class DeclarativeTaskMappingRunnerTests
     }
 
     [Fact]
-    public async Task Output_Delta_OutlivesTheTaskResultsOwnDocument()
+    public async Task Output_Delta_StaysReadable_AfterADisposableTaskResultDocumentIsDisposed()
     {
-        // The selected subtree and every set value are copied out of a disposable source before the mapping returns:
-        // disposing the task result's document afterwards leaves the delta readable.
+        // Data borrowed from a disposable document the caller owns: the selected subtree and every set value are copied
+        // out before the mapping returns, so disposing that document afterwards leaves the delta readable.
         var ctx = Context(Http(), output: Block(select: "$.body.customer", into: "$.c",
             set: [("$.n", "result.body.customer.name"), ("$.all", "result.body")]));
         JsonObject? delta;
@@ -270,6 +270,38 @@ public sealed class DeclarativeTaskMappingRunnerTests
 
         Json(delta).ShouldBe(
             """{"c":{"name":"Ada","tags":["x"]},"n":"Ada","all":{"customer":{"name":"Ada","tags":["x"]}}}""");
+    }
+
+    [Fact]
+    public async Task Output_Delta_DoesNotPinANonDisposableTaskResultDocument()
+    {
+        // The HTTP / Dapr invokers hand over a JsonElement of a NON-disposable document, for which JsonElement.Clone() is
+        // a no-op. The delta must hold a subtree-sized copy, not a node over the whole response: once the task result is
+        // unreachable, its document is collected although the delta is still alive.
+        var ctx = Context(Http(), output: Block(select: "$.body.customer.name", into: "$.n",
+            set: [("$.c", "result.body.customer")]));
+
+        var (delta, source) = await OutputOverUnreachableResultAsync(ctx);
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        source.IsAlive.ShouldBeFalse("the delta still references the task result's document");
+        Json(delta).ShouldBe("""{"n":"Ada","c":{"name":"Ada"}}""");
+        delta!["n"]!.AsValue().TryGetValue<JsonElement>(out var leaf).ShouldBeTrue();
+        leaf.GetRawText().ShouldBe("\"Ada\"");
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private async Task<(JsonObject? Delta, WeakReference Source)> OutputOverUnreachableResultAsync(TaskExecutorContext ctx)
+    {
+        var body = JsonSerializer.Deserialize<JsonElement>(
+            """{"customer":{"name":"Ada"},"items":[""" + string.Join(",", Enumerable.Range(0, 2000)) + "]}");
+        var parent = typeof(JsonElement).GetField("_parent",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(body)!;
+        var source = new WeakReference(parent);
+        var delta = await OutputAsync(ctx, TaskInvocationResult.Success(data: body, statusCode: 200));
+        return (delta, source);
     }
 
     [Fact]

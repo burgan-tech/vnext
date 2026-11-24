@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using BBT.Aether.Results;
@@ -639,16 +640,27 @@ internal static class DeclarativeValues
         RuleJsonDynamic dynamicValue => ToNode(dynamicValue.AsJsonElement()),
         JsonElement element => element.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
             ? null
-            : FromOwnedElement(element.Clone()),
+            : FromOwnedElement(CopySubtree(element)),
         JsonNode node => node.DeepClone(),
         string text => JsonValue.Create(text),
         _ => JsonSerializer.SerializeToNode(value, value.GetType(), JsonSerializerConstants.JsonOptions)
     };
 
     /// <summary>
+    /// A subtree-sized, owned copy of <paramref name="element"/>: its raw UTF-8 bytes parsed into a new, non-pooled
+    /// document. Unlike <see cref="JsonElement.Clone"/> — a no-op for an element of a non-disposable document, such as
+    /// the <c>JsonElement</c> an HTTP or Dapr invoker returns — the copy never references the source document, so a
+    /// small selected value does not pin a large task response for the life of the delta.
+    /// </summary>
+    private static JsonElement CopySubtree(JsonElement element)
+    {
+        var reader = new Utf8JsonReader(JsonMarshal.GetRawUtf8Value(element));
+        return JsonElement.ParseValue(ref reader);
+    }
+
+    /// <summary>
     /// The node <c>JsonNode.Parse(element.GetRawText())</c> would build — an object, array or value over the element —
-    /// without the text round trip. <see cref="JsonElement.Clone"/> made <paramref name="element"/> independent of any
-    /// disposable document (it copies only the selected subtree; an element of a non-disposable document is already safe).
+    /// without the text round trip, over an element <see cref="CopySubtree"/> already made independent of its source.
     /// </summary>
     private static JsonNode? FromOwnedElement(JsonElement element) => element.ValueKind switch
     {

@@ -66,7 +66,7 @@ ALC sanity check (setup of the cold class; `AssemblyLoadContext.All` count): `be
 
 Same command, job, machine and temporary `Directory.Build.props` edit as above (reverted, not committed). Source: 7c9ff669 plus the 9b change (committed with this section).
 
-Change: the output phase no longer builds a `{ body, headers, statusCode }` document. `TaskResultView` reads `result.Data` as it is when it is a `JsonElement` / `JsonDocument` (otherwise serializes it once into a pooled document disposed at scope end); `select` resolves its first segment (`body` / `headers` / `statusCode`) itself and walks only that member; the `result` variable is a `RuleJsonDynamic.BorrowObject` view that writes the whole object only when used as a value. `DeclarativeValues.ToNode` builds the node over `JsonElement.Clone()` (copies only the selected subtree, and nothing when the source document is not disposable) instead of `GetRawText()` + `JsonNode.Parse`. `BoundedLruCache` hits are a `ConcurrentDictionary` lookup plus a recency stamp; only inserts lock.
+Change: the output phase no longer builds a `{ body, headers, statusCode }` document. `TaskResultView` reads `result.Data` as it is when it is a `JsonElement` / `JsonDocument` (otherwise serializes it once into a pooled document disposed at scope end); `select` resolves its first segment (`body` / `headers` / `statusCode`) itself and walks only that member; the `result` variable is a `RuleJsonDynamic.BorrowObject` view that writes the whole object only when used as a value. `DeclarativeValues.ToNode` builds the node over an owned subtree-sized copy (the raw UTF-8 bytes of the selected value parsed into a new document; see "Fix round 1" below) instead of `GetRawText()` + `JsonNode.Parse`. `BoundedLruCache` hits are a `ConcurrentDictionary` lookup plus a recency stamp; only inserts lock.
 
 ```
 | Method                  | DocKb | Mean            | Allocated |
@@ -110,3 +110,39 @@ Selected subtree (`$.body.customer`) = `{"name":"Benchmark User","segment":"reta
 | Informational: vs warm Roslyn `IMapping` | 654 ns / 2,304 B vs 182 ns / 560 B: 3.6x slower, 4.1x more allocation (was 470x-9,100x / 68x-1,233x) | still slower than Roslyn; not a gate |
 
 Scope of the PASS: the benchmark's `result.Data` is a `JsonElement` (what the HTTP and Dapr service invokers produce via `Deserialize<object>`). A non-JSON `Data` (POCO, dictionary, `ExpandoObject`, `JsonNode`) is still serialized once per call into a pooled document, so its allocation scales with the payload (one copy instead of three); not measured here.
+
+### Fix round 1 - the delta never pins the task result
+
+The first 9b run built the node over `JsonElement.Clone()`, which is a no-op for an element of a non-disposable document (the HTTP / Dapr invokers' `JsonElement` and this benchmark's `Data`): the 44 B selected value kept the whole response alive for the delta's lifetime, and the table above (2,304 B) was measured with that defect. Now the selected value's raw UTF-8 bytes (`JsonMarshal.GetRawUtf8Value`) are parsed into a new subtree-sized document (`JsonElement.ParseValue`). Unit test `Output_Delta_DoesNotPinANonDisposableTaskResultDocument` collects the source document while the delta is alive; it fails with `Clone()`.
+
+Re-run (same command, job, machine and temporary props edit, reverted):
+
+```
+| Method                  | DocKb | Mean            | Allocated |
+|------------------------ |------ |----------------:|----------:|
+| RoslynOutputHandlerWarm | 10    |       179.29 ns |     560 B |
+| DeclarativeOutputWarm   | 10    |       927.92 ns |    2712 B |
+| DeOutputMapping3Warm    | 10    |   135,003.01 ns |  171393 B |
+| RoslynOutputHandlerWarm | 50    |       178.88 ns |     560 B |
+| DeclarativeOutputWarm   | 50    |       944.91 ns |    2712 B |
+| DeOutputMapping3Warm    | 50    |   754,567.29 ns |  829147 B |
+| RoslynOutputHandlerWarm | 200   |       183.12 ns |     560 B |
+| DeclarativeOutputWarm   | 200   |       930.55 ns |    2712 B |
+| DeOutputMapping3Warm    | 200   | 2,824,317.00 ns | 3294686 B |
+| DeclarativeOutputCold   |       |        420.1 us | 161.15 KB |
+| RoslynOutputHandlerCold |       |      4,939.6 us | 1326.56 KB |
+| CompilerCacheHitSequential |    |        45.75 us |         - |
+| CompilerCacheHitParallel   |    |        15.28 us |    3203 B |
+```
+
+ALC check unchanged (`before=1 afterDeclarative(25 cold)=1 afterRoslyn(5 cold)=3`).
+
+| Benchmark | Before (1b7bdfc1) | 9b first run (pinning) | 9b after fix round 1 |
+|---|---|---|---|
+| DeclarativeOutputWarm DocKb 10 | 83.9 us / 38,369 B | 0.654 us / 2,304 B | 0.928 us / 2,712 B |
+| DeclarativeOutputWarm DocKb 50 | 420 us / 175,824 B | 0.653 us / 2,304 B | 0.945 us / 2,712 B |
+| DeclarativeOutputWarm DocKb 200 | 1,671 us / 690,290 B | 0.655 us / 2,304 B | 0.931 us / 2,712 B |
+| DeclarativeOutputCold | 789 us / 195.9 KB | 440 us / 160.8 KB | 420 us / 161.2 KB |
+| CompilerCacheHitParallel | 170.6 us (3.54x seq) | 16.3 us (0.36x) | 15.3 us (0.33x) |
+
+G-P1' after fix round 1: selected subtree 44 B, so the limit is 2 x 44 + 8,192 = 8,280 B. Measured 2,712 B at DocKb 10 / 50 / 200 (flat). The copy adds 408 B over the pinning run: the new document, its 44-byte array and its metadata. **PASS**. Ratio to `DeOutputMapping3Warm`: 2,712 / 171,393 = 0.016x (10), 0.0033x (50), 0.0008x (200), all <= 0.25x. **PASS**. Informational: vs warm Roslyn (179 ns / 560 B), 5.2x slower, 4.8x more allocation.
