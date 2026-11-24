@@ -30,7 +30,9 @@ namespace BBT.Workflow.Definitions.Validators;
 /// publish warms the compile cache; compile is validation only, nothing is stored. Errors read
 /// <c>{jsonLocation}: {message}</c>, for example
 /// <c>states[review].onEntries[0].output.set['$.kyc.score']: ...</c>. A binding with neither a mapping nor
-/// blocks stays valid. Whether a task TYPE supports an input surface is not checked here.
+/// blocks stays valid. Whether a task TYPE supports an input surface is not checked here: a binding holds only a
+/// task reference, so the type is not resolvable at publish; <c>DeclarativeTaskMappingRunner</c> fails the mapping with
+/// a clear error at run time instead.
 /// </remarks>
 public sealed class MappingBlockValidator(IExpressionCompiler compiler)
 {

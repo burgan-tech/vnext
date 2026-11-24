@@ -17,6 +17,7 @@ using BBT.Workflow.Tasks.Executors;
 using BBT.Workflow.Tasks.Factory;
 using BBT.Workflow.Tasks.Invocation;
 using BBT.Workflow.Tasks.Invocation.Local;
+using BBT.Workflow.Tasks.Mapping;
 using BBT.Workflow.Tasks.Persistence;
 using BBT.Workflow.Tasks.Persistence.Strategies;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -121,6 +122,12 @@ public static class TaskServiceCollectionExtensions
 
         // Executor registry
         services.TryAddScoped<ITaskExecutorRegistry, TaskExecutorRegistry>();
+
+        // Binding mapping runners: executors run their input/output mapping through ITaskMappingRunner, which routes
+        // each phase to the Roslyn script runner or the declarative set/into/select runner (no Roslyn compile).
+        services.TryAddScoped<ScriptTaskMappingRunner>();
+        services.TryAddSingleton<DeclarativeTaskMappingRunner>();
+        services.TryAddScoped<ITaskMappingRunner, RoutingTaskMappingRunner>();
 
         // Script executor (no remote - inline execution)
         services.AddTaskExecutor<ScriptTaskExecutor>();

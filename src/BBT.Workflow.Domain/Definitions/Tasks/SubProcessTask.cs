@@ -6,7 +6,7 @@ namespace BBT.Workflow.Definitions;
 /// <summary>
 /// SubProcess Task Definition - Triggers transitions on correlated SubFlow instances
 /// </summary>
-public sealed class SubProcessTask : WorkflowTask
+public sealed class SubProcessTask : WorkflowTask, IHasBody, IHasHeaders
 {
     private SubProcessTask()
     {
@@ -316,4 +316,16 @@ public sealed class SubProcessTask : WorkflowTask
     {
         return new SubProcessTask();
     }
+
+    /// <inheritdoc />
+    JsonElement? IHasBody.CurrentBody => Body;
+
+    /// <inheritdoc />
+    void IHasBody.ApplyBody(JsonElement body) => SetBody(body);
+
+    /// <inheritdoc />
+    JsonElement? IHasHeaders.CurrentHeaders => Headers;
+
+    /// <inheritdoc />
+    void IHasHeaders.ApplyHeaders(Dictionary<string, string?> headers) => SetHeaders(headers);
 }

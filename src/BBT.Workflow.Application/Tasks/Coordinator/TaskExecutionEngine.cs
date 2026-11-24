@@ -655,7 +655,8 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             task, onExecuteTask, context, instanceTransitionId, taskTrigger, origin)
         {
             ResponseVariableKey = options.ResponseVariableKey,
-            CapturesJournalPayloads = capturesJournal
+            CapturesJournalPayloads = capturesJournal,
+            Caller = options.Caller ?? BBT.Workflow.Scripting.Caller.NullCallerAccessor.Instance
         };
 
         // 8. Execute task

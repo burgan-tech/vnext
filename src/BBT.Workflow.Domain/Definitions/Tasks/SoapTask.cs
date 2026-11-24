@@ -8,7 +8,7 @@ namespace BBT.Workflow.Definitions;
 /// SOAP Task Definition — sends a SOAP 1.1 or 1.2 request to a web service endpoint.
 /// Body is stored as a raw XML string (not JsonElement) to support SOAP envelope templates.
 /// </summary>
-public sealed class SoapTask : WorkflowTask
+public sealed class SoapTask : WorkflowTask, IHasHeaders
 {
     private SoapTask()
     {
@@ -207,4 +207,10 @@ public sealed class SoapTask : WorkflowTask
     {
         return new SoapTask();
     }
+
+    /// <inheritdoc />
+    JsonElement? IHasHeaders.CurrentHeaders => Headers;
+
+    /// <inheritdoc />
+    void IHasHeaders.ApplyHeaders(Dictionary<string, string?> headers) => SetHeaders(headers);
 }

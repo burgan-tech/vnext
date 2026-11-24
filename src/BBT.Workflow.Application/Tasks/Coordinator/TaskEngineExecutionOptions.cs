@@ -93,4 +93,11 @@ public sealed record TaskEngineExecutionOptions
     /// path, is the only thing that may change the key.
     /// </remarks>
     public string? ResponseVariableKey { get; init; }
+
+    /// <summary>
+    /// The caller of the hop the task runs in, for the <c>user</c> variable of the binding's declarative mapping
+    /// expressions (<c>TaskExecutorContext.Caller</c>). Null — every caller except the transition task steps — means no
+    /// caller (<c>user.available</c> is false). Set through <c>TaskMappingCaller.Refiner</c>.
+    /// </summary>
+    public BBT.Workflow.Scripting.Caller.ICallerAccessor? Caller { get; init; }
 }

@@ -1,5 +1,6 @@
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Scripting.Caller;
 
 namespace BBT.Workflow.Tasks.Executors;
 
@@ -55,6 +56,24 @@ public sealed record TaskExecutorContext(
     /// ask for; each entry is actually a <c>Func&lt;T&gt;</c> for that entry's target type.
     /// </summary>
     public Dictionary<(ScriptCode Mapping, Type Target), object>? CompiledMappingFactories { get; set; }
+
+    /// <summary>
+    /// Per-execution memo of the compiled declarative mapping plans (parsed paths and compiled expressions), keyed by
+    /// the binding's <see cref="MappingBlock"/> instance (reference identity) — the declarative counterpart of
+    /// <see cref="CompiledMappingFactories"/>. Boxed as <see cref="object"/> because the plan type lives in the
+    /// Application layer. The compiled delegates inside a plan come from the process-wide expression compiler and are
+    /// immutable, so parallel branches running the same binding share them safely.
+    /// </summary>
+    public Dictionary<MappingBlock, object>? CompiledDeclarativeMappings { get; set; }
+
+    /// <summary>
+    /// The caller of the hop this task runs in, for the <c>user</c> variable of declarative mapping expressions:
+    /// <c>ICallerAccessorFactory.ForHop(actor, headers)</c> on a transition hop, <see cref="NullCallerAccessor"/> on
+    /// System hops and everywhere no hop caller is known (functions, extensions). Roles are resolved only when a
+    /// compiled expression uses <c>user</c>. Script (Roslyn) mappings never see it: their <c>ScriptContext.Caller</c>
+    /// stays unavailable, as before.
+    /// </summary>
+    public ICallerAccessor Caller { get; init; } = NullCallerAccessor.Instance;
 
     /// <summary>
     /// Overrides the script-context variable name this task's response/output is filed under. Null

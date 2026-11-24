@@ -6,7 +6,7 @@ namespace BBT.Workflow.Definitions;
 /// <summary>
 /// Dapr PubSub Task Definition
 /// </summary>
-public sealed class DaprPubSubTask : WorkflowTask
+public sealed class DaprPubSubTask : WorkflowTask, IHasBody
 {
     private DaprPubSubTask()
     {
@@ -138,4 +138,10 @@ public sealed class DaprPubSubTask : WorkflowTask
     {
         return new DaprPubSubTask(config);
     }
+
+    /// <inheritdoc />
+    JsonElement? IHasBody.CurrentBody => Data.ValueKind == JsonValueKind.Undefined ? null : Data;
+
+    /// <inheritdoc />
+    void IHasBody.ApplyBody(JsonElement body) => SetData(body);
 }

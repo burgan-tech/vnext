@@ -33,9 +33,12 @@ public enum ScopeKind
 /// phase-dependent <see cref="ScriptContext.Body"/>), <c>instance</c> the read-only instance view,
 /// <c>now</c> one clock reading per scope, <c>user</c> the caller (fail-closed roles), <c>context</c> the
 /// legacy <see cref="ExpressoRuleContext"/>, and in the output phase <c>result</c> the task's standard
-/// response (<c>body</c>, <c>headers</c>, <c>statusCode</c>). <c>data</c>, <c>instance.Data</c> and
-/// <c>result</c> are borrowed (<see cref="RuleJsonDynamic.Borrow"/>): valid only while the scope's
-/// <see cref="ScriptContext"/> and result document live.
+/// response (<c>body</c>, <c>headers</c>, <c>statusCode</c>). <c>data</c>, <c>instance.Data</c>, a
+/// <see cref="JsonElement"/> <c>input</c> and <c>result</c> are borrowed (<see cref="RuleJsonDynamic.Borrow"/>), never
+/// cloned. The binding constraint is the documents they borrow from: the caller's result document (and any
+/// <see cref="JsonElement"/> transition body) must stay undisposed until every value an expression returned has been
+/// copied out (the instance-data element is backed by a non-disposable document). A value an expression returns may
+/// itself be a borrowed view, so a caller materializes it into an owned copy before the result document goes away.
 /// </remarks>
 public sealed class ExpressionScope
 {
@@ -134,7 +137,9 @@ public sealed class ExpressionScope
         }
         catch (CallerRolesUnavailableException)
         {
-            // Not marked prepared: a later PrepareAsync asks again (the accessor itself keeps a failure sticky).
+            // Only the provider's "could not answer" is mapped here; anything else the accessor throws (cancellation,
+            // a bug) propagates to the caller, which fails the evaluation. Not marked prepared: a later PrepareAsync
+            // asks again (the accessor itself keeps a failure sticky).
             return Result.Fail(WorkflowErrors.CallerRolesUnavailable());
         }
     }
@@ -166,7 +171,12 @@ public sealed class ExpressionScope
         return values;
     }
 
-    private static object? DefaultOf(Type type) => type.IsValueType ? Activator.CreateInstance(type) : null;
+    private static readonly object BoxedDefaultDateTimeOffset = default(DateTimeOffset);
+
+    private static object? DefaultOf(Type type) =>
+        type == typeof(DateTimeOffset) ? BoxedDefaultDateTimeOffset
+        : type.IsValueType ? Activator.CreateInstance(type)
+        : null;
 
     private object? Materialize(string name) => name switch
     {

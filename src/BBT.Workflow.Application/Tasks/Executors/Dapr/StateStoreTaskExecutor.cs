@@ -19,59 +19,29 @@ namespace BBT.Workflow.Tasks.Executors;
 public sealed class StateStoreTaskExecutor : TaskExecutorBase<StateStoreTask>
 {
     private readonly IRemoteInvokerService _remoteInvoker;
-    private readonly IScriptEngine _scriptEngine;
     private readonly ITaskInvocationDispatcher _dispatcher;
 
     /// <summary>
     /// Initializes a new instance of StateStoreTaskExecutor.
     /// </summary>
+    /// <param name="mappingRunner">
+    /// The binding mapping runner (DI); null runs mappings through <see cref="RoutingTaskMappingRunner.CreateDefault"/>
+    /// over the script engine.
+    /// </param>
     public StateStoreTaskExecutor(
         IRemoteInvokerService remoteInvoker,
         IScriptEngine scriptEngine,
         ITaskInvocationDispatcher dispatcher,
-        ILogger<StateStoreTaskExecutor> logger)
-        : base(logger)
+        ILogger<StateStoreTaskExecutor> logger,
+        ITaskMappingRunner? mappingRunner = null)
+        : base(logger, mappingRunner ?? RoutingTaskMappingRunner.CreateDefault(scriptEngine))
     {
         _remoteInvoker = remoteInvoker;
-        _scriptEngine = scriptEngine;
         _dispatcher = dispatcher;
     }
 
     /// <inheritdoc />
     public override TaskType TaskType => TaskType.StateStore;
-
-    /// <inheritdoc />
-    protected override async Task<Result<ScriptResponse?>> PrepareInputAsync(
-        StateStoreTask task,
-        TaskExecutorContext context,
-        CancellationToken cancellationToken)
-    {
-        var mapping = context.OnExecuteTask.Mapping;
-        if (mapping is null || !mapping.HasMappingCode)
-        {
-            return Result<ScriptResponse?>.Ok(null);
-        }
-
-        var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
-        {
-            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
-
-            return await scriptRunner.InputHandler(task, context.ScriptContext);
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"StateStore task input handler failed: {ScriptDiagnostics.Explain(ex)}"));
-
-        if (!result.IsSuccess)
-        {
-            Logger.TaskInputHandlerFailed(
-                task.Key,
-                TaskType.ToString(),
-                context.ScriptContext.Instance?.Id ?? Guid.Empty,
-                result.Error.Message ?? "Unknown error");
-        }
-
-        return result;
-    }
 
     /// <inheritdoc />
     protected override async Task<Result<TaskInvocationResult>> InvokeAsync(
@@ -99,43 +69,6 @@ public sealed class StateStoreTaskExecutor : TaskExecutorBase<StateStoreTask>
         if (!result.IsSuccess)
         {
             Logger.TaskInvocationFailed(
-                task.Key,
-                TaskType.ToString(),
-                context.ScriptContext.Instance?.Id ?? Guid.Empty,
-                result.Error.Message ?? "Unknown error");
-        }
-
-        return result;
-    }
-
-    /// <inheritdoc />
-    protected override async Task<Result<object?>> ProcessOutputAsync(
-        StateStoreTask task,
-        TaskInvocationResult invocationResult,
-        TaskExecutorContext context,
-        CancellationToken cancellationToken)
-    {
-        var mapping = context.OnExecuteTask.Mapping;
-        if (mapping is null || !mapping.HasMappingCode)
-        {
-            return Result<object?>.Ok(invocationResult.Data);
-        }
-
-        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext, context.ResponseVariableKey);
-
-        var result = await ResultExtensions.TryAsync<object?>(async ct =>
-        {
-            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
-
-            var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
-            return outputResponse.Data;
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"StateStore task output handler failed: {ScriptDiagnostics.Explain(ex)}"));
-
-        if (!result.IsSuccess)
-        {
-            Logger.TaskOutputHandlerFailed(
                 task.Key,
                 TaskType.ToString(),
                 context.ScriptContext.Instance?.Id ?? Guid.Empty,

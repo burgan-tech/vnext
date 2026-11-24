@@ -6,7 +6,7 @@ namespace BBT.Workflow.Definitions;
 /// <summary>
 /// Get Instance Data Task Definition - Retrieves instance data from a workflow instance
 /// </summary>
-public sealed class GetInstanceDataTask : WorkflowTask
+public sealed class GetInstanceDataTask : WorkflowTask, IHasHeaders
 {
     private GetInstanceDataTask()
     {
@@ -302,5 +302,10 @@ public sealed class GetInstanceDataTask : WorkflowTask
     {
         return new GetInstanceDataTask();
     }
-}
 
+    /// <inheritdoc />
+    JsonElement? IHasHeaders.CurrentHeaders => Headers;
+
+    /// <inheritdoc />
+    void IHasHeaders.ApplyHeaders(Dictionary<string, string?> headers) => SetHeaders(headers);
+}

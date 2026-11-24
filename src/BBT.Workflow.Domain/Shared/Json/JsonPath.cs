@@ -186,6 +186,36 @@ public sealed class JsonPath
     }
 
     /// <summary>
+    /// This path without its first segment, rooted at <c>$</c> (<c>$.data.customer</c> → <c>$.customer</c>): the part
+    /// of an input-phase <c>select</c> that is read inside the variable its first segment names. <c>$</c> stays <c>$</c>.
+    /// </summary>
+    public JsonPath WithoutFirstSegment()
+    {
+        if (_segments.Length == 0)
+            return this;
+
+        var rest = _segments[1..];
+        var text = new StringBuilder("$");
+        foreach (var s in rest)
+        {
+            switch (s.Kind)
+            {
+                case SegmentKind.Name:
+                    text.Append("['").Append(s.Name!.Replace("\\", "\\\\").Replace("'", "\\'")).Append("']");
+                    break;
+                case SegmentKind.Index:
+                    text.Append('[').Append(s.Index).Append(']');
+                    break;
+                default:
+                    text.Append("[*]");
+                    break;
+            }
+        }
+
+        return new JsonPath(text.ToString(), rest);
+    }
+
+    /// <summary>
     /// Reads the value at this path. Without a wildcard that is the addressed element; with one it is a JSON
     /// array of every match in document order (nested wildcards flatten). Returns false when the path does
     /// not resolve; a wildcard applied to a non-array yields false, an empty array yields an empty

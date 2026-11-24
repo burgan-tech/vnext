@@ -11,7 +11,7 @@ namespace BBT.Workflow.Definitions;
 /// variant shares the whole configuration and scripting surface — mapping scripts that cast
 /// <c>task as HttpTask</c> keep working for both types.
 /// </remarks>
-public class HttpTask : WorkflowTask
+public class HttpTask : WorkflowTask, IHasBody, IHasHeaders
 {
     protected HttpTask()
     {
@@ -280,4 +280,16 @@ public class HttpTask : WorkflowTask
     {
         return new HttpTask();
     }
+
+    /// <inheritdoc />
+    JsonElement? IHasBody.CurrentBody => Body;
+
+    /// <inheritdoc />
+    void IHasBody.ApplyBody(JsonElement body) => SetBody(body);
+
+    /// <inheritdoc />
+    JsonElement? IHasHeaders.CurrentHeaders => Headers;
+
+    /// <inheritdoc />
+    void IHasHeaders.ApplyHeaders(Dictionary<string, string?> headers) => SetHeaders(headers);
 }

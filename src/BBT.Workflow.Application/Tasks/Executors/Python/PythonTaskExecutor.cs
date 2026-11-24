@@ -8,6 +8,7 @@ using BBT.Workflow.Execution.Core.Invocation;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Invocation.Local;
+using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -18,51 +19,21 @@ namespace BBT.Workflow.Tasks.Executors;
 /// over Dapr service invocation (<see cref="PythonRuntimeOptions.AppId"/>), with the
 /// <see cref="PythonRuntimeContract"/> request/response shape. There is no Execution hop and no
 /// Python inside any vNext host: the runtime is a separate, opt-in deployment.
-/// Input and output follow the standard task mapping, as for every other task type.
+/// Input and output follow the standard task mapping, as for every other task type (base template).
 /// </summary>
+/// <param name="mappingRunner">The binding mapping runner (DI); null runs mappings over <paramref name="scriptEngine"/>.</param>
 public sealed class PythonTaskExecutor(
     IRemoteInvokerService remoteInvoker,
     IScriptEngine scriptEngine,
     DaprServiceInvocationClient daprInvocation,
     IOptions<PythonRuntimeOptions> options,
-    ILogger<PythonTaskExecutor> logger)
-    : TaskExecutorBase<PythonTask>(logger)
+    ILogger<PythonTaskExecutor> logger,
+    ITaskMappingRunner? mappingRunner = null)
+    : TaskExecutorBase<PythonTask>(logger, mappingRunner ?? RoutingTaskMappingRunner.CreateDefault(scriptEngine))
 {
     private readonly PythonRuntimeOptions _options = options.Value;
 
     public override TaskType TaskType => TaskType.Python;
-
-    protected override async Task<Result<ScriptResponse?>> PrepareInputAsync(
-        PythonTask task,
-        TaskExecutorContext context,
-        CancellationToken cancellationToken)
-    {
-        var mapping = context.OnExecuteTask.Mapping;
-        if (mapping is null || !mapping.HasMappingCode)
-        {
-            return Result<ScriptResponse?>.Ok(null);
-        }
-
-        var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
-        {
-            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(scriptEngine, context, ct);
-
-            return await scriptRunner.InputHandler(task, context.ScriptContext);
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Python task input handler failed: {ScriptDiagnostics.Explain(ex)}"));
-
-        if (!result.IsSuccess)
-        {
-            Logger.TaskInputHandlerFailed(
-                task.Key,
-                TaskType.ToString(),
-                context.ScriptContext.Instance?.Id ?? Guid.Empty,
-                result.Error.Message ?? "Unknown error");
-        }
-
-        return result;
-    }
 
     protected override async Task<Result<TaskInvocationResult>> InvokeAsync(
         PythonTask task,
@@ -149,42 +120,6 @@ public sealed class PythonTaskExecutor(
             task.Key, TaskType.ToString(), instanceId, failureMessage ?? "Unknown error");
 
         return Result<TaskInvocationResult>.Ok(Reshape(result, result.Data, failureMessage));
-    }
-
-    protected override async Task<Result<object?>> ProcessOutputAsync(
-        PythonTask task,
-        TaskInvocationResult invocationResult,
-        TaskExecutorContext context,
-        CancellationToken cancellationToken)
-    {
-        var mapping = context.OnExecuteTask.Mapping;
-        if (mapping is null || !mapping.HasMappingCode)
-        {
-            return Result<object?>.Ok(invocationResult.Data);
-        }
-
-        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext, context.ResponseVariableKey);
-
-        var result = await ResultExtensions.TryAsync<object?>(async ct =>
-        {
-            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(scriptEngine, context, ct);
-
-            var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
-            return outputResponse.Data;
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Python task output handler failed: {ScriptDiagnostics.Explain(ex)}"));
-
-        if (!result.IsSuccess)
-        {
-            Logger.TaskOutputHandlerFailed(
-                task.Key,
-                TaskType.ToString(),
-                context.ScriptContext.Instance?.Id ?? Guid.Empty,
-                result.Error.Message ?? "Unknown error");
-        }
-
-        return result;
     }
 
     private static string? FailureMessage(string? errorCode, string? errorMessage, string? fallback)

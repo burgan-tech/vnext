@@ -285,4 +285,34 @@ public sealed class ExpressionScopeTests
         prepared.IsSuccess.ShouldBeFalse();
         prepared.Error.Code.ShouldBe(WorkflowErrors.CallerRolesUnavailable().Code);
     }
+
+    [Fact]
+    public void User_AvailableCaller_PrepareSkipped_HasRoleThrows()
+    {
+        // An available caller whose roles were never resolved must not read as "holds no role": skipping PrepareAsync
+        // is a caller bug and fails loudly instead.
+        var caller = new CallerSpy(available: true, roles: ["a"]);
+        var scope = Scope(Context(), caller);
+        var signature = ExpressionSignatures.Mapping(ScopeKind.MappingInput);
+        var compiled = _compiler.Compile<InputFn>("user.hasRole(\"a\")", signature);
+        var args = scope.Bind(signature.Parameters, compiled.Value.UsedIdentifiers);
+
+        var thrown = Should.Throw<TargetInvocationException>(() => compiled.Value.Invoke.DynamicInvoke(args));
+
+        thrown.InnerException.ShouldBeOfType<InvalidOperationException>();
+        caller.Resolutions.ShouldBe(0);
+    }
+
+    [Fact]
+    public void Bind_UnusedDateTimeOffsetSlot_ReusesOneBoxedDefault()
+    {
+        var parameters = ExpressionSignatures.Mapping(ScopeKind.MappingInput).Parameters;
+        var none = new HashSet<string>();
+
+        var first = Scope(Context()).Bind(parameters, none)[3];
+        var second = Scope(Context()).Bind(parameters, none)[3];
+
+        first.ShouldBe(default(DateTimeOffset));
+        ReferenceEquals(first, second).ShouldBeTrue();
+    }
 }

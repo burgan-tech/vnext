@@ -7,7 +7,7 @@ namespace BBT.Workflow.Definitions;
 /// <summary>
 /// Start Task Definition - Creates a new workflow instance
 /// </summary>
-public sealed class StartTask : WorkflowTask
+public sealed class StartTask : WorkflowTask, IHasBody, IHasHeaders
 {
     private StartTask()
     {
@@ -315,4 +315,16 @@ public sealed class StartTask : WorkflowTask
     {
         return new StartTask();
     }
+
+    /// <inheritdoc />
+    JsonElement? IHasBody.CurrentBody => Body;
+
+    /// <inheritdoc />
+    void IHasBody.ApplyBody(JsonElement body) => SetBody(body);
+
+    /// <inheritdoc />
+    JsonElement? IHasHeaders.CurrentHeaders => Headers;
+
+    /// <inheritdoc />
+    void IHasHeaders.ApplyHeaders(Dictionary<string, string?> headers) => SetHeaders(headers);
 }

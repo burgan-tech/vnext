@@ -871,6 +871,23 @@ public static partial class WorkflowLogs
         string errorMessage);
 
     /// <summary>
+    /// Logs when a declarative task mapping (the binding's <c>input</c> or <c>output</c> block) fails: a path that
+    /// cannot be written, an expression that throws, an unsupported input surface, or caller roles that could not be
+    /// resolved for <c>user</c>. The task fails through the same error-boundary path as a failed script mapping.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10268,
+        Level = LogLevel.Error,
+        Message = "Task declarative mapping failed. TaskKey={TaskKey}, TaskType={TaskType}, Phase={Phase}, InstanceId={InstanceId}, Error={ErrorMessage}")]
+    public static partial void TaskDeclarativeMappingFailed(
+        this ILogger logger,
+        string taskKey,
+        string taskType,
+        string phase,
+        Guid instanceId,
+        string errorMessage);
+
+    /// <summary>
     /// Logs when task envelope creation fails.
     /// </summary>
     [LoggerMessage(

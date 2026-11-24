@@ -499,7 +499,9 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     /// Available to rule-based selection on a caller's request (transition <c>schemas</c>, function
     /// contract slots, state/transition <c>views</c>). Elsewhere — tasks, automatic rules, timers, event
     /// handlers — <see cref="ICallerAccessor.IsAvailable"/> is false and a read throws
-    /// <see cref="CallerRolesUnavailableException"/>. Never null.
+    /// <see cref="CallerRolesUnavailableException"/>. Never null. That includes script (Roslyn) task mappings; a
+    /// declarative task mapping (the binding's <c>input</c>/<c>output</c> blocks) reads the hop's caller through its own
+    /// <c>user</c> variable (<c>TaskExecutorContext.Caller</c>), never through this property.
     /// </remarks>
     public ICallerAccessor Caller { get; private set; } = NullCallerAccessor.Instance;
 

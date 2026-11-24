@@ -43,8 +43,9 @@ public sealed class DirectTriggerTaskExecutor : TriggerTaskExecutorBase<DirectTr
         IDomainDiscoveryResolver endpointResolver,
         IResultResiliencePipelineFactory resilienceFactory,
         ICurrentUser currentUser,
-        ILogger<DirectTriggerTaskExecutor> logger)
-        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
+        ILogger<DirectTriggerTaskExecutor> logger,
+        ITaskMappingRunner? mappingRunner = null)
+        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger, mappingRunner)
     {
         _instanceCommandGateway = instanceCommandGateway;
         _instanceIdResolver = instanceIdResolver;

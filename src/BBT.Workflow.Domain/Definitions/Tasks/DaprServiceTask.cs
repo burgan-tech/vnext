@@ -6,7 +6,7 @@ namespace BBT.Workflow.Definitions;
 /// <summary>
 /// Dapr Service Task Definition
 /// </summary>
-public sealed class DaprServiceTask : WorkflowTask
+public sealed class DaprServiceTask : WorkflowTask, IHasBody, IHasHeaders, IHasQuery
 {
     private DaprServiceTask()
     {
@@ -235,4 +235,23 @@ public sealed class DaprServiceTask : WorkflowTask
     {
         return new DaprServiceTask();
     }
+
+    /// <inheritdoc />
+    JsonElement? IHasBody.CurrentBody => Body;
+
+    /// <inheritdoc />
+    void IHasBody.ApplyBody(JsonElement body) => SetBody(body);
+
+    /// <inheritdoc />
+    JsonElement? IHasHeaders.CurrentHeaders => Headers;
+
+    /// <inheritdoc />
+    void IHasHeaders.ApplyHeaders(Dictionary<string, string?> headers) => SetHeaders(headers);
+
+    /// <inheritdoc />
+    IReadOnlyList<KeyValuePair<string, string?>> IHasQuery.CurrentQuery => TaskQueryString.Parse(QueryString);
+
+    /// <inheritdoc />
+    void IHasQuery.ApplyQuery(IReadOnlyList<KeyValuePair<string, string?>> query) =>
+        SetQueryString(TaskQueryString.Format(query));
 }

@@ -11,6 +11,7 @@ using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
+using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Tasks.Executors;
@@ -19,18 +20,37 @@ namespace BBT.Workflow.Tasks.Executors;
 /// Base class for trigger task executors that need domain-aware routing.
 /// Provides common functionality for determining local vs remote execution.
 /// </summary>
+/// <remarks>
+/// Input and output mapping run in the <see cref="TaskExecutorBase{TTask}"/> template; a trigger task files its
+/// response on the script context whether or not its binding maps the output, and keeps its own failure labels
+/// (<c>"Input handler failed for {TaskType}: "</c>).
+/// </remarks>
 /// <typeparam name="TTask">The specific trigger task type.</typeparam>
+/// <param name="mappingRunner">
+/// The binding mapping runner (DI); null runs mappings through <see cref="RoutingTaskMappingRunner.CreateDefault"/>
+/// over <paramref name="scriptEngine"/>.
+/// </param>
 public abstract class TriggerTaskExecutorBase<TTask>(
     IScriptEngine scriptEngine,
     IRuntimeInfoProvider runtimeInfoProvider,
     IRemoteInvokerService remoteInvoker,
-    ILogger logger)
-    : TaskExecutorBase<TTask>(logger)
+    ILogger logger,
+    ITaskMappingRunner? mappingRunner = null)
+    : TaskExecutorBase<TTask>(logger, mappingRunner ?? RoutingTaskMappingRunner.CreateDefault(scriptEngine))
     where TTask : WorkflowTask
 {
     protected readonly IScriptEngine ScriptEngine = scriptEngine;
     protected readonly IRuntimeInfoProvider RuntimeInfoProvider = runtimeInfoProvider;
     protected readonly IRemoteInvokerService RemoteInvoker = remoteInvoker;
+
+    /// <inheritdoc />
+    protected override string InputMappingFailurePrefix => $"Input handler failed for {TaskType}: ";
+
+    /// <inheritdoc />
+    protected override string OutputMappingFailurePrefix => $"Output handler failed for {TaskType}: ";
+
+    /// <inheritdoc />
+    protected override bool FilesResponseWithoutOutputMapping => true;
 
     /// <summary>
     /// Gets the target domain for the task.
@@ -49,77 +69,6 @@ public abstract class TriggerTaskExecutorBase<TTask>(
 
         return string.Equals(RuntimeInfoProvider.Domain, targetDomain, StringComparison.OrdinalIgnoreCase)
                || RuntimeInfoProvider.IsDomainMatch(targetDomain);
-    }
-
-    /// <inheritdoc />
-    protected override async Task<Result<ScriptResponse?>> PrepareInputAsync(
-        TTask task,
-        TaskExecutorContext context,
-        CancellationToken cancellationToken)
-    {
-        var mapping = context.OnExecuteTask.Mapping;
-        if (mapping is null || !mapping.HasMappingCode)
-        {
-            return Result<ScriptResponse?>.Ok(null);
-        }
-
-        var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
-        {
-            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(ScriptEngine, context, ct);
-
-            return await scriptRunner.InputHandler(task, context.ScriptContext);
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Input handler failed for {TaskType}: {ScriptDiagnostics.Explain(ex)}"));
-
-        if (!result.IsSuccess)
-        {
-            Logger.TaskInputHandlerFailed(
-                task.Key,
-                TaskType.ToString(),
-                context.ScriptContext.Instance?.Id ?? Guid.Empty,
-                result.Error.Message ?? "Unknown error");
-        }
-
-        return result;
-    }
-
-    /// <inheritdoc />
-    protected override async Task<Result<object?>> ProcessOutputAsync(
-        TTask task,
-        TaskInvocationResult invocationResult,
-        TaskExecutorContext context,
-        CancellationToken cancellationToken)
-    {
-        // Update script context with response
-        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext, context.ResponseVariableKey);
-
-        var mapping = context.OnExecuteTask.Mapping;
-        if (mapping is null || !mapping.HasMappingCode)
-        {
-            return Result<object?>.Ok(invocationResult.Data);
-        }
-
-        var result = await ResultExtensions.TryAsync<object?>(async ct =>
-        {
-            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(ScriptEngine, context, ct);
-
-            var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
-            return outputResponse.Data;
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Output handler failed for {TaskType}: {ScriptDiagnostics.Explain(ex)}"));
-
-        if (!result.IsSuccess)
-        {
-            Logger.TaskOutputHandlerFailed(
-                task.Key,
-                TaskType.ToString(),
-                context.ScriptContext.Instance?.Id ?? Guid.Empty,
-                result.Error.Message ?? "Unknown error");
-        }
-
-        return result;
     }
 
     /// <summary>
