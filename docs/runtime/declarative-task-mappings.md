@@ -35,7 +35,11 @@ A task binding (`onExecuteTask` entry of a state `onEntries`/`onExits`, a transi
 | `now` | one timestamp per mapping |
 | `user` | `available` (bool), `roles` (string[]), `hasRole(string)` — see [User](#user) |
 | `context` | the legacy rule context, unchanged (still fails on a missing member) |
+| `task` | the task's `config` as authored (a JSON view like `data`): `task.url`, `task.body.x`; in the output phase, as the input phase left it |
+| `config` | the host configuration: `config.get("Key")`, `config.get("Key", "fallback")` (same reach as `GetConfigValue`) |
 | `result` | **output phase only**: the task's standard response `body`, `headers`, `statusCode` |
+
+Function: `urlEncode(value)` percent-encodes one URL component. `task`, `config` and `urlEncode` exist in task mappings only, not in condition rules.
 
 Variables are bound lazily, only when an expression uses them; nothing is cloned.
 
@@ -43,21 +47,35 @@ Variables are bound lazily, only when an expression uses them; nothing is cloned
 
 ## Input phase
 
-- Targets start with a request surface: `$.body`, `$.headers`, `$.query`. Each starts from the task's configured value and is written through the task type's own setter. `$.route` is rejected at publish (no task type supports it yet).
-- `select` + `into` copies one value; they must appear together (publish error otherwise). An input `select` starts with a variable name (`$.data.customer`).
-- Surfaces by task type (the `IHas*` interfaces; publish cannot see the task type, so an unsupported surface fails at run time):
-
-| Task type | body | headers | query |
-|---|---|---|---|
-| `HttpTask`, `DirectTriggerTask`, `StartTask`, `SubProcessTask` | yes | yes | no |
-| `DaprServiceTask` | yes | yes | yes |
-| `DaprHttpEndpointTask`, `DaprBindingTask`, `DaprPubSubTask` | yes | no | no |
-| `SoapTask`, `GetInstanceTask`, `GetInstanceDataTask`, `GetInstancesTask` | no | yes | no |
-| any other task type | no | no | no |
-
-- Query round-trip: the query string is parsed to pairs and re-encoded, so repeated keys collapse and `+` is re-encoded.
+- **Targets are fields of the task's own `config`** — the object authored in the task definition — so the names are the task JSON's: `$.url`, `$.method`, `$.body.customer`, `$.headers.x-channel`, `$.timeoutSeconds`, a DaprService's `$.queryString`, a DaprBinding's `$.data`. Anything a C# `InputHandler` could change through a setter is reachable; no task type needs a per-field contract.
+- The block edits a **copy** of the configured `config` (fields it does not touch keep their configured value) and hands the result back through the task type's own `Configure` parser (`WorkflowTask.ApplyConfig`), exactly as if the task definition had carried it. A value that parser rejects (`"$.url": "42"`) fails the mapping.
+- A path INTO a field whose configured value is not an object (`$.body.x` over an array body) fails instead of replacing it; target the field as a whole to replace it. An absent or `null` field becomes an object.
+- A `headers` object's values are written as strings (`"$.headers.x-count": "3"` sends `"3"`).
+- **A field the task type does not read is ignored**, as it would be in the task definition: a binding holds only a task reference, so publish cannot see the type, and the field set is the type's parser. Check spelling against the task's schema.
+- `select` + `into` copies one value; they must appear together (publish error otherwise). An input `select` starts with a JSON variable name (`$.data.customer`, `$.task.body`); `config` is not selectable.
 - The input phase journals nothing (the values are not echoed into the task journal).
-- **FanOut, Notification and Human tasks reject a binding that carries declarative blocks at run time** (`TaskDeclarativeMappingFailed`). Script, Python, MCP and CacheAside tasks run output blocks; their input has no surface.
+- **FanOut, Notification and Human tasks reject a binding that carries declarative blocks at run time** (`TaskDeclarativeMappingFailed`). Every other task type runs both blocks.
+
+### URL from configuration
+
+The `API_BASEURL` placeholder a C# `InputHandler` resolves with `GetConfigValue` is one expression:
+
+```json
+"input": {
+  "set": {
+    "$.url": "task.url.ToString().Replace(\"API_BASEURL\", config.get(\"Example:ApiBaseUrl\", \"http://localhost:3001\")) + \"/\" + urlEncode(data.customer.id) + \"?lang=tr\""
+  }
+}
+```
+
+- `task.url` is the configured URL (`task` is the task's `config`, a JSON view like `data`, so a string needs `.ToString()` before `Replace`).
+- `config.get(key)` / `config.get(key, fallback)` read the host configuration — the same source and reach as `GetConfigValue`, connection strings included. Restricting what a domain's expressions may read is a separate, domain-owner decision.
+- `urlEncode(value)` percent-encodes one URL component (`Uri.EscapeDataString`); splice every data value into a path or query through it. Dynamic Expresso has no `$"..."` interpolation: build strings with `+` or `string.Format`.
+- Number formatting follows the server culture (`data.amount.AsDouble().ToString("0.00")` prints `1250,50` under `tr-TR`). Splice the JSON value itself instead: `urlEncode(data.amount)` and `"" + data.amount` use its JSON text (`1250.5`), which has no culture.
+
+The output phase sees the same `task` after the input phase, so `"$.calledUrl": "task.url"` records the URL actually called.
+
+**Cost.** The write-back is one copy of the `config` and one `Configure` parse per execution: 0.94 µs against a 0.02 µs task clone for an Http task, and a whole input block (URL + `config` + `urlEncode` + `select`/`into` + one header) 3.6 µs (BenchmarkDotNet short job, `DeclarativeInputBenchmarks`).
 
 ## Output phase
 

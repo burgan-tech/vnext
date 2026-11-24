@@ -6,7 +6,7 @@ namespace BBT.Workflow.Definitions;
 /// <summary>
 /// Dapr Binding Task Definition
 /// </summary>
-public sealed class DaprBindingTask : WorkflowTask, IHasBody
+public sealed class DaprBindingTask : WorkflowTask
 {
     private DaprBindingTask()
     {
@@ -150,10 +150,5 @@ public sealed class DaprBindingTask : WorkflowTask, IHasBody
     {
         return new DaprBindingTask(config);
     }
-
-    /// <inheritdoc />
-    JsonElement? IHasBody.CurrentBody => Data;
-
-    /// <inheritdoc />
-    void IHasBody.ApplyBody(JsonElement body) => SetData(body);
+    
 }

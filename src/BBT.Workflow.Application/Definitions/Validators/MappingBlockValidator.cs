@@ -8,11 +8,13 @@ using BBT.Workflow.Scripting.Sandbox;
 using InputFn = System.Func<
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Rules.RuleJsonDynamic,
     BBT.Workflow.Scripting.Expressions.ExpressionInstance, System.DateTimeOffset,
-    BBT.Workflow.Scripting.Expressions.ExpressionUser, BBT.Workflow.Scripting.Rules.ExpressoRuleContext, object>;
+    BBT.Workflow.Scripting.Expressions.ExpressionUser, BBT.Workflow.Scripting.Rules.ExpressoRuleContext,
+    BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Expressions.ExpressionConfig, object>;
 using OutputFn = System.Func<
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Rules.RuleJsonDynamic,
     BBT.Workflow.Scripting.Expressions.ExpressionInstance, System.DateTimeOffset,
     BBT.Workflow.Scripting.Expressions.ExpressionUser, BBT.Workflow.Scripting.Rules.ExpressoRuleContext,
+    BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Expressions.ExpressionConfig,
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, object>;
 
 namespace BBT.Workflow.Definitions.Validators;
@@ -30,25 +32,22 @@ namespace BBT.Workflow.Definitions.Validators;
 /// publish warms the compile cache; compile is validation only, nothing is stored. Errors read
 /// <c>{jsonLocation}: {message}</c>, for example
 /// <c>states[review].onEntries[0].output.set['$.kyc.score']: ...</c>. A binding with neither a mapping nor
-/// blocks stays valid. Whether a task TYPE supports an input surface is not checked here: a binding holds only a
-/// task reference, so the type is not resolvable at publish; <c>DeclarativeTaskMappingRunner</c> fails the mapping with
-/// a clear error at run time instead.
+/// blocks stays valid. An input target is a path into the task's <c>config</c> (<c>$.url</c>, <c>$.body.x</c>); which
+/// fields a task TYPE reads is not checked here: a binding holds only a task reference, so the type is not resolvable at
+/// publish.
 /// </remarks>
 public sealed class MappingBlockValidator(IExpressionCompiler compiler)
 {
-    private const string RouteSurface = "route";
-
     /// <summary>Publish warning for a task <c>mapping</c> labelled with the <c>dynamicExpresso</c> location.</summary>
     public const string DynamicExpressoMappingLocationWarning =
         "The dynamicExpresso location is ignored on a task 'mapping': the mapping runs as a C# script. " +
         "Author the declarative 'input' and 'output' blocks for expression-based mappings.";
 
-    private static readonly string[] InputSurfaces = ["body", "headers", "query", RouteSurface];
-
     private static readonly string[] InputVariables =
     [
         ExpressionScope.DataVariable, ExpressionScope.InputVariable, ExpressionScope.InstanceVariable,
-        ExpressionScope.NowVariable, ExpressionScope.UserVariable, ExpressionScope.ContextVariable
+        ExpressionScope.NowVariable, ExpressionScope.UserVariable, ExpressionScope.ContextVariable,
+        ExpressionScope.TaskVariable
     ];
 
     /// <summary>Whether <paramref name="componentType"/> can hold task bindings this validator checks.</summary>
@@ -161,7 +160,7 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
     {
         // An input select has no default target and an input into no default source: one without the other never runs.
         if (isInput && block.Select is not null && block.Into is null)
-            Add(errors, $"{path}.select", "An input 'select' needs an 'into' naming the request path it copies to.");
+            Add(errors, $"{path}.select", "An input 'select' needs an 'into' naming the task-config path it copies to.");
         if (isInput && block.Into is not null && block.Select is null)
             Add(errors, $"{path}.into", "An input 'into' needs a 'select' naming the value it copies.");
 
@@ -220,23 +219,11 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
             return;
         }
 
-        if (isInput)
+        if (parsed.FirstSegment.Length == 0)
         {
-            if (!InputSurfaces.Contains(parsed.FirstSegment, StringComparer.Ordinal))
-            {
-                Add(errors, location,
-                    "An input target must start with $.body, $.headers, $.query or $.route.");
-            }
-            else if (parsed.FirstSegment == RouteSurface)
-            {
-                // No task type exposes route values yet (IHasRouteValues has no implementation), so a $.route target
-                // could never run; reject it here instead of at run time.
-                Add(errors, location, "The $.route input surface is not supported yet by any task type.");
-            }
-        }
-        else if (parsed.FirstSegment.Length == 0)
-        {
-            Add(errors, location, "An output target must be a property of the instance data, not the root '$'.");
+            Add(errors, location, isInput
+                ? "An input target must be a field of the task's config ($.url, $.body.x), not the root '$'."
+                : "An output target must be a property of the instance data, not the root '$'.");
         }
     }
 

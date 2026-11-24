@@ -6,7 +6,7 @@ namespace BBT.Workflow.Definitions;
 /// <summary>
 /// Dapr Http Endpoint Task Definition
 /// </summary>
-public sealed class DaprHttpEndpointTask : WorkflowTask, IHasBody
+public sealed class DaprHttpEndpointTask : WorkflowTask
 {
     private DaprHttpEndpointTask()
     {
@@ -127,10 +127,5 @@ public sealed class DaprHttpEndpointTask : WorkflowTask, IHasBody
     {
         return new DaprHttpEndpointTask(config);
     }
-
-    /// <inheritdoc />
-    JsonElement? IHasBody.CurrentBody => Body;
-
-    /// <inheritdoc />
-    void IHasBody.ApplyBody(JsonElement body) => SetBodyInternal(body.Clone());
+    
 }

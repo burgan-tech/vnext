@@ -14,14 +14,17 @@ using BBT.Workflow.Shared.Json;
 using BBT.Workflow.Tasks.Executors;
 using DynamicExpresso;
 using Microsoft.CSharp.RuntimeBinder;
+using Microsoft.Extensions.Configuration;
 using InputFn = System.Func<
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Rules.RuleJsonDynamic,
     BBT.Workflow.Scripting.Expressions.ExpressionInstance, System.DateTimeOffset,
-    BBT.Workflow.Scripting.Expressions.ExpressionUser, BBT.Workflow.Scripting.Rules.ExpressoRuleContext, object>;
+    BBT.Workflow.Scripting.Expressions.ExpressionUser, BBT.Workflow.Scripting.Rules.ExpressoRuleContext,
+    BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Expressions.ExpressionConfig, object>;
 using OutputFn = System.Func<
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Rules.RuleJsonDynamic,
     BBT.Workflow.Scripting.Expressions.ExpressionInstance, System.DateTimeOffset,
     BBT.Workflow.Scripting.Expressions.ExpressionUser, BBT.Workflow.Scripting.Rules.ExpressoRuleContext,
+    BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Expressions.ExpressionConfig,
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, object>;
 
 namespace BBT.Workflow.Tasks.Mapping;
@@ -29,18 +32,21 @@ namespace BBT.Workflow.Tasks.Mapping;
 /// <summary>
 /// Runs a binding's declarative <c>input</c> / <c>output</c> blocks (<see cref="MappingBlock"/>): <c>select</c> +
 /// <c>into</c> first, then the <c>set</c> entries in declaration order, each value a Dynamic Expresso expression over
-/// <c>data</c>, <c>input</c>, <c>instance</c>, <c>now</c>, <c>user</c>, <c>context</c> (and <c>result</c> in the output
-/// phase) bound lazily by <see cref="ExpressionScope"/>. No Roslyn compile is involved.
+/// <c>data</c>, <c>input</c>, <c>instance</c>, <c>now</c>, <c>user</c>, <c>context</c>, <c>task</c>, <c>config</c> (and
+/// <c>result</c> in the output phase) bound lazily by <see cref="ExpressionScope"/>. No Roslyn compile is involved.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Input.</b> Each surface a block targets (<c>$.body</c>, <c>$.headers</c>, <c>$.query</c>, <c>$.route</c>) starts from
-/// the task's current value for it (its static configuration; an empty object when there is none or it is not an
-/// object), is written in place, and goes back through the task's surface interface (<see cref="IHasBody"/>,
-/// <see cref="IHasHeaders"/>, <see cref="IHasQuery"/>, <see cref="IHasRouteValues"/>), i.e. the task type's own setter.
-/// A task type without the targeted surface fails the mapping with a clear error (publish cannot check it: a binding's
-/// task type is not resolvable at publish). An input <c>select</c> reads the variable scope: its first segment names
-/// the variable. The returned <see cref="ScriptResponse"/> is empty — the values are not echoed into the task journal.
+/// <b>Input.</b> The targets are paths into the task's own <c>config</c> JSON — the object authored in the task
+/// definition (<c>$.url</c>, <c>$.body.customer</c>, <c>$.headers.x-channel</c>, <c>$.timeoutSeconds</c>), so every field
+/// a C# mapping could change through a setter is reachable without a per-type surface. The block writes into a copy of
+/// <see cref="WorkflowTask.Config"/> (fields it does not touch keep their configured value), the copy goes back through
+/// <see cref="WorkflowTask.ApplyConfig"/>, i.e. the task type's own <c>Configure</c> parser, and a value that parser
+/// rejects fails the mapping. A path INTO a field whose configured value is not an object fails instead of replacing it;
+/// a <c>headers</c> object's values are written as strings. A field name the task type does not read is ignored, as it
+/// would be in the task definition (the binding's task type is not resolvable at publish, and the field set is the
+/// type's parser). An input <c>select</c> reads the variable scope: its first segment names the variable. The returned
+/// <see cref="ScriptResponse"/> is empty — the values are not echoed into the task journal.
 /// </para>
 /// <para>
 /// <b>Output.</b> One <see cref="JsonObject"/> delta is built and returned as the output <c>Data</c>, so the engine's
@@ -63,7 +69,11 @@ namespace BBT.Workflow.Tasks.Mapping;
 /// <see cref="TaskExecutorContext"/>; their delegates come from the shared compiler and are safe across parallel branches.
 /// </para>
 /// </remarks>
-public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, TimeProvider clock) : ITaskMappingRunner
+/// <param name="compiler">The shared expression compiler.</param>
+/// <param name="clock">Source of <c>now</c>.</param>
+/// <param name="configuration">Backs the <c>config</c> variable; an empty configuration when null.</param>
+public sealed class DeclarativeTaskMappingRunner(
+    IExpressionCompiler compiler, TimeProvider clock, IConfiguration? configuration = null) : ITaskMappingRunner
 {
     private const string InputPhase = "input";
     private const string OutputPhase = "output";
@@ -119,17 +129,19 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
 
         try
         {
-            // The request's surfaces, under the names the target paths start with ($.body.x → request["body"]["x"]).
-            var request = new JsonObject();
-            foreach (var surface in plan.Surfaces)
+            // An editable copy of the task's configuration; the target paths address it directly ($.url, $.body.x).
+            var request = task.Config.ValueKind == JsonValueKind.Object
+                ? JsonNode.Parse(task.Config.GetRawText())!.AsObject()
+                : new JsonObject();
+            foreach (var field in plan.PartiallyTargeted)
             {
-                var loaded = LoadSurface(task, surface, plan.PartiallyTargeted.Contains(surface));
-                if (!loaded.IsSuccess)
-                    return Fail(site, InputPhase, loaded.Error.Message!);
-                request[surface] = loaded.Value;
+                var prepared = PrepareFieldForPath(request, field);
+                if (prepared is not null)
+                    return Fail(site, InputPhase, prepared);
             }
 
-            var scope = ExpressionScope.Create(ctx.ScriptContext, clock, ctx.Caller, ScopeKind.MappingInput);
+            var scope = ExpressionScope.Create(ctx.ScriptContext, clock, ctx.Caller, ScopeKind.MappingInput)
+                .WithTask(task.Config, configuration);
             if (plan.Into is not null || plan.Select is not null)
             {
                 if (plan.Into is null || plan.SelectVariable is null)
@@ -148,12 +160,9 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
             if (!set.IsSuccess)
                 return set;
 
-            foreach (var surface in plan.Surfaces)
-            {
-                var written = WriteSurface(task, surface, request[surface]);
-                if (written is not null)
-                    return Fail(site, InputPhase, written);
-            }
+            if (request[HeadersField] is JsonObject headers)
+                request[HeadersField] = HeadersAsStrings(headers);
+            task.ApplyConfig(JsonSerializer.SerializeToElement(request));
         }
         catch (Exception ex) when (!IsCancellation(ex, ct))
         {
@@ -179,7 +188,8 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
             using var resultView = plan.NeedsResult ? new TaskResultView(result) : null;
             var scope = ExpressionScope.Create(
                 ctx.ScriptContext, clock, ctx.Caller, ScopeKind.MappingOutput,
-                resultView is null ? null : RuleJsonDynamic.BorrowObject(resultView));
+                resultView is null ? null : RuleJsonDynamic.BorrowObject(resultView))
+                .WithTask(task.Config, configuration);
 
             if (plan.ResultSelect is { } selector)
             {
@@ -336,98 +346,42 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
         return built;
     }
 
+    private const string HeadersField = "headers";
+
     /// <summary>
-    /// The task's current value for <paramref name="surface"/>: an object as an editable copy, none (or JSON null) as an
-    /// empty object, any other value kept as it is when only the whole surface is targeted. A path INTO a surface whose
-    /// static value is not an object fails — silently replacing an array or scalar body with an object would lose it.
-    /// Fails too when the task type has no such surface.
+    /// Makes <paramref name="field"/> writable for a path INSIDE it: absent or JSON null becomes an empty object, an
+    /// object is kept; any other value returns an error — silently replacing an array or scalar with an object would
+    /// lose it.
     /// </summary>
-    private static Result<JsonNode?> LoadSurface(WorkflowTask task, string surface, bool partiallyTargeted)
+    private static string? PrepareFieldForPath(JsonObject request, string field)
     {
-        JsonElement? current;
-        switch (surface)
+        if (!request.TryGetPropertyValue(field, out var current) || current is null)
         {
-            case DeclarativeMappingPlan.BodySurface when task is IHasBody body:
-                current = body.CurrentBody;
-                break;
-            case DeclarativeMappingPlan.HeadersSurface when task is IHasHeaders headers:
-                current = headers.CurrentHeaders;
-                break;
-            case DeclarativeMappingPlan.QuerySurface when task is IHasQuery query:
-                return Result<JsonNode?>.Ok(FromPairs(query.CurrentQuery));
-            case DeclarativeMappingPlan.RouteSurface when task is IHasRouteValues route:
-                current = route.CurrentRouteValues;
-                break;
-            default:
-                return SurfaceError(
-                    $"task type {task.GetTaskType()} has no '{surface}' input surface; target only the surfaces it supports.");
-        }
-
-        if (current is not { } element || element.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
-            return Result<JsonNode?>.Ok(new JsonObject());
-        if (element.ValueKind == JsonValueKind.Object || !partiallyTargeted)
-            return Result<JsonNode?>.Ok(JsonNode.Parse(element.GetRawText()));
-
-        return SurfaceError(
-            $"the task's '{surface}' is a JSON {element.ValueKind}, not an object, so a path inside $.{surface} cannot be " +
-            $"written; target $.{surface} as a whole or configure an object {surface}.");
-    }
-
-    private static Result<JsonNode?> SurfaceError(string message) =>
-        Result<JsonNode?>.Fail(Error.Validation(WorkflowErrorCodes.TaskExecution, message));
-
-    /// <summary>Writes a surface back through the task's setter; returns an error message when the value has the wrong shape.</summary>
-    private static string? WriteSurface(WorkflowTask task, string surface, JsonNode? value)
-    {
-        switch (surface)
-        {
-            case DeclarativeMappingPlan.BodySurface:
-                ((IHasBody)task).ApplyBody(JsonSerializer.SerializeToElement(value));
-                return null;
-            case DeclarativeMappingPlan.HeadersSurface:
-                if (ToStringMap(value) is not { } headers)
-                    return "'$.headers' must stay a JSON object of header values.";
-                ((IHasHeaders)task).ApplyHeaders(headers);
-                return null;
-            case DeclarativeMappingPlan.QuerySurface:
-                if (ToStringMap(value) is not { } query)
-                    return "'$.query' must stay a JSON object of query values.";
-                ((IHasQuery)task).ApplyQuery(query.ToList());
-                return null;
-            default:
-                if (ToStringMap(value) is not { } route)
-                    return "'$.route' must stay a JSON object of route values.";
-                ((IHasRouteValues)task).ApplyRouteValues(route);
-                return null;
-        }
-    }
-
-    private static JsonObject FromPairs(IReadOnlyList<KeyValuePair<string, string?>> pairs)
-    {
-        var node = new JsonObject();
-        foreach (var (name, value) in pairs)
-            node[name] = value is null ? null : JsonValue.Create(value);
-        return node;
-    }
-
-    /// <summary>A JSON object as name → string (strings verbatim, other values as their JSON text); null when not an object.</summary>
-    private static Dictionary<string, string?>? ToStringMap(JsonNode? value)
-    {
-        if (value is not JsonObject obj)
+            request[field] = new JsonObject();
             return null;
+        }
 
-        var map = new Dictionary<string, string?>(obj.Count, StringComparer.Ordinal);
-        foreach (var (name, item) in obj)
+        return current is JsonObject
+            ? null
+            : $"the task's '{field}' is a JSON {current.GetValueKind()}, not an object, so a path inside $.{field} " +
+              $"cannot be written; target $.{field} as a whole or configure an object {field}.";
+    }
+
+    /// <summary>A <c>headers</c> object with every value as a string (strings verbatim, others as their JSON text).</summary>
+    private static JsonObject HeadersAsStrings(JsonObject headers)
+    {
+        var copy = new JsonObject();
+        foreach (var (name, item) in headers)
         {
-            map[name] = item switch
+            copy[name] = item switch
             {
                 null => null,
-                JsonValue v when v.TryGetValue<string>(out var text) => text,
-                _ => item.ToJsonString()
+                JsonValue v when v.TryGetValue<string>(out var text) => JsonValue.Create(text),
+                _ => JsonValue.Create(item.ToJsonString())
             };
         }
 
-        return map;
+        return copy;
     }
 
     /// <summary>The exception an expression threw, without the reflection wrapper a dynamic invoke adds.</summary>
@@ -474,20 +428,13 @@ internal sealed class BlockPhaseComparer : IEqualityComparer<(MappingBlock Block
 }
 
 /// <summary>
-/// One <see cref="MappingBlock"/> compiled for one phase: parsed paths, the touched input surfaces and every <c>set</c>
+/// One <see cref="MappingBlock"/> compiled for one phase: parsed paths, the task-config fields written inside and every <c>set</c>
 /// expression compiled through the shared <see cref="IExpressionCompiler"/>. Immutable once built.
 /// </summary>
 internal sealed class DeclarativeMappingPlan
 {
-    public const string BodySurface = "body";
-    public const string HeadersSurface = "headers";
-    public const string QuerySurface = "query";
-    public const string RouteSurface = "route";
-
-    private static readonly string[] InputSurfaces = [BodySurface, HeadersSurface, QuerySurface, RouteSurface];
-
     private DeclarativeMappingPlan(
-        IReadOnlyList<Parameter> parameters, JsonPath? select, JsonPath? into, SetEntry[] set, string[] surfaces,
+        IReadOnlyList<Parameter> parameters, JsonPath? select, JsonPath? into, SetEntry[] set,
         bool needsResult, Parameter? selectVariable, JsonPath? selectTail, IReadOnlySet<string> partiallyTargeted,
         TaskResultView.Selector? resultSelect)
     {
@@ -497,7 +444,6 @@ internal sealed class DeclarativeMappingPlan
         Select = select;
         Into = into;
         Set = set;
-        Surfaces = surfaces;
         NeedsResult = needsResult;
         SelectVariable = selectVariable;
         SelectTail = selectTail;
@@ -516,10 +462,7 @@ internal sealed class DeclarativeMappingPlan
     /// <summary>The <c>set</c> entries in declaration order.</summary>
     public SetEntry[] Set { get; }
 
-    /// <summary>Input only: the surfaces (<c>body</c>, <c>headers</c>, ...) the targets write, in first-use order.</summary>
-    public string[] Surfaces { get; }
-
-    /// <summary>Input only: the surfaces some target writes a path INSIDE of (not the surface as a whole).</summary>
+    /// <summary>Input only: the task-config fields some target writes a path INSIDE of (not the field as a whole).</summary>
     public IReadOnlySet<string> PartiallyTargeted { get; }
 
     /// <summary>Output only: whether the <c>result</c> document must be built.</summary>
@@ -548,7 +491,6 @@ internal sealed class DeclarativeMappingPlan
     {
         var isInput = kind == ScopeKind.MappingInput;
         var signature = ExpressionSignatures.Mapping(kind);
-        var surfaces = new List<string>();
         var partial = new HashSet<string>(StringComparer.Ordinal);
 
         JsonPath? select = null;
@@ -562,9 +504,10 @@ internal sealed class DeclarativeMappingPlan
             select = parsed.Value!;
             if (isInput)
             {
-                selectVariable = signature.Parameters.FirstOrDefault(p => p.Name == select.FirstSegment);
+                selectVariable = signature.Parameters.FirstOrDefault(
+                    p => p.Name == select.FirstSegment && p.Name != ExpressionScope.ConfigVariable);
                 if (selectVariable is null)
-                    return Invalid($"input 'select' {select.Text} must start at a variable ({string.Join(", ", signature.Parameters.Select(p => p.Name))}).");
+                    return Invalid($"input 'select' {select.Text} must start at a JSON variable ({string.Join(", ", SelectableInputVariables(signature))}).");
                 selectTail = select.WithoutFirstSegment();
             }
         }
@@ -572,7 +515,7 @@ internal sealed class DeclarativeMappingPlan
         JsonPath? into = null;
         if (block.Into is not null)
         {
-            var target = Target(block.Into, "into", isInput, surfaces, partial);
+            var target = Target(block.Into, "into", isInput, partial);
             if (!target.IsSuccess)
                 return Result<DeclarativeMappingPlan>.Fail(target.Error);
             into = target.Value!;
@@ -582,7 +525,7 @@ internal sealed class DeclarativeMappingPlan
         var needsResult = !isInput && (select is not null || into is not null);
         foreach (var (key, expression) in block.Set ?? new Dictionary<string, string>())
         {
-            var target = Target(key, $"set['{key}']", isInput, surfaces, partial);
+            var target = Target(key, $"set['{key}']", isInput, partial);
             if (!target.IsSuccess)
                 return Result<DeclarativeMappingPlan>.Fail(target.Error);
 
@@ -599,7 +542,8 @@ internal sealed class DeclarativeMappingPlan
                 var fn = compiled.Value!.Invoke;
                 entry = new SetEntry(key, target.Value!,
                     a => fn((RuleJsonDynamic?)a[0], (RuleJsonDynamic?)a[1], (ExpressionInstance?)a[2],
-                        (DateTimeOffset)a[3]!, (ExpressionUser?)a[4], (ExpressoRuleContext?)a[5]),
+                        (DateTimeOffset)a[3]!, (ExpressionUser?)a[4], (ExpressoRuleContext?)a[5],
+                        (RuleJsonDynamic?)a[6], (ExpressionConfig?)a[7]),
                     compiled.Value.UsedIdentifiers);
             }
             else
@@ -611,7 +555,7 @@ internal sealed class DeclarativeMappingPlan
                 entry = new SetEntry(key, target.Value!,
                     a => fn((RuleJsonDynamic?)a[0], (RuleJsonDynamic?)a[1], (ExpressionInstance?)a[2],
                         (DateTimeOffset)a[3]!, (ExpressionUser?)a[4], (ExpressoRuleContext?)a[5],
-                        (RuleJsonDynamic?)a[6]),
+                        (RuleJsonDynamic?)a[6], (ExpressionConfig?)a[7], (RuleJsonDynamic?)a[8]),
                     compiled.Value.UsedIdentifiers);
                 needsResult |= compiled.Value.UsedIdentifiers.Contains(ExpressionScope.ResultVariable);
             }
@@ -620,15 +564,18 @@ internal sealed class DeclarativeMappingPlan
         }
 
         return Result<DeclarativeMappingPlan>.Ok(new DeclarativeMappingPlan(
-            signature.Parameters, select, into, entries.ToArray(), surfaces.ToArray(), needsResult,
+            signature.Parameters, select, into, entries.ToArray(), needsResult,
             selectVariable, selectTail, partial,
             !isInput && (select is not null || into is not null)
                 ? TaskResultView.Selector.For(select ?? DeclarativeTaskMappingRunner.DefaultOutputSelect)
                 : null));
     }
 
-    private static Result<JsonPath> Target(
-        string text, string what, bool isInput, List<string> surfaces, HashSet<string> partial)
+    /// <summary>The variables an input <c>select</c> may start at: every JSON-shaped one (not <c>config</c>).</summary>
+    internal static IEnumerable<string> SelectableInputVariables(ExpressionSignature signature) =>
+        signature.Parameters.Select(p => p.Name).Where(name => name != ExpressionScope.ConfigVariable);
+
+    private static Result<JsonPath> Target(string text, string what, bool isInput, HashSet<string> partial)
     {
         var parsed = Parse(text, what);
         if (!parsed.IsSuccess)
@@ -638,16 +585,8 @@ internal sealed class DeclarativeMappingPlan
             return Result<JsonPath>.Fail(Error.Validation(WorkflowErrorCodes.TaskExecution,
                 $"{what} {text} is not a writable property path."));
 
-        if (isInput)
-        {
-            if (!InputSurfaces.Contains(path.FirstSegment, StringComparer.Ordinal))
-                return Result<JsonPath>.Fail(Error.Validation(WorkflowErrorCodes.TaskExecution,
-                    $"{what} {text} must start with $.body, $.headers, $.query or $.route."));
-            if (!surfaces.Contains(path.FirstSegment))
-                surfaces.Add(path.FirstSegment);
-            if (path.WithoutFirstSegment().Text != "$")
-                partial.Add(path.FirstSegment);
-        }
+        if (isInput && path.WithoutFirstSegment().Text != "$")
+            partial.Add(path.FirstSegment);
 
         return parsed;
     }

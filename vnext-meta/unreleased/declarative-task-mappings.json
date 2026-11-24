@@ -9,7 +9,7 @@
       "declarativeTaskMappings": {
         "since": "next",
         "status": "stable",
-        "description": "Optional input and output blocks on a task binding (onExecuteTask) with select, into and set over JSON paths; values are Dynamic Expresso expressions over data, input, instance, now, user, context and (output phase) result. One instance-data append per mapping, no Roslyn compile, publish-time validation. Mutually exclusive with a mapping script on the same binding."
+        "description": "Optional input and output blocks on a task binding (onExecuteTask) with select, into and set over JSON paths; values are Dynamic Expresso expressions over data, input, instance, now, user, context, task (the task's config), config (host configuration, same reach as GetConfigValue) and (output phase) result, with a urlEncode function. Input targets are fields of the task's own config ($.url, $.body.x, $.headers.x, ...) re-read through the task type's Configure parser, so an environment-driven URL needs no .csx. One instance-data append per mapping, no Roslyn compile, publish-time validation. Mutually exclusive with a mapping script on the same binding."
       }
     }
   },

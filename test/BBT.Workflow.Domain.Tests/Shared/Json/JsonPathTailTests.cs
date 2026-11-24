@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using System.Text.Json;
 using BBT.Workflow.Definitions;
 using Shouldly;
@@ -7,10 +6,9 @@ using Xunit;
 namespace BBT.Workflow.Shared.Json;
 
 /// <summary>
-/// <see cref="JsonPath.WithoutFirstSegment"/> (the part of an input-phase <c>select</c> read inside its variable) and
-/// <see cref="TaskQueryString"/> (the <see cref="IHasQuery"/> surface of a task's query-string text).
+/// <see cref="JsonPath.WithoutFirstSegment"/>: the part of an input-phase <c>select</c> read inside its variable.
 /// </summary>
-public sealed class JsonPathTailAndQueryStringTests
+public sealed class JsonPathTailTests
 {
     [Theory]
     [InlineData("$.data.customer.id", "$['customer']['id']")]
@@ -35,20 +33,5 @@ public sealed class JsonPathTailAndQueryStringTests
             .TryRead(document.RootElement, out var value).ShouldBeTrue();
 
         value.GetInt32().ShouldBe(7);
-    }
-
-    [Fact]
-    public void TaskQueryString_ParsesAndFormats_PercentEncoded_InOrder()
-    {
-        var pairs = TaskQueryString.Parse("?size=10&q=a%20b&flag");
-
-        pairs.ShouldBe([
-            new KeyValuePair<string, string?>("size", "10"),
-            new KeyValuePair<string, string?>("q", "a b"),
-            new KeyValuePair<string, string?>("flag", null)
-        ]);
-        TaskQueryString.Format(pairs).ShouldBe("size=10&q=a%20b&flag");
-        TaskQueryString.Parse(null).ShouldBeEmpty();
-        TaskQueryString.Format([]).ShouldBeNull();
     }
 }

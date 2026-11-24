@@ -49,17 +49,27 @@ public static class ExpressionSignatures
         typeof(object),
         NoFunctions);
 
-    private static readonly ExpressionSignature MappingCondition = BuildMapping("mapping-condition", withResult: false);
-    private static readonly ExpressionSignature MappingInput = BuildMapping("mapping-input", withResult: false);
-    private static readonly ExpressionSignature MappingOutput = BuildMapping("mapping-output", withResult: true);
+    /// <summary>
+    /// Functions of the mapping-phase signatures: <c>urlEncode(text)</c> percent-encodes one URL component
+    /// (<see cref="Uri.EscapeDataString(string)"/>; null stays null), for a value spliced into <c>$.url</c>.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, Delegate> MappingFunctions = new Dictionary<string, Delegate>
+    {
+        ["urlEncode"] = (Func<object?, string?>)UrlEncode
+    };
+
+    private static readonly ExpressionSignature MappingCondition = BuildMapping("mapping-condition", phase: null);
+    private static readonly ExpressionSignature MappingInput = BuildMapping("mapping-input", ScopeKind.MappingInput);
+    private static readonly ExpressionSignature MappingOutput = BuildMapping("mapping-output", ScopeKind.MappingOutput);
 
     /// <summary>
     /// Declarative mapping / condition expressions bound by <see cref="ExpressionScope"/>, in this order:
     /// <c>data</c>, <c>input</c> (<see cref="RuleJsonDynamic"/>), <c>instance</c> (<see cref="ExpressionInstance"/>, camelCase members),
     /// <c>now</c> (<see cref="DateTimeOffset"/>), <c>user</c> (<see cref="ExpressionUser"/>), <c>context</c>
-    /// (<see cref="ExpressoRuleContext"/>), plus <c>result</c> (<see cref="RuleJsonDynamic"/>) for
-    /// <see cref="ScopeKind.MappingOutput"/> only; <see cref="object"/> out, no functions, assignment operators disabled
-    /// (<see cref="AssignmentOperators.None"/>). Each kind has its own
+    /// (<see cref="ExpressoRuleContext"/>); in both mapping phases also <c>task</c> (<see cref="RuleJsonDynamic"/>, the task's
+    /// <c>config</c>), <c>config</c> (<see cref="ExpressionConfig"/>) and the <c>urlEncode</c> function; plus <c>result</c>
+    /// (<see cref="RuleJsonDynamic"/>) for <see cref="ScopeKind.MappingOutput"/> only. <see cref="object"/> out, assignment
+    /// operators disabled (<see cref="AssignmentOperators.None"/>). Each kind has its own
     /// signature name, so the compile cache never mixes them.
     /// </summary>
     public static ExpressionSignature Mapping(ScopeKind kind) => kind switch
@@ -70,7 +80,7 @@ public static class ExpressionSignatures
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null)
     };
 
-    private static ExpressionSignature BuildMapping(string name, bool withResult)
+    private static ExpressionSignature BuildMapping(string name, ScopeKind? phase)
     {
         List<Parameter> parameters =
         [
@@ -81,10 +91,28 @@ public static class ExpressionSignatures
             new(ExpressionScope.UserVariable, typeof(ExpressionUser)),
             new(ExpressionScope.ContextVariable, typeof(ExpressoRuleContext))
         ];
-        if (withResult)
+        if (phase is not null)
+        {
+            parameters.Add(new Parameter(ExpressionScope.TaskVariable, typeof(RuleJsonDynamic)));
+            parameters.Add(new Parameter(ExpressionScope.ConfigVariable, typeof(ExpressionConfig)));
+        }
+
+        if (phase == ScopeKind.MappingOutput)
             parameters.Add(new Parameter(ExpressionScope.ResultVariable, typeof(RuleJsonDynamic)));
 
         // Assignment is off: `data.x = 1` would write through a borrowed view instead of producing a value.
-        return new ExpressionSignature(name, parameters, typeof(object), NoFunctions, AssignmentOperators.None);
+        return new ExpressionSignature(
+            name, parameters, typeof(object), phase is null ? NoFunctions : MappingFunctions, AssignmentOperators.None);
     }
+
+    /// <summary>
+    /// <c>urlEncode</c>: the value's text (a JSON string's content, any other value's <c>ToString()</c>) percent-encoded
+    /// as one URL component; null stays null.
+    /// </summary>
+    internal static string? UrlEncode(object? value) => value switch
+    {
+        null => null,
+        string text => Uri.EscapeDataString(text),
+        _ => value.ToString() is { } text ? Uri.EscapeDataString(text) : null
+    };
 }

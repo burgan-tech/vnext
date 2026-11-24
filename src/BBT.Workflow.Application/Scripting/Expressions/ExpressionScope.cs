@@ -4,6 +4,7 @@ using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting.Caller;
 using BBT.Workflow.Scripting.Rules;
 using DynamicExpresso;
+using Microsoft.Extensions.Configuration;
 
 namespace BBT.Workflow.Scripting.Expressions;
 
@@ -33,7 +34,9 @@ public enum ScopeKind
 /// phase-dependent <see cref="ScriptContext.Body"/>), <c>instance</c> the read-only instance view,
 /// <c>now</c> one clock reading per scope, <c>user</c> the caller (fail-closed roles), <c>context</c> the
 /// legacy <see cref="ExpressoRuleContext"/>, and in the output phase <c>result</c> the task's standard
-/// response (<c>body</c>, <c>headers</c>, <c>statusCode</c>). <c>data</c>, <c>instance.Data</c>, a
+/// response (<c>body</c>, <c>headers</c>, <c>statusCode</c>). In both mapping phases <c>task</c> is the task's
+/// <c>config</c> JSON and <c>config</c> the host configuration (<see cref="ExpressionConfig"/>), both given by
+/// <see cref="WithTask"/>. <c>data</c>, <c>instance.Data</c>, a
 /// <see cref="JsonElement"/> <c>input</c> and <c>result</c> are borrowed (<see cref="RuleJsonDynamic.Borrow"/>), never
 /// cloned. The binding constraint is the documents they borrow from: the caller's result document (and any
 /// <see cref="JsonElement"/> transition body) must stay undisposed until every value an expression returned has been
@@ -63,6 +66,12 @@ public sealed class ExpressionScope
     /// <summary>Name of the task-response variable (output phase only).</summary>
     public const string ResultVariable = "result";
 
+    /// <summary>Name of the task-configuration variable (mapping phases only).</summary>
+    public const string TaskVariable = "task";
+
+    /// <summary>Name of the host-configuration variable (mapping phases only).</summary>
+    public const string ConfigVariable = "config";
+
     private readonly ScriptContext _context;
     private readonly TimeProvider _clock;
     private readonly ICallerAccessor _caller;
@@ -80,6 +89,11 @@ public sealed class ExpressionScope
     private bool _resultBuilt;
     private RuleJsonDynamic? _resultView;
     private ExpressionUser? _user;
+    private JsonElement? _taskConfig;
+    private bool _taskBuilt;
+    private RuleJsonDynamic? _task;
+    private IConfiguration? _configuration;
+    private ExpressionConfig? _config;
     private bool _userPrepared;
     private string[]? _roles;
 
@@ -126,6 +140,20 @@ public sealed class ExpressionScope
         scope._resultBuilt = true;
         scope._resultView = result;
         return scope;
+    }
+
+    /// <summary>
+    /// Gives a mapping scope its <c>task</c> variable (the task's <c>config</c> as it stands when the expression runs,
+    /// borrowed) and its <c>config</c> variable (<paramref name="configuration"/>; an empty configuration when null).
+    /// Returns this scope.
+    /// </summary>
+    public ExpressionScope WithTask(JsonElement taskConfig, IConfiguration? configuration)
+    {
+        _taskConfig = taskConfig;
+        _taskBuilt = false;
+        _task = null;
+        _configuration = configuration;
+        return this;
     }
 
     /// <summary>
@@ -206,6 +234,8 @@ public sealed class ExpressionScope
         UserVariable => _user ??= new ExpressionUser(this),
         ContextVariable => _ruleContext ??= ExpressoRuleContextMapper.FromScriptContext(_context),
         ResultVariable when _kind == ScopeKind.MappingOutput => ResultView(),
+        TaskVariable when _kind != ScopeKind.Condition => TaskView(),
+        ConfigVariable when _kind != ScopeKind.Condition => _config ??= new ExpressionConfig(_configuration),
         _ => throw new ArgumentException($"'{name}' is not a variable of a {_kind} expression scope.", nameof(name))
     };
 
@@ -244,6 +274,16 @@ public sealed class ExpressionScope
         _instanceBuilt = true;
         _instance = _context.Instance is { } instance ? new ExpressionInstance(instance) : null;
         return _instance;
+    }
+
+    private RuleJsonDynamic? TaskView()
+    {
+        if (_taskBuilt)
+            return _task;
+
+        _taskBuilt = true;
+        _task = _taskConfig is { ValueKind: JsonValueKind.Object } element ? RuleJsonDynamic.Borrow(element) : null;
+        return _task;
     }
 
     private RuleJsonDynamic? ResultView()

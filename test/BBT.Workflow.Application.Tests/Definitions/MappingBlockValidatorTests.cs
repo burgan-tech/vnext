@@ -35,7 +35,7 @@ public class MappingBlockValidatorTests
     public void Valid_DeclarativeBinding_NoErrors()
     {
         Errors("""
-            "input":{"select":"$.data.customer","into":"$.body","set":{"$.headers.x-channel":"user.available","$.query.q":"now.Year"}},
+            "input":{"select":"$.data.customer","into":"$.body","set":{"$.headers.x-channel":"user.available","$.url":"task.url.ToString().Replace(\"API_BASEURL\", config.get(\"Api:BaseUrl\", \"http://x\")) + \"/\" + urlEncode(data.id)"}},
             "output":{"select":"$.body.score","into":"$.kyc.score","set":{"$.kyc.ok":"result.statusCode.AsInt32() == 200"}}
             """).ShouldBeEmpty();
     }
@@ -167,24 +167,37 @@ public class MappingBlockValidatorTests
     }
 
     [Theory]
+    [InlineData("$.url")]
     [InlineData("$.data.x")]
-    [InlineData("$")]
-    [InlineData("$.bodyx")]
-    public void InputTarget_OutsideRequestSurfaces_IsRejected(string into)
+    [InlineData("$.queryString")]
+    [InlineData("$.route.id")]
+    public void InputTarget_IsAnyTaskConfigField(string into)
     {
-        var errors = Errors($$"""
-            "input":{"select":"$.data.a","into":"{{into}}"}
-            """);
-        errors.ShouldHaveSingleItem().ShouldStartWith($"{Loc}.input.into: ");
+        // A target addresses the task's config; which fields a task TYPE reads is not resolvable at publish.
+        Errors($$$"""
+            "input":{"select":"$.data.a","into":"{{{into}}}","set":{"{{{into}}}":"1"}}
+            """).ShouldBeEmpty();
     }
 
     [Fact]
-    public void InputSetKey_OutsideRequestSurfaces_IsRejected()
+    public void InputTarget_Root_IsRejected()
     {
         var errors = Errors("""
-            "input":{"set":{"$.data.x":"1"}}
+            "input":{"select":"$.data.a","into":"$"}
             """);
-        errors.ShouldHaveSingleItem().ShouldStartWith($"{Loc}.input.set['$.data.x']: ");
+        errors.ShouldHaveSingleItem().ShouldStartWith($"{Loc}.input.into: ");
+        errors[0].ShouldContain("field of the task's config");
+    }
+
+    [Fact]
+    public void InputSelect_MayReadTheTaskConfig_ButNotHostConfig()
+    {
+        Errors("""
+            "input":{"select":"$.task.body","into":"$.body.copy"}
+            """).ShouldBeEmpty();
+        Errors("""
+            "input":{"select":"$.config.Api","into":"$.body.copy"}
+            """).ShouldHaveSingleItem().ShouldStartWith($"{Loc}.input.select: ");
     }
 
     [Fact]
@@ -305,16 +318,5 @@ public class MappingBlockValidatorTests
         Errors("""
             "output":{"into":"$.response"}
             """).ShouldBeEmpty();
-    }
-
-    [Theory]
-    [InlineData("\"input\":{\"set\":{\"$.route.id\":\"1\"}}", "input.set['$.route.id']")]
-    [InlineData("\"input\":{\"select\":\"$.data.id\",\"into\":\"$.route.id\"}", "input.into")]
-    public void InputRouteTarget_IsRejected_NotSupportedYet(string block, string where)
-    {
-        var errors = Errors(block);
-        var error = errors.ShouldHaveSingleItem();
-        error.ShouldStartWith($"{Loc}.{where}: ");
-        error.ShouldContain("not supported yet");
     }
 }

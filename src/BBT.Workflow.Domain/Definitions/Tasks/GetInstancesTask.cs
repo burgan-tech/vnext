@@ -8,7 +8,7 @@ namespace BBT.Workflow.Definitions;
 /// Get Instances Task Definition - Retrieves a list of instance data from a workflow
 /// by calling the data function endpoint with pagination and filtering support.
 /// </summary>
-public sealed class GetInstancesTask : WorkflowTask, IHasHeaders
+public sealed class GetInstancesTask : WorkflowTask
 {
     private GetInstancesTask()
     {
@@ -353,10 +353,4 @@ public sealed class GetInstancesTask : WorkflowTask, IHasHeaders
     {
         return new GetInstancesTask();
     }
-
-    /// <inheritdoc />
-    JsonElement? IHasHeaders.CurrentHeaders => Headers;
-
-    /// <inheritdoc />
-    void IHasHeaders.ApplyHeaders(Dictionary<string, string?> headers) => SetHeaders(headers);
 }

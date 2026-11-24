@@ -6,7 +6,7 @@ namespace BBT.Workflow.Definitions;
 /// <summary>
 /// Direct Trigger Task Definition - Executes a transition on a target workflow instance
 /// </summary>
-public sealed class DirectTriggerTask : WorkflowTask, IHasBody, IHasHeaders
+public sealed class DirectTriggerTask : WorkflowTask
 {
     private DirectTriggerTask()
     {
@@ -360,16 +360,5 @@ public sealed class DirectTriggerTask : WorkflowTask, IHasBody, IHasHeaders
     {
         return new DirectTriggerTask();
     }
-
-    /// <inheritdoc />
-    JsonElement? IHasBody.CurrentBody => Body;
-
-    /// <inheritdoc />
-    void IHasBody.ApplyBody(JsonElement body) => SetBody(body);
-
-    /// <inheritdoc />
-    JsonElement? IHasHeaders.CurrentHeaders => Headers;
-
-    /// <inheritdoc />
-    void IHasHeaders.ApplyHeaders(Dictionary<string, string?> headers) => SetHeaders(headers);
 }
+

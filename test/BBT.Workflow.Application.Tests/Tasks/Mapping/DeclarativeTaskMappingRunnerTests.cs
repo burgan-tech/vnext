@@ -21,6 +21,7 @@ using BBT.Workflow.Shared;
 using BBT.Workflow.Tasks.Coordinator;
 using BBT.Workflow.Tasks.Executors;
 using BBT.Workflow.Tasks.Invocation;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -32,7 +33,7 @@ namespace BBT.Workflow.Tasks.Mapping;
 
 /// <summary>
 /// The declarative <c>input</c> / <c>output</c> blocks of a task binding (<see cref="DeclarativeTaskMappingRunner"/>):
-/// select/into before set, declaration order, missing sources, encrypted tokens, input surfaces, failures, the
+/// select/into before set, declaration order, missing sources, encrypted tokens, task-config input, failures, the
 /// <c>user</c> variable, materialization before the result document goes away, and parallel branches sharing the
 /// compiled delegates.
 /// </summary>
@@ -509,7 +510,7 @@ public sealed class DeclarativeTaskMappingRunnerTests
     // ---- input ----
 
     [Fact]
-    public async Task Input_Set_AppliesThroughSurfaceSetters()
+    public async Task Input_Set_WritesTheTaskConfig_HeadersAsStrings()
     {
         var task = Http("""{ "url": "https://x.test", "method": "POST", "body": { "static": 1 }, "headers": { "h0": "v0" } }""");
         var input = Block(select: "$.data.customer", into: "$.body.customer", set:
@@ -532,38 +533,86 @@ public sealed class DeclarativeTaskMappingRunnerTests
     }
 
     [Fact]
-    public async Task Input_Query_AppliesThroughTheQueryStringSetter()
+    public async Task Input_Url_IsComposedFromTheTaskConfigAndHostConfig()
+    {
+        // The API_BASEURL placeholder a C# InputHandler resolves with GetConfigValue, done declaratively.
+        var task = Http("""{ "url": "API_BASEURL/api/customers", "method": "GET" }""");
+        var ctx = Context(task, input: Block(set:
+        [
+            ("$.url", "task.url.ToString().Replace(\"API_BASEURL\", config.get(\"Api:BaseUrl\", \"http://fallback\")) + \"/\" + urlEncode(data.customer.name) + \"?lang=tr\"")
+        ]));
+
+        (await Runner(("Api:BaseUrl", "https://api.test")).PrepareInputAsync(task, ctx, CancellationToken.None))
+            .IsSuccess.ShouldBeTrue();
+
+        task.Url.ShouldBe("https://api.test/api/customers/Ada?lang=tr");
+        task.Config.GetProperty("url").GetString().ShouldBe(task.Url); // the config the output phase's `task` sees
+        task.Method.ShouldBe("GET");                                   // untouched fields keep their configured value
+    }
+
+    [Fact]
+    public async Task Input_AnyConfigField_IsWritable_ThroughTheTypesOwnParser()
     {
         var task = DaprServiceTask.Create(
             """{ "appId": "a", "methodName": "/m", "httpVerb": "GET", "queryString": "size=10" }""".ToJsonElement());
         task.SetReference(new Reference("svc", "test-domain", "sys-tasks", "1.0.0"));
-        var ctx = Context(task, input: Block(set: [("$.query.page", "2"), ("$.query.q", "\"a b\"")]));
+        var ctx = Context(task, input: Block(set:
+        [
+            ("$.queryString", "task.queryString.ToString() + \"&q=\" + urlEncode(\"a b\")"),
+            ("$.methodName", "\"/m/\" + data.customer.id")
+        ]));
 
         (await Runner().PrepareInputAsync(task, ctx, CancellationToken.None)).IsSuccess.ShouldBeTrue();
 
-        task.QueryString.ShouldBe("size=10&page=2&q=a%20b");
+        task.QueryString.ShouldBe("size=10&q=a%20b");
+        task.MethodName.ShouldBe("/m/7");
+        task.AppId.ShouldBe("a");
     }
 
     [Fact]
-    public async Task Input_UnsupportedSurface_FailsAtRunTimeWithClearError()
+    public async Task Input_ValueTheTaskParserRejects_FailsTheMapping()
     {
-        // A binding's task type is not resolvable at publish (the binding holds only a reference), so a surface the
-        // type lacks is reported when the mapping runs — as a Result failure, never silently dropped.
         var logger = new CapturingLogger();
-        var task = Http();
-        var ctx = Context(task, input: Block(set: [("$.query.page", "2")]));
+        var task = Http("""{ "url": "https://x.test", "method": "POST" }""");
+        var ctx = Context(task, input: Block(set: [("$.url", "42")]));
 
         var result = await Runner().PrepareInputAsync(task, ctx, CancellationToken.None, Site(logger));
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.TaskExecution);
-        result.Error.Message.ShouldBe(
-            "Http task declarative input mapping failed: task type Http has no 'query' input surface; target only the surfaces it supports.");
+        result.Error.Message.ShouldStartWith("Http task declarative input mapping failed: ");
         logger.Events.ShouldHaveSingleItem().Message.ShouldContain("Phase=input");
     }
 
     [Fact]
-    public async Task Input_PathInsideANonObjectSurface_FailsInsteadOfReplacingIt()
+    public async Task Input_FieldTheTypeDoesNotRead_IsIgnoredLikeInTheDefinition()
+    {
+        var task = Http("""{ "url": "https://x.test", "method": "POST" }""");
+        var ctx = Context(task, input: Block(set: [("$.nope", "1")]));
+
+        (await Runner().PrepareInputAsync(task, ctx, CancellationToken.None)).IsSuccess.ShouldBeTrue();
+
+        task.Url.ShouldBe("https://x.test");
+    }
+
+    [Fact]
+    public async Task Output_TaskVariable_SeesTheConfigTheInputPhaseLeft()
+    {
+        var task = Http("""{ "url": "API_BASEURL/a", "method": "GET" }""");
+        var binding = OnExecuteTask.Create(1, task, null,
+            input: Block(set: [("$.url", "task.url.ToString().Replace(\"API_BASEURL\", config.get(\"Api:BaseUrl\"))")]),
+            output: Block(set: [("$.calledUrl", "task.url")]));
+        var ctx = Context(task, binding: binding);
+        var runner = Runner(("Api:BaseUrl", "https://api.test"));
+
+        (await runner.PrepareInputAsync(task, ctx, CancellationToken.None)).IsSuccess.ShouldBeTrue();
+        var output = await runner.ProcessOutputAsync(task, ResultWith("{}"), ctx, CancellationToken.None);
+
+        Json((JsonObject?)output.Value).ShouldBe("""{"calledUrl":"https://api.test/a"}""");
+    }
+
+    [Fact]
+    public async Task Input_PathInsideANonObjectField_FailsInsteadOfReplacingIt()
     {
         var task = Http("""{ "url": "https://x.test", "method": "POST", "body": [1, 2] }""");
         var ctx = Context(task, input: Block(set: [("$.body.x", "1")]));
@@ -577,7 +626,7 @@ public sealed class DeclarativeTaskMappingRunnerTests
     }
 
     [Fact]
-    public async Task Input_WholeSurfaceTarget_ReplacesANonObjectSurface()
+    public async Task Input_WholeFieldTarget_ReplacesANonObjectField()
     {
         var task = Http("""{ "url": "https://x.test", "method": "POST", "body": [1, 2] }""");
         var ctx = Context(task, input: Block(set: [("$.body", "\"text\"")]));
@@ -777,7 +826,11 @@ public sealed class DeclarativeTaskMappingRunnerTests
 
     // ---- helpers ----
 
-    private DeclarativeTaskMappingRunner Runner() => new(new ExpressionCompiler(64), _clock);
+    private DeclarativeTaskMappingRunner Runner(params (string Key, string Value)[] configuration) =>
+        new(new ExpressionCompiler(64), _clock,
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(configuration.Select(c => new KeyValuePair<string, string?>(c.Key, c.Value)))
+                .Build());
 
     private static TaskMappingSite Site(CapturingLogger logger) =>
         TaskMappingSite.For(TaskType.Http) with { Logger = logger.For<HttpTaskExecutor>() };

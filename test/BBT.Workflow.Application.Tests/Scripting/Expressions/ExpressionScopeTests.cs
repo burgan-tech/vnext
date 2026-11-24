@@ -10,6 +10,7 @@ using BBT.Workflow.Scripting;
 using BBT.Workflow.Scripting.Caller;
 using BBT.Workflow.Scripting.Expressions;
 using BBT.Workflow.Scripting.Rules;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Shouldly;
@@ -17,8 +18,8 @@ using Xunit;
 
 namespace BBT.Workflow.Application.Tests.Scripting.Expressions;
 
-using InputFn = Func<RuleJsonDynamic, RuleJsonDynamic, ExpressionInstance, DateTimeOffset, ExpressionUser, ExpressoRuleContext, object>;
-using OutputFn = Func<RuleJsonDynamic, RuleJsonDynamic, ExpressionInstance, DateTimeOffset, ExpressionUser, ExpressoRuleContext, RuleJsonDynamic, object>;
+using InputFn = Func<RuleJsonDynamic, RuleJsonDynamic, ExpressionInstance, DateTimeOffset, ExpressionUser, ExpressoRuleContext, RuleJsonDynamic, ExpressionConfig, object>;
+using OutputFn = Func<RuleJsonDynamic, RuleJsonDynamic, ExpressionInstance, DateTimeOffset, ExpressionUser, ExpressoRuleContext, RuleJsonDynamic, ExpressionConfig, RuleJsonDynamic, object>;
 
 public sealed class ExpressionScopeTests
 {
@@ -107,9 +108,13 @@ public sealed class ExpressionScopeTests
     public void Mapping_DeclaresVariables_ResultOnlyForOutput()
     {
         ExpressionSignatures.Mapping(ScopeKind.MappingInput).Parameters.Select(p => p.Name)
-            .ShouldBe(["data", "input", "instance", "now", "user", "context"]);
+            .ShouldBe(["data", "input", "instance", "now", "user", "context", "task", "config"]);
         ExpressionSignatures.Mapping(ScopeKind.MappingOutput).Parameters.Select(p => p.Name)
-            .ShouldBe(["data", "input", "instance", "now", "user", "context", "result"]);
+            .ShouldBe(["data", "input", "instance", "now", "user", "context", "task", "config", "result"]);
+        ExpressionSignatures.Mapping(ScopeKind.Condition).Parameters.Select(p => p.Name)
+            .ShouldBe(["data", "input", "instance", "now", "user", "context"]);
+        ExpressionSignatures.Mapping(ScopeKind.MappingInput).Functions.Keys.ShouldBe(["urlEncode"]);
+        ExpressionSignatures.Mapping(ScopeKind.Condition).Functions.ShouldBeEmpty();
         ExpressionSignatures.Mapping(ScopeKind.MappingInput).ReturnType.ShouldBe(typeof(object));
         ExpressionSignatures.Mapping(ScopeKind.MappingInput).Parameters.Single(p => p.Name == "now").Type
             .ShouldBe(typeof(DateTimeOffset));
@@ -222,6 +227,92 @@ public sealed class ExpressionScopeTests
         (await EvalAsync(Scope(ctx), "instance.effectiveStatus")).ShouldBe(instance.GetEffectiveStatus.Code);
         (await EvalAsync(Scope(ctx), "instance.type")).ShouldBe("R");
         (await EvalAsync(Scope(ctx), "instance.data.x.AsInt32()")).ShouldBe(42);
+    }
+
+    // ---- task / config / urlEncode ----
+
+    private static IConfiguration Configuration(params (string Key, string Value)[] values) =>
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(values.Select(v => new KeyValuePair<string, string?>(v.Key, v.Value)))
+            .Build();
+
+    [Fact]
+    public async Task Task_ReadsTheTaskConfig()
+    {
+        using var config = JsonDocument.Parse("""{"url":"API_BASEURL/api/customers","method":"GET"}""");
+        var scope = Scope(Context()).WithTask(config.RootElement, null);
+
+        (await EvalAsync(scope, "task.url.ToString()")).ShouldBe("API_BASEURL/api/customers");
+        (await EvalAsync(scope, "task.nope == null")).ShouldBe(true);
+    }
+
+    [Fact]
+    public async Task Config_ReadsHostConfiguration_WithFallback()
+    {
+        using var task = JsonDocument.Parse("{}");
+        var scope = Scope(Context()).WithTask(task.RootElement, Configuration(("Api:BaseUrl", "https://api.test")));
+
+        (await EvalAsync(scope, "config.get(\"Api:BaseUrl\")")).ShouldBe("https://api.test");
+        (await EvalAsync(scope, "config.get(\"Api:Missing\")")).ShouldBeNull();
+        (await EvalAsync(scope, "config.get(\"Api:Missing\", \"http://localhost:3001\")")).ShouldBe("http://localhost:3001");
+        await Should.ThrowAsync<ArgumentException>(() => EvalAsync(scope, "config.get(\" \")"));
+    }
+
+    [Fact]
+    public async Task Config_WithoutConfiguration_ReadsAsUnset()
+    {
+        using var task = JsonDocument.Parse("{}");
+        var scope = Scope(Context()).WithTask(task.RootElement, null);
+
+        (await EvalAsync(scope, "config.get(\"Api:BaseUrl\", \"fallback\")")).ShouldBe("fallback");
+    }
+
+    [Fact]
+    public async Task Url_IsComposedFromTaskConfigAndHostConfig()
+    {
+        using var task = JsonDocument.Parse("""{"url":"API_BASEURL/api/customers/"}""");
+        var scope = Scope(Context()).WithTask(task.RootElement, Configuration(("Api:BaseUrl", "https://api.test")));
+
+        (await EvalAsync(scope,
+                "task.url.ToString().Replace(\"API_BASEURL\", config.get(\"Api:BaseUrl\")) + urlEncode(data.customer.name) + \"?q=\" + urlEncode(\"a b&c\")"))
+            .ShouldBe("https://api.test/api/customers/Ada?q=a%20b%26c");
+    }
+
+    [Theory]
+    [InlineData("urlEncode(data.x)", "42")]
+    [InlineData("urlEncode(\"ç/ş\")", "%C3%A7%2F%C5%9F")]
+    [InlineData("urlEncode(data.missing) == null", "True")]
+    public async Task UrlEncode_EncodesOneComponent(string expression, string expected)
+    {
+        (await EvalAsync(Scope(Context()), expression))!.ToString().ShouldBe(expected);
+    }
+
+    [Theory]
+    [InlineData("\"\" + task.amount", "1250.5")]
+    [InlineData("urlEncode(task.amount)", "1250.5")]
+    [InlineData("task.amount.AsDouble().ToString(\"0.00\")", "1250,50")]
+    public async Task NumberSplicing_JsonTextIsCultureFree_FormattedNumberFollowsTheCulture(string expression, string expected)
+    {
+        using var task = JsonDocument.Parse("""{"amount":1250.5}""");
+        var previous = System.Globalization.CultureInfo.CurrentCulture;
+        System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("tr-TR");
+        try
+        {
+            var scope = Scope(Context()).WithTask(task.RootElement, null);
+            (await EvalAsync(scope, expression))!.ToString().ShouldBe(expected);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = previous;
+        }
+    }
+
+    [Fact]
+    public void TaskAndConfig_AreNotConditionVariables()
+    {
+        _compiler.Compile<Func<RuleJsonDynamic, RuleJsonDynamic, ExpressionInstance, DateTimeOffset, ExpressionUser, ExpressoRuleContext, object>>(
+                "task.url", ExpressionSignatures.Mapping(ScopeKind.Condition))
+            .IsSuccess.ShouldBeFalse();
     }
 
     [Fact]

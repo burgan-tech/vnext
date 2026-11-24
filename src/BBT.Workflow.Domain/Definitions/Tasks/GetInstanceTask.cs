@@ -8,7 +8,7 @@ namespace BBT.Workflow.Definitions;
 /// from a workflow instance. Task-level equivalent of
 /// <c>GET /api/v1/{domain}/workflows/{workflow}/instances/{instance}</c>.
 /// </summary>
-public sealed class GetInstanceTask : WorkflowTask, IHasHeaders
+public sealed class GetInstanceTask : WorkflowTask
 {
     private GetInstanceTask()
     {
@@ -304,10 +304,4 @@ public sealed class GetInstanceTask : WorkflowTask, IHasHeaders
     {
         return new GetInstanceTask();
     }
-
-    /// <inheritdoc />
-    JsonElement? IHasHeaders.CurrentHeaders => Headers;
-
-    /// <inheritdoc />
-    void IHasHeaders.ApplyHeaders(Dictionary<string, string?> headers) => SetHeaders(headers);
 }
