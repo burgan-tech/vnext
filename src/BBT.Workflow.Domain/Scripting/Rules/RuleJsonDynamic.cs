@@ -43,6 +43,9 @@ public sealed class RuleJsonDynamic : DynamicObject
     /// through it) is valid only while the <see cref="JsonDocument"/> that owns the element is alive — after
     /// that document is disposed every read throws <see cref="ObjectDisposedException"/>. Never store a
     /// borrowed view beyond the scope; use <see cref="FromJsonElement"/> when the value must outlive it.
+    /// A borrowed view is also lenient where a legacy view fails: a member of a non-object, or an index that is out
+    /// of range or of the wrong kind, reads as missing (<c>null</c>) — a declarative mapping's missing source writes
+    /// nothing (RF-1). Views from <see cref="FromJsonElement"/> / <see cref="FromObject"/> keep failing as before.
     /// </summary>
     public static RuleJsonDynamic Borrow(JsonElement element) => new(element, borrowed: true);
 
@@ -129,7 +132,7 @@ public sealed class RuleJsonDynamic : DynamicObject
         }
 
         if (_element.ValueKind != JsonValueKind.Object)
-            return false;
+            return _borrowed; // a Borrow (declarative scope) view reads a member of a non-object as missing (null)
 
         if (TryGetPropertyIgnoreCase(_element, binder.Name, out var prop))
         {
@@ -163,12 +166,13 @@ public sealed class RuleJsonDynamic : DynamicObject
         if (indexes[0] is int idx && _element.ValueKind == JsonValueKind.Array)
         {
             if (idx < 0 || idx >= _element.GetArrayLength())
-                return false;
+                return _borrowed;
             result = Wrap(_element[idx]);
             return true;
         }
 
-        return false;
+        // A Borrow (declarative scope) view reads an index that does not apply as missing (null); legacy views fail.
+        return _borrowed;
     }
 
     /// <inheritdoc />

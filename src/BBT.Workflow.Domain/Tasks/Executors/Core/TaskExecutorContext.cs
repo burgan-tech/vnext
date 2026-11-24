@@ -59,12 +59,13 @@ public sealed record TaskExecutorContext(
 
     /// <summary>
     /// Per-execution memo of the compiled declarative mapping plans (parsed paths and compiled expressions), keyed by
-    /// the binding's <see cref="MappingBlock"/> instance (reference identity) — the declarative counterpart of
+    /// the binding's <see cref="MappingBlock"/> instance (reference identity) and phase (<c>input</c> / <c>output</c>,
+    /// since one block compiles differently per phase) — the declarative counterpart of
     /// <see cref="CompiledMappingFactories"/>. Boxed as <see cref="object"/> because the plan type lives in the
     /// Application layer. The compiled delegates inside a plan come from the process-wide expression compiler and are
     /// immutable, so parallel branches running the same binding share them safely.
     /// </summary>
-    public Dictionary<MappingBlock, object>? CompiledDeclarativeMappings { get; set; }
+    public Dictionary<(MappingBlock Block, string Phase), object>? CompiledDeclarativeMappings { get; set; }
 
     /// <summary>
     /// The caller of the hop this task runs in, for the <c>user</c> variable of declarative mapping expressions:

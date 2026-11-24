@@ -127,11 +127,40 @@ public sealed class DeclarativeTaskMappingRunnerTests
     }
 
     [Fact]
+    public async Task Output_MissingIntermediate_WritesNothing()
+    {
+        // RF-1: a path through a missing intermediate (no '?.') is a missing source — the entry writes nothing.
+        var ctx = Context(Http(), output: Block(set:
+        [
+            ("$.id", "data.customer.id"),
+            ("$.deep", "data.x.y.z"),
+            ("$.item", "data.list[9].name"),
+            ("$.kept", "data.x")
+        ]), instanceJson: """{"x":1,"list":[]}""");
+
+        var delta = await OutputAsync(ctx, ResultWith("{}"));
+
+        Json(delta).ShouldBe("""{"kept":1}""");
+    }
+
+    [Fact]
+    public async Task Input_MissingIntermediate_WritesNothing()
+    {
+        var task = Http("""{ "url": "https://x.test", "method": "POST", "body": { "static": 1 } }""");
+        var ctx = Context(task, input: Block(set: [("$.body.id", "data.missing.id"), ("$.body.n", "input.none.deeper")]),
+            instanceJson: """{"x":1}""");
+
+        (await Runner().PrepareInputAsync(task, ctx, CancellationToken.None)).IsSuccess.ShouldBeTrue();
+
+        task.Body!.Value.GetRawText().ShouldBe("""{"static":1}""");
+    }
+
+    [Fact]
     public async Task Output_ExpressionThrows_FailsTheMapping_NeverSkips()
     {
-        // A member read on a missing intermediate (no '?.') throws inside the expression: that is a failure, not a skip.
+        // An expression that genuinely fails (a method call with an out-of-range argument) is a failure, not a skip.
         var logger = new CapturingLogger();
-        var ctx = Context(Http(), output: Block(set: [("$.id", "data.customer.id")]), instanceJson: """{"x":1}""");
+        var ctx = Context(Http(), output: Block(set: [("$.id", "\"abc\".Substring(10)")]), instanceJson: """{"x":1}""");
 
         var result = await Runner().ProcessOutputAsync(ctx.Task, ResultWith("{}"), ctx, CancellationToken.None,
             Site(logger));
@@ -243,6 +272,7 @@ public sealed class DeclarativeTaskMappingRunnerTests
         var unguarded = Context(Http(), output: Block(set: [("$.can", "user.hasRole(\"x\")")]));
         var result = await Runner().ProcessOutputAsync(unguarded.Task, ResultWith("{}"), unguarded, CancellationToken.None);
         result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrors.CallerRolesUnavailable().Code);
     }
 
     // ---- input ----
@@ -299,6 +329,101 @@ public sealed class DeclarativeTaskMappingRunnerTests
         result.Error.Message.ShouldBe(
             "Http task declarative input mapping failed: task type Http has no 'query' input surface; target only the surfaces it supports.");
         logger.Events.ShouldHaveSingleItem().Message.ShouldContain("Phase=input");
+    }
+
+    [Fact]
+    public async Task Input_PathInsideANonObjectSurface_FailsInsteadOfReplacingIt()
+    {
+        var task = Http("""{ "url": "https://x.test", "method": "POST", "body": [1, 2] }""");
+        var ctx = Context(task, input: Block(set: [("$.body.x", "1")]));
+
+        var result = await Runner().PrepareInputAsync(task, ctx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Message.ShouldContain("'body' is a JSON Array, not an object");
+        task.Body!.Value.ValueKind.ShouldBe(JsonValueKind.Array); // left as configured
+        task.Body.Value.GetArrayLength().ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task Input_WholeSurfaceTarget_ReplacesANonObjectSurface()
+    {
+        var task = Http("""{ "url": "https://x.test", "method": "POST", "body": [1, 2] }""");
+        var ctx = Context(task, input: Block(set: [("$.body", "\"text\"")]));
+
+        (await Runner().PrepareInputAsync(task, ctx, CancellationToken.None)).IsSuccess.ShouldBeTrue();
+
+        task.Body!.Value.GetString().ShouldBe("text");
+    }
+
+    // ---- failure plumbing ----
+
+    [Fact]
+    public async Task Output_ResultDocumentThatCannotBeBuilt_IsAResultFailure_WithLog()
+    {
+        var logger = new CapturingLogger();
+        var ctx = Context(Http(), output: Block(set: [("$.v", "result.body")]));
+        var unserializable = TaskInvocationResult.Success(data: new ThrowingData(), statusCode: 200);
+
+        var result = await Runner().ProcessOutputAsync(ctx.Task, unserializable, ctx, CancellationToken.None, Site(logger));
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Message.ShouldStartWith("Http task declarative output mapping failed: ");
+        logger.Events.ShouldHaveSingleItem().Id.ShouldBe(TaskDeclarativeMappingFailedEventId);
+    }
+
+    [Fact]
+    public async Task Cancellation_OfTheMappingsToken_Propagates()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var ctx = Context(Http(), output: Block(set: [("$.a", "1")]));
+
+        await Should.ThrowAsync<OperationCanceledException>(() =>
+            Runner().ProcessOutputAsync(ctx.Task, ResultWith("{}"), ctx, cts.Token));
+    }
+
+    [Fact]
+    public async Task Memo_IsKeyedByBlockAndPhase()
+    {
+        var task = Http("""{ "url": "https://x.test", "method": "POST" }""");
+        var shared = Block(set: [("$.body.a", "1")]);
+        var ctx = Context(task, binding: OnExecuteTask.Create(1, task, null, input: shared, output: shared));
+
+        (await Runner().PrepareInputAsync(task, ctx, CancellationToken.None)).IsSuccess.ShouldBeTrue();
+        var output = await Runner().ProcessOutputAsync(task, ResultWith("{}"), ctx, CancellationToken.None);
+
+        output.IsSuccess.ShouldBeTrue(output.IsSuccess ? null : output.Error.Message);
+        Json((JsonObject?)output.Value).ShouldBe("""{"body":{"a":1}}""");
+        ctx.CompiledDeclarativeMappings!.Count.ShouldBe(2);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Executor_WithoutDeclarativeSupport_FailsABindingWithBlocks(bool inputBlock)
+    {
+        var logger = new CapturingLogger();
+        var executor = new HumanTaskExecutor(logger.For<HumanTaskExecutor>());
+        var task = HumanTask.Create("""{ "title": "t" }""".ToJsonElement());
+        task.SetReference(new Reference("approve", "test-domain", "sys-tasks", "1.0.0"));
+        var block = Block(set: [("$.a", "1")]);
+        var binding = inputBlock
+            ? OnExecuteTask.Create(1, task, null, input: Block(set: [("$.body.a", "1")]))
+            : OnExecuteTask.Create(1, task, null, output: block);
+
+        var result = await executor.ExecuteAsync(Context(task, binding: binding), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.TaskExecution);
+        result.Error.Message.ShouldBe("task type Human does not support declarative input/output blocks");
+        var logged = logger.Events.Single(e => e.Id == TaskDeclarativeMappingFailedEventId);
+        logged.Message.ShouldContain(inputBlock ? "Phase=input" : "Phase=output");
+    }
+
+    private sealed class ThrowingData
+    {
+        public string Value => throw new InvalidOperationException("cannot read");
     }
 
     // ---- parallel branches (RF-4) ----

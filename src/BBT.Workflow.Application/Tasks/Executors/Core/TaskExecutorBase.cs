@@ -81,6 +81,12 @@ public abstract class TaskExecutorBase<TTask> : ITaskExecutor
     /// <summary>The output <c>Data</c> when the binding maps no output. Default <see cref="TaskInvocationResult.Data"/>.</summary>
     protected virtual object? UnmappedOutput(TaskInvocationResult invocationResult) => invocationResult.Data;
 
+    /// <summary>
+    /// Whether this executor runs a binding's declarative <c>input</c>/<c>output</c> blocks. Default: it has a mapping
+    /// runner. An executor without one (FanOut, Notification, Human) fails a binding that carries blocks.
+    /// </summary>
+    protected virtual bool SupportsDeclarativeMapping => MappingRunner is not null;
+
     /// <summary>This executor's labels, logger and flags for the mapping runner.</summary>
     protected TaskMappingSite MappingSite => _mappingSite ??= new TaskMappingSite(
         Logger, TaskType.ToString(), InputMappingFailurePrefix, OutputMappingFailurePrefix)
@@ -112,6 +118,16 @@ public abstract class TaskExecutorBase<TTask> : ITaskExecutor
 
         var task = (TTask)context.Task;
         var taskTypeStr = context.Task.GetTaskType().ToString();
+
+        // A declarative input/output block on a task type that cannot run it must fail, never be silently ignored.
+        if (context.OnExecuteTask.HasDeclarativeMapping && !SupportsDeclarativeMapping)
+        {
+            var phase = context.OnExecuteTask.Input is not null ? "input" : "output";
+            var message = $"task type {TaskType} does not support declarative input/output blocks";
+            Logger.TaskDeclarativeMappingFailed(
+                taskKey, TaskType.ToString(), phase, context.ScriptContext.Instance?.Id ?? Guid.Empty, message);
+            return Result<StandardTaskResponse>.Fail(Error.Failure(WorkflowErrorCodes.TaskExecution, message));
+        }
 
         // 2. PrepareInput (virtual - custom per executor)
         Result<ScriptResponse?> inputResult;

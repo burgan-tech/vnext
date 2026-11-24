@@ -241,4 +241,44 @@ public class MappingBlockValidatorTests
         msgs.ShouldContain(m => m.StartsWith("sharedTransitions[note].onExecutionTasks[0].output.into: "));
         msgs.Count.ShouldBe(6);
     }
+
+    [Fact]
+    public void InputSelect_WithoutInto_IsRejected()
+    {
+        var errors = Errors("""
+            "input":{"select":"$.data.customer"}
+            """);
+        errors.ShouldHaveSingleItem().ShouldStartWith($"{Loc}.input.select: ");
+    }
+
+    [Fact]
+    public void InputInto_WithoutSelect_IsRejected()
+    {
+        var errors = Errors("""
+            "input":{"into":"$.body.customer"}
+            """);
+        errors.ShouldHaveSingleItem().ShouldStartWith($"{Loc}.input.into: ");
+    }
+
+    [Fact]
+    public void OutputSelect_And_Into_StayOptionalOnTheirOwn()
+    {
+        Errors("""
+            "output":{"select":"$.body.customer"}
+            """).ShouldBeEmpty();
+        Errors("""
+            "output":{"into":"$.response"}
+            """).ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData("\"input\":{\"set\":{\"$.route.id\":\"1\"}}", "input.set['$.route.id']")]
+    [InlineData("\"input\":{\"select\":\"$.data.id\",\"into\":\"$.route.id\"}", "input.into")]
+    public void InputRouteTarget_IsRejected_NotSupportedYet(string block, string where)
+    {
+        var errors = Errors(block);
+        var error = errors.ShouldHaveSingleItem();
+        error.ShouldStartWith($"{Loc}.{where}: ");
+        error.ShouldContain("not supported yet");
+    }
 }

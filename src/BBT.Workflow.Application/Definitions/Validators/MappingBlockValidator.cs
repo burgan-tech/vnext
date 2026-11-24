@@ -36,7 +36,9 @@ namespace BBT.Workflow.Definitions.Validators;
 /// </remarks>
 public sealed class MappingBlockValidator(IExpressionCompiler compiler)
 {
-    private static readonly string[] InputSurfaces = ["body", "headers", "query", "route"];
+    private const string RouteSurface = "route";
+
+    private static readonly string[] InputSurfaces = ["body", "headers", "query", RouteSurface];
 
     private static readonly string[] InputVariables =
     [
@@ -147,6 +149,12 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
 
     private void ValidateBlock(MappingBlock block, string path, bool isInput, IList<ValidationResult> errors)
     {
+        // An input select has no default target and an input into no default source: one without the other never runs.
+        if (isInput && block.Select is not null && block.Into is null)
+            Add(errors, $"{path}.select", "An input 'select' needs an 'into' naming the request path it copies to.");
+        if (isInput && block.Into is not null && block.Select is null)
+            Add(errors, $"{path}.into", "An input 'into' needs a 'select' naming the value it copies.");
+
         if (block.Select is not null)
         {
             var parsed = Parse(block.Select, $"{path}.select", errors);
@@ -208,6 +216,12 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
             {
                 Add(errors, location,
                     "An input target must start with $.body, $.headers, $.query or $.route.");
+            }
+            else if (parsed.FirstSegment == RouteSurface)
+            {
+                // No task type exposes route values yet (IHasRouteValues has no implementation), so a $.route target
+                // could never run; reject it here instead of at run time.
+                Add(errors, location, "The $.route input surface is not supported yet by any task type.");
             }
         }
         else if (parsed.FirstSegment.Length == 0)

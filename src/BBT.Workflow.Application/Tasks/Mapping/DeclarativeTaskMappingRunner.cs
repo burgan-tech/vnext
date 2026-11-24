@@ -1,15 +1,18 @@
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Scripting.Caller;
 using BBT.Workflow.Scripting.Expressions;
 using BBT.Workflow.Scripting.Rules;
 using BBT.Workflow.Shared.Json;
 using BBT.Workflow.Tasks.Executors;
 using DynamicExpresso;
+using Microsoft.CSharp.RuntimeBinder;
 using InputFn = System.Func<
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Rules.RuleJsonDynamic,
     BBT.Workflow.Scripting.Rules.ExpressoInstanceView, System.DateTimeOffset,
@@ -42,15 +45,18 @@ namespace BBT.Workflow.Tasks.Mapping;
 /// <b>Output.</b> One <see cref="JsonObject"/> delta is built and returned as the output <c>Data</c>, so the engine's
 /// single <c>AppendAsync</c> (merge, versioning, ETag, <c>x-encryption</c>) is unchanged. <c>select</c> reads
 /// <c>result</c> (<c>{ body, headers, statusCode }</c>; root <c>$</c> is <c>result</c>, default <c>$.body</c>);
-/// without <c>into</c> the selected object is merged at the data root. A missing source or a null value writes nothing;
-/// a delta with nothing in it returns null (no empty data version).
+/// without <c>into</c> the selected object is merged at the data root. A missing source writes nothing (RF-1): a missing
+/// <c>select</c> path, a null value, and a member read through a missing intermediate (<c>data.customer.id</c> with no
+/// <c>customer</c> — the binder's null-reference failure, or a member/index a borrowed view cannot apply). A delta with
+/// nothing in it returns null (no empty data version).
 /// </para>
 /// <para>
 /// <b>Lifetime.</b> Every value is materialized into an owned <see cref="JsonNode"/> before the scope's borrowed
 /// documents (the result document, a <see cref="JsonElement"/> input) go away. <b>Failures</b> — a caller-role provider
-/// failure for <c>user</c> (kept as its own retryable error), an expression that throws, a path that cannot be
-/// written — fail the mapping as a <see cref="Result"/>, never "write nothing", and raise
-/// <c>TaskDeclarativeMappingFailed</c>. Compiled plans are memoized per binding on the
+/// failure or a role read without a caller (both <c>Authorization:110006</c>), any other exception an expression throws,
+/// a path that cannot be written, a result document that cannot be built — fail the mapping as a <see cref="Result"/>,
+/// never "write nothing", and raise <c>TaskDeclarativeMappingFailed</c>. Cancellation of the mapping's own token
+/// propagates. Compiled plans are memoized per binding on the
 /// <see cref="TaskExecutorContext"/>; their delegates come from the shared compiler and are safe across parallel branches.
 /// </para>
 /// </remarks>
@@ -70,7 +76,7 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
             return Result<ScriptResponse?>.Ok(null);
 
         site ??= TaskMappingSite.For(task.GetTaskType());
-        var applied = await ApplyInputAsync(task, ctx, block, site);
+        var applied = await ApplyInputAsync(task, ctx, block, site, ct);
         if (!applied.IsSuccess)
         {
             Log(site, task, ctx, InputPhase, applied.Error);
@@ -90,7 +96,7 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
             return Result<object?>.Ok(result.Data);
 
         site ??= TaskMappingSite.For(task.GetTaskType());
-        var delta = await BuildOutputAsync(ctx, block, result, site);
+        var delta = await BuildOutputAsync(ctx, block, result, site, ct);
         if (!delta.IsSuccess)
         {
             Log(site, task, ctx, OutputPhase, delta.Error);
@@ -101,27 +107,26 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
     }
 
     private async Task<Result> ApplyInputAsync(
-        WorkflowTask task, TaskExecutorContext ctx, MappingBlock block, TaskMappingSite site)
+        WorkflowTask task, TaskExecutorContext ctx, MappingBlock block, TaskMappingSite site, CancellationToken ct)
     {
         var planResult = GetOrBuildPlan(ctx, block, ScopeKind.MappingInput, site);
         if (!planResult.IsSuccess)
             return Result.Fail(planResult.Error);
         var plan = planResult.Value!;
 
-        // The request's surfaces, under the names the target paths start with ($.body.x → request["body"]["x"]).
-        var request = new JsonObject();
-        foreach (var surface in plan.Surfaces)
-        {
-            var loaded = LoadSurface(task, surface);
-            if (loaded is null)
-                return Fail(site, InputPhase,
-                    $"task type {task.GetTaskType()} has no '{surface}' input surface; target only the surfaces it supports.");
-            request[surface] = loaded;
-        }
-
-        var scope = ExpressionScope.Create(ctx.ScriptContext, clock, ctx.Caller, ScopeKind.MappingInput);
         try
         {
+            // The request's surfaces, under the names the target paths start with ($.body.x → request["body"]["x"]).
+            var request = new JsonObject();
+            foreach (var surface in plan.Surfaces)
+            {
+                var loaded = LoadSurface(task, surface, plan.PartiallyTargeted.Contains(surface));
+                if (!loaded.IsSuccess)
+                    return Fail(site, InputPhase, loaded.Error.Message!);
+                request[surface] = loaded.Value;
+            }
+
+            var scope = ExpressionScope.Create(ctx.ScriptContext, clock, ctx.Caller, ScopeKind.MappingInput);
             if (plan.Into is not null || plan.Select is not null)
             {
                 if (plan.Into is null || plan.SelectVariable is null)
@@ -134,7 +139,7 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
                     plan.Into.Set(request, selected.Value);
             }
 
-            var set = await ApplySetAsync(plan, scope, request, site, InputPhase);
+            var set = await ApplySetAsync(plan, scope, request, site, InputPhase, ct);
             if (!set.IsSuccess)
                 return set;
 
@@ -145,7 +150,7 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
                     return Fail(site, InputPhase, written);
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!IsCancellation(ex, ct))
         {
             return Fail(site, InputPhase, Unwrap(ex).Message);
         }
@@ -154,20 +159,22 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
     }
 
     private async Task<Result<JsonObject?>> BuildOutputAsync(
-        TaskExecutorContext ctx, MappingBlock block, TaskInvocationResult result, TaskMappingSite site)
+        TaskExecutorContext ctx, MappingBlock block, TaskInvocationResult result, TaskMappingSite site,
+        CancellationToken ct)
     {
         var planResult = GetOrBuildPlan(ctx, block, ScopeKind.MappingOutput, site);
         if (!planResult.IsSuccess)
             return Result<JsonObject?>.Fail(planResult.Error);
         var plan = planResult.Value!;
 
-        // The response document `result` borrows from; disposed when the delta (owned nodes only) is built.
-        using var resultDocument = plan.NeedsResult ? BuildResultDocument(result) : null;
-        var scope = ExpressionScope.Create(
-            ctx.ScriptContext, clock, ctx.Caller, ScopeKind.MappingOutput, resultDocument?.RootElement);
         var delta = new JsonObject();
         try
         {
+            // The response document `result` borrows from; disposed when the delta (owned nodes only) is built.
+            using var resultDocument = plan.NeedsResult ? BuildResultDocument(result) : null;
+            var scope = ExpressionScope.Create(
+                ctx.ScriptContext, clock, ctx.Caller, ScopeKind.MappingOutput, resultDocument?.RootElement);
+
             if (plan.Select is not null || plan.Into is not null)
             {
                 var source = plan.Select ?? DefaultOutputSelect;
@@ -197,11 +204,11 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
                 }
             }
 
-            var set = await ApplySetAsync(plan, scope, delta, site, OutputPhase);
+            var set = await ApplySetAsync(plan, scope, delta, site, OutputPhase, ct);
             if (!set.IsSuccess)
                 return Result<JsonObject?>.Fail(set.Error);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!IsCancellation(ex, ct))
         {
             return Result<JsonObject?>.Fail(FailureError(site, OutputPhase, Unwrap(ex).Message));
         }
@@ -210,10 +217,12 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
     }
 
     private static async Task<Result> ApplySetAsync(
-        DeclarativeMappingPlan plan, ExpressionScope scope, JsonObject root, TaskMappingSite site, string phase)
+        DeclarativeMappingPlan plan, ExpressionScope scope, JsonObject root, TaskMappingSite site, string phase,
+        CancellationToken ct)
     {
         foreach (var entry in plan.Set)
         {
+            ct.ThrowIfCancellationRequested();
             var prepared = await scope.PrepareAsync(entry.UsedIdentifiers);
             if (!prepared.IsSuccess)
                 return prepared; // caller roles could not be resolved: kept as its own (retryable) error
@@ -224,9 +233,21 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
                 var args = scope.Bind(plan.Parameters, entry.UsedIdentifiers);
                 value = DeclarativeValues.ToNode(entry.Invoke(args));
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!IsCancellation(ex, ct))
             {
-                return Result.Fail(FailureError(site, phase, $"set['{entry.Key}']: {Unwrap(ex).Message}"));
+                var cause = Unwrap(ex);
+                switch (cause)
+                {
+                    case RuntimeBinderException binder when IsMemberAccessOnNull(binder):
+                        // RF-1: a member read through a missing intermediate (data.customer.id with no customer) is a
+                        // missing source, not an error — the entry writes nothing.
+                        continue;
+                    case CallerRolesUnavailableException:
+                        // The expression read user.roles / user.hasRole while no caller roles could be read.
+                        return Result.Fail(WorkflowErrors.CallerRolesUnavailable());
+                    default:
+                        return Result.Fail(FailureError(site, phase, $"set['{entry.Key}']: {cause.Message}"));
+                }
             }
 
             if (value is not null)
@@ -235,6 +256,18 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
 
         return Result.Ok();
     }
+
+    /// <summary>
+    /// True for the binder's "Cannot perform runtime binding on a null reference": a member or index read on a value
+    /// that is null — in a declarative scope, a path through a missing intermediate. Every other binder failure (a member
+    /// that does not exist on a CLR type, a bad conversion) stays an error.
+    /// </summary>
+    private static bool IsMemberAccessOnNull(RuntimeBinderException exception) =>
+        exception.Message.Contains("null reference", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>A cancellation of this mapping's own token propagates; anything else becomes a Result failure.</summary>
+    private static bool IsCancellation(Exception exception, CancellationToken ct) =>
+        exception is OperationCanceledException && ct.IsCancellationRequested;
 
     private static async Task<Result<JsonNode?>> ReadInputSelectAsync(DeclarativeMappingPlan plan, ExpressionScope scope)
     {
@@ -259,27 +292,58 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
     private Result<DeclarativeMappingPlan> GetOrBuildPlan(
         TaskExecutorContext ctx, MappingBlock block, ScopeKind kind, TaskMappingSite site)
     {
-        ctx.CompiledDeclarativeMappings ??= new Dictionary<MappingBlock, object>(ReferenceEqualityComparer.Instance);
-        if (ctx.CompiledDeclarativeMappings.TryGetValue(block, out var memo))
+        var phase = kind == ScopeKind.MappingInput ? InputPhase : OutputPhase;
+        ctx.CompiledDeclarativeMappings ??= new Dictionary<(MappingBlock Block, string Phase), object>(BlockPhaseComparer.Instance);
+        if (ctx.CompiledDeclarativeMappings.TryGetValue((block, phase), out var memo))
             return Result<DeclarativeMappingPlan>.Ok((DeclarativeMappingPlan)memo);
 
         var built = DeclarativeMappingPlan.Build(compiler, block, kind);
         if (!built.IsSuccess)
-            return Result<DeclarativeMappingPlan>.Fail(
-                FailureError(site, kind == ScopeKind.MappingInput ? InputPhase : OutputPhase, built.Error.Message ?? "invalid block."));
+            return Result<DeclarativeMappingPlan>.Fail(FailureError(site, phase, built.Error.Message ?? "invalid block."));
 
-        ctx.CompiledDeclarativeMappings[block] = built.Value!;
+        ctx.CompiledDeclarativeMappings[(block, phase)] = built.Value!;
         return built;
     }
 
-    private static JsonNode? LoadSurface(WorkflowTask task, string surface) => surface switch
+    /// <summary>
+    /// The task's current value for <paramref name="surface"/>: an object as an editable copy, none (or JSON null) as an
+    /// empty object, any other value kept as it is when only the whole surface is targeted. A path INTO a surface whose
+    /// static value is not an object fails — silently replacing an array or scalar body with an object would lose it.
+    /// Fails too when the task type has no such surface.
+    /// </summary>
+    private static Result<JsonNode?> LoadSurface(WorkflowTask task, string surface, bool partiallyTargeted)
     {
-        DeclarativeMappingPlan.BodySurface when task is IHasBody body => ObjectOrEmpty(body.CurrentBody),
-        DeclarativeMappingPlan.HeadersSurface when task is IHasHeaders headers => ObjectOrEmpty(headers.CurrentHeaders),
-        DeclarativeMappingPlan.QuerySurface when task is IHasQuery query => FromPairs(query.CurrentQuery),
-        DeclarativeMappingPlan.RouteSurface when task is IHasRouteValues route => ObjectOrEmpty(route.CurrentRouteValues),
-        _ => null
-    };
+        JsonElement? current;
+        switch (surface)
+        {
+            case DeclarativeMappingPlan.BodySurface when task is IHasBody body:
+                current = body.CurrentBody;
+                break;
+            case DeclarativeMappingPlan.HeadersSurface when task is IHasHeaders headers:
+                current = headers.CurrentHeaders;
+                break;
+            case DeclarativeMappingPlan.QuerySurface when task is IHasQuery query:
+                return Result<JsonNode?>.Ok(FromPairs(query.CurrentQuery));
+            case DeclarativeMappingPlan.RouteSurface when task is IHasRouteValues route:
+                current = route.CurrentRouteValues;
+                break;
+            default:
+                return SurfaceError(
+                    $"task type {task.GetTaskType()} has no '{surface}' input surface; target only the surfaces it supports.");
+        }
+
+        if (current is not { } element || element.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+            return Result<JsonNode?>.Ok(new JsonObject());
+        if (element.ValueKind == JsonValueKind.Object || !partiallyTargeted)
+            return Result<JsonNode?>.Ok(JsonNode.Parse(element.GetRawText()));
+
+        return SurfaceError(
+            $"the task's '{surface}' is a JSON {element.ValueKind}, not an object, so a path inside $.{surface} cannot be " +
+            $"written; target $.{surface} as a whole or configure an object {surface}.");
+    }
+
+    private static Result<JsonNode?> SurfaceError(string message) =>
+        Result<JsonNode?>.Fail(Error.Validation(WorkflowErrorCodes.TaskExecution, message));
 
     /// <summary>Writes a surface back through the task's setter; returns an error message when the value has the wrong shape.</summary>
     private static string? WriteSurface(WorkflowTask task, string surface, JsonNode? value)
@@ -306,11 +370,6 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
                 return null;
         }
     }
-
-    private static JsonObject ObjectOrEmpty(JsonElement? current) =>
-        current is { ValueKind: JsonValueKind.Object } element
-            ? JsonNode.Parse(element.GetRawText())!.AsObject()
-            : new JsonObject();
 
     private static JsonObject FromPairs(IReadOnlyList<KeyValuePair<string, string?>> pairs)
     {
@@ -378,6 +437,18 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
             error.Message ?? error.Code);
 }
 
+/// <summary>Keys the per-execution plan memo by the binding's block instance (reference identity) and phase.</summary>
+internal sealed class BlockPhaseComparer : IEqualityComparer<(MappingBlock Block, string Phase)>
+{
+    public static readonly BlockPhaseComparer Instance = new();
+
+    public bool Equals((MappingBlock Block, string Phase) x, (MappingBlock Block, string Phase) y) =>
+        ReferenceEquals(x.Block, y.Block) && string.Equals(x.Phase, y.Phase, StringComparison.Ordinal);
+
+    public int GetHashCode((MappingBlock Block, string Phase) obj) =>
+        HashCode.Combine(RuntimeHelpers.GetHashCode(obj.Block), obj.Phase);
+}
+
 /// <summary>
 /// One <see cref="MappingBlock"/> compiled for one phase: parsed paths, the touched input surfaces and every <c>set</c>
 /// expression compiled through the shared <see cref="IExpressionCompiler"/>. Immutable once built.
@@ -393,8 +464,9 @@ internal sealed class DeclarativeMappingPlan
 
     private DeclarativeMappingPlan(
         IReadOnlyList<Parameter> parameters, JsonPath? select, JsonPath? into, SetEntry[] set, string[] surfaces,
-        bool needsResult, Parameter? selectVariable, JsonPath? selectTail)
+        bool needsResult, Parameter? selectVariable, JsonPath? selectTail, IReadOnlySet<string> partiallyTargeted)
     {
+        PartiallyTargeted = partiallyTargeted;
         Parameters = parameters;
         Select = select;
         Into = into;
@@ -421,6 +493,9 @@ internal sealed class DeclarativeMappingPlan
     /// <summary>Input only: the surfaces (<c>body</c>, <c>headers</c>, ...) the targets write, in first-use order.</summary>
     public string[] Surfaces { get; }
 
+    /// <summary>Input only: the surfaces some target writes a path INSIDE of (not the surface as a whole).</summary>
+    public IReadOnlySet<string> PartiallyTargeted { get; }
+
     /// <summary>Output only: whether the <c>result</c> document must be built.</summary>
     public bool NeedsResult { get; }
 
@@ -442,6 +517,7 @@ internal sealed class DeclarativeMappingPlan
         var isInput = kind == ScopeKind.MappingInput;
         var signature = ExpressionSignatures.Mapping(kind);
         var surfaces = new List<string>();
+        var partial = new HashSet<string>(StringComparer.Ordinal);
 
         JsonPath? select = null;
         Parameter? selectVariable = null;
@@ -464,7 +540,7 @@ internal sealed class DeclarativeMappingPlan
         JsonPath? into = null;
         if (block.Into is not null)
         {
-            var target = Target(block.Into, "into", isInput, surfaces);
+            var target = Target(block.Into, "into", isInput, surfaces, partial);
             if (!target.IsSuccess)
                 return Result<DeclarativeMappingPlan>.Fail(target.Error);
             into = target.Value!;
@@ -474,7 +550,7 @@ internal sealed class DeclarativeMappingPlan
         var needsResult = !isInput && (select is not null || into is not null);
         foreach (var (key, expression) in block.Set ?? new Dictionary<string, string>())
         {
-            var target = Target(key, $"set['{key}']", isInput, surfaces);
+            var target = Target(key, $"set['{key}']", isInput, surfaces, partial);
             if (!target.IsSuccess)
                 return Result<DeclarativeMappingPlan>.Fail(target.Error);
 
@@ -513,10 +589,11 @@ internal sealed class DeclarativeMappingPlan
 
         return Result<DeclarativeMappingPlan>.Ok(new DeclarativeMappingPlan(
             signature.Parameters, select, into, entries.ToArray(), surfaces.ToArray(), needsResult,
-            selectVariable, selectTail));
+            selectVariable, selectTail, partial));
     }
 
-    private static Result<JsonPath> Target(string text, string what, bool isInput, List<string> surfaces)
+    private static Result<JsonPath> Target(
+        string text, string what, bool isInput, List<string> surfaces, HashSet<string> partial)
     {
         var parsed = Parse(text, what);
         if (!parsed.IsSuccess)
@@ -533,6 +610,8 @@ internal sealed class DeclarativeMappingPlan
                     $"{what} {text} must start with $.body, $.headers, $.query or $.route."));
             if (!surfaces.Contains(path.FirstSegment))
                 surfaces.Add(path.FirstSegment);
+            if (path.WithoutFirstSegment().Text != "$")
+                partial.Add(path.FirstSegment);
         }
 
         return parsed;
