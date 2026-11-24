@@ -26,7 +26,7 @@ public sealed record CompiledExpression<TDelegate>(TDelegate Invoke, IReadOnlySe
 
 /// <summary>
 /// Single, bounded compiler for every Dynamic Expresso expression slot. Compiled delegates are cached
-/// by (signature name, text) with LRU eviction.
+/// by (signature name, delegate type, text) with LRU eviction.
 /// </summary>
 public interface IExpressionCompiler
 {

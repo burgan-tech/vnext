@@ -12,9 +12,13 @@ public sealed class RuleJsonDynamic : DynamicObject
 {
     private readonly JsonElement _element;
 
-    private RuleJsonDynamic(JsonElement element)
+    // True for a Borrow view: the element is not cloned, and every nested value it hands out borrows too.
+    private readonly bool _borrowed;
+
+    private RuleJsonDynamic(JsonElement element, bool borrowed = false)
     {
-        _element = element.Clone();
+        _element = borrowed ? element : element.Clone();
+        _borrowed = borrowed;
     }
 
     /// <summary>
@@ -34,7 +38,16 @@ public sealed class RuleJsonDynamic : DynamicObject
     public static RuleJsonDynamic FromJsonElement(JsonElement element) => new(element);
 
     /// <summary>
-    /// Returns the underlying (cloned, read-only) <see cref="JsonElement"/> for callers that need to
+    /// Builds a view over <paramref name="element"/> WITHOUT cloning it; nested values reached through the
+    /// view are borrowed the same way. For one expression-evaluation scope only: the view (and anything read
+    /// through it) is valid only while the <see cref="JsonDocument"/> that owns the element is alive — after
+    /// that document is disposed every read throws <see cref="ObjectDisposedException"/>. Never store a
+    /// borrowed view beyond the scope; use <see cref="FromJsonElement"/> when the value must outlive it.
+    /// </summary>
+    public static RuleJsonDynamic Borrow(JsonElement element) => new(element, borrowed: true);
+
+    /// <summary>
+    /// Returns the underlying (read-only; cloned unless this view was made by <see cref="Borrow"/>) <see cref="JsonElement"/> for callers that need to
     /// enumerate object properties or array items — operations the dynamic surface does not expose.
     /// </summary>
     public JsonElement AsJsonElement() => _element;
@@ -290,13 +303,13 @@ public sealed class RuleJsonDynamic : DynamicObject
         return false;
     }
 
-    private static object? Wrap(JsonElement e)
+    private object? Wrap(JsonElement e)
     {
         return e.ValueKind switch
         {
             JsonValueKind.Null => null,
             JsonValueKind.Undefined => null,
-            _ => new RuleJsonDynamic(e)
+            _ => new RuleJsonDynamic(e, _borrowed)
         };
     }
 

@@ -48,4 +48,41 @@ public static class ExpressionSignatures
         ],
         typeof(object),
         NoFunctions);
+
+    private static readonly ExpressionSignature MappingCondition = BuildMapping("mapping-condition", withResult: false);
+    private static readonly ExpressionSignature MappingInput = BuildMapping("mapping-input", withResult: false);
+    private static readonly ExpressionSignature MappingOutput = BuildMapping("mapping-output", withResult: true);
+
+    /// <summary>
+    /// Declarative mapping / condition expressions bound by <see cref="ExpressionScope"/>, in this order:
+    /// <c>data</c>, <c>input</c> (<see cref="RuleJsonDynamic"/>), <c>instance</c> (<see cref="ExpressoInstanceView"/>),
+    /// <c>now</c> (<see cref="DateTimeOffset"/>), <c>user</c> (<see cref="ExpressionUser"/>), <c>context</c>
+    /// (<see cref="ExpressoRuleContext"/>), plus <c>result</c> (<see cref="RuleJsonDynamic"/>) for
+    /// <see cref="ScopeKind.MappingOutput"/> only; <see cref="object"/> out, no functions. Each kind has its own
+    /// signature name, so the compile cache never mixes them.
+    /// </summary>
+    public static ExpressionSignature Mapping(ScopeKind kind) => kind switch
+    {
+        ScopeKind.Condition => MappingCondition,
+        ScopeKind.MappingInput => MappingInput,
+        ScopeKind.MappingOutput => MappingOutput,
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null)
+    };
+
+    private static ExpressionSignature BuildMapping(string name, bool withResult)
+    {
+        List<Parameter> parameters =
+        [
+            new(ExpressionScope.DataVariable, typeof(RuleJsonDynamic)),
+            new(ExpressionScope.InputVariable, typeof(RuleJsonDynamic)),
+            new(ExpressionScope.InstanceVariable, typeof(ExpressoInstanceView)),
+            new(ExpressionScope.NowVariable, typeof(DateTimeOffset)),
+            new(ExpressionScope.UserVariable, typeof(ExpressionUser)),
+            new(ExpressionScope.ContextVariable, typeof(ExpressoRuleContext))
+        ];
+        if (withResult)
+            parameters.Add(new Parameter(ExpressionScope.ResultVariable, typeof(RuleJsonDynamic)));
+
+        return new ExpressionSignature(name, parameters, typeof(object), NoFunctions);
+    }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Dynamic;
 using System.Reflection;
 using BBT.Workflow.Instances;
@@ -6,7 +7,9 @@ using System.Text.Json;
 using System.Threading;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Scripting.Caller;
 using BBT.Workflow.Scripting.Evaluators;
+using BBT.Workflow.Scripting.Expressions;
 using BBT.Workflow.Scripting.Helpers;
 using BBT.Workflow.Scripting.Rules;
 using BBT.Workflow.Tasks.Evaluators;
@@ -21,6 +24,8 @@ namespace BBT.Workflow.Benchmarks;
 /// by the AFTER comparison, so do not rename them.
 /// <list type="bullet">
 /// <item><c>EagerContextBuild</c>: today's <see cref="ExpressoRuleContextMapper.FromScriptContext"/>.</item>
+/// <item><c>LazyScopeDataOnly</c>: an <see cref="ExpressionScope"/> bound for an expression that uses only
+/// <c>data</c> (full mapping-input arity, unused slots default). Gate G-P2 compares it with <c>EagerContextBuild</c>.</item>
 /// <item><c>DeConditionWarm</c> / <c>DeValueWarm</c>: the Dynamic Expresso evaluators on a warm
 /// compiled-expression cache (each includes the eager context build, as in production).</item>
 /// <item><c>RoslynOutputHandlerWarm</c>: compile once in setup, invoke <c>OutputHandler</c> per op; the handler is a
@@ -137,6 +142,16 @@ public class ExpressionMappingBenchmarks
 
     [Benchmark]
     public ExpressoRuleContext EagerContextBuild() => ExpressoRuleContextMapper.FromScriptContext(_context);
+
+    private static readonly IReadOnlyList<DynamicExpresso.Parameter> MappingInputParameters =
+        ExpressionSignatures.Mapping(ScopeKind.MappingInput).Parameters;
+
+    private static readonly IReadOnlySet<string> DataOnly = new HashSet<string>(StringComparer.Ordinal) { ExpressionScope.DataVariable };
+
+    [Benchmark]
+    public object?[] LazyScopeDataOnly()
+        => ExpressionScope.Create(_context, TimeProvider.System, NullCallerAccessor.Instance, ScopeKind.MappingInput)
+            .Bind(MappingInputParameters, DataOnly);
 
     [Benchmark]
     public object DeConditionWarm()

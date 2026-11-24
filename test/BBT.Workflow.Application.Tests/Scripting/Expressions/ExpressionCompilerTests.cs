@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Dynamic;
 using System.Threading.Tasks;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Scripting;
@@ -91,6 +92,58 @@ public sealed class ExpressionCompilerTests
         result.Value.UsedIdentifiers.ShouldContain("context");
         result.Value.UsedIdentifiers.ShouldContain("sha256");
         result.Value.UsedIdentifiers.ShouldNotContain("varyKey");
+    }
+
+    [Fact]
+    public void Compile_SameKeyDifferentDelegateType_CachesSeparately()
+    {
+        var compiler = new ExpressionCompiler(4);
+
+        var asObject = compiler.Compile<Func<ExpressoRuleContext, object>>("\"x\"", ExpressionSignatures.LegacyValue);
+        var asString = compiler.Compile<Func<ExpressoRuleContext, string>>("\"x\"", ExpressionSignatures.LegacyValue);
+        var asStringAgain = compiler.Compile<Func<ExpressoRuleContext, string>>("\"x\"", ExpressionSignatures.LegacyValue);
+        var asObjectAgain = compiler.Compile<Func<ExpressoRuleContext, object>>("\"x\"", ExpressionSignatures.LegacyValue);
+
+        asObject.IsSuccess.ShouldBeTrue();
+        asString.IsSuccess.ShouldBeTrue();
+        ReferenceEquals(asString.Value.Invoke, asStringAgain.Value.Invoke).ShouldBeTrue();
+        ReferenceEquals(asObject.Value.Invoke, asObjectAgain.Value.Invoke).ShouldBeTrue();
+        compiler.CacheCount.ShouldBe(2);
+    }
+
+    [Fact]
+    public void AgentTool_ArgsAndNow_EvaluateWithExpandoObjects()
+    {
+        var compiler = new ExpressionCompiler(8);
+        var now = new DateTime(2026, 11, 24, 10, 0, 0, DateTimeKind.Utc);
+        dynamic args = new ExpandoObject();
+        args.x = 41;
+        dynamic data = new ExpandoObject();
+        data.y = "d";
+
+        var sum = compiler.Compile<Func<ExpandoObject, ExpandoObject, DateTime, object>>("args.x + 1", ExpressionSignatures.AgentTool);
+        var year = compiler.Compile<Func<ExpandoObject, ExpandoObject, DateTime, object>>("now.AddDays(1).Day", ExpressionSignatures.AgentTool);
+
+        sum.IsSuccess.ShouldBeTrue();
+        year.IsSuccess.ShouldBeTrue();
+        sum.Value.Invoke((ExpandoObject)args, (ExpandoObject)data, now).ShouldBe(42);
+        year.Value.Invoke((ExpandoObject)args, (ExpandoObject)data, now).ShouldBe(25);
+    }
+
+    [Fact]
+    public void Cache_ParallelCompilesBeyondCapacity_StaysBounded()
+    {
+        const int capacity = 8;
+        var compiler = new ExpressionCompiler(capacity);
+
+        Parallel.For(0, 200, i =>
+        {
+            var result = compiler.Compile<Func<ExpressoRuleContext, bool>>($"{i} == {i}", ExpressionSignatures.LegacyCondition);
+            result.IsSuccess.ShouldBeTrue();
+            result.Value.Invoke(new ExpressoRuleContext()).ShouldBeTrue();
+        });
+
+        compiler.CacheCount.ShouldBeLessThanOrEqualTo(capacity);
     }
 
     [Theory]

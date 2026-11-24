@@ -20,7 +20,9 @@ public sealed class ExpressionCompiler : IExpressionCompiler
     /// </summary>
     public static ExpressionCompiler Shared { get; } = new(new ExpressionCompilerOptions().CacheCapacity);
 
-    private readonly BoundedLruCache<(string Name, string Text), object> _cache;
+    // Keyed by delegate type too: the same (signature, text) compiled to two delegate types are two entries,
+    // so alternating callers never recompile each other's entry.
+    private readonly BoundedLruCache<(string Name, Type Delegate, string Text), object> _cache;
 
     /// <summary>Creates a compiler with the configured cache capacity.</summary>
     public ExpressionCompiler(IOptions<ExpressionCompilerOptions> options)
@@ -31,7 +33,7 @@ public sealed class ExpressionCompiler : IExpressionCompiler
     /// <summary>Creates a compiler with an explicit cache capacity.</summary>
     public ExpressionCompiler(int cacheCapacity)
     {
-        _cache = new BoundedLruCache<(string, string), object>(cacheCapacity);
+        _cache = new BoundedLruCache<(string, Type, string), object>(cacheCapacity);
     }
 
     /// <summary>Number of compiled expressions currently cached.</summary>
@@ -41,7 +43,7 @@ public sealed class ExpressionCompiler : IExpressionCompiler
     public Result<CompiledExpression<TDelegate>> Compile<TDelegate>(string text, ExpressionSignature signature)
         where TDelegate : Delegate
     {
-        var key = (signature.Name, text);
+        var key = (signature.Name, typeof(TDelegate), text);
         if (_cache.TryGet(key, out var cached) && cached is CompiledExpression<TDelegate> hit)
             return Result<CompiledExpression<TDelegate>>.Ok(hit);
 
@@ -63,9 +65,7 @@ public sealed class ExpressionCompiler : IExpressionCompiler
                 used.Add(identifier);
 
             var compiled = new CompiledExpression<TDelegate>(invoke, used);
-            // A cached entry of another delegate type under the same key is left alone; this compile is returned uncached.
-            return Result<CompiledExpression<TDelegate>>.Ok(
-                _cache.GetOrAdd(key, compiled) is CompiledExpression<TDelegate> winner ? winner : compiled);
+            return Result<CompiledExpression<TDelegate>>.Ok((CompiledExpression<TDelegate>)_cache.GetOrAdd(key, compiled));
         }
         catch (Exception ex)
         {
