@@ -120,7 +120,7 @@ public abstract class TaskExecutorBase<TTask> : ITaskExecutor
         var taskTypeStr = context.Task.GetTaskType().ToString();
 
         // A declarative input/output block on a task type that cannot run it must fail, never be silently ignored.
-        if (context.OnExecuteTask.HasDeclarativeMapping && !SupportsDeclarativeMapping)
+        if (context.OnExecuteTask.RunsDeclarativeMapping && !SupportsDeclarativeMapping)
         {
             var phase = context.OnExecuteTask.Input is not null ? "input" : "output";
             var message = $"task type {TaskType} does not support declarative input/output blocks";

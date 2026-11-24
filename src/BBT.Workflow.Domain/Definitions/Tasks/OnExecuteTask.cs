@@ -72,6 +72,14 @@ public sealed class OnExecuteTask
     public bool HasDeclarativeMapping => Input is not null || Output is not null;
 
     /// <summary>
+    /// True when the declarative blocks are what runs: the binding authors a block and carries no script mapping code.
+    /// A binding stored with both (only possible before publish rejected it) keeps its legacy meaning: the script runs and
+    /// the blocks are ignored.
+    /// </summary>
+    [JsonIgnore]
+    public bool RunsDeclarativeMapping => HasDeclarativeMapping && Mapping is not { HasMappingCode: true };
+
+    /// <summary>
     /// Task-level error boundary.
     /// Provides the most specific error handling for this task.
     /// </summary>

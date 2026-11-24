@@ -20,8 +20,9 @@ A task binding (`onExecuteTask` entry of a state `onEntries`/`onExits`, a transi
 ```
 
 - `input` and `output` are optional; each holds `select`, `into` and `set` (path to Dynamic Expresso expression, max 8000 characters each).
-- **`mapping` and the blocks are mutually exclusive per binding** — publish error if both are present.
-- A `mapping` with `location: "dynamicExpresso"` is a **publish error** (one expression cannot be both input and output handler). Before, it passed publish and failed at run time as a Roslyn compile error. Use the blocks. Recorded in `vnext-meta/unreleased/declarative-task-mappings.json`.
+- **`mapping` and the blocks are mutually exclusive per binding** — publish error if both are present. A binding stored with both before this validation existed keeps its legacy meaning: the script runs and the blocks are ignored.
+- A `mapping` with `location: "dynamicExpresso"` is a **publish warning**, not an error: the script engine never reads a mapping's `location`, so such a mapping runs as a C# `IMapping` script, as it always has (an empty one is a no-op). The warning reads `<location>.mapping: The dynamicExpresso location is ignored on a task 'mapping': the mapping runs as a C# script. Author the declarative 'input' and 'output' blocks for expression-based mappings.` Behaviour is unchanged; the label is deprecated (`task-mapping-dynamic-expresso-location` in `vnext-meta/unreleased/declarative-task-mappings.json`).
+- **Assignment is disabled** in mapping expressions (Dynamic Expresso `AssignmentOperators.None` on the mapping signatures): `data.x = 1` is a compile error at publish (`MappingBlockValidator`) and fails the mapping at run time. An expression produces a value; only `into` and `set` keys write. The legacy condition, cache-key and agent-tool expressions are unchanged.
 - Paths use one in-house subset: `$`, `.name` (hyphens allowed), `['name']`, `[n]` and `[*]` (read only). No filters, no recursive descent. A write target (`into`, `set` key) must be writable: no index, no wildcard. An array is written whole (replace), like the full-merge model.
 
 ## Variables
@@ -66,11 +67,13 @@ Variables are bound lazily, only when an expression uses them; nothing is cloned
 
 ## Missing values
 
-A missing `select` path, a missing leaf, `?.`, or member access on a missing intermediate (`data.customer.id` with no `customer`) makes that entry **write nothing** — no error, no log. Every other evaluation error (bad cast, unwritable path, role provider failure) **fails the mapping**: the error boundary applies and `TaskDeclarativeMappingFailed` is logged. Inconsistency to know: legacy `context.*` paths still fail on a missing member.
+A missing `select` path, a missing leaf, `?.`, or member access on a missing intermediate (`data.customer.id` with no `customer`) makes that entry **write nothing** — no error. A skipped `select` (path not found) or `set` entry (missing intermediate) raises the Debug log `TaskDeclarativeMappingEntrySkipped` (EventId 10269) with the task key, the phase and the path or `set` key — never the value; a plain null value or `?.` result skips silently. Every other evaluation error (bad cast, unwritable path, role provider failure) **fails the mapping**: the error boundary applies and `TaskDeclarativeMappingFailed` is logged. Inconsistency to know: legacy `context.*` paths still fail on a missing member.
 
 ## User
 
-`user` is available in task mappings on **caller-driven (User) hops** of state `onEntries` / `onExits` and transition `onExecutionTasks`. On System hops (fired timers, SubFlow resume, continuations) `user.available` is `false` and reading `user.roles` / `user.hasRole` fails the mapping (fail-closed, never an empty set). Functions and extensions always see `user.available == false`. Roles are resolved once, and only when an expression uses them. Script mappings never see the caller. Provider and surfaces: [Script Caller Roles](script-caller-roles.md).
+`user` is available in task mappings on **caller-driven (User) hops** of state `onEntries` / `onExits` and transition `onExecutionTasks`. On System hops (fired timers, SubFlow resume, continuations) `user.available` is `false` and reading `user.roles` / `user.hasRole` — in a `set` expression or through an input `select` such as `$.user.roles` — fails the mapping (fail-closed, never an empty set). That failure is **deterministic, not transient**: a `TaskExecution` failure whose message says to guard the read with `user.available`, never `Authorization:110006`. `110006` (transient, retryable) is kept for a real role-provider failure while resolving the caller's roles. An input `select: "$.user.available"` reads the flag on any hop. Functions and extensions always see `user.available == false`. Roles are resolved once, and only when an expression uses them. Script mappings never see the caller. Provider and surfaces: [Script Caller Roles](script-caller-roles.md).
+
+**Persisting roles is the author's responsibility.** An output `set` such as `{ "$.approval.roles": "user.roles" }` writes the caller's roles into instance data, where every later reader of that data (state and data functions, scripts, other callers allowed to read the instance) sees them. Write roles into data only when that exposure is intended, and protect the field (`x-roles`, `x-masking`) as you would any other caller-derived value.
 
 ## Publish validation
 

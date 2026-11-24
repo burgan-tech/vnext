@@ -49,7 +49,7 @@ public sealed class ExpressionCompiler : IExpressionCompiler
 
         try
         {
-            var interpreter = new Interpreter(InterpreterOptions.Default);
+            var interpreter = new Interpreter(InterpreterOptions.Default).EnableAssignment(signature.Assignment);
             foreach (var (name, function) in signature.Functions)
                 interpreter.SetFunction(name, function);
 

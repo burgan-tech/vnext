@@ -49,12 +49,14 @@ namespace BBT.Workflow.Tasks.Mapping;
 /// without <c>into</c> the selected object is merged at the data root. A missing source writes nothing (RF-1): a missing
 /// <c>select</c> path, a null value, and a member read through a missing intermediate (<c>data.customer.id</c> with no
 /// <c>customer</c> — the binder's null-reference failure, or a member/index a borrowed view cannot apply). A delta with
-/// nothing in it returns null (no empty data version).
+/// nothing in it returns null (no empty data version). Each skipped <c>select</c> or <c>set</c> entry raises the Debug
+/// <c>TaskDeclarativeMappingEntrySkipped</c> with its path or key (never the value).
 /// </para>
 /// <para>
 /// <b>Lifetime.</b> Every value is materialized into an owned <see cref="JsonNode"/> before the scope's borrowed
 /// documents (the <see cref="TaskResultView"/>'s documents, a <see cref="JsonElement"/> input) go away. <b>Failures</b> — a caller-role provider
-/// failure or a role read without a caller (both <c>Authorization:110006</c>), any other exception an expression throws,
+/// failure (<c>Authorization:110006</c>, transient), a role read on a hop with no caller (a non-transient mapping failure
+/// telling the author to guard with <c>user.available</c>), any other exception an expression throws,
 /// a path that cannot be written, a response <c>Data</c> that cannot be serialized — fail the mapping as a <see cref="Result"/>,
 /// never "write nothing", and raise <c>TaskDeclarativeMappingFailed</c>. Cancellation of the mapping's own token
 /// propagates. Compiled plans are memoized per binding on the
@@ -97,7 +99,7 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
             return Result<object?>.Ok(result.Data);
 
         site ??= TaskMappingSite.For(task.GetTaskType());
-        var delta = await BuildOutputAsync(ctx, block, result, site, ct);
+        var delta = await BuildOutputAsync(task, ctx, block, result, site, ct);
         if (!delta.IsSuccess)
         {
             Log(site, task, ctx, OutputPhase, delta.Error);
@@ -133,14 +135,16 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
                 if (plan.Into is null || plan.SelectVariable is null)
                     return Fail(site, InputPhase, "an input 'select' and 'into' must be authored together.");
 
-                var selected = await ReadInputSelectAsync(plan, scope);
+                var selected = await ReadInputSelectAsync(plan, scope, site);
                 if (!selected.IsSuccess)
                     return Result.Fail(selected.Error);
                 if (selected.Value is not null)
                     plan.Into.Set(request, selected.Value);
+                else
+                    LogSkipped(site, task, InputPhase, plan.Select!.Text, MissingSelectReason);
             }
 
-            var set = await ApplySetAsync(plan, scope, request, site, InputPhase, ct);
+            var set = await ApplySetAsync(task, plan, scope, request, site, InputPhase, ct);
             if (!set.IsSuccess)
                 return set;
 
@@ -160,7 +164,7 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
     }
 
     private async Task<Result<JsonObject?>> BuildOutputAsync(
-        TaskExecutorContext ctx, MappingBlock block, TaskInvocationResult result, TaskMappingSite site,
+        WorkflowTask task, TaskExecutorContext ctx, MappingBlock block, TaskInvocationResult result, TaskMappingSite site,
         CancellationToken ct)
     {
         var planResult = GetOrBuildPlan(ctx, block, ScopeKind.MappingOutput, site);
@@ -204,9 +208,13 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
                             $"but selected a {selected.GetValueKind()}."));
                     }
                 }
+                else
+                {
+                    LogSkipped(site, task, OutputPhase, source.Text, MissingSelectReason);
+                }
             }
 
-            var set = await ApplySetAsync(plan, scope, delta, site, OutputPhase, ct);
+            var set = await ApplySetAsync(task, plan, scope, delta, site, OutputPhase, ct);
             if (!set.IsSuccess)
                 return Result<JsonObject?>.Fail(set.Error);
         }
@@ -219,7 +227,7 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
     }
 
     private static async Task<Result> ApplySetAsync(
-        DeclarativeMappingPlan plan, ExpressionScope scope, JsonObject root, TaskMappingSite site, string phase,
+        WorkflowTask task, DeclarativeMappingPlan plan, ExpressionScope scope, JsonObject root, TaskMappingSite site, string phase,
         CancellationToken ct)
     {
         foreach (var entry in plan.Set)
@@ -243,10 +251,13 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
                     case RuntimeBinderException binder when IsMemberAccessOnNull(binder):
                         // RF-1: a member read through a missing intermediate (data.customer.id with no customer) is a
                         // missing source, not an error — the entry writes nothing.
+                        LogSkipped(site, task, phase, $"set['{entry.Key}']", MissingIntermediateReason);
                         continue;
                     case CallerRolesUnavailableException:
-                        // The expression read user.roles / user.hasRole while no caller roles could be read.
-                        return Result.Fail(WorkflowErrors.CallerRolesUnavailable());
+                        // The expression read user.roles / user.hasRole on a hop with no caller (a System hop): a
+                        // deterministic authoring error, not a transient one — retrying the same hop fails the same way.
+                        // A provider failure never reaches here: PrepareAsync reports it (Authorization:110006).
+                        return Result.Fail(FailureError(site, phase, $"set['{entry.Key}']: {NoCallerDetail}"));
                     default:
                         return Result.Fail(FailureError(site, phase, $"set['{entry.Key}']: {cause.Message}"));
                 }
@@ -271,7 +282,8 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
     private static bool IsCancellation(Exception exception, CancellationToken ct) =>
         exception is OperationCanceledException && ct.IsCancellationRequested;
 
-    private static async Task<Result<JsonNode?>> ReadInputSelectAsync(DeclarativeMappingPlan plan, ExpressionScope scope)
+    private static async Task<Result<JsonNode?>> ReadInputSelectAsync(
+        DeclarativeMappingPlan plan, ExpressionScope scope, TaskMappingSite site)
     {
         var variable = plan.SelectVariable!;
         var used = plan.SelectUsed!;
@@ -280,6 +292,23 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
             return Result<JsonNode?>.Fail(prepared.Error);
 
         var value = scope.Bind([variable], used)[0];
+        if (value is ExpressionUser user)
+        {
+            // `user` is read member by member: `$.user.available` never needs roles, and a roles read with no caller is
+            // the same deterministic failure as in a `set` expression (never an empty set, never a missing source).
+            var tail = plan.SelectTail!;
+            if (tail.FirstSegment == "available")
+                return Result<JsonNode?>.Ok(tail.TryRead(new JsonObject { ["available"] = user.available }, out var flag) ? flag : null);
+            if (!user.available)
+                return Result<JsonNode?>.Fail(FailureError(site, InputPhase, $"'select' {plan.Select!.Text}: {NoCallerDetail}"));
+            var userNode = new JsonObject
+            {
+                ["available"] = true,
+                ["roles"] = new JsonArray(user.roles.Select(role => (JsonNode?)JsonValue.Create(role)).ToArray())
+            };
+            return Result<JsonNode?>.Ok(tail.TryRead(userNode, out var read) ? read : null);
+        }
+
         if (value is RuleJsonDynamic dynamicValue)
         {
             return Result<JsonNode?>.Ok(plan.SelectTail!.TryRead(dynamicValue.AsJsonElement(), out var element)
@@ -411,6 +440,17 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
     private static Error FailureError(TaskMappingSite site, string phase, string detail) =>
         Error.Failure(WorkflowErrorCodes.TaskExecution,
             $"{site.TaskTypeName} task declarative {phase} mapping failed: {detail}");
+
+    private const string MissingSelectReason = "select path not found";
+    private const string MissingIntermediateReason = "missing intermediate";
+
+    private const string NoCallerDetail =
+        "user.roles / user.hasRole was read on a hop with no caller (a System hop: a timer, an automatic chain, an event); " +
+        "guard the read with user.available.";
+
+    /// <summary>RF-1 skip at Debug: the task, phase and the path or set key — never the value.</summary>
+    private static void LogSkipped(TaskMappingSite site, WorkflowTask task, string phase, string path, string reason) =>
+        site.Logger?.TaskDeclarativeMappingEntrySkipped(task.Key, phase, path, reason);
 
     private static void Log(TaskMappingSite site, WorkflowTask task, TaskExecutorContext ctx, string phase, Error error) =>
         site.Logger?.TaskDeclarativeMappingFailed(

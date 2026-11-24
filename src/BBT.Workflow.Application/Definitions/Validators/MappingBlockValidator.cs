@@ -38,6 +38,11 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
 {
     private const string RouteSurface = "route";
 
+    /// <summary>Publish warning for a task <c>mapping</c> labelled with the <c>dynamicExpresso</c> location.</summary>
+    public const string DynamicExpressoMappingLocationWarning =
+        "The dynamicExpresso location is ignored on a task 'mapping': the mapping runs as a C# script. " +
+        "Author the declarative 'input' and 'output' blocks for expression-based mappings.";
+
     private static readonly string[] InputSurfaces = ["body", "headers", "query", RouteSurface];
 
     private static readonly string[] InputVariables =
@@ -63,16 +68,16 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
             {
                 case RuntimeSysSchemaInfo.Flows:
                     if (attributes.Deserialize<Workflow>(JsonSerializerConstants.JsonOptions) is { } workflow)
-                        ValidateWorkflow(workflow, result.ValidationErrors);
+                        ValidateWorkflow(workflow, result);
                     break;
                 case RuntimeSysSchemaInfo.Functions:
                     if (attributes.Deserialize<Function>(JsonSerializerConstants.JsonOptions) is { } function)
-                        ValidateFunction(function, result.ValidationErrors);
+                        ValidateFunction(function, result);
                     break;
                 case RuntimeSysSchemaInfo.Extensions:
                     if (attributes.Deserialize<Extension>(JsonSerializerConstants.JsonOptions) is { } extension
                         && extension.Task is not null)
-                        ValidateBinding(extension.Task, "task", result.ValidationErrors);
+                        ValidateBinding(extension.Task, "task", result.ValidationErrors, result.Warnings);
                     break;
             }
         }
@@ -82,54 +87,59 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
         }
     }
 
-    private void ValidateWorkflow(Workflow workflow, IList<ValidationResult> errors)
+    private void ValidateWorkflow(Workflow workflow, ComponentValidationResult r)
     {
-        ValidateTransition(workflow.StartTransition, "startTransition", errors);
-        ValidateTransition(workflow.Cancel, "cancel", errors);
-        ValidateTransition(workflow.UpdateData, "updateData", errors);
-        ValidateTransition(workflow.Exit, "exit", errors);
+        ValidateTransition(workflow.StartTransition, "startTransition", r);
+        ValidateTransition(workflow.Cancel, "cancel", r);
+        ValidateTransition(workflow.UpdateData, "updateData", r);
+        ValidateTransition(workflow.Exit, "exit", r);
         foreach (var shared in workflow.SharedTransitions)
-            ValidateTransition(shared, $"sharedTransitions[{shared.Key}]", errors);
+            ValidateTransition(shared, $"sharedTransitions[{shared.Key}]", r);
 
         foreach (var state in workflow.States)
         {
             var statePath = $"states[{state.Key}]";
-            ValidateBindings(state.OnEntries, $"{statePath}.onEntries", errors);
-            ValidateBindings(state.OnExits, $"{statePath}.onExits", errors);
+            ValidateBindings(state.OnEntries, $"{statePath}.onEntries", r);
+            ValidateBindings(state.OnExits, $"{statePath}.onExits", r);
             foreach (var transition in state.Transitions)
-                ValidateTransition(transition, $"{statePath}.transitions[{transition.Key}]", errors);
+                ValidateTransition(transition, $"{statePath}.transitions[{transition.Key}]", r);
         }
     }
 
-    private void ValidateFunction(Function function, IList<ValidationResult> errors)
+    private void ValidateFunction(Function function, ComponentValidationResult r)
     {
         if (function.Task is not null)
-            ValidateBinding(function.Task, "task", errors);
-        ValidateBindings(function.OnExecutionTasks, "onExecutionTasks", errors);
+            ValidateBinding(function.Task, "task", r.ValidationErrors, r.Warnings);
+        ValidateBindings(function.OnExecutionTasks, "onExecutionTasks", r);
     }
 
-    private void ValidateTransition(Transition? transition, string path, IList<ValidationResult> errors)
+    private void ValidateTransition(Transition? transition, string path, ComponentValidationResult r)
     {
         if (transition is null)
             return;
-        ValidateBindings(transition.OnExecutionTasks, $"{path}.onExecutionTasks", errors);
+        ValidateBindings(transition.OnExecutionTasks, $"{path}.onExecutionTasks", r);
     }
 
-    private void ValidateBindings(IEnumerable<OnExecuteTask> bindings, string path, IList<ValidationResult> errors)
+    private void ValidateBindings(IEnumerable<OnExecuteTask> bindings, string path, ComponentValidationResult r)
     {
         var index = 0;
         foreach (var binding in bindings)
-            ValidateBinding(binding, $"{path}[{index++}]", errors);
+            ValidateBinding(binding, $"{path}[{index++}]", r.ValidationErrors, r.Warnings);
     }
 
-    /// <summary>Validates one binding at <paramref name="location"/> and appends its errors.</summary>
-    public void ValidateBinding(OnExecuteTask binding, string location, IList<ValidationResult> errors)
+    /// <summary>
+    /// Validates one binding at <paramref name="location"/> and appends its errors and, when
+    /// <paramref name="warnings"/> is given, its non-blocking findings.
+    /// </summary>
+    public void ValidateBinding(
+        OnExecuteTask binding, string location, IList<ValidationResult> errors, IList<ValidationResult>? warnings = null)
     {
-        if (binding.Mapping is not null && ConditionScriptLocations.IsDynamicExpresso(binding.Mapping.Location))
+        // The script engine never reads ScriptCode.Location, so a task mapping labelled dynamicExpresso has always run
+        // as a C# IMapping script (and an empty one as a no-op). Keep that meaning; only tell the author.
+        if (binding.Mapping is not null && warnings is not null
+            && ConditionScriptLocations.IsDynamicExpresso(binding.Mapping.Location))
         {
-            Add(errors, $"{location}.mapping",
-                "A task binding mapping cannot use the dynamicExpresso location: it takes a script. " +
-                "Author the declarative 'input' and 'output' blocks for expression-based mappings.");
+            Add(warnings, $"{location}.mapping", DynamicExpressoMappingLocationWarning);
         }
 
         if (!binding.HasDeclarativeMapping)

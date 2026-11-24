@@ -58,7 +58,8 @@ public static class ExpressionSignatures
     /// <c>data</c>, <c>input</c> (<see cref="RuleJsonDynamic"/>), <c>instance</c> (<see cref="ExpressoInstanceView"/>),
     /// <c>now</c> (<see cref="DateTimeOffset"/>), <c>user</c> (<see cref="ExpressionUser"/>), <c>context</c>
     /// (<see cref="ExpressoRuleContext"/>), plus <c>result</c> (<see cref="RuleJsonDynamic"/>) for
-    /// <see cref="ScopeKind.MappingOutput"/> only; <see cref="object"/> out, no functions. Each kind has its own
+    /// <see cref="ScopeKind.MappingOutput"/> only; <see cref="object"/> out, no functions, assignment operators disabled
+    /// (<see cref="AssignmentOperators.None"/>). Each kind has its own
     /// signature name, so the compile cache never mixes them.
     /// </summary>
     public static ExpressionSignature Mapping(ScopeKind kind) => kind switch
@@ -83,6 +84,7 @@ public static class ExpressionSignatures
         if (withResult)
             parameters.Add(new Parameter(ExpressionScope.ResultVariable, typeof(RuleJsonDynamic)));
 
-        return new ExpressionSignature(name, parameters, typeof(object), NoFunctions);
+        // Assignment is off: `data.x = 1` would write through a borrowed view instead of producing a value.
+        return new ExpressionSignature(name, parameters, typeof(object), NoFunctions, AssignmentOperators.None);
     }
 }

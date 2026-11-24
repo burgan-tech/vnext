@@ -888,6 +888,22 @@ public static partial class WorkflowLogs
         string errorMessage);
 
     /// <summary>
+    /// Logs when a declarative task mapping skips an entry because its source is missing (RF-1): a <c>select</c> path
+    /// that reads nothing, or a <c>set</c> expression that reads through a missing intermediate. Carries the path or
+    /// <c>set</c> key, never the value. The mapping continues; nothing is written for that entry.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10269,
+        Level = LogLevel.Debug,
+        Message = "Task declarative mapping entry skipped: missing source. TaskKey={TaskKey}, Phase={Phase}, Path={Path}, Reason={Reason}")]
+    public static partial void TaskDeclarativeMappingEntrySkipped(
+        this ILogger logger,
+        string taskKey,
+        string phase,
+        string path,
+        string reason);
+
+    /// <summary>
     /// Logs when task envelope creation fails.
     /// </summary>
     [LoggerMessage(

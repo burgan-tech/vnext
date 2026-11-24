@@ -43,17 +43,53 @@ public class MappingBlockValidatorTests
     [Fact]
     public void Binding_WithNeitherMappingNorBlocks_StaysValid() => Errors("").ShouldBeEmpty();
 
+    [Theory]
+    [InlineData("data.x")]
+    [InlineData("")]
+    public void D1_DynamicExpressoMapping_IsAWarning_NotAnError(string text)
+    {
+        // The script engine never read ScriptCode.Location: such a mapping has always run as a C# script (an empty one as
+        // a no-op). Rejecting it would break published components, so publish only warns.
+        var code = Convert.ToBase64String(Encoding.UTF8.GetBytes(text));
+        var errors = new List<ValidationResult>();
+        var warnings = new List<ValidationResult>();
+
+        _sut.ValidateBinding(Binding($$"""
+            "mapping":{"location":"dynamicExpresso","code":"{{code}}"}
+            """), Loc, errors, warnings);
+
+        errors.ShouldBeEmpty();
+        var warning = warnings.ShouldHaveSingleItem().ErrorMessage!;
+        warning.ShouldStartWith($"{Loc}.mapping: ");
+        warning.ShouldContain("ignored");
+        warning.ShouldContain("'input'");
+        warning.ShouldContain("'output'");
+    }
+
     [Fact]
-    public void D1_DynamicExpressoMapping_IsRejected_PointingAtBlocks()
+    public void D1_Warning_ReachesTheComponentResult_AndKeepsItValid()
     {
         var code = Convert.ToBase64String(Encoding.UTF8.GetBytes("data.x"));
-        var errors = Errors($$"""
-            "mapping":{"location":"dynamicExpresso","code":"{{code}}"}
-            """);
-        errors.Count.ShouldBe(1);
-        errors[0].ShouldStartWith($"{Loc}.mapping: ");
-        errors[0].ShouldContain("input");
-        errors[0].ShouldContain("output");
+        var fn = JsonDocument.Parse("""
+            {"scope":"F","task":{"order":1,"task":__T__,"mapping":{"location":"dynamicExpresso","code":"__C__"}}}
+            """.Replace("__T__", TaskRef).Replace("__C__", code)).RootElement;
+        var result = new ComponentValidationResult();
+
+        _sut.Validate(RuntimeSysSchemaInfo.Functions, fn, result);
+
+        result.IsValid.ShouldBeTrue();
+        result.Warnings.ShouldHaveSingleItem().ErrorMessage!.ShouldStartWith("task.mapping: ");
+    }
+
+    [Theory]
+    [InlineData("data.x = 1")]
+    [InlineData("input.amount = 2")]
+    public void AssignmentInASetExpression_IsRejected(string expression)
+    {
+        var errors = Errors("""
+            "output":{"set":{"$.x":"__E__"}}
+            """.Replace("__E__", expression));
+        errors.ShouldHaveSingleItem().ShouldStartWith($"{Loc}.output.set['$.x']: The expression does not compile");
     }
 
     [Fact]

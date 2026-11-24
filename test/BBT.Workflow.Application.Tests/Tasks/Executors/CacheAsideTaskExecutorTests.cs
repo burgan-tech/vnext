@@ -87,6 +87,38 @@ public sealed class CacheAsideTaskExecutorTests
             default!, default, default, default, default, default!, default, default);
     }
 
+    [Theory]
+    [InlineData(true, "cached")]
+    [InlineData(false, "shaped")]
+    public async Task DeclarativeOutput_RunsOnHitAndMiss_OverTheCachedOrFreshValue(bool hit, string expected)
+    {
+        // CacheAside overrides PrepareInputAsync but files its result through the base output path: a declarative output
+        // block must see the same `result` either way — the cached value on a hit, the source's shaped value on a miss.
+        var harness = new Harness
+        {
+            OuterOutput = new MappingBlock("$.body.name", "$.profile.name", new OrderedStringMap(
+            [
+                new KeyValuePair<string, string>("$.profile.status", "result.statusCode"),
+                new KeyValuePair<string, string>("$.profile.echo", "result.body.name")
+            ]))
+        };
+        if (hit)
+        {
+            harness.SetReadResult(new CacheGetResult(true, true, JsonSerializer.SerializeToElement(new { name = "cached" })));
+        }
+
+        var result = await harness.ExecuteAsync();
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        result.Value!.IsSuccess.ShouldBeTrue();
+        ((bool)result.Value.Metadata!["CacheHit"]).ShouldBe(hit);
+        JsonSerializer.Serialize((object?)result.Value.Data, JsonSerializerConstants.JsonOptions)
+            .ShouldBe("""{"profile":{"name":"__N__","status":200,"echo":"__N__"}}"""
+                .Replace("__N__", expected));
+        harness.SourceContexts.Count.ShouldBe(hit ? 0 : 1);
+        harness.ScriptEngine.ReceivedCalls().ShouldBeEmpty(); // no script compile on either path
+    }
+
     [Fact]
     public async Task SourceBusinessFailure_IsNotCached_AndPropagatesStatus()
     {
@@ -429,6 +461,9 @@ public sealed class CacheAsideTaskExecutorTests
 
         private ScriptCode _outerMapping = ScriptCode.FromNative(string.Empty);
 
+        /// <summary>A declarative output block on the CacheAside binding (no task-level script then).</summary>
+        public MappingBlock? OuterOutput { get; set; }
+
         public Harness(
             bool withSourceMapping = true,
             bool bypassOnCacheError = true,
@@ -532,7 +567,9 @@ public sealed class CacheAsideTaskExecutorTests
                 .SetRuntime(Substitute.For<IRuntimeInfoProvider>())
                 .SetInstance(instance)
                 .Build();
-            var onExecute = OnExecuteTask.Create(1, Task, _outerMapping);
+            var onExecute = OuterOutput is null
+                ? OnExecuteTask.Create(1, Task, _outerMapping)
+                : OnExecuteTask.Create(1, Task, null, output: OuterOutput);
             var context = new TaskExecutorContext(
                 Task, onExecute, OuterScriptContext, null, TaskTrigger.OnExecute, TaskExecutionOrigin.Flow);
             return Executor.ExecuteAsync(context, cancellationToken);

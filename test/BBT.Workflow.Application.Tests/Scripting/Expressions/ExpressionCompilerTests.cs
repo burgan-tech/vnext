@@ -33,6 +33,26 @@ public sealed class ExpressionCompilerTests
     }
 
     [Fact]
+    public void Assignment_FollowsTheSignature_OffForMappingSignatures_OnForLegacy()
+    {
+        var compiler = new ExpressionCompiler(16);
+        var holder = new DynamicExpresso.Parameter("box", typeof(int[]));
+        var allowing = new ExpressionSignature("assign-on", [holder], typeof(object), new Dictionary<string, Delegate>());
+        var denying = allowing with { Name = "assign-off", Assignment = DynamicExpresso.AssignmentOperators.None };
+
+        compiler.Compile<Func<int[], object>>("box[0] = 5", allowing).IsSuccess.ShouldBeTrue();
+        compiler.Compile<Func<int[], object>>("box[0] = 5", denying).IsSuccess.ShouldBeFalse();
+        compiler.Compile<Func<int[], object>>("box[0] == 5", denying).IsSuccess.ShouldBeTrue();
+
+        ExpressionSignatures.Mapping(ScopeKind.MappingInput).Assignment.ShouldBe(DynamicExpresso.AssignmentOperators.None);
+        ExpressionSignatures.Mapping(ScopeKind.MappingOutput).Assignment.ShouldBe(DynamicExpresso.AssignmentOperators.None);
+        ExpressionSignatures.Mapping(ScopeKind.Condition).Assignment.ShouldBe(DynamicExpresso.AssignmentOperators.None);
+        ExpressionSignatures.LegacyCondition.Assignment.ShouldBe(DynamicExpresso.AssignmentOperators.All);
+        ExpressionSignatures.LegacyValue.Assignment.ShouldBe(DynamicExpresso.AssignmentOperators.All);
+        ExpressionSignatures.AgentTool.Assignment.ShouldBe(DynamicExpresso.AssignmentOperators.All);
+    }
+
+    [Fact]
     public void Cache_ExceedsCapacity_EvictsLeastRecentlyUsed()
     {
         var compiler = new ExpressionCompiler(2);

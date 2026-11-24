@@ -8,11 +8,21 @@ namespace BBT.Workflow.Scripting.Expressions;
 /// parameters, return type, registered functions) every expression of that family is compiled with.
 /// <see cref="Name"/> is part of the compile-cache key, so two signatures must never share a name.
 /// </summary>
+/// <param name="Name">Unique signature name; part of the compile-cache key.</param>
+/// <param name="Parameters">Declared parameters, in delegate order.</param>
+/// <param name="ReturnType">The expression's return type.</param>
+/// <param name="Functions">Functions registered on the interpreter.</param>
+/// <param name="Assignment">
+/// The assignment operators the interpreter accepts (<see cref="AssignmentOperators.All"/>, Dynamic Expresso's default,
+/// unless the signature narrows it). The declarative mapping signatures use <see cref="AssignmentOperators.None"/>:
+/// a mapping value reads the scope, it never writes to it.
+/// </param>
 public sealed record ExpressionSignature(
     string Name,
     IReadOnlyList<Parameter> Parameters,
     Type ReturnType,
-    IReadOnlyDictionary<string, Delegate> Functions);
+    IReadOnlyDictionary<string, Delegate> Functions,
+    AssignmentOperators Assignment = AssignmentOperators.All);
 
 /// <summary>A compiled expression: the shared delegate and the identifiers the text references.</summary>
 /// <typeparam name="TDelegate">Delegate type the expression was compiled to.</typeparam>

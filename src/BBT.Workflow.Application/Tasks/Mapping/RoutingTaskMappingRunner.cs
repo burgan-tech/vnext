@@ -8,27 +8,27 @@ namespace BBT.Workflow.Tasks.Mapping;
 
 /// <summary>
 /// Picks the runner for one phase of a binding, the same way <c>RoutingConditionEvaluator</c> picks a condition
-/// evaluator: the declarative block of that phase when the binding authors one, else the Roslyn script when
-/// <see cref="OnExecuteTask.Mapping"/> has code, else pass-through (input → null, output → <c>result.Data</c>, exactly
-/// what an executor did without a mapping). Publish rejects a binding that carries both a script and blocks (D-4); if one
-/// reaches the runtime anyway, the blocks win.
+/// evaluator: the Roslyn script when <see cref="OnExecuteTask.Mapping"/> has code, else the declarative block of that
+/// phase when the binding authors one, else pass-through (input → null, output → <c>result.Data</c>, exactly what an
+/// executor did without a mapping). Publish rejects a binding that carries both a script and blocks (D-4); if one reaches
+/// the runtime anyway (data stored before that validation existed), the script wins — its legacy meaning — and the
+/// blocks are ignored.
 /// </summary>
 public static class TaskMappingRouter
 {
     /// <summary>The kind that handles <paramref name="binding"/>'s input phase.</summary>
     public static TaskMappingKind InputKind(OnExecuteTask binding) =>
-        binding.HasDeclarativeMapping
-            ? binding.Input is null ? TaskMappingKind.PassThrough : TaskMappingKind.Declarative
-            : ScriptOrPassThrough(binding);
+        HasScript(binding)
+            ? TaskMappingKind.Script
+            : binding.Input is not null ? TaskMappingKind.Declarative : TaskMappingKind.PassThrough;
 
     /// <summary>The kind that handles <paramref name="binding"/>'s output phase.</summary>
     public static TaskMappingKind OutputKind(OnExecuteTask binding) =>
-        binding.HasDeclarativeMapping
-            ? binding.Output is null ? TaskMappingKind.PassThrough : TaskMappingKind.Declarative
-            : ScriptOrPassThrough(binding);
+        HasScript(binding)
+            ? TaskMappingKind.Script
+            : binding.Output is not null ? TaskMappingKind.Declarative : TaskMappingKind.PassThrough;
 
-    private static TaskMappingKind ScriptOrPassThrough(OnExecuteTask binding) =>
-        binding.Mapping is { HasMappingCode: true } ? TaskMappingKind.Script : TaskMappingKind.PassThrough;
+    private static bool HasScript(OnExecuteTask binding) => binding.Mapping is { HasMappingCode: true };
 }
 
 /// <summary>

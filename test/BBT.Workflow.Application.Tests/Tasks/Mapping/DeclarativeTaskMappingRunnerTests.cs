@@ -39,6 +39,7 @@ namespace BBT.Workflow.Tasks.Mapping;
 public sealed class DeclarativeTaskMappingRunnerTests
 {
     private const int TaskDeclarativeMappingFailedEventId = 10268;
+    private const int TaskDeclarativeMappingEntrySkippedEventId = 10269;
 
     private readonly FakeTimeProvider _clock = new(new DateTimeOffset(2026, 11, 24, 10, 0, 0, TimeSpan.Zero));
 
@@ -385,7 +386,124 @@ public sealed class DeclarativeTaskMappingRunnerTests
         var unguarded = Context(Http(), output: Block(set: [("$.can", "user.hasRole(\"x\")")]));
         var result = await Runner().ProcessOutputAsync(unguarded.Task, ResultWith("{}"), unguarded, CancellationToken.None);
         result.IsSuccess.ShouldBeFalse();
+        AssertNoCallerFailure(result.Error, "output");
+    }
+
+    [Fact]
+    public async Task User_SystemHop_InputSetRoleRead_FailsNonTransient()
+    {
+        var task = Http();
+        var ctx = Context(task, input: Block(set: [("$.body.roles", "user.roles")]));
+
+        var result = await Runner().PrepareInputAsync(task, ctx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        AssertNoCallerFailure(result.Error, "input");
+    }
+
+    [Fact]
+    public async Task User_InputSelect_SystemHop_RolesFail_AvailableReads()
+    {
+        var task = Http();
+        var roles = Context(task, input: Block(select: "$.user.roles", into: "$.body.roles"));
+        var failed = await Runner().PrepareInputAsync(task, roles, CancellationToken.None);
+        failed.IsSuccess.ShouldBeFalse();
+        AssertNoCallerFailure(failed.Error, "input");
+
+        var availableTask = Http();
+        var available = Context(availableTask, input: Block(select: "$.user.available", into: "$.body.available"));
+        (await Runner().PrepareInputAsync(availableTask, available, CancellationToken.None)).IsSuccess.ShouldBeTrue();
+        availableTask.Body!.Value.GetRawText().ShouldBe("""{"available":false}""");
+    }
+
+    [Fact]
+    public async Task User_InputSelect_UserHop_ReadsRoles()
+    {
+        var caller = new CallerAccessor(() => Task.FromResult(new CallerRoleSnapshot(["approver", "viewer"], false, false)));
+        var task = Http();
+        var ctx = Context(task, input: Block(select: "$.user.roles", into: "$.body.roles"), caller: caller);
+
+        (await Runner().PrepareInputAsync(task, ctx, CancellationToken.None)).IsSuccess.ShouldBeTrue();
+
+        task.Body!.Value.GetRawText().ShouldBe("""{"roles":["approver","viewer"]}""");
+    }
+
+    [Fact]
+    public async Task User_InputSelect_ProviderFailure_StaysTransient()
+    {
+        var caller = new CallerAccessor(() => Task.FromResult(new CallerRoleSnapshot([], true, false)));
+        var task = Http();
+        var ctx = Context(task, input: Block(select: "$.user.roles", into: "$.body.roles"), caller: caller);
+
+        var result = await Runner().PrepareInputAsync(task, ctx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrors.CallerRolesUnavailable().Code);
+    }
+
+    private static void AssertNoCallerFailure(Error error, string phase)
+    {
+        // A System hop has no caller: deterministic, so not the transient 110006 ("can be retried").
+        error.Code.ShouldBe(WorkflowErrorCodes.TaskExecution);
+        error.Code.ShouldNotBe(WorkflowErrors.CallerRolesUnavailable().Code);
+        error.Prefix.ShouldNotBe(WorkflowErrors.CallerRolesUnavailable().Prefix);
+        error.Message.ShouldStartWith($"Http task declarative {phase} mapping failed: ");
+        error.Message.ShouldContain("user.available");
+    }
+
+    // ---- RF-1 skip log ----
+
+    [Fact]
+    public async Task MissingSources_AreLoggedAtDebug_WithPathNeverValue()
+    {
+        var logger = new CapturingLogger();
+        var ctx = Context(Http(), output: Block(select: "$.body.missing", into: "$.kyc.x", set:
+        [
+            ("$.id", "data.customer.id"),
+            ("$.kept", "data.secret")
+        ]), instanceJson: """{"secret":"s3cr3t-value"}""");
+
+        var result = await Runner().ProcessOutputAsync(ctx.Task, ResultWith("""{"present":"p-value"}"""), ctx,
+            CancellationToken.None, Site(logger));
+
+        result.IsSuccess.ShouldBeTrue();
+        var skipped = logger.Events.Where(e => e.Id == TaskDeclarativeMappingEntrySkippedEventId).ToList();
+        skipped.Count.ShouldBe(2);
+        skipped.ShouldAllBe(e => e.Level == LogLevel.Debug);
+        skipped[0].Message.ShouldContain("$.body.missing");
+        skipped[0].Message.ShouldContain("Phase=output");
+        skipped[0].Message.ShouldContain("TaskKey=decl-task");
+        skipped[1].Message.ShouldContain("set['$.id']");
+        logger.Events.ShouldAllBe(e => !e.Message.Contains("s3cr3t-value") && !e.Message.Contains("p-value"));
+    }
+
+    [Fact]
+    public async Task MissingInputSelect_IsLoggedAtDebug()
+    {
+        var logger = new CapturingLogger();
+        var task = Http();
+        var ctx = Context(task, input: Block(select: "$.data.nothing", into: "$.body.x"));
+
+        (await Runner().PrepareInputAsync(task, ctx, CancellationToken.None, Site(logger))).IsSuccess.ShouldBeTrue();
+
+        var skipped = logger.Events.ShouldHaveSingleItem();
+        skipped.Id.ShouldBe(TaskDeclarativeMappingEntrySkippedEventId);
+        skipped.Message.ShouldContain("$.data.nothing");
+        skipped.Message.ShouldContain("Phase=input");
+    }
+
+    // ---- assignment ----
+
+    [Fact]
+    public async Task AssignmentInASetExpression_FailsAtRunTime()
+    {
+        var ctx = Context(Http(), output: Block(set: [("$.x", "data.customer = 1")]));
+
+        var result = await Runner().ProcessOutputAsync(ctx.Task, ResultWith("{}"), ctx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Message.ShouldContain("does not compile");
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.TaskExecution);
     }
 
     // ---- input ----
@@ -577,6 +695,39 @@ public sealed class DeclarativeTaskMappingRunnerTests
         var outputOnly = OnExecuteTask.Create(1, task, null, output: Block(set: [("$.a", "1")]));
         TaskMappingRouter.InputKind(outputOnly).ShouldBe(TaskMappingKind.PassThrough);
         TaskMappingRouter.OutputKind(outputOnly).ShouldBe(TaskMappingKind.Declarative);
+    }
+
+    [Fact]
+    public void Router_ScriptAndBlocksBothStored_ScriptWins_LegacyMeaning()
+    {
+        // Publish rejects script + blocks (D-4); a binding stored before that keeps its legacy meaning: the script runs.
+        var task = Http();
+        var both = OnExecuteTask.Create(1, task, ScriptCode.FromNative("return null;"),
+            input: Block(set: [("$.body.a", "1")]), output: Block(set: [("$.a", "1")]));
+
+        TaskMappingRouter.InputKind(both).ShouldBe(TaskMappingKind.Script);
+        TaskMappingRouter.OutputKind(both).ShouldBe(TaskMappingKind.Script);
+        both.RunsDeclarativeMapping.ShouldBeFalse();
+
+        var emptyScript = OnExecuteTask.Create(1, task, ScriptCode.FromNative(string.Empty), output: Block(set: [("$.a", "1")]));
+        TaskMappingRouter.OutputKind(emptyScript).ShouldBe(TaskMappingKind.Declarative);
+        emptyScript.RunsDeclarativeMapping.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task RoutingRunner_ScriptAndBlocks_RunsTheScriptNotTheBlocks()
+    {
+        var scriptRunner = new ScriptTaskMappingRunner(Substitute.For<IScriptEngine>());
+        var compiler = new RecordingCompiler(new ExpressionCompiler(64));
+        var routing = new RoutingTaskMappingRunner(scriptRunner, new DeclarativeTaskMappingRunner(compiler, _clock));
+        var task = Http();
+        var binding = OnExecuteTask.Create(1, task, ScriptCode.FromNative("public class M {}"),
+            output: Block(set: [("$.declarative", "1")]));
+        var ctx = Context(task, binding: binding);
+
+        await routing.ProcessOutputAsync(task, ResultWith("""{"a":1}"""), ctx, CancellationToken.None);
+
+        compiler.DistinctDelegates.ShouldBe(0); // the declarative block was never compiled or run
     }
 
     [Fact]
