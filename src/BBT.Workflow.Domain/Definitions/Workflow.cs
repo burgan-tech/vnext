@@ -1,5 +1,4 @@
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 using BBT.Aether;
 using BBT.Aether.Auditing;
 using BBT.Aether.Results;
@@ -119,7 +118,7 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     /// Semantic version
     /// </summary>
     public string SemanticVersion =>
-        Version.Contains('+') ? Regex.Match(Version, @"^([^+]+)").Groups[1].Value : Version;
+        Version.IndexOf('+') is var plus and >= 0 ? Version[..plus] : Version;
 
     public static string ComponentTypeKey => RuntimeSysSchemaInfo.Flows;
     public string ComponentKey => ComponentTypeKey;

@@ -89,11 +89,7 @@ public class EfCoreInstanceTransitionRepository(
     public async Task ForgetAsync(InstanceTransition transition)
     {
         var context = await GetDbContextAsync();
-        var entry = context.Entry(transition);
-        if (entry.State != EntityState.Detached)
-        {
-            entry.State = EntityState.Detached;
-        }
+        context.Entry(transition).State = EntityState.Detached;
     }
 
     /// <inheritdoc />
