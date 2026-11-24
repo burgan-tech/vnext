@@ -17,8 +17,8 @@ using Xunit;
 
 namespace BBT.Workflow.Application.Tests.Scripting.Expressions;
 
-using InputFn = Func<RuleJsonDynamic, RuleJsonDynamic, ExpressoInstanceView, DateTimeOffset, ExpressionUser, ExpressoRuleContext, object>;
-using OutputFn = Func<RuleJsonDynamic, RuleJsonDynamic, ExpressoInstanceView, DateTimeOffset, ExpressionUser, ExpressoRuleContext, RuleJsonDynamic, object>;
+using InputFn = Func<RuleJsonDynamic, RuleJsonDynamic, ExpressionInstance, DateTimeOffset, ExpressionUser, ExpressoRuleContext, object>;
+using OutputFn = Func<RuleJsonDynamic, RuleJsonDynamic, ExpressionInstance, DateTimeOffset, ExpressionUser, ExpressoRuleContext, RuleJsonDynamic, object>;
 
 public sealed class ExpressionScopeTests
 {
@@ -208,12 +208,36 @@ public sealed class ExpressionScopeTests
     }
 
     [Fact]
-    public async Task Instance_ExposesIdentityAndState()
+    public async Task Instance_ExposesIdentityAndState_CamelCase()
     {
         var ctx = Context();
+        var instance = ctx.Instance!;
 
-        (await EvalAsync(Scope(ctx), "instance.Key")).ShouldBe("scope-key");
-        (await EvalAsync(Scope(ctx), "instance.Id")).ShouldBe(ctx.Instance!.Id);
+        (await EvalAsync(Scope(ctx), "instance.key")).ShouldBe("scope-key");
+        (await EvalAsync(Scope(ctx), "instance.id")).ShouldBe(instance.Id);
+        (await EvalAsync(Scope(ctx), "instance.flow")).ShouldBe("scope-flow");
+        (await EvalAsync(Scope(ctx), "instance.version")).ShouldBe("1.0.0");
+        (await EvalAsync(Scope(ctx), "instance.currentState")).ShouldBe(instance.CurrentState);
+        (await EvalAsync(Scope(ctx), "instance.effectiveState")).ShouldBe(instance.EffectiveState);
+        (await EvalAsync(Scope(ctx), "instance.effectiveStatus")).ShouldBe(instance.GetEffectiveStatus.Code);
+        (await EvalAsync(Scope(ctx), "instance.type")).ShouldBe("R");
+        (await EvalAsync(Scope(ctx), "instance.data.x.AsInt32()")).ShouldBe(42);
+    }
+
+    [Fact]
+    public void Instance_PascalCaseMembers_DoNotCompile()
+    {
+        // The mapping surface spells every member the way the JSON variables do (camelCase); the legacy
+        // PascalCase view stays reachable only through context.Instance.
+        var compiled = _compiler.Compile<InputFn>("instance.CurrentState", ExpressionSignatures.Mapping(ScopeKind.MappingInput));
+
+        compiled.IsSuccess.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Instance_LegacyContextView_StaysPascalCase()
+    {
+        (await EvalAsync(Scope(Context()), "context.Instance.Key")).ShouldBe("scope-key");
     }
 
     [Fact]

@@ -16,11 +16,11 @@ using DynamicExpresso;
 using Microsoft.CSharp.RuntimeBinder;
 using InputFn = System.Func<
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Rules.RuleJsonDynamic,
-    BBT.Workflow.Scripting.Rules.ExpressoInstanceView, System.DateTimeOffset,
+    BBT.Workflow.Scripting.Expressions.ExpressionInstance, System.DateTimeOffset,
     BBT.Workflow.Scripting.Expressions.ExpressionUser, BBT.Workflow.Scripting.Rules.ExpressoRuleContext, object>;
 using OutputFn = System.Func<
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Rules.RuleJsonDynamic,
-    BBT.Workflow.Scripting.Rules.ExpressoInstanceView, System.DateTimeOffset,
+    BBT.Workflow.Scripting.Expressions.ExpressionInstance, System.DateTimeOffset,
     BBT.Workflow.Scripting.Expressions.ExpressionUser, BBT.Workflow.Scripting.Rules.ExpressoRuleContext,
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, object>;
 
@@ -598,7 +598,7 @@ internal sealed class DeclarativeMappingPlan
                     return Invalid($"set['{key}']: the expression does not compile: {compiled.Error.Message}");
                 var fn = compiled.Value!.Invoke;
                 entry = new SetEntry(key, target.Value!,
-                    a => fn((RuleJsonDynamic?)a[0], (RuleJsonDynamic?)a[1], (ExpressoInstanceView?)a[2],
+                    a => fn((RuleJsonDynamic?)a[0], (RuleJsonDynamic?)a[1], (ExpressionInstance?)a[2],
                         (DateTimeOffset)a[3]!, (ExpressionUser?)a[4], (ExpressoRuleContext?)a[5]),
                     compiled.Value.UsedIdentifiers);
             }
@@ -609,7 +609,7 @@ internal sealed class DeclarativeMappingPlan
                     return Invalid($"set['{key}']: the expression does not compile: {compiled.Error.Message}");
                 var fn = compiled.Value!.Invoke;
                 entry = new SetEntry(key, target.Value!,
-                    a => fn((RuleJsonDynamic?)a[0], (RuleJsonDynamic?)a[1], (ExpressoInstanceView?)a[2],
+                    a => fn((RuleJsonDynamic?)a[0], (RuleJsonDynamic?)a[1], (ExpressionInstance?)a[2],
                         (DateTimeOffset)a[3]!, (ExpressionUser?)a[4], (ExpressoRuleContext?)a[5],
                         (RuleJsonDynamic?)a[6]),
                     compiled.Value.UsedIdentifiers);

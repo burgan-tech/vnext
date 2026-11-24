@@ -31,13 +31,15 @@ A task binding (`onExecuteTask` entry of a state `onEntries`/`onExits`, a transi
 |---|---|
 | `data` | the instance's latest data |
 | `input` | the transition request body (never the task payload; no fallback) |
-| `instance` | read-only instance view (for example `instance.currentState`) |
+| `instance` | read-only instance view, camelCase members: `id`, `key`, `flow`, `version`, `currentState`, `effectiveState`, `effectiveStateType`, `effectiveStateSubType`, `effectiveStatus`, `type` (`R`/`S`/`P`), `data` |
 | `now` | one timestamp per mapping |
 | `user` | `available` (bool), `roles` (string[]), `hasRole(string)` — see [User](#user) |
 | `context` | the legacy rule context, unchanged (still fails on a missing member) |
 | `result` | **output phase only**: the task's standard response `body`, `headers`, `statusCode` |
 
 Variables are bound lazily, only when an expression uses them; nothing is cloned.
+
+**Member names are case-sensitive and camelCase everywhere a mapping author writes them**: JSON members of `data`, `input` and `result` as stored (`data.customer.id`), the `instance` view (`instance.currentState`) and `user` (`user.hasRole("x")`). `instance.CurrentState` is a compile error at publish. Only the legacy `context` keeps its PascalCase members (`context.Instance.CurrentState`, `context.Body`), unchanged. JSON values need a conversion for comparison and arithmetic — `data.amount.AsDouble() > 1000`, `AsInt32()`, `AsBoolean()`, `AsArrayLength()` — but not to be written as they are.
 
 ## Input phase
 

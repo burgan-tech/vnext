@@ -7,11 +7,11 @@ using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting.Sandbox;
 using InputFn = System.Func<
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Rules.RuleJsonDynamic,
-    BBT.Workflow.Scripting.Rules.ExpressoInstanceView, System.DateTimeOffset,
+    BBT.Workflow.Scripting.Expressions.ExpressionInstance, System.DateTimeOffset,
     BBT.Workflow.Scripting.Expressions.ExpressionUser, BBT.Workflow.Scripting.Rules.ExpressoRuleContext, object>;
 using OutputFn = System.Func<
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Rules.RuleJsonDynamic,
-    BBT.Workflow.Scripting.Rules.ExpressoInstanceView, System.DateTimeOffset,
+    BBT.Workflow.Scripting.Expressions.ExpressionInstance, System.DateTimeOffset,
     BBT.Workflow.Scripting.Expressions.ExpressionUser, BBT.Workflow.Scripting.Rules.ExpressoRuleContext,
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, object>;
 

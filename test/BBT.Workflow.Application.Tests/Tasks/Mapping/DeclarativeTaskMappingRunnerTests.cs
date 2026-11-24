@@ -83,7 +83,7 @@ public sealed class DeclarativeTaskMappingRunnerTests
         var output = Block(select: "$.body", into: "$.kyc", set:
         [
             ("$.kyc.score", "result.body.score.AsInt32() + 10"),
-            ("$.kyc.state", "instance.Key"),
+            ("$.kyc.state", "instance.key"),
             ("$.kyc.checkedAt", "now")
         ]);
         var ctx = Context(Http(), output: output);

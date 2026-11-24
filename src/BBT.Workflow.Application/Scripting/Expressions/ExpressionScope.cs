@@ -74,7 +74,7 @@ public sealed class ExpressionScope
     private bool _inputBuilt;
     private RuleJsonDynamic? _input;
     private bool _instanceBuilt;
-    private ExpressoInstanceView? _instance;
+    private ExpressionInstance? _instance;
     private DateTimeOffset? _now;
     private ExpressoRuleContext? _ruleContext;
     private bool _resultBuilt;
@@ -236,13 +236,13 @@ public sealed class ExpressionScope
         return _input;
     }
 
-    private ExpressoInstanceView? InstanceView()
+    private ExpressionInstance? InstanceView()
     {
         if (_instanceBuilt)
             return _instance;
 
         _instanceBuilt = true;
-        _instance = ExpressoRuleContextMapper.MapInstance(_context.Instance, borrowData: true);
+        _instance = _context.Instance is { } instance ? new ExpressionInstance(instance) : null;
         return _instance;
     }
 

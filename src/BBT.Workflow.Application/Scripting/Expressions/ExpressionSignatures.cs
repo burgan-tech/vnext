@@ -55,7 +55,7 @@ public static class ExpressionSignatures
 
     /// <summary>
     /// Declarative mapping / condition expressions bound by <see cref="ExpressionScope"/>, in this order:
-    /// <c>data</c>, <c>input</c> (<see cref="RuleJsonDynamic"/>), <c>instance</c> (<see cref="ExpressoInstanceView"/>),
+    /// <c>data</c>, <c>input</c> (<see cref="RuleJsonDynamic"/>), <c>instance</c> (<see cref="ExpressionInstance"/>, camelCase members),
     /// <c>now</c> (<see cref="DateTimeOffset"/>), <c>user</c> (<see cref="ExpressionUser"/>), <c>context</c>
     /// (<see cref="ExpressoRuleContext"/>), plus <c>result</c> (<see cref="RuleJsonDynamic"/>) for
     /// <see cref="ScopeKind.MappingOutput"/> only; <see cref="object"/> out, no functions, assignment operators disabled
@@ -76,7 +76,7 @@ public static class ExpressionSignatures
         [
             new(ExpressionScope.DataVariable, typeof(RuleJsonDynamic)),
             new(ExpressionScope.InputVariable, typeof(RuleJsonDynamic)),
-            new(ExpressionScope.InstanceVariable, typeof(ExpressoInstanceView)),
+            new(ExpressionScope.InstanceVariable, typeof(ExpressionInstance)),
             new(ExpressionScope.NowVariable, typeof(DateTimeOffset)),
             new(ExpressionScope.UserVariable, typeof(ExpressionUser)),
             new(ExpressionScope.ContextVariable, typeof(ExpressoRuleContext))
