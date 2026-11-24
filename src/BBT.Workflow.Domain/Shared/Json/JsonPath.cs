@@ -227,7 +227,8 @@ public sealed class JsonPath
             writer.WriteEndArray();
         }
 
-        value = JsonDocument.Parse(buffer.WrittenMemory).RootElement;
+        using var doc = JsonDocument.Parse(buffer.WrittenMemory);
+        value = doc.RootElement.Clone();
         return true;
     }
 

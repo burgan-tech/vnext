@@ -21,9 +21,11 @@ public sealed class OnExecuteTask
     private OnExecuteTask(
         int order,
         Reference task,
-        ScriptCode mapping,
+        ScriptCode? mapping,
         ErrorBoundary? errorBoundary,
-        string? variableKey
+        string? variableKey,
+        MappingBlock? input,
+        MappingBlock? output
     )
     {
         Order = order;
@@ -31,6 +33,8 @@ public sealed class OnExecuteTask
         Mapping = mapping;
         ErrorBoundary = errorBoundary;
         VariableKey = variableKey;
+        Input = input;
+        Output = output;
     }
 
     /// <summary>
@@ -44,10 +48,29 @@ public sealed class OnExecuteTask
     public Reference Task { get; private set; }
     
     /// <summary>
-    /// Optional mapping script for input/output transformation.
+    /// Optional mapping script for input/output transformation. Null when the binding authors none
+    /// (for example a binding that uses only the declarative <see cref="Input"/>/<see cref="Output"/> blocks).
     /// </summary>
-    public ScriptCode Mapping { get; private set; }
+    public ScriptCode? Mapping { get; private set; }
     
+    /// <summary>
+    /// Optional declarative input block: shapes the task request without a script.
+    /// Absent on every binding authored before the declarative blocks existed.
+    /// </summary>
+    [JsonPropertyName("input")]
+    public MappingBlock? Input { get; private set; }
+
+    /// <summary>
+    /// Optional declarative output block: files the task response without a script.
+    /// Absent on every binding authored before the declarative blocks existed.
+    /// </summary>
+    [JsonPropertyName("output")]
+    public MappingBlock? Output { get; private set; }
+
+    /// <summary>True when the binding authors an <see cref="Input"/> or <see cref="Output"/> block.</summary>
+    [JsonIgnore]
+    public bool HasDeclarativeMapping => Input is not null || Output is not null;
+
     /// <summary>
     /// Task-level error boundary.
     /// Provides the most specific error handling for this task.
@@ -85,18 +108,24 @@ public sealed class OnExecuteTask
     /// <param name="mapping">Optional mapping script.</param>
     /// <param name="errorBoundary">Optional task-level error boundary.</param>
     /// <param name="variableKey">Optional response slot name; defaults to the task key's variable name.</param>
+    /// <param name="input">Optional declarative input block.</param>
+    /// <param name="output">Optional declarative output block.</param>
     public static OnExecuteTask Create(
         int order,
         IReference task,
-        ScriptCode mapping,
+        ScriptCode? mapping,
         ErrorBoundary? errorBoundary = null,
-        string? variableKey = null)
+        string? variableKey = null,
+        MappingBlock? input = null,
+        MappingBlock? output = null)
     {
         return new OnExecuteTask(
             order,
             task.ToReference(),
             mapping,
             errorBoundary,
-            variableKey);
+            variableKey,
+            input,
+            output);
     }
 }

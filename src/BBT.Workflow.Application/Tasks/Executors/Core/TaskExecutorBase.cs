@@ -317,7 +317,9 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         CancellationToken cancellationToken)
         where T : class
     {
-        var mapping = context.OnExecuteTask.Mapping;
+        // Callers reach this only after a HasMappingCode guard; a binding with no script mapping is a caller bug.
+        var mapping = context.OnExecuteTask.Mapping
+            ?? throw new InvalidOperationException("The task binding has no script mapping to compile.");
         var key = (mapping, typeof(T));
         context.CompiledMappingFactories ??= new Dictionary<(ScriptCode, Type), object>();
         if (!context.CompiledMappingFactories.TryGetValue(key, out var boxed))

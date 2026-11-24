@@ -146,6 +146,17 @@ public sealed class JsonPathTests
     }
 
     [Fact]
+    public void TryRead_JsonElement_Wildcard_ValueSurvivesLaterCalls()
+    {
+        using var doc = JsonDocument.Parse("""{"u":[{"id":"a"},{"id":"b"}]}""");
+        P("$.u[*].id").TryRead(doc.RootElement, out var first).ShouldBeTrue();
+        for (var i = 0; i < 50; i++)
+            P("$.u[*].id").TryRead(doc.RootElement, out _).ShouldBeTrue();
+
+        first.GetRawText().ShouldBe("[\"a\",\"b\"]");
+    }
+
+    [Fact]
     public void TryRead_JsonElement_Wildcard_ProjectsInOrder()
     {
         var root = JsonDocument.Parse("""{"u":[{"id":"a"},{"id":"b"},{"x":1},{"id":"c"}]}""").RootElement;
