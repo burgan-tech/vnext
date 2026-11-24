@@ -187,6 +187,22 @@ public class ExpressionMappingBenchmarks
         => _declRunner.ProcessOutputAsync(_declCtx.Task, _declResult, _declCtx, CancellationToken.None)
             .GetAwaiter().GetResult().Value;
 
+    /// <summary>
+    /// The same block with a NEW <see cref="TaskExecutorContext"/> per op, as production builds one per task execution
+    /// (same cached binding, compiler cache warm): measures what the per-execution plan lookup really costs.
+    /// </summary>
+    [Benchmark]
+    public object? DeclarativeOutputFreshContext()
+    {
+        var ctx = new TaskExecutorContext(_declCtx.Task, _declCtx.OnExecuteTask, _declCtx.ScriptContext, null,
+            TaskTrigger.OnExecute, TaskExecutionOrigin.Flow)
+        {
+            Caller = NullCallerAccessor.Instance
+        };
+        return _declRunner.ProcessOutputAsync(ctx.Task, _declResult, ctx, CancellationToken.None)
+            .GetAwaiter().GetResult().Value;
+    }
+
     [Benchmark]
     public object DeOutputMapping3Warm()
     {

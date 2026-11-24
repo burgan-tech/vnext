@@ -1,4 +1,4 @@
-# Expression Mapping Baseline (BEFORE) - src at e4faefa8, harness at <this commit>
+# Expression Mapping Baseline (BEFORE) - src at e4faefa8, harness at ac2d8feb/6808c432
 
 Branch claude/issue-1227-analysis-50e96f. Suites: `ExpressionMappingBenchmarks` and `ExpressionMappingColdBenchmarks` (names are reused by the AFTER run in Task 9; harness previously at ac2d8feb).
 

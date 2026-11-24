@@ -105,9 +105,10 @@ Selected subtree (`$.body.customer`) = `{"name":"Benchmark User","segment":"reta
 
 | Gate | Measured | Verdict |
 |---|---|---|
-| G-P1' (a) warm allocation <= 2x subtree + 8 KB | 2,304 B at DocKb 10 / 50 / 200 (flat: does not scale with the result) vs 8,280 B | **PASS** |
-| G-P1' (b) <= 0.25x `DeOutputMapping3Warm` | 2,304 / 171,393 = 0.013x (10), 0.0028x (50), 0.0007x (200) | **PASS** |
-| Informational: vs warm Roslyn `IMapping` | 654 ns / 2,304 B vs 182 ns / 560 B: 3.6x slower, 4.1x more allocation (was 470x-9,100x / 68x-1,233x) | still slower than Roslyn; not a gate |
+| G-P1' (a) warm allocation <= 2x subtree + 8 KB | 2,712 B at DocKb 10 / 50 / 200 (flat: does not scale with the result) vs 8,280 B (final numbers, after fix round 1 below; the first run's 2,304 B was measured with the pinning defect) | **PASS** |
+| G-P1' (a') fresh `TaskExecutorContext` per op (production shape) | 5,152 B at DocKb 10 / 50 / 200 (flat) vs 8,280 B; 1.90x the warm-memo figure (final fix wave, see below) | **PASS** |
+| G-P1' (b) <= 0.25x `DeOutputMapping3Warm` | 2,712 / 171,393 = 0.016x (10), 0.0033x (50), 0.0008x (200); fresh context 5,152 / 171,393 = 0.030x (10) | **PASS** |
+| Informational: vs warm Roslyn `IMapping` | 932 ns / 2,712 B vs 182 ns / 560 B: 5.1x slower, 4.8x more allocation (was 470x-9,100x / 68x-1,233x) | still slower than Roslyn; not a gate |
 
 Scope of the PASS: the benchmark's `result.Data` is a `JsonElement` (what the HTTP and Dapr service invokers produce via `Deserialize<object>`). A non-JSON `Data` (POCO, dictionary, `ExpandoObject`, `JsonNode`) is still serialized once per call into a pooled document, so its allocation scales with the payload (one copy instead of three); not measured here.
 
@@ -146,3 +147,29 @@ ALC check unchanged (`before=1 afterDeclarative(25 cold)=1 afterRoslyn(5 cold)=3
 | CompilerCacheHitParallel | 170.6 us (3.54x seq) | 16.3 us (0.36x) | 15.3 us (0.33x) |
 
 G-P1' after fix round 1: selected subtree 44 B, so the limit is 2 x 44 + 8,192 = 8,280 B. Measured 2,712 B at DocKb 10 / 50 / 200 (flat). The copy adds 408 B over the pinning run: the new document, its 44-byte array and its metadata. **PASS**. Ratio to `DeOutputMapping3Warm`: 2,712 / 171,393 = 0.016x (10), 0.0033x (50), 0.0008x (200), all <= 0.25x. **PASS**. Informational: vs warm Roslyn (179 ns / 560 B), 5.2x slower, 4.8x more allocation.
+
+### Final fix wave - fresh context per execution
+
+`DeclarativeOutputWarm` reuses one `TaskExecutorContext`, so the per-execution plan memo is always warm. Production builds a
+new `TaskExecutorContext` per task execution (the binding itself comes from the cached definition), so the plan is built
+again on every execution from the warm compiler cache. `DeclarativeOutputFreshContext` measures that shape: a new
+context per op, same binding, compiler cache warm. Same command, job, machine and temporary props edit (reverted); the
+summary style was switched to bytes for this run only (temporary `Program.cs` edit, reverted).
+
+```
+| Method                        | DocKb | Mean       | Error     | StdDev   | Gen0   | Allocated |
+| RoslynOutputHandlerWarm       | 10    |   188.5 ns |   4.79 ns |  0.26 ns | 0.0067 |     560 B |
+| DeclarativeOutputWarm         | 10    |   931.8 ns | 197.67 ns | 10.84 ns | 0.0324 |    2712 B |
+| DeclarativeOutputFreshContext | 10    | 1,395.0 ns |  24.44 ns |  1.34 ns | 0.0629 |    5152 B |
+| RoslynOutputHandlerWarm       | 50    |   181.2 ns |   5.26 ns |  0.29 ns | 0.0067 |     560 B |
+| DeclarativeOutputWarm         | 50    |   929.7 ns |  63.57 ns |  3.48 ns | 0.0324 |    2712 B |
+| DeclarativeOutputFreshContext | 50    | 1,402.5 ns | 244.19 ns | 13.38 ns | 0.0629 |    5152 B |
+| RoslynOutputHandlerWarm       | 200   |   183.4 ns |  34.35 ns |  1.88 ns | 0.0067 |     560 B |
+| DeclarativeOutputWarm         | 200   |   934.4 ns |  12.80 ns |  0.70 ns | 0.0324 |    2712 B |
+| DeclarativeOutputFreshContext | 200   | 1,401.8 ns |  29.71 ns |  1.63 ns | 0.0629 |    5152 B |
+```
+
+Fresh / warm allocation = 5,152 / 2,712 = 1.90x (the 2,440 B difference includes the `TaskExecutorContext` the benchmark
+allocates, the memo dictionary and the plan rebuild over cached delegates). The ruling added a process-wide plan cache only
+above 2x, so **no process-wide cache was added**; the per-context memo stays. Both figures stay flat across DocKb and
+under the 8,280 B G-P1' limit.
