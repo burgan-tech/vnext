@@ -1,4 +1,7 @@
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
+using BBT.Workflow.Shared.Json;
 
 namespace BBT.Workflow.Definitions;
 
@@ -18,6 +21,17 @@ public static class ContextPathResolver
 {
     private const string ArrayWildcard = "[*]";
 
+    // Paths come from component definitions (a finite set), so a static cache keyed by the path text is
+    // fine; the cap only guards against a caller feeding unbounded distinct strings.
+    private const int MaxCachedPaths = 4096;
+
+    private static readonly ConcurrentDictionary<string, Parsed> ParseCache = new(StringComparer.Ordinal);
+
+    // Keyed by the array instance SplitSegments hands out, so the pre-split overload reuses the compiled path.
+    private static readonly ConditionalWeakTable<string[], JsonPath> PathBySegments = new();
+
+    private sealed record Parsed(string[] Segments, JsonPath Path);
+
     /// <summary>
     /// Resolves a path against the given <paramref name="root"/> and returns all matched string values.
     /// Returns an empty list when the path does not exist or any segment is missing.
@@ -31,11 +45,8 @@ public static class ContextPathResolver
         if (string.IsNullOrWhiteSpace(path))
             return [];
 
-        var segments = SplitPath(path);
-        if (segments.Length == 0)
-            return [];
-
-        return Resolve(root, segments, 0);
+        var parsed = GetParsed(path);
+        return parsed.Segments.Length == 0 ? [] : Collect(root, parsed.Path, 0);
     }
 
     /// <summary>
@@ -48,17 +59,19 @@ public static class ContextPathResolver
     /// </summary>
     public static IReadOnlyList<string> Resolve(JsonElement root, string[] segments, int startIndex)
     {
-        var results = new List<string>();
-        Walk(root, segments, startIndex, results);
-        return results;
+        var path = PathBySegments.TryGetValue(segments, out var known)
+            ? known
+            : PathBySegments.GetValue(segments, JsonPath.FromSegments);
+        return Collect(root, path, startIndex);
     }
 
     /// <summary>
     /// Splits a path into the segments <see cref="Resolve(JsonElement, string)"/> walks: dot-separated,
-    /// trimmed, empty segments dropped, <c>[*]</c> as a segment of its own. Empty for a blank path.
+    /// trimmed, empty segments dropped, <c>[*]</c> as a segment of its own. Empty for a blank path. The
+    /// returned array is cached per path text and shared — treat it as read-only.
     /// </summary>
     public static string[] SplitSegments(string path)
-        => string.IsNullOrWhiteSpace(path) ? [] : SplitPath(path);
+        => string.IsNullOrWhiteSpace(path) ? [] : GetParsed(path).Segments;
 
     /// <summary>
     /// Splits a path string into segments, normalizing <c>[*]</c> as a dedicated segment.
@@ -75,51 +88,33 @@ public static class ContextPathResolver
             .ToArray();
     }
 
-    private static void Walk(JsonElement element, string[] segments, int index, List<string> results)
+    private static Parsed GetParsed(string path)
     {
-        if (index >= segments.Length)
-        {
-            // Leaf: collect value
-            var value = GetStringValue(element);
-            if (value != null)
-                results.Add(value);
-            return;
-        }
+        if (ParseCache.TryGetValue(path, out var cached))
+            return cached;
 
-        var segment = segments[index];
-
-        if (segment == ArrayWildcard)
-        {
-            // Expand array: iterate all elements and continue
-            if (element.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var item in element.EnumerateArray())
-                    Walk(item, segments, index + 1, results);
-            }
-            return;
-        }
-
-        if (element.ValueKind == JsonValueKind.Object)
-        {
-            // Case-insensitive property lookup
-            if (TryGetPropertyIgnoreCase(element, segment, out var child))
-                Walk(child, segments, index + 1, results);
-        }
+        var segments = SplitPath(path);
+        var parsed = new Parsed(segments, JsonPath.FromSegments(segments));
+        if (ParseCache.Count < MaxCachedPaths)
+            ParseCache.TryAdd(path, parsed);
+        PathBySegments.AddOrUpdate(segments, parsed.Path);
+        return parsed;
     }
 
-    private static bool TryGetPropertyIgnoreCase(JsonElement obj, string name, out JsonElement value)
+    private static List<string> Collect(JsonElement root, JsonPath path, int startIndex)
     {
-        foreach (var prop in obj.EnumerateObject())
+        var leaves = new List<JsonElement>();
+        path.CollectLeaves(root, startIndex, ignoreCase: true, leaves);
+
+        var results = new List<string>(leaves.Count);
+        foreach (var leaf in leaves)
         {
-            if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
-            {
-                value = prop.Value;
-                return true;
-            }
+            var value = GetStringValue(leaf);
+            if (value != null)
+                results.Add(value);
         }
 
-        value = default;
-        return false;
+        return results;
     }
 
     private static string? GetStringValue(JsonElement element)
