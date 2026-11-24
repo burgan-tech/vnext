@@ -1,0 +1,29 @@
+{
+  "releaseNote": {
+    "summary": "A task binding can shape its input and write its output with declarative input/output set, into and select blocks (Dynamic Expresso, no .csx); a dynamicExpresso mapping script is now a publish error.",
+    "breaking": false,
+    "docs": []
+  },
+  "features": {
+    "engine": {
+      "declarativeTaskMappings": {
+        "since": "next",
+        "status": "stable",
+        "description": "Optional input and output blocks on a task binding (onExecuteTask) with select, into and set over JSON paths; values are Dynamic Expresso expressions over data, input, instance, now, user, context and (output phase) result. One instance-data append per mapping, no Roslyn compile, publish-time validation. Mutually exclusive with a mapping script on the same binding."
+      }
+    }
+  },
+  "migrations": [
+    {
+      "id": "task-mapping-dynamic-expresso-location-rejected",
+      "type": "behavior",
+      "component": "task",
+      "path": "onExecuteTask.mapping.location",
+      "since": "next",
+      "severity": "warning",
+      "title": "A task binding mapping with location dynamicExpresso is rejected at publish",
+      "description": "A task binding's mapping ScriptCode with location dynamicExpresso is now a publish error. A single expression cannot implement both the input and the output handler, so such a mapping never worked: it passed publish and failed at run time as a Roslyn compile error. Publishing it now fails with a pointer to the declarative input and output blocks.",
+      "action": "Replace the mapping with the declarative input and output blocks (select, into, set), or author the mapping as a C# script (location base64 or file). A binding cannot carry both a mapping and input/output blocks."
+    }
+  ]
+}

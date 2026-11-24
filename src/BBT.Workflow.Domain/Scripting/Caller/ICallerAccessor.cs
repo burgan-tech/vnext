@@ -4,7 +4,7 @@ namespace BBT.Workflow.Scripting.Caller;
 /// The caller's role set as the runtime resolved it. Reached through <see cref="ScriptContext.Caller"/>.
 /// Available to: selection rules (transition <c>schemas</c>, function contract slots, state/transition <c>views</c>),
 /// automatic-transition rules and timer scripts on caller-driven hops, and SubFlow output mappings (the child
-/// settler's carried identity). Unavailable to task mappings, transition mappings, extensions, resource locks and
+/// settler's carried identity). Unavailable to script task mappings (a declarative task mapping reads the caller through its own <c>user</c> variable on User hops: <c>docs/runtime/declarative-task-mappings.md</c>), transition mappings, extensions, resource locks and
 /// event mappings, and on System hops (fired timers, SubFlow resumes, continuations). The per-surface table and the
 /// reasons: <c>docs/runtime/script-caller-roles.md</c>; councils <c>2026-11-12-script-caller-roles</c> and
 /// <c>2026-11-12-script-caller-roles-background</c>.
