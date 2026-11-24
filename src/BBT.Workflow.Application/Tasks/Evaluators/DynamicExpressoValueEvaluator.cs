@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
@@ -6,8 +5,8 @@ using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Scripting.Expressions;
 using BBT.Workflow.Scripting.Rules;
-using DynamicExpresso;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Tasks.Evaluators;
@@ -28,11 +27,23 @@ public interface IDynamicExpressoValueEvaluator
 }
 
 /// <inheritdoc />
-public sealed class DynamicExpressoValueEvaluator(ILogger<DynamicExpressoValueEvaluator> logger)
-    : IDynamicExpressoValueEvaluator
+public sealed class DynamicExpressoValueEvaluator : IDynamicExpressoValueEvaluator
 {
-    private static readonly ConcurrentDictionary<string, Func<ExpressoRuleContext, string>> CompiledExpressions =
-        new(StringComparer.Ordinal);
+    private readonly ILogger<DynamicExpressoValueEvaluator> logger;
+    private readonly IExpressionCompiler compiler;
+
+    /// <summary>Creates the evaluator on the shared process-wide <see cref="ExpressionCompiler"/>.</summary>
+    public DynamicExpressoValueEvaluator(ILogger<DynamicExpressoValueEvaluator> logger)
+        : this(logger, ExpressionCompiler.Shared)
+    {
+    }
+
+    /// <summary>Creates the evaluator on the given compiler (the DI constructor).</summary>
+    public DynamicExpressoValueEvaluator(ILogger<DynamicExpressoValueEvaluator> logger, IExpressionCompiler compiler)
+    {
+        this.logger = logger;
+        this.compiler = compiler;
+    }
 
     /// <inheritdoc />
     public Result<string> Evaluate(ScriptCode script, ScriptContext context)
@@ -73,8 +84,10 @@ public sealed class DynamicExpressoValueEvaluator(ILogger<DynamicExpressoValueEv
         try
         {
             var ruleContext = ExpressoRuleContextMapper.FromScriptContext(context);
-            var fn = CompiledExpressions.GetOrAdd(expression, CompileExpression);
-            var value = fn(ruleContext);
+            var compiled = compiler.Compile<Func<ExpressoRuleContext, string>>(expression, ExpressionSignatures.LegacyValue);
+            if (!compiled.IsSuccess)
+                throw new InvalidOperationException(compiled.Error.Message);
+            var value = compiled.Value.Invoke(ruleContext);
             return Result<string>.Ok(value);
         }
         catch (Exception ex)
@@ -86,23 +99,10 @@ public sealed class DynamicExpressoValueEvaluator(ILogger<DynamicExpressoValueEv
         }
     }
 
-    private static Func<ExpressoRuleContext, string> CompileExpression(string expression)
-    {
-        var interpreter = new Interpreter(InterpreterOptions.Default);
-        // Deterministic hash helper for building bounded, vary-by-correct cache keys, e.g.
-        // "cfg:" + context.Instance.Key + ":" + sha256(varyKey(context)).
-        interpreter.SetFunction("sha256", (Func<string?, string>)Sha256Hex);
-        // Canonical vary-by string builder (see VaryKey). Because DynamicExpresso cannot express list
-        // operations (no LINQ / array literals), the header-name set is assembled in C# here.
-        interpreter.SetFunction("varyKey", (Func<ExpressoRuleContext, string>)VaryKey);
-        var lambda = interpreter.Parse(expression, typeof(string), new Parameter("context", typeof(ExpressoRuleContext)));
-        return lambda.Compile<Func<ExpressoRuleContext, string>>();
-    }
-
     /// <summary>
     /// Lowercase hex SHA-256 of the UTF-8 bytes of <paramref name="input"/> (empty string for null).
     /// </summary>
-    private static string Sha256Hex(string? input)
+    internal static string Sha256Hex(string? input)
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(input ?? string.Empty));
         return Convert.ToHexString(bytes).ToLowerInvariant();
@@ -133,7 +133,7 @@ public sealed class DynamicExpressoValueEvaluator(ILogger<DynamicExpressoValueEv
     /// selector (query param <c>version</c>, default <c>latest</c>) is prepended as <c>v=&lt;version&gt;|…</c>.
     /// The result is intended to be hashed by the caller via <c>sha256(...)</c>. Generic and reusable.
     /// </summary>
-    private static string VaryKey(ExpressoRuleContext context)
+    internal static string VaryKey(ExpressoRuleContext context)
     {
         var headers = AsElement(context.Headers);
 

@@ -1,3 +1,4 @@
+using BBT.Workflow.Scripting.Expressions;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Recovery;
 using BBT.Workflow.Execution.ErrorHandling;
@@ -224,6 +225,13 @@ public static class TaskServiceCollectionExtensions
         services.AddScoped<DynamicExpressoConditionEvaluator>();
         services.AddScoped<IConditionEvaluator, RoutingConditionEvaluator>();
         services.AddScoped<ITimerEvaluator, ScriptTimerEvaluator>();
+
+        // One bounded compiler for every Dynamic Expresso slot (Workflow:Expressions:CacheCapacity).
+        services.AddOptions<ExpressionCompilerOptions>()
+            .BindConfiguration(ExpressionCompilerOptions.SectionName)
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+        services.TryAddSingleton<IExpressionCompiler, ExpressionCompiler>();
 
         // Dynamic Expresso string evaluator (e.g. CacheAside key expressions).
         services.AddScoped<IDynamicExpressoValueEvaluator, DynamicExpressoValueEvaluator>();

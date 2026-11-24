@@ -9,7 +9,7 @@ using BBT.Workflow.Scripting.Rules;
 using BBT.Workflow.Tasks.Coordinator;
 using BBT.Workflow.Tasks.Factory;
 using BBT.Workflow.Tasks.Executors;
-using DynamicExpresso;
+using BBT.Workflow.Scripting.Expressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -44,10 +44,10 @@ public sealed class AgentToolCatalog(
     IServiceScopeFactory scopeFactory,
     ITaskFactory taskFactory,
     IScriptEngine scriptEngine,
+    IExpressionCompiler expressionCompiler,
     ILogger<AgentToolCatalog> logger)
 {
     private static readonly ConcurrentDictionary<string, (DateTime ExpiresAt, IReadOnlyList<McpToolInfo> Tools)> McpToolMemo = new();
-    private static readonly ConcurrentDictionary<string, Lambda> ExpressionMemo = new(StringComparer.Ordinal);
     private static readonly JsonElement EmptyObjectSchema = JsonDocument.Parse("""{"type":"object","properties":{}}""").RootElement.Clone();
 
     /// <summary>Builds the tool definitions of a run.</summary>
@@ -198,14 +198,12 @@ public sealed class AgentToolCatalog(
         return await handler.Handler(invocation.Arguments, ctx.ScriptContext.CreateParallelBranch());
     }
 
-    private static object? EvaluateExpression(string expression, JsonElement args, ScriptContext context)
+    private object? EvaluateExpression(string expression, JsonElement args, ScriptContext context)
     {
-        var lambda = ExpressionMemo.GetOrAdd(expression, e =>
-            new Interpreter(InterpreterOptions.Default)
-                .Parse(e,
-                    new Parameter("args", typeof(ExpandoObject)),
-                    new Parameter("data", typeof(ExpandoObject)),
-                    new Parameter("now", typeof(DateTime))));
+        var compiled = expressionCompiler.Compile<Func<ExpandoObject, ExpandoObject, DateTime, object>>(
+            expression, ExpressionSignatures.AgentTool);
+        if (!compiled.IsSuccess)
+            throw new InvalidOperationException(compiled.Error.Message);
 
         var argsObject = JsonSerializer.Deserialize<ExpandoObject>(args.GetRawText(), JsonSerializerConstants.JsonOptions) ?? new ExpandoObject();
         var dataJson = context.Instance?.LatestData?.Data.JsonElement.GetRawText();
@@ -213,7 +211,7 @@ public sealed class AgentToolCatalog(
             ? new ExpandoObject()
             : JsonSerializer.Deserialize<ExpandoObject>(dataJson, JsonSerializerConstants.JsonOptions) ?? new ExpandoObject();
 
-        return lambda.Invoke(argsObject, dataObject, DateTime.UtcNow);
+        return compiled.Value.Invoke(argsObject, dataObject, DateTime.UtcNow);
     }
 
     private async Task<IReadOnlyList<AgentToolDefinition>> BuildMcpToolsAsync(AgentToolBuildContext ctx, AgentTool tool, CancellationToken cancellationToken)

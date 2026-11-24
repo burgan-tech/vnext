@@ -1,11 +1,10 @@
-using System.Collections.Concurrent;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Scripting.Expressions;
 using BBT.Workflow.Scripting.Rules;
 using BBT.Workflow.Tasks.Evaluation;
-using DynamicExpresso;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Tasks.Evaluators;
@@ -13,9 +12,23 @@ namespace BBT.Workflow.Tasks.Evaluators;
 /// <summary>
 /// Evaluates auto-transition (and other) condition rules stored as plain text Dynamic Expresso expressions.
 /// </summary>
-public sealed class DynamicExpressoConditionEvaluator(ILogger<DynamicExpressoConditionEvaluator> logger) : IConditionEvaluator
+public sealed class DynamicExpressoConditionEvaluator : IConditionEvaluator
 {
-    private static readonly ConcurrentDictionary<string, Func<ExpressoRuleContext, bool>> CompiledExpressions = new(StringComparer.Ordinal);
+    private readonly ILogger<DynamicExpressoConditionEvaluator> logger;
+    private readonly IExpressionCompiler compiler;
+
+    /// <summary>Creates the evaluator on the shared process-wide <see cref="ExpressionCompiler"/>.</summary>
+    public DynamicExpressoConditionEvaluator(ILogger<DynamicExpressoConditionEvaluator> logger)
+        : this(logger, ExpressionCompiler.Shared)
+    {
+    }
+
+    /// <summary>Creates the evaluator on the given compiler (the DI constructor).</summary>
+    public DynamicExpressoConditionEvaluator(ILogger<DynamicExpressoConditionEvaluator> logger, IExpressionCompiler compiler)
+    {
+        this.logger = logger;
+        this.compiler = compiler;
+    }
 
     /// <inheritdoc />
     public string EvaluationType => "Condition";
@@ -63,8 +76,10 @@ public sealed class DynamicExpressoConditionEvaluator(ILogger<DynamicExpressoCon
         try
         {
             var ruleContext = ExpressoRuleContextMapper.FromScriptContext(context);
-            var fn = CompiledExpressions.GetOrAdd(expression, CompileExpression);
-            var value = fn(ruleContext);
+            var compiled = compiler.Compile<Func<ExpressoRuleContext, bool>>(expression, ExpressionSignatures.LegacyCondition);
+            if (!compiled.IsSuccess)
+                throw new InvalidOperationException(compiled.Error.Message);
+            var value = compiled.Value.Invoke(ruleContext);
             return Task.FromResult(Result<bool>.Ok(value));
         }
         catch (Exception ex)
@@ -74,12 +89,5 @@ public sealed class DynamicExpressoConditionEvaluator(ILogger<DynamicExpressoCon
                 WorkflowErrorCodes.TransitionRuleFailed,
                 $"Dynamic Expresso evaluation failed: {ex.Message}")));
         }
-    }
-
-    private static Func<ExpressoRuleContext, bool> CompileExpression(string expression)
-    {
-        var interpreter = new Interpreter(InterpreterOptions.Default);
-        var lambda = interpreter.Parse(expression, typeof(bool), new Parameter("context", typeof(ExpressoRuleContext)));
-        return lambda.Compile<Func<ExpressoRuleContext, bool>>();
     }
 }
