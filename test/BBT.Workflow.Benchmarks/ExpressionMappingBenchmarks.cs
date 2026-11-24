@@ -1,7 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Dynamic;
+using System.Linq;
 using System.Reflection;
+using System.Runtime.Loader;
+using System.Threading.Tasks;
+using BBT.Workflow.Tasks.Executors;
+using BBT.Workflow.Tasks;
+using BBT.Workflow.Tasks.Mapping;
+using BBT.Workflow.Shared;
 using BBT.Workflow.Instances;
 using System.Text.Json;
 using System.Threading;
@@ -84,6 +91,9 @@ public class ExpressionMappingBenchmarks
     private ScriptCode _valueScript = null!;
     private DynamicExpressoConditionEvaluator _condition = null!;
     private DynamicExpressoValueEvaluator _value = null!;
+    private DeclarativeTaskMappingRunner _declRunner = null!;
+    private TaskExecutorContext _declCtx = null!;
+    private TaskInvocationResult _declResult = null!;
 
     [Params(10, 50, 200)]
     public int DocKb { get; set; }
@@ -135,6 +145,13 @@ public class ExpressionMappingBenchmarks
             if (!r.IsSuccess)
                 throw new InvalidOperationException("DeOutputMapping3Warm expression failed: " + r.Error.Message);
         }
+        _declRunner = new DeclarativeTaskMappingRunner(new ExpressionCompiler(4096), TimeProvider.System);
+        _declCtx = DeclarativeBench.Context(json, DeclarativeBench.Block());
+        _declResult = DeclarativeBench.Result(json);
+        var declWarm = _declRunner.ProcessOutputAsync(_declCtx.Task, _declResult, _declCtx, CancellationToken.None)
+            .GetAwaiter().GetResult();
+        if (!declWarm.IsSuccess || declWarm.Value is null)
+            throw new InvalidOperationException("DeclarativeOutputWarm failed: " + (declWarm.IsSuccess ? "null delta" : declWarm.Error.Message));
         var valueResult = _value.Evaluate(_valueScript, _context);
         if (!valueResult.IsSuccess)
             throw new InvalidOperationException("DeValueWarm expression failed: " + valueResult.Error.Message);
@@ -164,6 +181,12 @@ public class ExpressionMappingBenchmarks
     public ScriptResponse RoslynOutputHandlerWarm()
         => _warmMapping.OutputHandler(_context).GetAwaiter().GetResult();
 
+    /// <summary>The same 3 entries as a declarative output block through the real runner (memo warm).</summary>
+    [Benchmark]
+    public object? DeclarativeOutputWarm()
+        => _declRunner.ProcessOutputAsync(_declCtx.Task, _declResult, _declCtx, CancellationToken.None)
+            .GetAwaiter().GetResult().Value;
+
     [Benchmark]
     public object DeOutputMapping3Warm()
     {
@@ -172,6 +195,49 @@ public class ExpressionMappingBenchmarks
             last = _value.Evaluate(script, _context);
         return last!;
     }
+}
+
+/// <summary>Shared builders for the declarative-output benchmarks (same 3 entries as the Roslyn handler).</summary>
+internal static class DeclarativeBench
+{
+    private static readonly ConstructorInfo InstanceDataCtor = typeof(InstanceData)
+        .GetConstructor(BindingFlags.Instance | BindingFlags.NonPublic,
+            binder: null, [typeof(Guid), typeof(Guid), typeof(string), typeof(JsonData), typeof(bool)], modifiers: null)!;
+    private static readonly MethodInfo Accept = typeof(Instance)
+        .GetMethod("AcceptPersistedData", BindingFlags.Instance | BindingFlags.NonPublic)!;
+    private static readonly PropertyInfo VersionNoProp = typeof(InstanceData).GetProperty(nameof(InstanceData.VersionNo))!;
+
+    public static MappingBlock Block(string stampExpression = "now") => new(
+        "$.body.customer", "$.customer",
+        new OrderedStringMap(
+        [
+            new KeyValuePair<string, string>("$.ownerName", "data.customer.name"),
+            new KeyValuePair<string, string>("$.stamp", stampExpression)
+        ]));
+
+    public static TaskExecutorContext Context(string json, MappingBlock output)
+    {
+        var instance = Instance.Create(Guid.NewGuid(), "bench-flow", "1.0.0", "bench-key");
+        var row = (InstanceData)InstanceDataCtor.Invoke([Guid.NewGuid(), instance.Id, "1.0.0", new JsonData(json), true]);
+        VersionNoProp.SetValue(row, 1L);
+        Accept.Invoke(instance, [row]);
+        var scriptContext = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
+            .SetInstance(instance)
+            .SetBody(JsonSerializer.Deserialize<ExpandoObject>(json))
+            .Build();
+        var task = HttpTask.Create(JsonSerializer.Deserialize<JsonElement>("""{ "url": "https://x.test", "method": "POST" }"""));
+        task.SetReference(new Reference("bench-task", "bench-domain", "sys-tasks", "1.0.0"));
+        var binding = OnExecuteTask.Create(1, task, null, input: null, output: output);
+        return new TaskExecutorContext(task, binding, scriptContext, null, TaskTrigger.OnExecute, TaskExecutionOrigin.Flow)
+        {
+            Caller = NullCallerAccessor.Instance
+        };
+    }
+
+    public static TaskInvocationResult Result(string json) =>
+        TaskInvocationResult.Success(data: JsonSerializer.Deserialize<JsonElement>(json), statusCode: 200, taskType: "Http");
+
+    public static int AlcCount() => AssemblyLoadContext.All.Count();
 }
 
 /// <summary>
@@ -185,6 +251,9 @@ public class ExpressionMappingColdBenchmarks
 {
     private static int _uniqueCounter;
     private ScriptEngine _engine = null!;
+    private DeclarativeTaskMappingRunner _declRunner = null!;
+    private string _json = null!;
+    private TaskInvocationResult _declResult = null!;
 
     [GlobalSetup]
     public void Setup()
@@ -197,6 +266,38 @@ public class ExpressionMappingColdBenchmarks
             new ScriptHelpersOptions { Enabled = false },
             new ServiceCollection().BuildServiceProvider(),
             NullLogger<ScriptEngine>.Instance);
+
+        _json = PayloadFactory.Json(10);
+        _declRunner = new DeclarativeTaskMappingRunner(new ExpressionCompiler(4096), TimeProvider.System);
+        _declResult = DeclarativeBench.Result(_json);
+        AlcSanityCheck();
+    }
+
+    // G-P3: the DE path must not allocate an AssemblyLoadContext; the Roslyn path is measured beside it.
+    private void AlcSanityCheck()
+    {
+        var before = DeclarativeBench.AlcCount();
+        for (var i = 0; i < 25; i++)
+            if (DeclarativeOutputCold() is null) throw new InvalidOperationException("cold declarative produced no delta");
+        var afterDe = DeclarativeBench.AlcCount();
+        for (var i = 0; i < 5; i++)
+            RoslynOutputHandlerCold();
+        var afterRoslyn = DeclarativeBench.AlcCount();
+        var line = $"ALC-CHECK before={before} afterDeclarative(25 cold)={afterDe} afterRoslyn(5 cold)={afterRoslyn}";
+        Console.WriteLine("// " + line);
+        System.IO.File.WriteAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "bdn-alc-check.txt"), line);
+        if (afterDe != before)
+            throw new InvalidOperationException("G-P3 violated: the declarative path created an AssemblyLoadContext. " + line);
+    }
+
+    /// <summary>Cold declarative output: unique expression text per call (compiler-cache miss) and a fresh context (memo miss).</summary>
+    [Benchmark]
+    public object? DeclarativeOutputCold()
+    {
+        var n = Interlocked.Increment(ref _uniqueCounter);
+        var ctx = DeclarativeBench.Context(_json, DeclarativeBench.Block($"now.AddSeconds({n})"));
+        return _declRunner.ProcessOutputAsync(ctx.Task, _declResult, ctx, CancellationToken.None)
+            .GetAwaiter().GetResult().Value;
     }
 
     [Benchmark]
@@ -207,4 +308,35 @@ public class ExpressionMappingColdBenchmarks
             .CompileToInstanceAsync<IMapping>(ScriptCode.FromNative(string.Format(ExpressionMappingBenchmarks.MappingBody, name)))
             .GetAwaiter().GetResult();
     }
+}
+
+/// <summary>
+/// Task 1 review concern: the global lock on the compiler-cache hit path. 1000 hits of the same key, sequential
+/// vs <see cref="Parallel.For(int, int, Action{int})"/>.
+/// </summary>
+[MemoryDiagnoser]
+[GcServer(true)]
+public class ExpressionMappingCompilerCacheBenchmarks
+{
+    private const int Hits = 1000;
+    private ExpressionCompiler _compiler = null!;
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        _compiler = new ExpressionCompiler(4096);
+        Hit();
+    }
+
+    private object Hit() => _compiler
+        .Compile<Func<ExpressoRuleContext, bool>>("1 == 1", ExpressionSignatures.LegacyCondition).Value!;
+
+    [Benchmark(Baseline = true)]
+    public void CompilerCacheHitSequential()
+    {
+        for (var i = 0; i < Hits; i++) Hit();
+    }
+
+    [Benchmark]
+    public void CompilerCacheHitParallel() => Parallel.For(0, Hits, _ => Hit());
 }
