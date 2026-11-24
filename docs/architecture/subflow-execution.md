@@ -213,6 +213,25 @@ read. Do not replace these reads with the old parent object: it may still say Bu
 ## Failure and Idempotency
 
 - Child start uses strict idempotency with a preassigned child instance id.
+- Creating a child is all or nothing: its row, initial data version and creation-time
+  `sub:state-changed` event commit together, only when every creation step succeeded — validation,
+  file offload, the INSERT, the start mapping and the initial data append
+  (`InstanceCommandAppService.PrepareInstanceAsync`). A child whose start mapping throws therefore
+  leaves no row: the parent faults, and its retry finds no child and restarts the start with the same
+  preassigned id. Before, the failed child stayed committed in its initial state without its data. The
+  parent's fault faulted it too, so the retry found a faulted child, unfaulted the parent and handed the
+  retry to that child, which could not succeed: the parent was left Active, with no incident, waiting on
+  a dead child. A leftover no parent fault reached stayed Busy: a SubProcess child (a parent's fault
+  cascades only to its SubFlow children) or a direct `sub/instances/start` call.
+  The child's start transition runs after that commit, and its own failure keeps the committed child, as
+  before: faulted when one of its steps fails, unstarted when it fails before its first step (context,
+  admission, an async enqueue).
+- Nothing orders the parent's `ChildSubflowFaultRequestedEvent` (Outbox → Inbox, not relayed) against
+  a retry that re-creates the child under the same preassigned id: `ChildSubflowFaultService` skips
+  only a missing or terminal child, so an event delivered after the re-creation faults the new child. A
+  cascaded fault does not notify the parent, which is then left Busy on a faulted child with no incident.
+  The window is the same for every child-start failure (input mapping, gateway, start mapping); known
+  issue `late-child-fault-can-fault-recreated-child`.
 - Durable correlations identify parent, child, relationship type and terminal outcome.
 - Terminal settlement uses a durable settled marker/guard to absorb relay/Inbox duplicates. For a
   completion the marker (`InstanceCorrelation.SettledAt`) is written by the resume hop itself, in its

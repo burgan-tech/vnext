@@ -288,7 +288,9 @@ public sealed class InstanceCommandAppService(
     }
 
     /// <summary>
-    /// Step 3: Prepares the instance (create, configure, persist).
+    /// Step 3: Prepares the instance (create, configure, persist) in one transaction that is committed
+    /// only when every step succeeded; a failed step rolls it back and leaves no instance. The start
+    /// transition runs after this commit, so its own failure keeps the committed instance.
     /// Railway chain: Create Instance → Validate → x-storage swap → Persist → Map Data
     /// </summary>
     private async Task<Result<(Definitions.Workflow Workflow, Instance Instance)>> PrepareInstanceAsync(
@@ -323,13 +325,20 @@ public sealed class InstanceCommandAppService(
             .ThenAsync(instance => PersistInstanceAsync(workflow, instance, cancellationToken))
             .ThenAsync(data => MapAndAppendInstanceDataAsync(data, input, cancellationToken));
 
-        await uow.CommitAsync(cancellationToken);
-
-        if (result.IsSuccess)
-            activity?.SetTag(TelemetryConstants.TagNames.InstanceId, result.Value.Instance.Id.ToString());
-        else
+        // Creating the instance is all or nothing. The INSERT runs before the start mapping and the
+        // initial data version; committing a failed result kept that instance without its data. Its
+        // key or id then answered every retry with the empty instance (CheckExistingInstanceAsync), a
+        // child stayed Busy (sub-items are created Busy), and its parent's retry went to the leftover
+        // child instead of restarting the start.
+        if (!result.IsSuccess)
+        {
+            await uow.RollbackAsync(cancellationToken);
             activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+            return result;
+        }
 
+        await uow.CommitAsync(cancellationToken);
+        activity?.SetTag(TelemetryConstants.TagNames.InstanceId, result.Value.Instance.Id.ToString());
         return result;
     }
 
