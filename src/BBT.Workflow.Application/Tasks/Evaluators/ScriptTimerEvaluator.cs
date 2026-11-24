@@ -44,13 +44,23 @@ public sealed class ScriptTimerEvaluator : ITimerEvaluator
 
         var evaluation = await ResultExtensions.TryAsync(async ct =>
             {
-                var scriptRunner = await _scriptEngine.CompileToInstanceAsync<ITimerMapping>(
-                    script,
-                    flowScripts: context.Workflow?.Scripts,
-                    cancellationToken: ct);
-            
-                // ITimerMapping.Handler directly returns TimerSchedule
-                return await scriptRunner.Handler(context);
+                try
+                {
+                    var scriptRunner = await _scriptEngine.CompileToInstanceAsync<ITimerMapping>(
+                        script,
+                        flowScripts: context.Workflow?.Scripts,
+                        cancellationToken: ct);
+
+                    // ITimerMapping.Handler directly returns TimerSchedule
+                    return await scriptRunner.Handler(context);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // Kept for the fault incident's stack trace (vnext#1268); TryAsync still turns
+                    // the exception into the error, exactly as before.
+                    context.FailureCause = ex;
+                    throw;
+                }
             }, cancellationToken)
             .OnFailure(error => _logger.LogError(
                 "Timer script evaluation failed: {Error}",

@@ -89,7 +89,49 @@ the one-line imperatives.
   instance. Pinned by
   `InstanceIncidentPersistenceTests.TryUnfaultAsync_FlipsFaultedToActiveAndLeavesNothingForAnAmbientCommitToOverwrite`.
 
+## Stack traces
+
+`InstanceIncidents."StackTrace"` holds the exception behind the failure, rendered with
+`Exception.ToString()`: type, message, then the inner exceptions, innermost first, each with its
+frames. It is capped at 4096 characters (`InstanceIncidentConstants.MaxStackTraceLength`; the head —
+type, message, innermost frames — is what survives). No API serves it (`IncidentDetailDto` has no
+such field). It travels between runtimes in one place: `InstanceSubFaultedEvent.IncidentStackTrace`
+copies a faulted child's trace into its parent's incident, across domains too. It reaches the
+incident like this (vnext#1268):
+
+| Failure | Where the exception is kept | Incident |
+|---|---|---|
+| A task script throws — an input/output mapping of any task type, the script task's own handler, a FanOut selector/mapping, a cache key | `ScriptContext.FailureCause` (internal), set by `ScriptDiagnostics.TaskScriptError`; `TaskExecutionEngine` takes it after every executor run and copies it into `ExecutionError.StackTrace` | the task step's (`BoundaryOutcomeHandler`), boundary or not |
+| Any other exception the task engine catches (an executor or invoker that throws) | `ExecutionErrorFactory.CreateFromException` | the task step's |
+| A transition mapping, a resource-lock key script or a timer script throws; an exception escapes a pipeline step (agent-state scripts included) or automatic-rule evaluation | `TransitionExecutionContext.FailureCause` | the pipeline's fault incident (`MarkInstanceFaultedAsync`) |
+| A SubFlow input or output mapping throws | `Error.Detail` of `SubFlowInputMappingFailed` / `SubFlowOutputMappingFailed` (pre-existing: their detail is the post-commit incident channel) | the parent's (`PostCommitParentMutationService`, `SubflowCompletionService`) |
+| An automatic-transition rule script throws | not kept: the rule counts as not satisfied and nothing is recorded — unchanged; the log carries it | none |
+
+- **An `Error` never carries it,** because Aether writes an error's `Detail` into the HTTP error body.
+  The SubFlow mapping rows are the pre-existing exception; their detail can still reach a client on one
+  path (`POST …/retry` restarting a missing child returns `SubFlowInputMappingFailed` as it is).
+- **Codes and messages do not change.** An unhandled task failure used to reach the task step as a
+  failed `Result` that `TaskCoordinator` re-derived into an `ExecutionError`, which dropped the trace.
+  The coordinator now asks the engine for an outcome instead
+  (`TaskEngineExecutionOptions.ReportUnhandledFailureAsOutcome`), and the engine re-derives the error
+  the same way the coordinator did, keeping only the trace in addition. FanOut items and agent tools
+  keep the failed `Result`; their cancellation handling reads it.
+- **A cause never outlives its run.** The engine takes the script context's cause after every
+  executor run — in a `finally`, so a run that throws or succeeds leaves nothing — and
+  `CreateParallelBranch` does not copy it, so it cannot attach to another task's failure.
+- **A cancellation a script sees is not its failure.** An `OperationCanceledException` thrown inside a
+  task script, a transition mapping, a lock-key, timer or rule script is reported exactly as before but
+  kept nowhere and not logged as a script failure. An exception that escapes a pipeline step is the
+  hop's cause whatever it is, a cancellation included.
+- **Script line numbers.** A script's frames carry the line in the author's own source; how, and
+  what it costs: [Script Context and Engine § Observability](script-context-and-engine.md#observability).
+- **The same detail in the log.** `TaskScriptFailed` (10268) logs a task script's exception once, in
+  the engine; `InstanceFaultedDueToPipelineError` (10130) carries the hop's cause;
+  `StartTransitionMappingFailed` (10269) logs a start mapping that fails — the start answers with the
+  error and records no incident; `ConditionScriptFailed` (10270) logs a rule script that throws, which records no incident.
+
 ## Related
 
 - [Instance Function Cache and Fingerprint ETag](state-function-cache-and-etag.md) — `HasActiveIncident` as fingerprint material, the state body's `incident` links block.
+- [Script Context and Engine](script-context-and-engine.md) — the script compiler, line numbers in script frames.
 - [Workflow Execution Pipeline](../architecture/workflow-execution-pipeline.md) — task steps, `FinalizeTransitionStep`, error boundary.

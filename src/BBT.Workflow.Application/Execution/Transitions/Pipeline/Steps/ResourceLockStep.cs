@@ -78,6 +78,8 @@ public sealed class ResourceLockStep(
         }
         catch (Exception ex)
         {
+            if (ex is not OperationCanceledException)
+                context.FailureCause = ex;
             return Result<string>.Fail(
                 ExecutionErrors.ResourceLockKeyResolutionFailed(context.TransitionKey, ex.Message));
         }

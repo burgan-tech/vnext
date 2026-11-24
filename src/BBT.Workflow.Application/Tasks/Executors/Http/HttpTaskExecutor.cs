@@ -57,9 +57,7 @@ public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
             var scriptRunner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
 
             return await scriptRunner.InputHandler(task, context.ScriptContext);
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Http task input handler failed: {ScriptDiagnostics.Explain(ex)}"));
+        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "Http task input handler failed"));
 
         if (!result.IsSuccess)
         {
@@ -138,9 +136,7 @@ public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
 
             var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
             return outputResponse.Data;
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Http task output handler failed: {ScriptDiagnostics.Explain(ex)}"));
+        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "Http task output handler failed"));
 
         if (!result.IsSuccess)
         {

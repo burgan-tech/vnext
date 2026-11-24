@@ -407,9 +407,10 @@ public sealed class FanOutTaskExecutorMappingTests
         // The items all succeeded, but the batch's only write point did not produce anything.
         // Silently substituting the default packaging would hand the flow a shape its author never
         // wrote and its downstream mappings do not expect.
+        var thrown = new InvalidOperationException("output blew up");
         var mapping = new StubFanOutMapping
         {
-            OutputHandlerThrows = new InvalidOperationException("output blew up")
+            OutputHandlerThrows = thrown
         };
         var harness = new FanOutHarness(instanceData: FanOutHarness.Documents(2), mapping: mapping);
 
@@ -423,14 +424,17 @@ public sealed class FanOutTaskExecutorMappingTests
         response.Value!.ErrorMessage!.ShouldContain("output handler", Case.Insensitive);
         response.Value!.ErrorMessage!.ShouldContain("output blew up");
         ((object?)response.Value!.Data).ShouldBeNull();
+        // vnext#1268: kept for the incident's stack trace; the task engine takes it after the run.
+        harness.ScriptContext.FailureCause.ShouldBeSameAs(thrown);
     }
 
     [Fact]
     public async Task ItemSelectorThatThrows_FailsTheTask_BeforeAnyItemRuns()
     {
+        var thrown = new InvalidOperationException("selector blew up");
         var mapping = new StubFanOutMapping
         {
-            ItemSelectorThrows = new InvalidOperationException("selector blew up")
+            ItemSelectorThrows = thrown
         };
         var harness = new FanOutHarness(itemsPath: null, mapping: mapping);
 
@@ -439,6 +443,7 @@ public sealed class FanOutTaskExecutorMappingTests
         response.Value!.IsSuccess.ShouldBeFalse();
         response.Value!.ErrorMessage!.ShouldContain("item selector", Case.Insensitive);
         response.Value!.ErrorMessage!.ShouldContain("selector blew up");
+        harness.ScriptContext.FailureCause.ShouldBeSameAs(thrown, "vnext#1268: kept for the incident's stack trace");
 
         // Nothing downstream of the item source may run once the source itself is broken.
         harness.Engine.Calls.ShouldBeEmpty();

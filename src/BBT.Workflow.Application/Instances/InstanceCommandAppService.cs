@@ -450,9 +450,10 @@ public sealed class InstanceCommandAppService(
                 data.Workflow.StartTransition,
                 data.Workflow,
                 data.Instance,
-                runtimeInfoProvider,
                 input.Headers,
-                cancellationToken)
+                onScriptFailure: ex => logger.StartTransitionMappingFailed(
+                    data.Workflow.Key, data.Workflow.StartTransition.Key, data.Instance.Id, ex),
+                cancellationToken: cancellationToken)
             .TapAsync(async mappedData =>
             {
                 // history: none (vnext#1006) writes no initial row: the start transition maps the same

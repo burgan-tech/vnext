@@ -43,7 +43,9 @@ public sealed class ExecutionErrorFactory : IExecutionErrorFactory
             TaskType = taskType,
             StatusCode = normalized.StatusCode,
             ErrorMessage = exception.Message,
-            StackTrace = exception.StackTrace,
+            // The whole rendering — type, message and inner exceptions with their frames — not the
+            // outer frames alone: the cause of a wrapped failure is the inner exception (vnext#1268).
+            StackTrace = exception.ToString(),
             NormalizedError = taskNormalizedError,
             ExecutionDurationMs = executionDurationMs,
             Metadata = new Dictionary<string, object>

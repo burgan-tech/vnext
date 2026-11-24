@@ -58,9 +58,7 @@ public sealed class DaprServiceTaskExecutor : TaskExecutorBase<DaprServiceTask>
             var scriptRunner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
 
             return await scriptRunner.InputHandler(task, context.ScriptContext);
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"DaprService task input handler failed: {ScriptDiagnostics.Explain(ex)}"));
+        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "DaprService task input handler failed"));
 
         if (!result.IsSuccess)
         {
@@ -138,9 +136,7 @@ public sealed class DaprServiceTaskExecutor : TaskExecutorBase<DaprServiceTask>
 
             var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
             return outputResponse.Data;
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"DaprService task output handler failed: {ScriptDiagnostics.Explain(ex)}"));
+        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "DaprService task output handler failed"));
 
         if (!result.IsSuccess)
         {
