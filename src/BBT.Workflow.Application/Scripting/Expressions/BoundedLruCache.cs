@@ -1,44 +1,47 @@
+using System.Collections.Concurrent;
+
 namespace BBT.Workflow.Scripting.Expressions;
 
 /// <summary>
-/// Small thread-safe least-recently-used cache with a fixed capacity. Every read and write takes one
-/// short lock (a dictionary lookup plus a linked-list move); values are produced by the caller outside
-/// the lock. Not an <c>IMemoryCache</c> on purpose: its size-limit eviction is not deterministic LRU.
+/// Small thread-safe least-recently-used cache with a fixed capacity. A hit takes no lock: a
+/// <see cref="ConcurrentDictionary{TKey,TValue}"/> lookup plus one recency stamp from a shared counter
+/// (<see cref="Interlocked.Increment(ref long)"/>). Only an insert takes the lock, and an insert that overflows
+/// evicts the entry with the oldest stamp (a scan of at most capacity entries — paid on a miss, next to a compile).
+/// Values are produced by the caller outside the lock. Not an <c>IMemoryCache</c> on purpose: its size-limit
+/// eviction is not deterministic LRU.
 /// </summary>
+/// <remarks>
+/// Single-threaded use is exact LRU (stamps are strictly increasing). Under concurrency it is approximate: a hit that
+/// races an eviction scan may lose its entry although it was just used, which only costs a recompile. The capacity
+/// bound is exact — every insert and every removal happens under the lock.
+/// </remarks>
 /// <typeparam name="TKey">Key type.</typeparam>
 /// <typeparam name="TValue">Value type.</typeparam>
 public sealed class BoundedLruCache<TKey, TValue> where TKey : notnull
 {
     private readonly int _capacity;
-    private readonly Dictionary<TKey, LinkedListNode<KeyValuePair<TKey, TValue>>> _map;
-    private readonly LinkedList<KeyValuePair<TKey, TValue>> _order = new();
+    private readonly ConcurrentDictionary<TKey, Entry> _map;
     private readonly object _gate = new();
+    private long _clock;
 
     /// <summary>Creates a cache holding at most <paramref name="capacity"/> entries (minimum 1).</summary>
     public BoundedLruCache(int capacity, IEqualityComparer<TKey>? comparer = null)
     {
         _capacity = Math.Max(1, capacity);
-        _map = new Dictionary<TKey, LinkedListNode<KeyValuePair<TKey, TValue>>>(comparer);
+        _map = new ConcurrentDictionary<TKey, Entry>(comparer ?? EqualityComparer<TKey>.Default);
     }
 
     /// <summary>Number of entries currently cached.</summary>
-    public int Count
-    {
-        get { lock (_gate) return _map.Count; }
-    }
+    public int Count => _map.Count;
 
-    /// <summary>Returns the cached value and marks it most recently used.</summary>
+    /// <summary>Returns the cached value and marks it most recently used. Lock-free.</summary>
     public bool TryGet(TKey key, out TValue value)
     {
-        lock (_gate)
+        if (_map.TryGetValue(key, out var entry))
         {
-            if (_map.TryGetValue(key, out var node))
-            {
-                _order.Remove(node);
-                _order.AddFirst(node);
-                value = node.Value.Value;
-                return true;
-            }
+            Touch(entry);
+            value = entry.Value;
+            return true;
         }
 
         value = default!;
@@ -51,26 +54,60 @@ public sealed class BoundedLruCache<TKey, TValue> where TKey : notnull
     /// </summary>
     public TValue GetOrAdd(TKey key, TValue value)
     {
+        if (_map.TryGetValue(key, out var existing))
+        {
+            Touch(existing);
+            return existing.Value;
+        }
+
         lock (_gate)
         {
-            if (_map.TryGetValue(key, out var existing))
+            if (_map.TryGetValue(key, out existing))
             {
-                _order.Remove(existing);
-                _order.AddFirst(existing);
-                return existing.Value.Value;
+                Touch(existing);
+                return existing.Value;
             }
 
-            var node = new LinkedListNode<KeyValuePair<TKey, TValue>>(new KeyValuePair<TKey, TValue>(key, value));
-            _order.AddFirst(node);
-            _map[key] = node;
-            if (_map.Count > _capacity)
+            _map[key] = new Entry(value, Interlocked.Increment(ref _clock));
+            while (_map.Count > _capacity && EvictOldest(key))
             {
-                var last = _order.Last!;
-                _order.RemoveLast();
-                _map.Remove(last.Value.Key);
             }
 
             return value;
         }
+    }
+
+    // An entry that already holds the newest stamp is already the most recent: skip the shared-counter write, so a
+    // hot key read from many threads does not bounce the counter's cache line.
+    private void Touch(Entry entry)
+    {
+        if (Volatile.Read(ref entry.Stamp) != Volatile.Read(ref _clock))
+            Volatile.Write(ref entry.Stamp, Interlocked.Increment(ref _clock));
+    }
+
+    // Under _gate. Removes the entry with the smallest stamp, never the one just inserted.
+    private bool EvictOldest(TKey inserted)
+    {
+        var found = false;
+        TKey oldestKey = default!;
+        var oldestStamp = long.MaxValue;
+        foreach (var (key, entry) in _map)
+        {
+            var stamp = Volatile.Read(ref entry.Stamp);
+            if (stamp < oldestStamp && !_map.Comparer.Equals(key, inserted))
+            {
+                oldestStamp = stamp;
+                oldestKey = key;
+                found = true;
+            }
+        }
+
+        return found && _map.TryRemove(oldestKey, out _);
+    }
+
+    private sealed class Entry(TValue value, long stamp)
+    {
+        public readonly TValue Value = value;
+        public long Stamp = stamp;
     }
 }

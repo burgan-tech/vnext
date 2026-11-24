@@ -76,6 +76,9 @@ public sealed class JsonPath
     /// </summary>
     public string FirstSegment { get; }
 
+    /// <summary>True for the root path <c>$</c> (no segments).</summary>
+    public bool IsRoot => _segments.Length == 0;
+
     /// <summary>Parses <paramref name="text"/>; a failure carries a validation error naming the offending position.</summary>
     public static Result<JsonPath> Parse(string text)
     {

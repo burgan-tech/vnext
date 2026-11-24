@@ -52,9 +52,9 @@ namespace BBT.Workflow.Tasks.Mapping;
 /// </para>
 /// <para>
 /// <b>Lifetime.</b> Every value is materialized into an owned <see cref="JsonNode"/> before the scope's borrowed
-/// documents (the result document, a <see cref="JsonElement"/> input) go away. <b>Failures</b> — a caller-role provider
+/// documents (the <see cref="TaskResultView"/>'s documents, a <see cref="JsonElement"/> input) go away. <b>Failures</b> — a caller-role provider
 /// failure or a role read without a caller (both <c>Authorization:110006</c>), any other exception an expression throws,
-/// a path that cannot be written, a result document that cannot be built — fail the mapping as a <see cref="Result"/>,
+/// a path that cannot be written, a response <c>Data</c> that cannot be serialized — fail the mapping as a <see cref="Result"/>,
 /// never "write nothing", and raise <c>TaskDeclarativeMappingFailed</c>. Cancellation of the mapping's own token
 /// propagates. Compiled plans are memoized per binding on the
 /// <see cref="TaskExecutorContext"/>; their delegates come from the shared compiler and are safe across parallel branches.
@@ -65,7 +65,7 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
     private const string InputPhase = "input";
     private const string OutputPhase = "output";
 
-    private static readonly JsonPath DefaultOutputSelect = JsonPath.Parse("$.body").Value;
+    internal static readonly JsonPath DefaultOutputSelect = JsonPath.Parse("$.body").Value;
 
     /// <inheritdoc />
     public async Task<Result<ScriptResponse?>> PrepareInputAsync(
@@ -170,15 +170,16 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
         var delta = new JsonObject();
         try
         {
-            // The response document `result` borrows from; disposed when the delta (owned nodes only) is built.
-            using var resultDocument = plan.NeedsResult ? BuildResultDocument(result) : null;
+            // The response view `result` borrows from; disposed when the delta (owned nodes only) is built.
+            using var resultView = plan.NeedsResult ? new TaskResultView(result) : null;
             var scope = ExpressionScope.Create(
-                ctx.ScriptContext, clock, ctx.Caller, ScopeKind.MappingOutput, resultDocument?.RootElement);
+                ctx.ScriptContext, clock, ctx.Caller, ScopeKind.MappingOutput,
+                resultView is null ? null : RuleJsonDynamic.BorrowObject(resultView));
 
-            if (plan.Select is not null || plan.Into is not null)
+            if (plan.ResultSelect is { } selector)
             {
                 var source = plan.Select ?? DefaultOutputSelect;
-                var selected = source.TryRead(resultDocument!.RootElement, out var element)
+                var selected = resultView!.TryRead(selector, out var element)
                     ? DeclarativeValues.ToNode(element)
                     : null;
                 if (selected is not null)
@@ -399,24 +400,6 @@ public sealed class DeclarativeTaskMappingRunner(IExpressionCompiler compiler, T
         return map;
     }
 
-    /// <summary>
-    /// The <c>result</c> document: <c>body</c> (the parsed response <c>Data</c>, else the raw <c>Body</c> text),
-    /// <c>headers</c> and <c>statusCode</c>.
-    /// </summary>
-    private static JsonDocument BuildResultDocument(TaskInvocationResult result)
-    {
-        var body = result.Data is not null
-            ? JsonSerializer.SerializeToNode(result.Data, result.Data.GetType(), JsonSerializerConstants.JsonOptions)
-            : result.Body is null ? null : JsonValue.Create(result.Body);
-        var response = new JsonObject
-        {
-            ["body"] = body,
-            ["headers"] = result.Headers is null ? null : JsonSerializer.SerializeToNode(result.Headers),
-            ["statusCode"] = result.StatusCode is { } status ? JsonValue.Create(status) : null
-        };
-        return JsonSerializer.SerializeToDocument(response);
-    }
-
     /// <summary>The exception an expression threw, without the reflection wrapper a dynamic invoke adds.</summary>
     private static Exception Unwrap(Exception ex) =>
         ex is TargetInvocationException { InnerException: { } inner } ? inner : ex;
@@ -464,8 +447,10 @@ internal sealed class DeclarativeMappingPlan
 
     private DeclarativeMappingPlan(
         IReadOnlyList<Parameter> parameters, JsonPath? select, JsonPath? into, SetEntry[] set, string[] surfaces,
-        bool needsResult, Parameter? selectVariable, JsonPath? selectTail, IReadOnlySet<string> partiallyTargeted)
+        bool needsResult, Parameter? selectVariable, JsonPath? selectTail, IReadOnlySet<string> partiallyTargeted,
+        TaskResultView.Selector? resultSelect)
     {
+        ResultSelect = resultSelect;
         PartiallyTargeted = partiallyTargeted;
         Parameters = parameters;
         Select = select;
@@ -498,6 +483,12 @@ internal sealed class DeclarativeMappingPlan
 
     /// <summary>Output only: whether the <c>result</c> document must be built.</summary>
     public bool NeedsResult { get; }
+
+    /// <summary>
+    /// Output only: the <c>select</c> (or the default <c>$.body</c> when only <c>into</c> is authored) split at its first
+    /// segment for <see cref="TaskResultView"/>; null when the block has neither.
+    /// </summary>
+    public TaskResultView.Selector? ResultSelect { get; }
 
     /// <summary>Input only: the variable an input <c>select</c> reads.</summary>
     public Parameter? SelectVariable { get; }
@@ -589,7 +580,10 @@ internal sealed class DeclarativeMappingPlan
 
         return Result<DeclarativeMappingPlan>.Ok(new DeclarativeMappingPlan(
             signature.Parameters, select, into, entries.ToArray(), surfaces.ToArray(), needsResult,
-            selectVariable, selectTail, partial));
+            selectVariable, selectTail, partial,
+            !isInput && (select is not null || into is not null)
+                ? TaskResultView.Selector.For(select ?? DeclarativeTaskMappingRunner.DefaultOutputSelect)
+                : null));
     }
 
     private static Result<JsonPath> Target(
@@ -645,9 +639,21 @@ internal static class DeclarativeValues
         RuleJsonDynamic dynamicValue => ToNode(dynamicValue.AsJsonElement()),
         JsonElement element => element.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
             ? null
-            : JsonNode.Parse(element.GetRawText()),
+            : FromOwnedElement(element.Clone()),
         JsonNode node => node.DeepClone(),
         string text => JsonValue.Create(text),
         _ => JsonSerializer.SerializeToNode(value, value.GetType(), JsonSerializerConstants.JsonOptions)
+    };
+
+    /// <summary>
+    /// The node <c>JsonNode.Parse(element.GetRawText())</c> would build — an object, array or value over the element —
+    /// without the text round trip. <see cref="JsonElement.Clone"/> made <paramref name="element"/> independent of any
+    /// disposable document (it copies only the selected subtree; an element of a non-disposable document is already safe).
+    /// </summary>
+    private static JsonNode? FromOwnedElement(JsonElement element) => element.ValueKind switch
+    {
+        JsonValueKind.Object => JsonObject.Create(element),
+        JsonValueKind.Array => JsonArray.Create(element),
+        _ => JsonValue.Create(element)
     };
 }

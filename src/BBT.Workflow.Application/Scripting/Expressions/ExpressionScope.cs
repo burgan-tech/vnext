@@ -23,7 +23,7 @@ public enum ScopeKind
 /// <summary>
 /// The variables one declarative expression evaluation (or several entries of one mapping) sees, built
 /// lazily: a variable is materialized only when an expression asks for it, at most once per scope, and
-/// nothing is cloned. Lifecycle: <see cref="Create"/> per mapping/condition evaluation, then for each
+/// nothing is cloned. Lifecycle: <see cref="Create(ScriptContext, TimeProvider, ICallerAccessor, ScopeKind, JsonElement?)"/> per mapping/condition evaluation, then for each
 /// compiled expression <see cref="PrepareAsync"/> (async: resolves the caller's roles when <c>user</c> is
 /// used) followed by the synchronous <see cref="Bind(IReadOnlyList{Parameter}, IReadOnlySet{string})"/>.
 /// Not thread-safe; never shared across evaluations.
@@ -107,6 +107,25 @@ public sealed class ExpressionScope
         ArgumentNullException.ThrowIfNull(clock);
         ArgumentNullException.ThrowIfNull(caller);
         return new ExpressionScope(context, clock, caller, kind, result);
+    }
+
+    /// <summary>
+    /// Creates a scope whose <c>result</c> is the given view (output phase) instead of a view over a
+    /// <see cref="JsonElement"/>; <paramref name="result"/> is borrowed the same way, so whatever backs it must
+    /// outlive the scope.
+    /// </summary>
+    /// <param name="context">The execution context the variables are read from.</param>
+    /// <param name="clock">Source of <c>now</c> (read once per scope).</param>
+    /// <param name="caller">Caller whose roles back <c>user</c>; <see cref="NullCallerAccessor"/> on System hops.</param>
+    /// <param name="kind">Expression family; <c>result</c> exists only for <see cref="ScopeKind.MappingOutput"/>.</param>
+    /// <param name="result">The <c>result</c> variable (a borrowed view), or null.</param>
+    public static ExpressionScope Create(
+        ScriptContext context, TimeProvider clock, ICallerAccessor caller, ScopeKind kind, RuleJsonDynamic? result)
+    {
+        var scope = Create(context, clock, caller, kind);
+        scope._resultBuilt = true;
+        scope._resultView = result;
+        return scope;
     }
 
     /// <summary>

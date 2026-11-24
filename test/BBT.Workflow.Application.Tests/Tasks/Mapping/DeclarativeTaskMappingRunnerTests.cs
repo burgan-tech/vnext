@@ -216,6 +216,87 @@ public sealed class DeclarativeTaskMappingRunnerTests
     }
 
     [Fact]
+    public async Task Output_ResultView_ReadsEachMemberAndTheWholeResult_AsTheResultObjectWould()
+    {
+        // `result` is read through a member view (no { body, headers, statusCode } document is built for a member
+        // read); used as a value it is the whole object, with header names as sent and member names case-insensitive.
+        var ctx = Context(Http(), output: Block(select: "$.headers", into: "$.hdr", set:
+        [
+            ("$.whole", "result"),
+            ("$.cased", "result.Body.a"),
+            ("$.code", "result[\"statusCode\"]"),
+            ("$.missing", "result.nope")
+        ]));
+        var result = TaskInvocationResult.Success(
+            data: JsonSerializer.Deserialize<JsonElement>("""{"a":1}"""), statusCode: 201,
+            headers: new Dictionary<string, string> { ["X-Req"] = "1" });
+
+        var delta = await OutputAsync(ctx, result);
+
+        Json(delta).ShouldBe(
+            """{"hdr":{"X-Req":"1"},"whole":{"body":{"a":1},"headers":{"X-Req":"1"},"statusCode":201},"cased":1,"code":201}""");
+    }
+
+    [Theory]
+    [InlineData("$", """{"r":{"body":{"a":1},"headers":null,"statusCode":200}}""")]
+    [InlineData("$.statusCode", """{"r":200}""")]
+    [InlineData("$.body.a", """{"r":1}""")]
+    [InlineData("$.Body.a", "null")]     // path reads are case-sensitive
+    [InlineData("$.other", "null")]
+    [InlineData("$[0]", "null")]
+    [InlineData("$[*]", "null")]
+    [InlineData("$.headers.x", "null")]  // no headers: JSON null, nothing below it
+    public async Task Output_Select_ResolvesItsFirstSegmentAgainstTheResultObject(string select, string expected)
+    {
+        var ctx = Context(Http(), output: Block(select: select, into: "$.r"));
+
+        var delta = await OutputAsync(ctx, ResultWith("""{"a":1}"""));
+
+        Json(delta).ShouldBe(expected);
+    }
+
+    [Fact]
+    public async Task Output_Delta_OutlivesTheTaskResultsOwnDocument()
+    {
+        // The selected subtree and every set value are copied out of a disposable source before the mapping returns:
+        // disposing the task result's document afterwards leaves the delta readable.
+        var ctx = Context(Http(), output: Block(select: "$.body.customer", into: "$.c",
+            set: [("$.n", "result.body.customer.name"), ("$.all", "result.body")]));
+        JsonObject? delta;
+        using (var document = JsonDocument.Parse("""{"customer":{"name":"Ada","tags":["x"]}}"""))
+        {
+            delta = await OutputAsync(ctx, TaskInvocationResult.Success(data: document.RootElement, statusCode: 200));
+        }
+
+        Json(delta).ShouldBe(
+            """{"c":{"name":"Ada","tags":["x"]},"n":"Ada","all":{"customer":{"name":"Ada","tags":["x"]}}}""");
+    }
+
+    [Fact]
+    public async Task Output_Delta_OutlivesTheViewsSerializedBody_WithTheRuntimesJsonOptions()
+    {
+        // A non-JSON Data is serialized once (runtime options: camelCase dictionary keys) into a document the view
+        // disposes at scope end; the delta, read after the mapping returned, holds owned copies.
+        var ctx = Context(Http(), output: Block(select: "$.body.customer", into: "$.c", set: [("$.raw", "result")]));
+        var data = new Dictionary<string, object> { ["Customer"] = new Dictionary<string, object> { ["Name"] = "Ada" } };
+
+        var delta = await OutputAsync(ctx, TaskInvocationResult.Success(data: data, statusCode: 200));
+
+        Json(delta).ShouldBe(
+            """{"c":{"name":"Ada"},"raw":{"body":{"customer":{"name":"Ada"}},"headers":null,"statusCode":200}}""");
+    }
+
+    [Fact]
+    public async Task Output_RawBodyText_IsTheBodyWhenThereIsNoData()
+    {
+        var ctx = Context(Http(), output: Block(set: [("$.b", "result.body"), ("$.len", "result.body.ToString().Length")]));
+
+        var delta = await OutputAsync(ctx, TaskInvocationResult.Success(body: "plain text", statusCode: 200));
+
+        Json(delta).ShouldBe("""{"b":"plain text","len":10}""");
+    }
+
+    [Fact]
     public async Task Output_NoOutputBlock_PassesResultDataThrough()
     {
         var ctx = Context(Http(), input: Block(set: [("$.body.a", "1")]));

@@ -61,3 +61,52 @@ ALC sanity check (setup of the cold class; `AssemblyLoadContext.All` count): `be
 
 - G-P1 failure cause: the Roslyn handler's 560 B figure is a bare `ExpandoObject` fill. It does not build the `result` JSON document, does not serialize/materialize nodes and does not bind `data`. The declarative path pays those per call; its allocation scales with payload (38 KB / 176 KB / 690 KB), roughly 3.4 x the DocKb payload. The cost is in the generic runner path, not the compiler.
 - Task 1 review concern (global lock on the compiler-cache hit path): `CompilerCacheHitParallel` (1000 hits, `Parallel.For`) 170.6 us vs sequential 48.3 us, i.e. 3.5x SLOWER in parallel (error bars wide, 3 iterations; parallel also allocates 3,618 B for Parallel.For itself). Consistent with contention on the cache hit path; sequential hit costs about 48 ns.
+
+## 9b - result view without whole-payload copies; lock-free compiler-cache hits
+
+Same command, job, machine and temporary `Directory.Build.props` edit as above (reverted, not committed). Source: 7c9ff669 plus the 9b change (committed with this section).
+
+Change: the output phase no longer builds a `{ body, headers, statusCode }` document. `TaskResultView` reads `result.Data` as it is when it is a `JsonElement` / `JsonDocument` (otherwise serializes it once into a pooled document disposed at scope end); `select` resolves its first segment (`body` / `headers` / `statusCode`) itself and walks only that member; the `result` variable is a `RuleJsonDynamic.BorrowObject` view that writes the whole object only when used as a value. `DeclarativeValues.ToNode` builds the node over `JsonElement.Clone()` (copies only the selected subtree, and nothing when the source document is not disposable) instead of `GetRawText()` + `JsonNode.Parse`. `BoundedLruCache` hits are a `ConcurrentDictionary` lookup plus a recency stamp; only inserts lock.
+
+```
+| Method                  | DocKb | Mean            | Allocated |
+|------------------------ |------ |----------------:|----------:|
+| RoslynOutputHandlerWarm | 10    |       182.01 ns |     560 B |
+| DeclarativeOutputWarm   | 10    |       653.69 ns |    2304 B |
+| DeOutputMapping3Warm    | 10    |   139,717.74 ns |  171393 B |
+| RoslynOutputHandlerWarm | 50    |       194.47 ns |     560 B |
+| DeclarativeOutputWarm   | 50    |       653.45 ns |    2304 B |
+| DeOutputMapping3Warm    | 50    |   786,989.31 ns |  829125 B |
+| RoslynOutputHandlerWarm | 200   |       181.95 ns |     560 B |
+| DeclarativeOutputWarm   | 200   |       654.50 ns |    2304 B |
+| DeOutputMapping3Warm    | 200   | 2,994,116.75 ns | 3294641 B |
+| DeclarativeOutputCold   |       |        440.0 us | 160.75 KB |
+| RoslynOutputHandlerCold |       |      5,743.8 us | 1296.02 KB |
+| CompilerCacheHitSequential |    |        45.06 us |         - |
+| CompilerCacheHitParallel   |    |        16.27 us |    3182 B |
+```
+
+Other rows (EagerContextBuild, LazyScopeDataOnly, DeConditionWarm, DeValueWarm) unchanged within noise. ALC check unchanged: `before=1 afterDeclarative(25 cold)=1 afterRoslyn(5 cold)=3`.
+
+### Before / after
+
+| Benchmark | Before (1b7bdfc1) | After (9b) |
+|---|---|---|
+| DeclarativeOutputWarm DocKb 10 | 83.9 us / 38,369 B | 0.654 us / 2,304 B |
+| DeclarativeOutputWarm DocKb 50 | 420 us / 175,824 B | 0.653 us / 2,304 B |
+| DeclarativeOutputWarm DocKb 200 | 1,671 us / 690,290 B | 0.655 us / 2,304 B |
+| DeclarativeOutputCold | 789 us / 195.9 KB | 440 us / 160.8 KB |
+| CompilerCacheHitParallel (1000 hits) | 170.6 us (3.54x sequential) | 16.3 us (0.36x sequential) |
+| CompilerCacheHitSequential (1000 hits) | 48.3 us | 45.1 us |
+
+### Gate G-P1' (controller ruling)
+
+Selected subtree (`$.body.customer`) = `{"name":"Benchmark User","segment":"retail"}` = 44 bytes at every DocKb. Target: <= 2 x 44 + 8,192 = 8,280 B, and <= 0.25 x `DeOutputMapping3Warm`.
+
+| Gate | Measured | Verdict |
+|---|---|---|
+| G-P1' (a) warm allocation <= 2x subtree + 8 KB | 2,304 B at DocKb 10 / 50 / 200 (flat: does not scale with the result) vs 8,280 B | **PASS** |
+| G-P1' (b) <= 0.25x `DeOutputMapping3Warm` | 2,304 / 171,393 = 0.013x (10), 0.0028x (50), 0.0007x (200) | **PASS** |
+| Informational: vs warm Roslyn `IMapping` | 654 ns / 2,304 B vs 182 ns / 560 B: 3.6x slower, 4.1x more allocation (was 470x-9,100x / 68x-1,233x) | still slower than Roslyn; not a gate |
+
+Scope of the PASS: the benchmark's `result.Data` is a `JsonElement` (what the HTTP and Dapr service invokers produce via `Deserialize<object>`). A non-JSON `Data` (POCO, dictionary, `ExpandoObject`, `JsonNode`) is still serialized once per call into a pooled document, so its allocation scales with the payload (one copy instead of three); not measured here.
