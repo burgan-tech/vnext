@@ -180,6 +180,13 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
 
     Task<Result<Instance>> GetActiveAsync(string identifier, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// <see cref="GetActiveAsync"/> that also admits a <see cref="InstanceStatus.Faulted"/> instance — for
+    /// the reserved cancel only, the one transition a faulted instance accepts. Completed and Passive are
+    /// refused exactly as <see cref="GetActiveAsync"/> refuses them (<c>Instance:100018</c>).
+    /// </summary>
+    Task<Result<Instance>> GetActiveOrFaultedAsync(string identifier, CancellationToken cancellationToken = default);
+
     Task<List<InstanceAndDataModel>> GetActiveDataListAsync(CancellationToken cancellationToken = default);
 
     Task<InstanceAndDataModel?> FindActiveDataAsync(string key, string version,
@@ -460,6 +467,17 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     /// <returns>True when exactly this call flipped Faulted → Active; false when the instance was
     /// no longer faulted, in which case the aggregate is left untouched.</returns>
     Task<bool> TryUnfaultAsync(Instance instance, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Aligns the change tracker's baseline for the status columns (<c>Status</c>, <c>EffectiveStatus</c>,
+    /// <c>CompletedAt</c>, <c>Duration</c>, <c>ModifiedAt</c>, <c>HasActiveIncident</c>) of this unit of work's
+    /// copy of the instance with the values it holds in memory. Call it after those values were set to what
+    /// ANOTHER unit of work has already committed — a fault the pipeline wrote on a reload, an unfault CAS run
+    /// in a transaction of its own. Without it this unit of work's commit writes them a second time, and when
+    /// the copy is older than the row it writes the stale status over the newer one. Writes nothing; no-op
+    /// for a detached aggregate.
+    /// </summary>
+    Task AcceptPersistedStatusAsync(Instance instance, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Writes the long-poll acknowledge token as one set-based UPDATE — the arm is a single

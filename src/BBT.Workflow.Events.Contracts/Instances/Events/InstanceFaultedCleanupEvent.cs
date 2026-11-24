@@ -5,7 +5,7 @@ namespace BBT.Workflow.Instances.Events;
 
 /// <summary>
 /// Event published when a workflow instance faults to trigger job cleanup.
-/// This event triggers cancellation of all scheduled jobs for the faulted instance.
+/// It cancels the instance's scheduled jobs while the instance still rests in this fault.
 /// </summary>
 [EventName("instance.faulted.cleanup")]
 public class InstanceFaultedCleanupEvent : IDistributedEvent, ITraceableDistributedEvent
@@ -32,7 +32,9 @@ public class InstanceFaultedCleanupEvent : IDistributedEvent, ITraceableDistribu
     public required string Version { get; init; }
     
     /// <summary>
-    /// When the instance faulted
+    /// When the instance faulted: exactly the <c>CompletedAt</c> the fault wrote. The cleanup compares the two and
+    /// runs only while the instance still rests in this fault, so a cleanup that arrives after a retry or the
+    /// reserved cancel took the instance over changes nothing (vnext#1252). Keep them the same value.
     /// </summary>
     public required DateTime FaultedAt { get; init; }
 

@@ -25,9 +25,22 @@ public sealed class InstanceCancellationService(
     :  IInstanceCancellationService
 {
     /// <inheritdoc />
-    public async Task<Result> ProcessCancellationAsync(
+    public Task<Result> ProcessCancellationAsync(
         Guid instanceId,
         CancellationToken cancellationToken = default)
+        => ProcessCleanupAsync(instanceId, faultedAt: null, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<Result> ProcessFaultCleanupAsync(
+        Guid instanceId,
+        DateTime faultedAt,
+        CancellationToken cancellationToken = default)
+        => ProcessCleanupAsync(instanceId, faultedAt, cancellationToken);
+
+    private async Task<Result> ProcessCleanupAsync(
+        Guid instanceId,
+        DateTime? faultedAt,
+        CancellationToken cancellationToken)
     {
         using (logger.BeginScope(new Dictionary<string, object>
         {
@@ -43,59 +56,87 @@ public sealed class InstanceCancellationService(
                 return Result.Fail(WorkflowErrors.InstanceNotFound(instanceId.ToString()));
             }
 
+            // A fault's cleanup travels outbox → Inbox and can arrive after the instance left that fault:
+            // a retry or the reserved cancel took it over and may already have enqueued its own job or
+            // armed a state's timers. Those belong to the instance's new life, not to the fault, so a
+            // cleanup that no longer describes the instance changes nothing (vnext#1252). The fault that
+            // ends this new life raises a cleanup of its own.
+            if (faultedAt is { } at && !IsTheFaultThatRaisedTheCleanup(instance, at))
+            {
+                logger.StaleFaultCleanupSkipped(instanceId, at, instance.Status.Code);
+                return Result.Ok();
+            }
+
             // Release any distributed resource locks this instance holds. Runs on every terminal
             // path (completed / faulted / canceled) and before the job-cleanup early return, so a
             // lock is freed the moment the instance reaches a terminal state — no per-transition
             // Release wiring, and no leak until TTL on unexpected faults. Best-effort and idempotent.
             await ReleaseTrackedResourceLocksAsync(instance, cancellationToken);
 
-            var jobs = await instanceJobRepository.GetListActiveAsync(instance.Id, cancellationToken);
-
-            if (!jobs.Any())
-            {
-                return Result.Ok();
-            }
-
-            var cancelledJobIds = new List<Guid>(jobs.Count);
-            var failedCount = 0;
-            foreach (var job in jobs)
-            {
-                try
-                {
-                    if (await TryCancelInSchedulerAsync(job, instance.Id, cancellationToken))
-                    {
-                        cancelledJobIds.Add(job.Id);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    failedCount++;
-                    logger.InstanceJobDeletionFailed(ex, job.JobId, instanceId);
-                }
-            }
-
-            // The scheduler verdicts are per job; the row closes are one statement for all winners
-            // instead of a tracked update per row.
-            await instanceJobRepository.MarkManyAsProcessedAsync(cancelledJobIds, cancellationToken);
-
-            logger.InstanceCanceledJobsProcessed(instanceId, cancelledJobIds.Count);
-
-            if (failedCount > 0)
-            {
-                // Retryable: winners are already persisted above, so the Inbox redelivery this
-                // failure triggers only retries the jobs that are still active. Returning Ok here
-                // would ACK the message and strand the uncancelled scheduler entries forever.
-                return Result.Fail(WorkflowErrors.InstanceCancellationFailed(
-                    instanceId, $"{failedCount} scheduler job cancellation(s) failed; delivery will be retried"));
-            }
-
-            return Result.Ok();
+            return await CancelActiveJobsAsync(instance, cancellationToken);
         }
         catch (Exception ex)
         {
             logger.InstanceCanceledProcessingFailed(ex, instanceId);
             return Result.Fail(WorkflowErrors.InstanceCancellationFailed(instanceId, ex.Message));
         }
+    }
+
+    /// <summary>
+    /// True while the instance still rests in the fault whose cleanup this is. <see cref="Instance.Fault"/>
+    /// stamps the event's <c>FaultedAt</c> from the <c>CompletedAt</c> it writes, so the two are the same
+    /// value; the tolerance only absorbs the column's microsecond precision. Same host clock, no skew.
+    /// </summary>
+    internal static bool IsTheFaultThatRaisedTheCleanup(Instance instance, DateTime faultedAt)
+        => instance.Status.Equals(InstanceStatus.Faulted)
+           && instance.CompletedAt is { } completedAt
+           && (completedAt - faultedAt).Duration() < FaultStampTolerance;
+
+    private static readonly TimeSpan FaultStampTolerance = TimeSpan.FromMilliseconds(1);
+
+    private async Task<Result> CancelActiveJobsAsync(Instance instance, CancellationToken cancellationToken)
+    {
+        var jobs = await instanceJobRepository.GetListActiveAsync(instance.Id, cancellationToken);
+
+        if (!jobs.Any())
+        {
+            return Result.Ok();
+        }
+
+        var cancelledJobIds = new List<Guid>(jobs.Count);
+        var failedCount = 0;
+        foreach (var job in jobs)
+        {
+            try
+            {
+                if (await TryCancelInSchedulerAsync(job, instance.Id, cancellationToken))
+                {
+                    cancelledJobIds.Add(job.Id);
+                }
+            }
+            catch (Exception ex)
+            {
+                failedCount++;
+                logger.InstanceJobDeletionFailed(ex, job.JobId, instance.Id);
+            }
+        }
+
+        // The scheduler verdicts are per job; the row closes are one statement for all winners
+        // instead of a tracked update per row.
+        await instanceJobRepository.MarkManyAsProcessedAsync(cancelledJobIds, cancellationToken);
+
+        logger.InstanceCanceledJobsProcessed(instance.Id, cancelledJobIds.Count);
+
+        if (failedCount > 0)
+        {
+            // Retryable: winners are already persisted above, so the Inbox redelivery this
+            // failure triggers only retries the jobs that are still active. Returning Ok here
+            // would ACK the message and strand the uncancelled scheduler entries forever.
+            return Result.Fail(WorkflowErrors.InstanceCancellationFailed(
+                instance.Id, $"{failedCount} scheduler job cancellation(s) failed; delivery will be retried"));
+        }
+
+        return Result.Ok();
     }
 
     /// <inheritdoc />

@@ -500,6 +500,16 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
             || UpdateData?.Key.Equals(key, StringComparison.OrdinalIgnoreCase) == true);
 
     /// <summary>
+    /// True when the key is this workflow's cancel transition, by reserved alias or by configured key
+    /// (OrdinalIgnoreCase). The one key a Faulted instance still admits — see
+    /// <c>docs/domain/well-known-transitions.md</c>.
+    /// </summary>
+    public bool IsCancelKey(string? key) =>
+        key is not null
+        && (key.Equals(WellKnownTransitionKeys.Cancel, StringComparison.OrdinalIgnoreCase)
+            || Cancel?.Key.Equals(key, StringComparison.OrdinalIgnoreCase) == true);
+
+    /// <summary>
     /// True when the key names a well-known workflow-level transition, whether by reserved alias or by
     /// configured key — including when that transition is not configured on this workflow, so callers
     /// that must exclude reserved keys from state-machine rules still do so.

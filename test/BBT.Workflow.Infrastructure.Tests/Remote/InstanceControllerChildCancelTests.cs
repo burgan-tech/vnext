@@ -231,11 +231,47 @@ public sealed class InstanceControllerChildCancelTests
         captured.TrustedPayload.ShouldBeFalse(); // the forward relays a client body: EXTERNAL
     }
 
+    [Fact]
+    public async Task CancelCleanup_WithTheFaultsStamp_RunsTheFaultCleanup()
+    {
+        // vnext#1252: the faulted-cleanup handler forwards FaultedAt so a cleanup that arrives after a retry or the
+        // reserved cancel took the instance over leaves it alone.
+        var instanceId = Guid.NewGuid();
+        var faultedAt = new DateTime(2026, 11, 24, 9, 22, 15, DateTimeKind.Utc);
+        var cancellation = Substitute.For<IInstanceCancellationService>();
+        cancellation.ProcessFaultCleanupAsync(instanceId, faultedAt, Arg.Any<CancellationToken>()).Returns(Result.Ok());
+        var sut = CreateController(Substitute.For<IInstanceCommandAppService>(), Substitute.For<IHttpContextAccessor>(),
+            Substitute.For<IChildSubflowCancellationService>(), cancellationService: cancellation);
+
+        await sut.CancelCleanupAsync("core", "flow", instanceId, new InstanceCleanupInput { FaultedAt = faultedAt });
+
+        await cancellation.Received(1).ProcessFaultCleanupAsync(instanceId, faultedAt, Arg.Any<CancellationToken>());
+        await cancellation.DidNotReceiveWithAnyArgs().ProcessCancellationAsync(default, default);
+    }
+
+    [Fact]
+    public async Task CancelCleanup_WithoutAStamp_SweepsAsBefore()
+    {
+        // Completed and canceled cleanups send `{}`; an older Inbox sends `{}` for a fault too; no body at all binds null.
+        var instanceId = Guid.NewGuid();
+        var cancellation = Substitute.For<IInstanceCancellationService>();
+        cancellation.ProcessCancellationAsync(instanceId, Arg.Any<CancellationToken>()).Returns(Result.Ok());
+        var sut = CreateController(Substitute.For<IInstanceCommandAppService>(), Substitute.For<IHttpContextAccessor>(),
+            Substitute.For<IChildSubflowCancellationService>(), cancellationService: cancellation);
+
+        await sut.CancelCleanupAsync("core", "flow", instanceId, new InstanceCleanupInput());
+        await sut.CancelCleanupAsync("core", "flow", instanceId, input: null);
+
+        await cancellation.Received(2).ProcessCancellationAsync(instanceId, Arg.Any<CancellationToken>());
+        await cancellation.DidNotReceiveWithAnyArgs().ProcessFaultCleanupAsync(default, default, default);
+    }
+
     private static InstanceController CreateController(
         IInstanceCommandAppService commandService,
         IHttpContextAccessor accessor,
         IChildSubflowCancellationService childService,
-        IRelatedInstanceQueryAppService? relatedInstanceQueryAppService = null) => new(
+        IRelatedInstanceQueryAppService? relatedInstanceQueryAppService = null,
+        IInstanceCancellationService? cancellationService = null) => new(
         commandService,
         Substitute.For<IInstanceQueryAppService>(),
         Substitute.For<IInstanceRetryAppService>(),
@@ -244,7 +280,7 @@ public sealed class InstanceControllerChildCancelTests
         Substitute.For<ISubflowStateService>(),
         Substitute.For<ISubflowFaultService>(),
         Substitute.For<ISubflowCancellationService>(),
-        Substitute.For<IInstanceCancellationService>(),
+        cancellationService ?? Substitute.For<IInstanceCancellationService>(),
         childService,
         Substitute.For<IChildSubflowFaultService>(),
         Substitute.For<ITransitionJobEnqueuer>(),

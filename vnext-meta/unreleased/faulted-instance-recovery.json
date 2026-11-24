@@ -1,0 +1,32 @@
+{
+  "releaseNote": {
+    "summary": "An instance faulted by a failed transition mapping or master-schema check can be retried, and the reserved cancel now closes a Faulted instance.",
+    "breaking": false,
+    "docs": []
+  },
+  "migrations": [
+    {
+      "id": "faulted-instance-retry-and-cancel",
+      "type": "behavior",
+      "component": "instance",
+      "path": "POST {domain}/workflows/{workflow}/instances/{instance}/retry | PATCH {domain}/workflows/{workflow}/instances/{instance}/transitions/{cancel}",
+      "since": "next",
+      "severity": "info",
+      "title": "A Faulted instance can be retried after a failed mapping and closed with the reserved cancel",
+      "description": "Up to 0.0.106, a transition that failed in its first step — its mapping threw, its data failed the master schema, or the instance key it set was already taken — left the instance Faulted with an incident but without a record of that hop. retry answered 400 Instance:100028, the reserved cancel answered 400 Instance:100018, and only a database edit recovered it; the sync answer of such a failed updateData or cancel also said status A. Now the hop's record is saved first, so retry re-runs it (manual transitions, updateData and the reserved cancel; the re-run uses the retry's body). The reserved cancel is admitted on a Faulted instance: it resolves the incidents, runs inline (200, even for sync=false), closes the instance and its Faulted SubFlow children. The failed hop's sync answer says status F. A late fault cleanup no longer cancels the jobs of an instance a retry or cancel already took over. (Builds before 0.0.104 happened to leave a failed manual transition Busy, which the reserved cancel could close; 0.0.104 removed that accident, so this release is the first that gives an exit by design.)",
+      "action": "None required. An instance faulted this way before upgrading has no record of the failed hop, so retry still answers Instance:100028 for it; close it with the reserved cancel when the flow declares one, otherwise it needs a database fix. A client that read status A from a failed updateData or cancel should read F."
+    }
+  ],
+  "knownIssues": [
+    {
+      "id": "parent-faulted-by-subflow-child-not-retryable",
+      "affectedVersions": ">=next",
+      "severity": "warning",
+      "component": "execution",
+      "path": "InstanceSubFaultedEvent → SubflowFaultService → POST …/retry on the parent",
+      "title": "Also on earlier versions: a SubFlow child's own fault closes the parent's correlation (terminal outcome Faulted) and faults the parent. Retrying the parent then finds neither an open SubFlow to descend into nor an unfinished record of its own, and answers 400 Instance:100028; retrying the child re-runs the child's failed hop, but the child's completion does not resume the Faulted parent. A parent's cancel does not reach the child, because the correlation is closed. A parent that faulted on its own while its child ran keeps that correlation open and cascades its fault to the child; its retry is handed to that child, which has nothing to re-run, and answers 400 Instance:100028 after the parent was already unfaulted: the parent is left Active with no incident (the refused retry of vnext#1338).",
+      "workaround": "Do not retry such a parent; close it with the reserved cancel. Its cancel also closes the child when the parent faulted on its own; after a child's own fault, cancel the child too. Retry the child alone when only the child's work has to finish.",
+      "fixedIn": null
+    }
+  ]
+}

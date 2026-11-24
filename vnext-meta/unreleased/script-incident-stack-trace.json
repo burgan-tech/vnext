@@ -21,11 +21,11 @@
       "id": "script-failure-log-events",
       "type": "behavior",
       "component": "runtime",
-      "path": "log EventIds 10130, 10268, 10269, 10270",
+      "path": "log EventIds 10130, 10269, 10270, 10273",
       "since": "next",
       "severity": "info",
       "title": "Script failures are logged with the exception",
-      "description": "TaskScriptFailed (10268) logs a task script's exception once per failure; StartTransitionMappingFailed (10269) logs a start mapping that fails (the start answers with the error and records no incident); InstanceFaultedDueToPipelineError (10130) now carries the exception behind a pipeline fault; ConditionScriptFailed (10270) replaces the unstructured 'Condition script evaluation failed: {Error}' line and carries the exception. A cancellation a script sees is not logged as a script failure.",
+      "description": "TaskScriptFailed (10273) logs a task script's exception once per failure; StartTransitionMappingFailed (10269) logs a start mapping that fails (the start answers with the error and records no incident); InstanceFaultedDueToPipelineError (10130) now carries the exception behind a pipeline fault; ConditionScriptFailed (10270) replaces the unstructured 'Condition script evaluation failed: {Error}' line and carries the exception. A cancellation a script sees is not logged as a script failure.",
       "action": "Move a log query or alert that matched the text 'Condition script evaluation failed' to EventId 10270.",
       "documentation": "docs/runtime/instance-incident-persistence.md"
     },
