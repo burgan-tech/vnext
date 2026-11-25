@@ -447,13 +447,13 @@ legacy meaning), the same rule as a task binding. The CacheAside `sourceOutput` 
 Three more sites take a declarative block in place of a C# `mapping` script: a transition's `output`, a SubFlow state's `input` and its `output`. The block grammar (`select`, `into`, `set`) and the expression rules are those of a task binding; what differs is the variables, the target document and where the result goes.
 
 - `input` builds what goes **to** a callee, `output` writes what comes **back**. A single-block site rejects the other block at publish: a transition carrying an `input` member is a publish error (`'input' is not supported on a transition; use 'output'.`).
-- `select` reads `result` when the site has one, otherwise the variables (`$.data…`, `$.input…`).
+- `select` reads `result` when the site has one, otherwise the variables except `headers` (`$.data…`, `$.input…`); `headers` is never a `select` root, as for a task binding (see [Headers](#headers)) — read a header with a `set` expression.
 - A block and a C# `mapping` on the same site is a publish error; a stored definition holding both runs the script.
 
 | Site | Variables | `select` root | Target | Delta starts | Result goes to |
 |---|---|---|---|---|---|
-| Transition `output` | `data`, `input`, `instance`, `now`, `user`, `context`, `headers` | variables (no `result`) | instance data | empty; `"select": "$.input"` keeps the whole request | transition record body, the single data append, `CurrentTransition.Data` |
-| SubFlow `input` | the same set | variables | the child's start document `{ attributes, headers, key, tags }` | empty | the child start request |
+| Transition `output` | `data`, `input`, `instance`, `now`, `user`, `context`, `headers` | variables except `headers` (no `result`) | instance data | empty; `"select": "$.input"` keeps the whole request | transition record body, the single data append, `CurrentTransition.Data` |
+| SubFlow `input` | the same set | variables except `headers` | the child's start document `{ attributes, headers, key, tags }` | empty | the child start request |
 | SubFlow `output` | the same set plus `result`; `input` is null; `headers` / `user` are the child settler's (see [carried headers](../architecture/subflow-execution.md#carried-headers-from-the-child)) | `result`, default `$.data` | instance data | empty | the single data append of the parent |
 
 `result` of a SubFlow output is `{ data, status }` with `status` either `"completed"` or `"faulted"`.
@@ -469,7 +469,7 @@ Applies to `transitions[]`, `startTransition`, shared transitions and the well-k
   "output": {
     "select": "$.input.customer",
     "into": "$.customer",
-    "set": { "$.submittedAt": "now", "$.submittedBy": "user.id" }
+    "set": { "$.submittedAt": "now", "$.reviewedByAuditor": "user.available && user.hasRole(\"auditor\")" }
   }
 }
 ```
@@ -480,7 +480,7 @@ For `type: S` only; a `P` SubProcess rejects both blocks (it is started by its o
 
 - `select` needs `into`; `key` must be a string and `tags` an array of strings, anything else fails the start before a child is created.
 - `$.headers.sub` written blank stays blank (the [instance-call credential rule](../architecture/subflow-execution.md)).
-- `input` is the request of the hop that entered the SubFlow state: null on an automatic chain and on a retry restart, where `user` is the retrying requester, as for the script.
+- `input` is the request of the hop that entered the SubFlow state: null on an automatic chain and on a retry restart (the restart carries no data; its actor is the retrying requester, so `user` and `headers` are theirs), as for the script.
 
 ```json
 "subFlow": {
@@ -492,7 +492,7 @@ For `type: S` only; a `P` SubProcess rejects both blocks (it is started by its o
       "$.attributes.amount": "input.amount",
       "$.headers.x-channel": "\"web\"",
       "$.key": "data.customer.id",
-      "$.tags": "new [] { \"kyc\" }"
+      "$.tags": "new string[] { \"kyc\" }"
     }
   }
 }
@@ -516,7 +516,15 @@ Runs on completion **and** on fault; `result.status` tells them apart (a script 
 
 ### Failures
 
-The error codes are the scripts' (`Execution` transition mapping error, `SubFlowInputMappingFailed`, `SubFlowOutputMappingFailed`) under the same `Script.Execute` spans; new log events are 10277 `TransitionDeclarativeOutputFailed`, 10278 `SubFlowDeclarativeInputFailed` and 10279 `SubFlowDeclarativeOutputFailed`. A caller-roles provider failure stays `Authorization:110006` (retryable; on the SubFlow output completion path the event is redelivered); reading `user.roles` with no caller is a permanent failure.
+Each site fails with the error its script fails with, under the same `Script.Execute` span, and logs a new event:
+
+| Site | Error code | Span kind | Log event |
+|---|---|---|---|
+| Transition `output` | `Execution` transition mapping error (`ExecutionStepFailed`) | transition mapping | 10277 `TransitionDeclarativeOutputFailed` |
+| SubFlow `input` | `SubFlowInputMappingFailed` | SubFlow input mapping | 10278 `SubFlowDeclarativeInputFailed` |
+| SubFlow `output` | `SubFlowOutputMappingFailed` | `subflowOutputMapping` | 10279 `SubFlowDeclarativeOutputFailed` |
+
+A caller-roles provider failure stays `Authorization:110006` (retryable; on the SubFlow output completion path the event is redelivered); reading `user.roles` with no caller is a permanent failure.
 
 ## Publish validation
 
