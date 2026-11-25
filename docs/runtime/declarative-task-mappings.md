@@ -318,8 +318,24 @@ the hop's `input`.
 
 What `input` carries for special fields, as the pipeline exposes it:
 
-- `x-storage` file field: the **handle**. File admission swaps a request's `content` for the stored handle before any
-  step runs, and `input` follows it — never the bytes.
+- `x-storage` file field: the **handle** in every pipeline expression (task mappings, lock key, auto rules, timers).
+  File admission swaps a request's `content` for the stored handle before any step runs, and `input` follows it —
+  never the bytes. Copying the handle is harmless (it carries metadata, not bytes); an input block that sends it to a
+  task sends the handle, and a task that needs the bytes uses a C# mapping with `GetFileAsync`.
+  **Exception — the transition and start `schemas[]` rule** runs *before* the swap, by necessity: the schema it
+  selects validates the request in its write shape (with `content`), and the swap runs only after validation so
+  that a rejected request writes nothing to the store. There `input` holds the request as sent, in one of three
+  shapes:
+
+  | The client sent | `input.<field>` in the `schemas[]` rule |
+  |---|---|
+  | inline content (`transport: inline`) | `{ name, mimeType, size, content: "<base64>", …other members }` — `name`, `mimeType` and `size` are the client's claim (the runtime later ignores the client's `size`) |
+  | a streamed upload (`transport: stream`) | `{ file: "<upload id>", …other members }` — no `name`, `mimeType` or `size` (they are on the upload ticket) |
+  | an echo of the stored handle | `{ file: "<guid>", …what the client sent back }` — replaced by the stored handle later |
+
+  So a rule such as `input.document.mimeType == "application/pdf"` matches only inline uploads. Do not select a
+  schema by file metadata; read a member the client sends explicitly next to the file (`input.document.documentType`),
+  which every shape keeps. See [File Storage](file-storage.md#where-the-swap-happens).
 - `x-encryption` field (`encrypt` or `hash`): the **plaintext** the client sent, by decision. Encryption and hashing
   happen in the instance-data write funnel, after `input` was captured; `input` is neither masked nor tokenized. This
   is the same trust boundary C# scripts already have: `context.Body` of a transition's own task scripts and

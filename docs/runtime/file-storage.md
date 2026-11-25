@@ -194,6 +194,12 @@ After schema validation, before anything is persisted or enqueued:
   `cancel` and `exit` are never forwarded: the preflight step short-circuits them to the parent's own record,
   so the parent swaps them (`SubflowForwardRule.WillForward`).
   A relay from an older parent that still carries `ChainReserved=true` is swapped at the leaf as well.
+- **Expressions.** A Dynamic Expresso `input` (the hop's request payload) sees the swapped handle at every
+  pipeline site. The transition and start `schemas[]` rule is the exception: it picks the schema that validates the
+  request, so it runs before the swap and sees the request as sent — inline `content` with the client's
+  `name`/`mimeType`/`size`, a streamed upload's `{ file }`, or an echo. Select by a member the client sends next to the
+  file (`documentType`), not by file metadata
+  ([Declarative task mappings § input per trigger](declarative-task-mappings.md#input-per-trigger)).
 - **No file member, no schema load.** The offload acts only on `content` and `file` members, so start,
   admission and the mapping step first check whether any object in the payload carries one (raw-byte scan,
   exact walk only when the text has a backslash or one of the literals). If none does, the master schema is not
