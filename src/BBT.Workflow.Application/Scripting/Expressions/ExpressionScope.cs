@@ -18,7 +18,16 @@ public enum ScopeKind
     MappingInput,
 
     /// <summary>A task output mapping (after the task ran); adds <c>result</c>.</summary>
-    MappingOutput
+    MappingOutput,
+
+    /// <summary>A transition's declarative output block: the condition variables, no <c>task</c> / <c>config</c> / <c>result</c>.</summary>
+    TransitionOutput,
+
+    /// <summary>A SubFlow's declarative input block (the child start request): the condition variables.</summary>
+    SubFlowInput,
+
+    /// <summary>A SubFlow's declarative output block (child completion): the condition variables plus <c>result</c>.</summary>
+    SubFlowOutput
 }
 
 /// <summary>
@@ -121,7 +130,7 @@ public sealed class ExpressionScope
     /// <param name="context">The execution context the variables are read from.</param>
     /// <param name="clock">Source of <c>now</c> (read once per scope).</param>
     /// <param name="caller">Caller whose roles back <c>user</c>; <see cref="NullCallerAccessor"/> on System hops.</param>
-    /// <param name="kind">Expression family; <c>result</c> exists only for <see cref="ScopeKind.MappingOutput"/>.</param>
+    /// <param name="kind">Expression family; <c>result</c> exists only for <see cref="ScopeKind.MappingOutput"/> and <see cref="ScopeKind.SubFlowOutput"/>.</param>
     /// <param name="result">The task's standard response (output phase); borrowed, so its document must outlive the scope.</param>
     public static ExpressionScope Create(
         ScriptContext context, TimeProvider clock, ICallerAccessor caller, ScopeKind kind, JsonElement? result = null)
@@ -140,7 +149,7 @@ public sealed class ExpressionScope
     /// <param name="context">The execution context the variables are read from.</param>
     /// <param name="clock">Source of <c>now</c> (read once per scope).</param>
     /// <param name="caller">Caller whose roles back <c>user</c>; <see cref="NullCallerAccessor"/> on System hops.</param>
-    /// <param name="kind">Expression family; <c>result</c> exists only for <see cref="ScopeKind.MappingOutput"/>.</param>
+    /// <param name="kind">Expression family; <c>result</c> exists only for <see cref="ScopeKind.MappingOutput"/> and <see cref="ScopeKind.SubFlowOutput"/>.</param>
     /// <param name="result">The <c>result</c> variable (a borrowed view), or null.</param>
     public static ExpressionScope Create(
         ScriptContext context, TimeProvider clock, ICallerAccessor caller, ScopeKind kind, RuleJsonDynamic? result)
@@ -244,13 +253,16 @@ public sealed class ExpressionScope
         NowVariable => _now ??= _clock.GetUtcNow(),
         UserVariable => _user ??= new ExpressionUser(this),
         ContextVariable => _ruleContext ??= ExpressoRuleContextMapper.FromScriptContext(_context),
-        ResultVariable when _kind == ScopeKind.MappingOutput => ResultView(),
-        TaskVariable when _kind != ScopeKind.Condition => TaskView(),
-        ConfigVariable when _kind != ScopeKind.Condition => _config ??= new ExpressionConfig(_configuration),
+        ResultVariable when _kind is ScopeKind.MappingOutput or ScopeKind.SubFlowOutput => ResultView(),
+        TaskVariable when IsTaskKind => TaskView(),
+        ConfigVariable when IsTaskKind => _config ??= new ExpressionConfig(_configuration),
         // The script view (deny list applied), never TransportHeaders; wrapped, not copied.
         HeadersVariable => _headers ??= new ExpressionHeaders((object?)_context.Headers),
         _ => throw new ArgumentException($"'{name}' is not a variable of a {_kind} expression scope.", nameof(name))
     };
+
+    /// <summary>The two task-mapping phases: they alone have <c>task</c> / <c>config</c> and read the transition record's body as <c>input</c>.</summary>
+    private bool IsTaskKind => _kind is ScopeKind.MappingInput or ScopeKind.MappingOutput;
 
     private RuleJsonDynamic? Data()
     {
@@ -288,7 +300,7 @@ public sealed class ExpressionScope
     /// </summary>
     private object? ResolveInput()
     {
-        if (_kind != ScopeKind.Condition && _context.CurrentTransition is { } currentTransition)
+        if (IsTaskKind && _context.CurrentTransition is { } currentTransition)
             return currentTransition.Data;
 
         return _context.HasHopInput ? _context.HopInput : _context.CurrentTransition?.Data;

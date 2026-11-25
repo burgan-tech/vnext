@@ -14,6 +14,7 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Scripting.Caller;
+using BBT.Workflow.Scripting.Declarative;
 using BBT.Workflow.Scripting.Expressions;
 using BBT.Workflow.Scripting.Related;
 using BBT.Workflow.Scripting.Rules;
@@ -310,7 +311,7 @@ public sealed class ExpressionHeadersTests
     public void Headers_IsNotAnInputSelectRoot()
     {
         var plan = DeclarativeMappingPlan.Build(
-            _compiler, new MappingBlock("$.headers", "$.body.h", null), ScopeKind.MappingInput);
+            _compiler, new MappingBlock("$.headers", "$.body.h", null), DeclarativeSiteKind.TaskInput);
 
         plan.IsSuccess.ShouldBeFalse();
         plan.Error.Message!.ShouldNotContain("headers,");

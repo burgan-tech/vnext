@@ -15,6 +15,7 @@ using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Scripting.Caller;
+using BBT.Workflow.Scripting.Declarative;
 using BBT.Workflow.Scripting.Expressions;
 using BBT.Workflow.Scripting.Rules;
 using BBT.Workflow.Shared;

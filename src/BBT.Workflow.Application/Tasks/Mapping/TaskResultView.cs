@@ -15,7 +15,7 @@ namespace BBT.Workflow.Tasks.Mapping;
 /// </summary>
 /// <remarks>
 /// Scope-lifetime object, one per output mapping, single-threaded. Every element it hands out is borrowed: the documents
-/// it creates are disposed by <see cref="Dispose"/>, so values are materialized (<see cref="DeclarativeValues.ToNode"/>)
+/// it creates are disposed by <see cref="Dispose"/>, so values are materialized (<see cref="BBT.Workflow.Scripting.Declarative.DeclarativeValues.ToNode"/>)
 /// before that. The body is resolved in the constructor, so a response <c>Data</c> that cannot be serialized fails where
 /// the old result document failed — before any entry runs.
 /// </remarks>
