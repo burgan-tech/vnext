@@ -316,12 +316,36 @@ body except where a legacy transition `mapping` script rewrote the record body, 
 (then the original body). Without a record (the hop's context was built earlier, e.g. by the resource lock) they read
 the hop's `input`.
 
-What `input` carries for special fields, as the pipeline exposes it (under discussion, unchanged here):
+What `input` carries for special fields, as the pipeline exposes it:
 
 - `x-storage` file field: the **handle**. File admission swaps a request's `content` for the stored handle before any
   step runs, and `input` follows it — never the bytes.
-- `x-encryption` field: the **plaintext** the client sent. Encryption happens in the instance-data write funnel, after
-  `input` was captured; `input` is not masked or tokenized.
+- `x-encryption` field (`encrypt` or `hash`): the **plaintext** the client sent, by decision. Encryption and hashing
+  happen in the instance-data write funnel, after `input` was captured; `input` is neither masked nor tokenized. This
+  is the same trust boundary C# scripts already have: `context.Body` of a transition's own task scripts and
+  `context.CurrentTransition.Data` carry the same plaintext. `data` holds the stored form (the `encrypt` token, the
+  `hash` digest).
+
+The write funnel protects the schema's own paths, not values. So for an output `set` entry:
+
+| Entry | Stored |
+|---|---|
+| `"$.email": "input.email"` — back to the field's own path | the token (the funnel seals it) |
+| `"$.tckn": "input.tckn"` — a `hash` field to its own path | the digest |
+| `"$.contactNote": "input.email"` — an unprotected path | **plaintext**: the copy removes the protection, and nothing at runtime refuses or logs it |
+| `"$.contactNote": "data.email"` — the stored token to another path | refused (`EncryptedValueReservedException`): a token only opens at its own path |
+
+An input block that sends `input.email` to a task (`"$.body.email": "input.email"`, e.g. to a KYC service) sends the
+plaintext, which is usually the point; `data.email` sends the token. Dynamic Expresso cannot open a stored token
+(there is no `DecryptAsync` in an expression): a task that needs the plaintext of a value stored earlier uses a C#
+mapping with `context.Instance.DecryptAsync(path)`.
+
+The runtime does not check these copies at publish: components are published independently, the master schema may
+not be published yet, and a field can become `encrypt` after the workflow. **Forge** warns while the author edits,
+when the workflow's master schema is in the project: an output `set` entry that reads an `encrypt` / `hash` field from
+`input` (or an object that contains one, e.g. `input.customer`) into a path that is not itself protected. It sees
+plain `input.a.b` / `input["a"]` reads, not values passed around inside an expression, so it is a hint rather than a
+guarantee. See [Field masking and encryption](../domain/field-masking.md).
 
 Headers and query parameters are not part of `input`.
 
