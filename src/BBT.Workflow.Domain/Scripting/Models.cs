@@ -280,6 +280,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
                 Headers = null;
                 RouteValues = null;
                 CurrentTransition = null;
+                HopInput = null;
                 Incident = null;
 
                 // Backing field, not the property: the property getter throws once disposed, and
@@ -606,6 +607,29 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     public ScriptTransitionRequest? CurrentTransition { get; private set; }
 
     /// <summary>
+    /// The raw request payload that triggered the current hop — the value declarative expressions read as
+    /// <c>input</c>. Fixed for the whole hop: the pipeline binds it once (<see cref="BindHopInput"/>, through
+    /// <c>TransitionExecutionContext.GetOrBuildScriptContextAsync</c> or the builder's <c>WithHopInput</c>), and
+    /// every step's expressions read the same value. <c>null</c> on hops with no request payload (timer, automatic
+    /// continuation, SubFlow resume) and on read paths. Not <see cref="Body"/>, which task responses merge into.
+    /// Internal: C# scripts keep <see cref="CurrentTransition"/> and <see cref="Body"/>; this only backs <c>input</c>.
+    /// </summary>
+    internal object? HopInput { get; private set; }
+
+    /// <summary>
+    /// True once a hop input was bound (<see cref="BindHopInput"/>), even when it is <c>null</c>. A context built
+    /// outside any hop leaves it false, and <c>input</c> then falls back to <see cref="CurrentTransition"/>'s data.
+    /// </summary>
+    internal bool HasHopInput { get; private set; }
+
+    /// <summary>Binds the hop's raw request payload (see <see cref="HopInput"/>); <c>null</c> is a valid value.</summary>
+    internal void BindHopInput(object? hopInput)
+    {
+        HopInput = hopInput;
+        HasHopInput = true;
+    }
+
+    /// <summary>
     /// Contains workflow and component definitions available in the current execution context.
     /// This includes reusable definitions, templates, and configuration objects.
     /// </summary>
@@ -861,6 +885,8 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             Runtime = Runtime,
             Transition = Transition,
             CurrentTransition = CurrentTransition,
+            HopInput = HopInput,
+            HasHopInput = HasHopInput,
             CancellationToken = CancellationToken,
             // Container copies, values shared; ComparerOf keeps a non-default key comparer alive
             // (today these are plain default-comparer dictionaries — behavior unchanged).
@@ -1231,6 +1257,13 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         public Builder SetCurrentTransition(ScriptTransitionRequest? value)
         {
             _context.CurrentTransition = value;
+            return this;
+        }
+
+        /// <summary>Binds the hop's raw request payload (see <see cref="ScriptContext.HopInput"/>).</summary>
+        internal Builder SetHopInput(object? hopInput)
+        {
+            _context.BindHopInput(hopInput);
             return this;
         }
 

@@ -30,8 +30,8 @@ public enum ScopeKind
 /// Not thread-safe; never shared across evaluations.
 /// </summary>
 /// <remarks>
-/// Variables: <c>data</c> the instance's latest data, <c>input</c> the transition request body (never the
-/// phase-dependent <see cref="ScriptContext.Body"/>), <c>instance</c> the read-only instance view,
+/// Variables: <c>data</c> the instance's latest data, <c>input</c> the raw request payload of the hop
+/// (<see cref="ScriptContext.HopInput"/>; never the phase-dependent <see cref="ScriptContext.Body"/>), <c>instance</c> the read-only instance view,
 /// <c>now</c> one clock reading per scope, <c>user</c> the caller (fail-closed roles), <c>context</c> the
 /// legacy <see cref="ExpressoRuleContext"/>, and in the output phase <c>result</c> the task's standard
 /// response (<c>body</c>, <c>headers</c>, <c>statusCode</c>). In both mapping phases <c>task</c> is the task's
@@ -48,7 +48,7 @@ public sealed class ExpressionScope
     /// <summary>Name of the instance-data variable.</summary>
     public const string DataVariable = "data";
 
-    /// <summary>Name of the transition-request-body variable.</summary>
+    /// <summary>Name of the hop-request-payload variable (<see cref="ScriptContext.HopInput"/>).</summary>
     public const string InputVariable = "input";
 
     /// <summary>Name of the instance-view variable.</summary>
@@ -256,7 +256,7 @@ public sealed class ExpressionScope
             return _input;
 
         _inputBuilt = true;
-        object? body = _context.CurrentTransition?.Data;
+        var body = ResolveInput();
         _input = body switch
         {
             null => null,
@@ -264,6 +264,21 @@ public sealed class ExpressionScope
             _ => RuleJsonDynamic.FromObject(body)
         };
         return _input;
+    }
+
+    /// <summary>
+    /// <c>input</c> is the raw request payload that triggered the hop (<see cref="ScriptContext.HopInput"/>), the same
+    /// value in every step. Task mappings keep the transition record's body (<see cref="ScriptContext.CurrentTransition"/>)
+    /// whenever the task step attached one, exactly as before — it is the hop's request body except where a legacy
+    /// transition <c>mapping</c> script rewrote the record or a retry reused the original record. A context built
+    /// outside any hop (no hop input bound) falls back to that record body as well.
+    /// </summary>
+    private object? ResolveInput()
+    {
+        if (_kind != ScopeKind.Condition && _context.CurrentTransition is { } currentTransition)
+            return currentTransition.Data;
+
+        return _context.HasHopInput ? _context.HopInput : _context.CurrentTransition?.Data;
     }
 
     private ExpressionInstance? InstanceView()

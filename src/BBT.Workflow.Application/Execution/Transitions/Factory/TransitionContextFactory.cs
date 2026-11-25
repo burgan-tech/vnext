@@ -173,6 +173,9 @@ public sealed class TransitionContextFactory(
             // Instance state
             Instance = data.Instance,
             Data = input.Data?.Attributes,
+            // The hop's `input`: this request's attributes. A continuation, a fired timer and a SubFlow resume
+            // carry none (their WorkflowExecutionContext has no Data), so it is null there.
+            HopInput = input.Data?.Attributes,
             InstanceKey = input.Data?.Key,
             Tags = input.Data?.Tags,
             Stage = input.Data?.Stage,

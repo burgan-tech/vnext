@@ -269,7 +269,9 @@ public sealed class FunctionAppService(
             .WithQueryParameters(queryParameters)
             .WithMetadata(metadata)
             .WithCaller(caller)
-            .BuildAsync(ct));
+            .BuildAsync(ct)
+            // `input` is the function's request body (null when the call has none — a GET).
+            .WithHopInput(body));
 
         Result inputValidation;
         using (FunctionActivityHelper.StartPhase(FunctionActivityHelper.OperationValidateRequest))

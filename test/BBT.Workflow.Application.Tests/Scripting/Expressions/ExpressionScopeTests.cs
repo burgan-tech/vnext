@@ -212,6 +212,83 @@ public sealed class ExpressionScopeTests
         (await EvalAsync(Scope(ctx), "input == null")).ShouldBe(true);
     }
 
+    // ---- input: the hop's raw request payload (ScriptContext.HopInput) ----
+
+    private static ScriptContext HopContext(object? hopInput, ScriptTransitionRequest? currentTransition = null)
+    {
+        var builder = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
+            .SetInstance(InstanceWithData(InstanceJson))
+            .SetBody(new Dictionary<string, object> { ["seat"] = "from-body" })
+            .SetHopInput(hopInput);
+        if (currentTransition is not null)
+            builder.SetCurrentTransition(currentTransition);
+        return builder.Build();
+    }
+
+    [Fact]
+    public async Task Input_ConditionScope_ReadsHopInput_WithoutAnyTransitionRecord()
+    {
+        // Resource-lock key / automatic rule on a hop where no task step attached the transition record.
+        var ctx = HopContext(JsonDocument.Parse("""{"seat":"12A"}""").RootElement);
+
+        (await EvalAsync(Scope(ctx, kind: ScopeKind.Condition), "input.seat.ToString()")).ShouldBe("12A");
+    }
+
+    [Fact]
+    public async Task Input_ConditionScope_NullHopInput_IsNull_EvenWithARecordAndABody()
+    {
+        // Automatic continuation / fired timer / SubFlow resume: the hop carries no request payload. A record body
+        // (CurrentTransition) and context.Body never stand in for it.
+        var ctx = HopContext(null, new TransitionSpy().Create(new Dictionary<string, object> { ["seat"] = "stale" }));
+
+        (await EvalAsync(Scope(ctx, kind: ScopeKind.Condition), "input == null")).ShouldBe(true);
+    }
+
+    [Fact]
+    public async Task Input_TaskMapping_KeepsTheTransitionRecordBody_ExactlyAsBefore()
+    {
+        // Pins task mappings: with the record attached they read CurrentTransition.Data, as they always did.
+        var spy = new TransitionSpy();
+        var ctx = HopContext(
+            JsonDocument.Parse("""{"amount":1}""").RootElement,
+            spy.Create(new Dictionary<string, object> { ["amount"] = 7 }));
+
+        (await EvalAsync(Scope(ctx, kind: ScopeKind.MappingInput), "input.amount.ToString()")).ShouldBe("7");
+        (await EvalAsync(Scope(ctx, kind: ScopeKind.MappingOutput), "input.amount.ToString()")).ShouldBe("7");
+    }
+
+    [Fact]
+    public async Task Input_TaskMapping_WithoutRecord_ReadsHopInput()
+    {
+        // The hop's shared context was built by a step before the record existed (e.g. the resource lock).
+        var ctx = HopContext(JsonDocument.Parse("""{"amount":3}""").RootElement);
+
+        (await EvalAsync(Scope(ctx, kind: ScopeKind.MappingInput), "input.amount.ToString()")).ShouldBe("3");
+    }
+
+    [Fact]
+    public async Task Input_ReadPath_NoHopInputNoRecord_IsNull()
+    {
+        // View / state / data function / long-poll / notification contexts bind no hop input.
+        var ctx = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
+            .SetInstance(InstanceWithData(InstanceJson))
+            .SetBody(new Dictionary<string, object> { ["amount"] = 999 })
+            .Build();
+
+        ctx.HasHopInput.ShouldBeFalse();
+        (await EvalAsync(Scope(ctx, kind: ScopeKind.Condition), "input == null")).ShouldBe(true);
+    }
+
+    [Fact]
+    public async Task Input_ParallelBranch_CarriesTheHopInput()
+    {
+        var ctx = HopContext(JsonDocument.Parse("""{"seat":"7C"}""").RootElement);
+        var branch = ctx.CreateParallelBranch();
+
+        branch.HasHopInput.ShouldBeTrue();
+        (await EvalAsync(Scope(branch, kind: ScopeKind.Condition), "input.seat.ToString()")).ShouldBe("7C");
+    }
+
     [Fact]
     public async Task Instance_ExposesIdentityAndState_CamelCase()
     {

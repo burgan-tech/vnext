@@ -88,6 +88,17 @@ public sealed class TransitionExecutionContext
     /// <summary>Gets or sets the instance data payload.</summary>
     public object? Data { get; set; }
 
+    /// <summary>
+    /// The raw request payload that triggered THIS hop — what declarative expressions read as <c>input</c> in every
+    /// step (resource lock, tasks, agent, automatic rule, timer). Captured once where the context is created (the
+    /// <c>attributes</c> of the start / transition / updateData request, or the payload an event delivery hands the
+    /// pipeline) and never touched by task outputs, unlike <see cref="Data"/> (which
+    /// <see cref="ApplyScriptContextChanges"/> rebases onto the latest instance data). <c>null</c> on hops with no
+    /// request payload: fired timers, automatic continuations, SubFlow resume. File admission replaces an
+    /// <c>x-storage</c> <c>content</c> with its handle here as it does in <see cref="Data"/>.
+    /// </summary>
+    public object? HopInput { get; set; }
+
     // Execution flags
     /// <summary>Gets the execution mode (sync/async/resume) from the original request.</summary>
     public ExecMode Mode { get; init; } = ExecMode.Sync;
@@ -221,6 +232,9 @@ public sealed class TransitionExecutionContext
         }
 
         var created = await factory(cancellationToken);
+        // One source of truth for `input`: whichever step builds the hop's shared context first, the context
+        // carries this hop's request payload — never the step's own idea of it.
+        created.BindHopInput(HopInput);
         Cache["ScriptContext"] = created;
         return created;
     }

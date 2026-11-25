@@ -3591,7 +3591,7 @@ public sealed class InstanceQueryAppService(
         }
 
         var resolved = await transitionSchemaResolver.ResolveAsync(
-            currentWorkflow, instance, transition, input.Headers, cancellationToken);
+            currentWorkflow, instance, transition, input.Headers, requestBody: null, cancellationToken);
         if (!resolved.IsSuccess)
         {
             // Only "no entry matched" is a 404; any other failure keeps its own error.

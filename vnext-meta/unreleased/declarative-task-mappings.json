@@ -30,6 +30,11 @@
         "since": "next",
         "status": "stable",
         "description": "One variable standard for every Dynamic Expresso slot: condition rules (auto-transition, view, transition/function schemas[] and contract, long-poll, state-notification rule) and string keys (CacheAside key, function cache keyExpression / generationKeyExpression, resourceLock.keyExpression) bind data, input, instance (camelCase), now and user beside the unchanged legacy context, lazily (a context-only rule resolves nothing extra). Every existing context.* expression compiles and returns the same value; assignment operators are disabled in these slots. A failing rule does not select; a key fails as before; user.roles on a hop with no caller fails (never an empty set) and a role-provider failure keeps each site's Authorization:110006 outcome. sha256 and varyKey stay available in keys. Agent tool binding.code keeps args/data(ExpandoObject)/now."
+      },
+      "uniformHopInput": {
+        "since": "next",
+        "status": "stable",
+        "description": "The expression variable input is one value per hop in every Dynamic Expresso slot: the raw request payload that triggered the hop (start attributes, transition / updateData body, the payload an event delivery hands the pipeline; a function's request body). It no longer depends on which step built the hop's context first: a resource-lock key and an automatic rule now see the request body on a transition without tasks (before: null), and a timer armed by the hop sees it too. Hops without a request payload (automatic continuation, fired timer, SubFlow resume) and read paths (view, state/data functions, long-poll, notification, schema read) see null. Transition schemas[] rules see the transition request body. Task mappings keep the transition record body exactly as before; context.Body is unchanged everywhere."
       }
     }
   },

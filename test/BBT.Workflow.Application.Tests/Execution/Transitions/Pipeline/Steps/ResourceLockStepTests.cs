@@ -85,6 +85,44 @@ public class ResourceLockStepTests
         await _scriptEngine.DidNotReceiveWithAnyArgs().CompileToInstanceAsync<ITransitionMapping>(default(ScriptCode)!);
     }
 
+    /// <summary>
+    /// `input` in a lock key is the hop's request payload (TransitionExecutionContext.HopInput), although the lock step
+    /// (order 25) builds the hop's shared context before any task step attaches the transition record.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_DynamicExpressoKey_ReadsInput_FromTheHopRequestPayload()
+    {
+        SetupScriptContextFactory();
+        _resourceLockService
+            .AcquireAsync(TestResourceKey, Arg.Any<string>(), DefaultTtl, Arg.Any<CancellationToken>())
+            .Returns(true);
+        var context = ExpressionKeyContext("\"seat:concert1:\" + input.seat");
+        context.HopInput = System.Text.Json.JsonDocument.Parse("""{"seat":"A1"}""").RootElement;
+
+        var result = await StepWithExpressions().ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        await _resourceLockService.Received(1)
+            .AcquireAsync(TestResourceKey, Arg.Any<string>(), DefaultTtl, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DynamicExpressoKey_InputIsNull_OnAHopWithoutRequestPayload()
+    {
+        SetupScriptContextFactory();
+        _resourceLockService
+            .AcquireAsync("seat:none", Arg.Any<string>(), DefaultTtl, Arg.Any<CancellationToken>())
+            .Returns(true);
+        var context = ExpressionKeyContext("input == null ? \"seat:none\" : \"seat:some\"");
+        context.Data = new Dictionary<string, object> { ["seat"] = "from-data" }; // never stands in for input
+
+        var result = await StepWithExpressions().ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        await _resourceLockService.Received(1)
+            .AcquireAsync("seat:none", Arg.Any<string>(), DefaultTtl, Arg.Any<CancellationToken>());
+    }
+
     [Fact]
     public async Task ExecuteAsync_DynamicExpressoKey_EmptyResult_FailsWithKeyEmpty()
     {

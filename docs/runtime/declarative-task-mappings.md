@@ -30,7 +30,7 @@ A task binding (`onExecuteTask` entry of a state `onEntries`/`onExits`, a transi
 | Variable | Meaning |
 |---|---|
 | `data` | the instance's latest data |
-| `input` | the transition request body (never the task payload; no fallback) |
+| `input` | the raw request payload of the hop — the transition request body (never the task payload, never `context.Body`); see [`input` per trigger](#input-per-trigger) |
 | `instance` | read-only instance view, camelCase members: `id`, `key`, `flow`, `version`, `currentState`, `effectiveState`, `effectiveStateType`, `effectiveStateSubType`, `effectiveStatus`, `type` (`R`/`S`/`P`), `data` |
 | `now` | one timestamp per mapping |
 | `user` | `available` (bool), `roles` (string[]), `hasRole(string)` — see [User](#user) |
@@ -266,15 +266,46 @@ Changes for an existing expression in a condition or key slot: assignment operat
 compiles; nothing in a rule or a key should write), and the compile cache keys these slots under their new signature
 names (`condition`, `key`), so the first evaluation after an upgrade compiles once.
 
-`input` per site — the transition request body as the shared script context of the hop carries it
-(`ScriptContext.CurrentTransition`), never `context.Body`, no fallback:
+#### `input` per trigger
 
-| Site | `input` |
+`input` is **one value per hop**: the raw request payload that triggered the hop
+(`TransitionExecutionContext.HopInput`), captured when the hop's context is created and never touched by task
+outputs. Every step of the hop reads the same value — resource-lock key (order 25), task mappings and CacheAside keys
+(30 / 40 / 60), agent prompt and decision (65), automatic `rule` (80), a timer armed by the hop (90) — whichever step
+built the hop's shared script context first. It is never the merged instance data and never a task response
+(`context.Body` keeps its meaning, unchanged).
+
+| Trigger | `input` |
 |---|---|
-| CacheAside `key` of a task run by a transition's `onExecutionTasks` or a state's `onEntries` / `onExits` | the transition request body (`null` when the hop has none) |
-| Automatic-transition `rule` | the request body when a task step of the same hop (`onExecutionTasks`, `onExits`, `onEntries` with tasks) built the hop's shared context before the rule; `null` otherwise. Use `context.Body` for the hop's request data regardless |
-| Resource-lock `keyExpression` | `null`: the lock step (order 25) builds the hop's context before any task step. Use `data` or `context.Body` |
-| View, schema / contract, function, long-poll and state-notification rules; function cache keys; CacheAside in a function or extension | `null` (no transition request); a function's request body is `context.Body` |
+| Manual transition (sync, or the async-accept job replaying it) | the request body (`attributes`) |
+| Instance start | the start request's `attributes` (the start hop and the workflow `timeout.mapping` armed by it) |
+| `updateData` | its body |
+| Event-triggered transition | the payload the event path hands the pipeline (the event mapping's result) |
+| Retry | the retry request's body (`null` when it has none) |
+| Fired timer (scheduled transition, workflow timeout) | `null` |
+| Automatic continuation hop (the auto transitions chained after a hop) | `null` — a continuation carries no new request payload |
+| SubFlow resume (completion, fault, cancellation), long-poll ack resume | `null` |
+| Function call | the function's request body (contract `rule`, input `schemas[]`, `keyExpression` / `generationKeyExpression`, and its tasks' mappings); `null` without a body |
+| Transition `schemas[]` rule | the transition request body (`null` on the schema read path, which has no request) |
+| Read paths: view selection, state / data functions, long-poll and state-notification rules, function discovery | `null` |
+
+A rule therefore tells the triggering hop from a continuation with `input == null`, and a resource-lock key can use
+the request directly (`"seat:" + input.seat`).
+
+Task mappings (declarative `input` / `output` blocks) keep reading the transition record body
+(`context.CurrentTransition.Data`) when the task step attached the record, exactly as before; it is the hop's request
+body except where a legacy transition `mapping` script rewrote the record body, or a retry reused the original record
+(then the original body). Without a record (the hop's context was built earlier, e.g. by the resource lock) they read
+the hop's `input`.
+
+What `input` carries for special fields, as the pipeline exposes it (under discussion, unchanged here):
+
+- `x-storage` file field: the **handle**. File admission swaps a request's `content` for the stored handle before any
+  step runs, and `input` follows it — never the bytes.
+- `x-encryption` field: the **plaintext** the client sent. Encryption happens in the instance-data write funnel, after
+  `input` was captured; `input` is not masked or tokenized.
+
+Headers and query parameters are not part of `input`.
 
 Missing values: `data.x?.y`, a missing member or index reads as `null` (a comparison is then just false); a conversion
 of a missing value (`data.nope.AsDouble()`) throws, and a throwing rule **does not select** (not satisfied / next entry

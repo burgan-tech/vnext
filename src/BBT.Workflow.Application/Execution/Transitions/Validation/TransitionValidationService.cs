@@ -113,7 +113,7 @@ public class TransitionValidationService(
 
         // Rule-based selection: the first matching `schemas` entry wins; none matching is a rejection.
         var resolved = await schemaResolver.ResolveAsync(
-            context.Workflow, context.Instance, context.Transition, context.Headers, cancellationToken);
+            context.Workflow, context.Instance, context.Transition, context.Headers, context.DataElement, cancellationToken);
         if (!resolved.IsSuccess)
             return Result.Fail(resolved.Error);
         if (resolved.Value is null)
@@ -210,6 +210,7 @@ public class TransitionValidationService(
             // Instance state
             Instance = instance,
             Data = data,
+            HopInput = data,
 
             // Flags
             IsReentry = false, // Start transitions are never re-entry
