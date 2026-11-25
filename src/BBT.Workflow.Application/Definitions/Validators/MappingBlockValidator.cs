@@ -88,9 +88,15 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
                         && extension.Task is not null)
                         ValidateBinding(extension.Task, "task", result.ValidationErrors, result.Warnings);
                     break;
+                default:
+                    break; // other component types carry no task bindings
             }
         }
-        catch (Exception ex) when (ex is JsonException or ArgumentException)
+        catch (JsonException)
+        {
+            // Reported by the component's own validator.
+        }
+        catch (ArgumentException)
         {
             // Reported by the component's own validator.
         }
@@ -230,8 +236,8 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
             }
 
             var error = isInput
-                ? compiler.Compile<InputFn>(expression, signature) is { IsSuccess: false } f1 ? f1.Error.Message : null
-                : compiler.Compile<OutputFn>(expression, signature) is { IsSuccess: false } f2 ? f2.Error.Message : null;
+                ? CompileError<InputFn>(compiler, expression, signature)
+                : CompileError<OutputFn>(compiler, expression, signature);
             if (error is not null)
                 Add(errors, keyPath, $"The expression does not compile: {error}");
         }
@@ -268,4 +274,11 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
 
     private static void Add(IList<ValidationResult> errors, string location, string message) =>
         errors.Add(new ValidationResult($"{location}: {message}", [location]));
+
+    private static string? CompileError<TDelegate>(IExpressionCompiler compiler, string expression, ExpressionSignature signature)
+        where TDelegate : Delegate
+    {
+        var compiled = compiler.Compile<TDelegate>(expression, signature);
+        return compiled.IsSuccess ? null : compiled.Error.Message;
+    }
 }

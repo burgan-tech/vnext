@@ -65,7 +65,8 @@ public sealed class ExpressionAgentCandidates
     public int count => _items.Length;
 
     /// <summary>The candidate transition keys, in declaration order.</summary>
-    public string[] keys => _items.Select(c => c.key).ToArray();
+    // An array on purpose: decision expressions use candidates.keys[0] and keys.Length.
+    public string[] keys => _items.Select(c => c.key).ToArray(); // skipcq: CS-P1026
 
     /// <summary>The candidate at <paramref name="index"/>.</summary>
     public ExpressionAgentCandidate this[int index] => _items[index];

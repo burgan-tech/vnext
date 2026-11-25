@@ -241,8 +241,9 @@ public sealed class DeclarativeTaskMappingRunner(
         WorkflowTask task, DeclarativeMappingPlan plan, ExpressionScope scope, JsonObject root, TaskMappingSite site, string phase,
         CancellationToken ct)
     {
-        foreach (var entry in plan.Set)
+        for (var i = 0; i < plan.Set.Count; i++)
         {
+            var entry = plan.Set[i];
             ct.ThrowIfCancellationRequested();
             var prepared = await scope.PrepareAsync(entry.UsedIdentifiers);
             if (!prepared.IsSuccess)
@@ -461,7 +462,7 @@ internal sealed class DeclarativeMappingPlan
     public JsonPath? Into { get; }
 
     /// <summary>The <c>set</c> entries in declaration order.</summary>
-    public SetEntry[] Set { get; }
+    public IReadOnlyList<SetEntry> Set { get; }
 
     /// <summary>Input only: the task-config fields some target writes a path INSIDE of (not the field as a whole).</summary>
     public IReadOnlySet<string> PartiallyTargeted { get; }

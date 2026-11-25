@@ -65,10 +65,15 @@ public sealed class ValueSlotExpressionEvaluator(IExpressionCompiler compiler, T
         if (text is null)
             return decodeError;
 
-        var compiled = kind == ValueSlotKind.AgentDecision
-            ? compiler.Compile<DecisionFn>(text, ExpressionSignatures.AgentDecision) is { IsSuccess: false } f1 ? f1.Error.Message : null
-            : compiler.Compile<ValueFn>(text, ExpressionSignatures.ValueSlot) is { IsSuccess: false } f2 ? f2.Error.Message : null;
-        return compiled;
+        return kind == ValueSlotKind.AgentDecision
+            ? CompileErrorOf(compiler.Compile<DecisionFn>(text, ExpressionSignatures.AgentDecision))
+            : CompileErrorOf(compiler.Compile<ValueFn>(text, ExpressionSignatures.ValueSlot));
+    }
+
+    private static string? CompileErrorOf<TDelegate>(Result<CompiledExpression<TDelegate>> compiled)
+        where TDelegate : Delegate
+    {
+        return compiled.IsSuccess ? null : compiled.Error.Message;
     }
 
     /// <summary>Evaluates a timer / timeout expression and converts its value (<see cref="ToTimerSchedule"/>).</summary>
@@ -156,7 +161,7 @@ public sealed class ValueSlotExpressionEvaluator(IExpressionCompiler compiler, T
         if (evaluated.IsSuccess || evaluated.Error.Code == WorkflowErrors.CallerRolesUnavailable().Code)
             return evaluated;
 
-        T value;
+        T value = default!;
         try
         {
             value = await script();
@@ -286,7 +291,7 @@ public sealed class ValueSlotExpressionEvaluator(IExpressionCompiler compiler, T
     private static string? Decode(ScriptCode script, out string? error)
     {
         error = null;
-        string text;
+        var text = string.Empty;
         try
         {
             text = script.DecodedCode.Trim();

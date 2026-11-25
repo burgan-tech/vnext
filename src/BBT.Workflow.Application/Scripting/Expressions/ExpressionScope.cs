@@ -227,12 +227,14 @@ public sealed class ExpressionScope
         return values;
     }
 
-    private static readonly object BoxedDefaultDateTimeOffset = default(DateTimeOffset);
+    private static readonly object BoxedDefaultDateTimeOffset = DateTimeOffset.MinValue;
 
-    private static object? DefaultOf(Type type) =>
-        type == typeof(DateTimeOffset) ? BoxedDefaultDateTimeOffset
-        : type.IsValueType ? Activator.CreateInstance(type)
-        : null;
+    private static object? DefaultOf(Type type)
+    {
+        if (type == typeof(DateTimeOffset))
+            return BoxedDefaultDateTimeOffset;
+        return type.IsValueType ? Activator.CreateInstance(type) : null;
+    }
 
     private object? Materialize(string name) => name switch
     {
@@ -353,7 +355,8 @@ public sealed class ExpressionUser
 
     /// <summary>The caller's roles (empty when the caller holds none).</summary>
     /// <exception cref="CallerRolesUnavailableException">No caller (<see cref="available"/> is false).</exception>
-    public string[] roles => (string[])_scope.UserRoles().Clone();
+    // An array on purpose: expressions use user.roles.Length and indexers, and the clone keeps the resolved set immutable.
+    public string[] roles => (string[])_scope.UserRoles().Clone(); // skipcq: CS-P1026
 
     /// <summary>True when the caller holds <paramref name="role"/> (ordinal).</summary>
     /// <exception cref="CallerRolesUnavailableException">No caller (<see cref="available"/> is false).</exception>

@@ -17,16 +17,17 @@ namespace BBT.Workflow.Tasks.Mapping;
 public static class TaskMappingRouter
 {
     /// <summary>The kind that handles <paramref name="binding"/>'s input phase.</summary>
-    public static TaskMappingKind InputKind(OnExecuteTask binding) =>
-        HasScript(binding)
-            ? TaskMappingKind.Script
-            : binding.Input is not null ? TaskMappingKind.Declarative : TaskMappingKind.PassThrough;
+    public static TaskMappingKind InputKind(OnExecuteTask binding) => KindOf(binding, binding.Input);
 
     /// <summary>The kind that handles <paramref name="binding"/>'s output phase.</summary>
-    public static TaskMappingKind OutputKind(OnExecuteTask binding) =>
-        HasScript(binding)
-            ? TaskMappingKind.Script
-            : binding.Output is not null ? TaskMappingKind.Declarative : TaskMappingKind.PassThrough;
+    public static TaskMappingKind OutputKind(OnExecuteTask binding) => KindOf(binding, binding.Output);
+
+    private static TaskMappingKind KindOf(OnExecuteTask binding, MappingBlock? block)
+    {
+        if (HasScript(binding))
+            return TaskMappingKind.Script;
+        return block is not null ? TaskMappingKind.Declarative : TaskMappingKind.PassThrough;
+    }
 
     private static bool HasScript(OnExecuteTask binding) => binding.Mapping is { HasMappingCode: true };
 }

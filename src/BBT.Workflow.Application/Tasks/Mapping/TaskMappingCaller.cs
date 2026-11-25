@@ -24,7 +24,7 @@ public static class TaskMappingCaller
         IEnumerable<OnExecuteTask> bindings,
         CancellationToken cancellationToken)
     {
-        if (callerAccessorFactory is null || !bindings.Any(b => b.RunsDeclarativeMapping))
+        if (callerAccessorFactory is null || bindings.All(b => !b.RunsDeclarativeMapping))
             return null;
 
         var caller = callerAccessorFactory.ForHop(context.Actor, context.Headers, cancellationToken);

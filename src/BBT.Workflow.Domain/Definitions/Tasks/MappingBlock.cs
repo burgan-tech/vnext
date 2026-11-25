@@ -60,7 +60,7 @@ public sealed class OrderedStringMap : IReadOnlyDictionary<string, string>
 /// </summary>
 public sealed class OrderedStringMapJsonConverter : JsonConverter<IReadOnlyDictionary<string, string>>
 {
-    public override IReadOnlyDictionary<string, string>? Read(
+    public override IReadOnlyDictionary<string, string>? Read( // skipcq: CS-R1138 — JsonConverter's signature
         ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         if (reader.TokenType == JsonTokenType.Null)
