@@ -177,6 +177,53 @@ public sealed class DeclarativeTaskMappingRunnerTests
     }
 
     [Fact]
+    public async Task Output_MethodCallOnAJsonValue_FailsTheMapping_NeverSkips()
+    {
+        // input.name is present, so a CLR method call on it is not a missing source: it used to be skipped silently
+        // (the call fell back to a member read, invoking null threw the binder's "null reference", read as RF-1).
+        var logger = new CapturingLogger();
+        using var body = JsonDocument.Parse("""{"name":"Ada"}""");
+        var ctx = Context(Http(), output: Block(set: [("$.v", "input.name.Substring(40)")]), transitionBody: body.RootElement);
+
+        var result = await Runner().ProcessOutputAsync(ctx.Task, ResultWith("{}"), ctx, CancellationToken.None,
+            Site(logger));
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.TaskExecution);
+        result.Error.Message.ShouldBe(
+            "Http task declarative output mapping failed: set['$.v']: 'Substring' is not a method of this JSON String value; convert it first, e.g. .ToString().Substring(...)");
+        logger.Events.ShouldHaveSingleItem().Id.ShouldBe(TaskDeclarativeMappingFailedEventId);
+    }
+
+    [Fact]
+    public async Task Output_MethodCallAfterConversion_Writes_AndMissingIntermediateStillSkips()
+    {
+        using var body = JsonDocument.Parse("""{"name":"Ada"}""");
+        var ctx = Context(Http(), output: Block(set:
+        [
+            ("$.v", "input.name.ToString().Substring(0, 2)"),
+            ("$.id", "data.missing.id"),
+            ("$.up", "data.missing.name.ToUpper()")
+        ]), transitionBody: body.RootElement);
+
+        var delta = await OutputAsync(ctx, ResultWith("{}"));
+
+        Json(delta).ShouldBe("""{"v":"Ad"}""");
+    }
+
+    [Fact]
+    public async Task Output_MethodCallOnInstanceData_FailsTheMapping()
+    {
+        // data is always a borrowed view, whatever the input body is.
+        var ctx = Context(Http(), output: Block(set: [("$.v", "data.customer.name.ToUpper()")]));
+
+        var result = await Runner().ProcessOutputAsync(ctx.Task, ResultWith("{}"), ctx, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Message.ShouldContain("'ToUpper' is not a method of this JSON String value");
+    }
+
+    [Fact]
     public async Task Output_EncryptedToken_StaysToken()
     {
         // RF-2: an x-encryption field holds its stored token; reading it and writing it back keeps the token (the
@@ -876,14 +923,15 @@ public sealed class DeclarativeTaskMappingRunnerTests
         MappingBlock? output = null,
         string instanceJson = """{"customer":{"id":7,"name":"Ada"}}""",
         ICallerAccessor? caller = null,
-        OnExecuteTask? binding = null)
+        OnExecuteTask? binding = null,
+        object? transitionBody = null)
     {
         binding ??= OnExecuteTask.Create(1, task, null, input: input, output: output);
         var scriptContext = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
             .SetRuntime(Substitute.For<IRuntimeInfoProvider>())
             .SetInstance(InstanceWithData(instanceJson))
             .SetCurrentTransition(new ScriptTransitionRequest(
-                () => new Dictionary<string, object> { ["amount"] = 7 },
+                () => transitionBody ?? new Dictionary<string, object> { ["amount"] = 7 },
                 () => new Dictionary<string, object?>()))
             .Build();
         return new TaskExecutorContext(task, binding, scriptContext, null, TaskTrigger.OnExecute, TaskExecutionOrigin.Flow)
