@@ -43,4 +43,20 @@ public class DeclarativeBlockContractTests
         subFlow.Input.ShouldNotBeNull();
         subFlow.Output.ShouldNotBeNull();
     }
+
+    [Fact]
+    public void SubFlow_InputOutput_RoundTrip()
+    {
+        var subFlow = Read<BBT.Workflow.Definitions.SubFlow>("""{"type":"S","process":{"key":"p","domain":"d","flow":"sys-flows","version":"1.0.0"},"input":{"select":"$.data.c","into":"$.attributes.c","set":{"$.a":"1"}},"output":{"set":{"$.b":"2"}}}""");
+
+        var again = Read<BBT.Workflow.Definitions.SubFlow>(JsonSerializer.Serialize(subFlow, JsonSerializerConstants.JsonOptions));
+
+        again.Mapping.ShouldBeNull();
+        again.Input.ShouldNotBeNull();
+        again.Input!.Select.ShouldBe("$.data.c");
+        again.Input.Into.ShouldBe("$.attributes.c");
+        again.Input.Set!["$.a"].ShouldBe("1");
+        again.Output.ShouldNotBeNull();
+        again.Output!.Set!["$.b"].ShouldBe("2");
+    }
 }

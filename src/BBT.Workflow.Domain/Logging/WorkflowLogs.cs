@@ -967,6 +967,25 @@ public static partial class WorkflowLogs
         string errorMessage);
 
     /// <summary>
+    /// Logs when a SubFlow state's declarative <c>input</c> block fails (an expression that throws, a path that cannot be
+    /// written, a block that does not build, <c>tags</c> that is not an array of strings, caller roles that could not be
+    /// resolved for <c>user</c>). The SubFlow start fails before any child is created, with the same error a failing
+    /// <c>subFlow.mapping</c> InputHandler returns; a block has no exception, so this line is its counterpart of the
+    /// script's stack trace.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10278,
+        Level = LogLevel.Error,
+        Message = "SubFlow declarative input mapping failed. Workflow={WorkflowKey}, StateKey={StateKey}, SubFlowKey={SubFlowKey}, InstanceId={InstanceId}, Error={ErrorMessage}")]
+    public static partial void SubFlowDeclarativeInputFailed(
+        this ILogger logger,
+        string workflowKey,
+        string stateKey,
+        string subFlowKey,
+        Guid instanceId,
+        string errorMessage);
+
+    /// <summary>
     /// Logs when a declarative task mapping skips an entry because its source is missing (RF-1): a <c>select</c> path
     /// that reads nothing, or a <c>set</c> expression that reads through a missing intermediate. Carries the path or
     /// <c>set</c> key, never the value. The mapping continues; nothing is written for that entry.
