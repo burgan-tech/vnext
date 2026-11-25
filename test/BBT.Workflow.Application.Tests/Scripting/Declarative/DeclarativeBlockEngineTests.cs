@@ -43,6 +43,17 @@ public sealed class DeclarativeBlockEngineTests
     }
 
     [Fact]
+    public void SubFlowInput_SelectNeedsInto_AndIntoNeedsSelect()
+    {
+        DeclarativeMappingPlan.Build(_compiler, Block(select: "$.data.x"), DeclarativeSiteKind.SubFlowInput)
+            .IsSuccess.ShouldBeFalse();
+        DeclarativeMappingPlan.Build(_compiler, Block(into: "$.attributes"), DeclarativeSiteKind.SubFlowInput)
+            .IsSuccess.ShouldBeFalse();
+        DeclarativeMappingPlan.Build(_compiler, Block(select: "$.data.x", into: "$.attributes"), DeclarativeSiteKind.SubFlowInput)
+            .IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
     public void SubFlowInput_KeyMustBeWholeMember()
     {
         var plan = DeclarativeMappingPlan.Build(

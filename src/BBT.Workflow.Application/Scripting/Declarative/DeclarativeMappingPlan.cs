@@ -166,6 +166,14 @@ internal sealed class DeclarativeMappingPlan
             into = target.Value!;
         }
 
+        // A SubFlow input must catch at publish what a task input only fails at run time: one half of a select/into pair.
+        if (kind == DeclarativeSiteKind.SubFlowInput && (select is null) != (into is null))
+        {
+            return Invalid(select is null
+                ? $"'into' {into!.Text} needs a 'select': a SubFlow input has no default source."
+                : $"'select' {select.Text} needs an 'into' naming the start-request path it copies to.");
+        }
+
         if (kind == DeclarativeSiteKind.TransitionOutput && into is not null && select is null)
             return Invalid($"'into' {into.Text} needs a 'select': a transition output has no default source.");
 
