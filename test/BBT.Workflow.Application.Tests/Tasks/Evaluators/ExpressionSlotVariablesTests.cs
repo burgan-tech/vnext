@@ -238,6 +238,32 @@ public sealed class ExpressionSlotVariablesTests
     }
 
     [Fact]
+    public async Task Condition_MethodCallOnAJsonValue_FailsAndDoesNotSelect()
+    {
+        // A CLR method on a JSON value is not called: it fails like any throwing rule, with a message that says why.
+        var input = JsonDocument.Parse("""{"name":"Ada"}""").RootElement;
+
+        var result = await Condition().EvaluateAsync(Expr("input.name.ToUpper() == \"ADA\""), Context(transitionInput: input));
+        var converted = await Condition().EvaluateAsync(Expr("input.name.ToString().ToUpper() == \"ADA\""),
+            Context(transitionInput: input));
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.TransitionRuleFailed);
+        result.Error.Message.ShouldContain("convert it first");
+        converted.IsSuccess.ShouldBeTrue(converted.IsSuccess ? null : converted.Error.Message);
+        converted.Value.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Key_MethodCallOnAJsonValue_Fails()
+    {
+        var result = await Key().EvaluateAsync(Expr("data.customer.id.ToUpper()"), Context());
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Message.ShouldContain("convert it first");
+    }
+
+    [Fact]
     public async Task Condition_UserRoles_OnHopWithoutCaller_FailsAndDoesNotSelect()
     {
         var result = await Condition().EvaluateAsync(Expr("user.hasRole(\"approver\")"), Context());

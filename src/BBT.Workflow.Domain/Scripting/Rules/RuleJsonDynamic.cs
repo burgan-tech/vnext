@@ -61,7 +61,9 @@ public sealed class RuleJsonDynamic : DynamicObject
     /// borrowed view beyond the scope; use <see cref="FromJsonElement"/> when the value must outlive it.
     /// A borrowed view is also lenient where a legacy view fails: a member of a non-object, or an index that is out
     /// of range or of the wrong kind, reads as missing (<c>null</c>) — a declarative mapping's missing source writes
-    /// nothing (RF-1). Views from <see cref="FromJsonElement"/> / <see cref="FromObject"/> keep failing as before.
+    /// nothing (RF-1). A call of a method the view does not declare (<c>input.name.Substring(1)</c>) is not lenient: it
+    /// throws <see cref="InvalidOperationException"/> telling the author to convert first (<c>.ToString()</c>).
+    /// Views from <see cref="FromJsonElement"/> / <see cref="FromObject"/> keep failing as before.
     /// </summary>
     public static RuleJsonDynamic Borrow(JsonElement element) => new(element, borrowed: true);
 
@@ -214,7 +216,15 @@ public sealed class RuleJsonDynamic : DynamicObject
 
         if (Kind != JsonValueKind.Array || !string.Equals(binder.Name, "Contains", StringComparison.OrdinalIgnoreCase) ||
             args.Length != 1)
+        {
+            // A Borrow (declarative scope) view fails here: returning false would fall back to a member read, which a
+            // borrowed view answers with null, and invoking null reads as a missing source — the call silently skipped.
+            // The declared CLR methods (AsDouble, ToString, …) bind before this runs; legacy views keep the binder error.
+            if (_borrowed)
+                throw new InvalidOperationException(
+                    $"'{binder.Name}' is not a method of this JSON {Kind} value; convert it first, e.g. .ToString().{binder.Name}(...)");
             return base.TryInvokeMember(binder, args, out result);
+        }
 
         var needle = args[0];
         foreach (var item in _element.EnumerateArray())
