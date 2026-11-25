@@ -11,7 +11,7 @@ namespace BBT.Workflow.Definitions;
 public sealed class OnExecuteTask
 {
     private const int VariableKeyMaxLength = 100;
-    private static readonly Regex VariableKeyPattern = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
+    private static readonly Regex VariableKeyPattern = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled, TimeSpan.FromMilliseconds(100));
 
     private OnExecuteTask()
     {

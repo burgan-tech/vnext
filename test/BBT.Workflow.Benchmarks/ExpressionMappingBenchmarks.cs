@@ -130,18 +130,18 @@ public class ExpressionMappingBenchmarks
             NullLogger<ScriptEngine>.Instance);
 
         _warmMapping = _engine
-            .CompileToInstanceAsync<IMapping>(ScriptCode.FromNative(string.Format(MappingBody, "WarmProbe")))
+            .CompileToInstanceAsync<IMapping>(ScriptCode.FromNative(string.Format(MappingBody, "WarmProbe")), cancellationToken: CancellationToken.None)
             .GetAwaiter().GetResult();
 
         // Warm the expression caches and fail loudly if an expression does not evaluate.
-        var conditionResult = _condition.EvaluateAsync(_conditionScript, _context).GetAwaiter().GetResult();
+        var conditionResult = _condition.EvaluateAsync(_conditionScript, _context, CancellationToken.None).GetAwaiter().GetResult();
         if (!conditionResult.IsSuccess)
             throw new InvalidOperationException("DeConditionWarm expression failed: " + conditionResult.Error.Message);
         _outputScripts = Array.ConvertAll(OutputExpressions,
             e => ScriptCode.FromNative(e, ConditionScriptLocations.DynamicExpresso));
         foreach (var script in _outputScripts)
         {
-            var r = _value.EvaluateAsync(script, _context).GetAwaiter().GetResult();
+            var r = _value.EvaluateAsync(script, _context, CancellationToken.None).GetAwaiter().GetResult();
             if (!r.IsSuccess)
                 throw new InvalidOperationException("DeOutputMapping3Warm expression failed: " + r.Error.Message);
         }
@@ -152,7 +152,7 @@ public class ExpressionMappingBenchmarks
             .GetAwaiter().GetResult();
         if (!declWarm.IsSuccess || declWarm.Value is null)
             throw new InvalidOperationException("DeclarativeOutputWarm failed: " + (declWarm.IsSuccess ? "null delta" : declWarm.Error.Message));
-        var valueResult = _value.EvaluateAsync(_valueScript, _context).GetAwaiter().GetResult();
+        var valueResult = _value.EvaluateAsync(_valueScript, _context, CancellationToken.None).GetAwaiter().GetResult();
         if (!valueResult.IsSuccess)
             throw new InvalidOperationException("DeValueWarm expression failed: " + valueResult.Error.Message);
     }
@@ -172,10 +172,10 @@ public class ExpressionMappingBenchmarks
 
     [Benchmark]
     public object DeConditionWarm()
-        => _condition.EvaluateAsync(_conditionScript, _context).GetAwaiter().GetResult();
+        => _condition.EvaluateAsync(_conditionScript, _context, CancellationToken.None).GetAwaiter().GetResult();
 
     [Benchmark]
-    public object DeValueWarm() => _value.EvaluateAsync(_valueScript, _context).GetAwaiter().GetResult();
+    public object DeValueWarm() => _value.EvaluateAsync(_valueScript, _context, CancellationToken.None).GetAwaiter().GetResult();
 
     [Benchmark]
     public ScriptResponse RoslynOutputHandlerWarm()
@@ -208,7 +208,7 @@ public class ExpressionMappingBenchmarks
     {
         object? last = null;
         foreach (var script in _outputScripts)
-            last = _value.EvaluateAsync(script, _context).GetAwaiter().GetResult();
+            last = _value.EvaluateAsync(script, _context, CancellationToken.None).GetAwaiter().GetResult();
         return last!;
     }
 }
@@ -321,7 +321,7 @@ public class ExpressionMappingColdBenchmarks
     {
         var name = "ColdProbe" + Interlocked.Increment(ref _uniqueCounter);
         return _engine
-            .CompileToInstanceAsync<IMapping>(ScriptCode.FromNative(string.Format(ExpressionMappingBenchmarks.MappingBody, name)))
+            .CompileToInstanceAsync<IMapping>(ScriptCode.FromNative(string.Format(ExpressionMappingBenchmarks.MappingBody, name)), cancellationToken: CancellationToken.None)
             .GetAwaiter().GetResult();
     }
 }
