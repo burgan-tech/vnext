@@ -2185,6 +2185,51 @@ public class WorkflowValidatorTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
+    public void AutoTransition_WithOutput_IsRejected()
+    {
+        var workflow = WorkflowWithTransition($$"""
+            "triggerType": "automatic",
+            "rule": {{TsRule}},
+            "output": { "set": { "$.x": "now" } }
+            """);
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldContain(e => e.ErrorMessage!.Contains("Auto transition")
+            && e.ErrorMessage.Contains("cannot have an output definition")
+            && e.MemberNames.Any(m => m.EndsWith(".output")));
+    }
+
+    [Fact]
+    public void ScheduledTransition_WithOutput_IsRejected()
+    {
+        var workflow = WorkflowWithTransition($$"""
+            "triggerType": "scheduled",
+            "timer": { "reset": "N", "duration": "PT1M" },
+            "output": { "set": { "$.x": "now" } }
+            """);
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldContain(e => e.ErrorMessage!.Contains("Scheduled transition")
+            && e.ErrorMessage.Contains("cannot have an output definition")
+            && e.MemberNames.Any(m => m.EndsWith(".output")));
+    }
+
+    [Fact]
+    public void ManualTransition_WithOutput_IsNotRejectedAsAnOutputDefinition()
+    {
+        var workflow = WorkflowWithTransition("""
+            "triggerType": "manual",
+            "output": { "set": { "$.x": "now" } }
+            """);
+
+        var result = _validator.Validate(workflow);
+
+        result.ValidationErrors.ShouldNotContain(e => e.ErrorMessage!.Contains("cannot have an output definition"));
+    }
+
+    [Fact]
     public void ScheduledTransition_WithSchemas_IsRejected()
     {
         var workflow = WorkflowWithTransition($$"""

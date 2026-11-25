@@ -197,6 +197,31 @@ public sealed class TransitionDataMapperDeclarativeTests
         result.Error.Code.ShouldBe(WorkflowErrorCodes.ExecutionStepFailed);
     }
 
+    [Fact]
+    public async Task OutputBlock_RunsUnderTheScriptExecuteSpan_LikeTheScript()
+    {
+        var (workflow, transition) = WorkflowWithTransition(output: Block(set: [("$.customerName", "input.name")]));
+        using var spans = new BBT.Workflow.Application.Tests.Telemetry.TraceSpanCollector("BBT.Workflow.Scripting");
+
+        (await Map(workflow, transition)).IsSuccess.ShouldBeTrue();
+
+        var span = spans.Spans.Where(a => a.DisplayName == "Script.Execute").ShouldHaveSingleItem();
+        span.GetTagItem(BBT.Workflow.Logging.TelemetryConstants.TagNames.ScriptKind).ShouldBe("transitionMapping");
+        span.Status.ShouldNotBe(System.Diagnostics.ActivityStatusCode.Error);
+    }
+
+    [Fact]
+    public async Task OutputBlockFailure_MarksTheScriptExecuteSpanAsError()
+    {
+        var (workflow, transition) = WorkflowWithTransition(output: Block(set: [("$.x", "int.Parse(\"not-a-number\")")]));
+        using var spans = new BBT.Workflow.Application.Tests.Telemetry.TraceSpanCollector("BBT.Workflow.Scripting");
+
+        (await Map(workflow, transition)).IsSuccess.ShouldBeFalse();
+
+        var span = spans.Spans.Where(a => a.DisplayName == "Script.Execute").ShouldHaveSingleItem();
+        span.Status.ShouldBe(System.Diagnostics.ActivityStatusCode.Error);
+    }
+
     private Task<BBT.Aether.Results.Result<object?>> Map(
         Definitions.Workflow workflow, Transition transition, ExecutionActor? actor = null) =>
         CreateMapper().MapTransitionDataAsync(

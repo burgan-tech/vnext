@@ -52,6 +52,9 @@ public sealed class TransitionDataMapper(
 
     private const string OutputPhase = "output";
 
+    /// <summary>The <c>Script.Execute</c> span's script kind, shared by the mapping script and the output block.</summary>
+    internal const string TransitionMappingScriptKind = "transitionMapping";
+
     private readonly IExpressionCompiler _compiler = expressionCompiler ?? ExpressionCompiler.Shared;
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 
@@ -86,9 +89,33 @@ public sealed class TransitionDataMapper(
     }
 
     /// <summary>
-    /// Runs the transition's declarative <c>output</c> block into an empty delta and returns it (null when empty).
+    /// Runs the block under the same <c>Script.Execute</c> span (kind <c>transitionMapping</c>) a mapping script opens,
+    /// so a slow or failing block sits in the trace tree exactly where the script would; a failure marks it the same way.
     /// </summary>
     private async Task<Result<object?>> ExecuteOutputBlockAsync(
+        object? payload,
+        Transition transition,
+        MappingBlock block,
+        Definitions.Workflow workflow,
+        Instance instance,
+        IReadOnlyDictionary<string, string?>? headers,
+        ExecutionActor? actor,
+        CancellationToken cancellationToken)
+    {
+        using var activity = ScriptActivityHelper.StartExecuteActivity(TransitionMappingScriptKind);
+
+        var result = await RunOutputBlockAsync(
+            payload, transition, block, workflow, instance, headers, actor, cancellationToken);
+        if (!result.IsSuccess)
+            activity.SetResultError(result.Error.Code, result.Error.Message);
+
+        return result;
+    }
+
+    /// <summary>
+    /// Runs the transition's declarative <c>output</c> block into an empty delta and returns it (null when empty).
+    /// </summary>
+    private async Task<Result<object?>> RunOutputBlockAsync(
         object? payload,
         Transition transition,
         MappingBlock block,
@@ -162,7 +189,7 @@ public sealed class TransitionDataMapper(
         Action<Exception>? onScriptFailure,
         CancellationToken cancellationToken)
     {
-        using var activity = ScriptActivityHelper.StartExecuteActivity("transitionMapping");
+        using var activity = ScriptActivityHelper.StartExecuteActivity(TransitionMappingScriptKind);
 
         var result = await ResultExtensions.TryAsync(
             async ct =>
