@@ -105,6 +105,25 @@ internal sealed class DeclarativeMappingPlan
     public IReadOnlySet<string>? SelectUsed { get; }
 
     /// <summary>
+    /// True when the block reads the expression variable <paramref name="identifier"/> — in a <c>set</c> expression or
+    /// as the variable a <c>select</c> reads. A site that resolves something ahead of time for one variable (the SubFlow
+    /// output's caller-role warm-up for <c>user</c>) asks this instead of resolving for every block.
+    /// </summary>
+    public bool Reads(string identifier)
+    {
+        if (SelectVariable?.Name == identifier)
+            return true;
+
+        for (var i = 0; i < Set.Count; i++)
+        {
+            if (Set[i].UsedIdentifiers.Contains(identifier))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// True for the input-style sites (<see cref="DeclarativeSiteKind.TaskInput"/>, <see cref="DeclarativeSiteKind.SubFlowInput"/>):
     /// <c>select</c> and <c>into</c> are authored together, never merged at the root.
     /// </summary>
