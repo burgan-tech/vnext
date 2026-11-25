@@ -80,7 +80,7 @@ public sealed class InstanceCommandAppServiceStartRollbackTests : IDisposable
                 _inserted = ci.Arg<Instance>();
                 return _inserted;
             });
-        _mapper.MapTransitionDataAsync(default, default, default!, default!, default!, default, default)
+        _mapper.MapTransitionDataAsync(default, default, default!, default!, default!, default, default, default)
             .ReturnsForAnyArgs(Result<object?>.Ok(new { amount = 10, mapped = true }));
         _execution.ExecuteTransitionAsync(default!, default)
             .ReturnsForAnyArgs(Result<TransitionOutput>.Ok(
@@ -129,7 +129,7 @@ public sealed class InstanceCommandAppServiceStartRollbackTests : IDisposable
         _workflow = CreateWorkflow(flowType);
         var mappingError = ExecutionErrors.TransitionMappingFailed(
             "the start mapping found no customer", nameof(InvalidOperationException));
-        _mapper.MapTransitionDataAsync(default, default, default!, default!, default!, default, default)
+        _mapper.MapTransitionDataAsync(default, default, default!, default!, default!, default, default, default)
             .ReturnsForAnyArgs(Result<object?>.Fail(mappingError));
 
         var result = await _service.StartAsync(CreateInput(), CancellationToken.None);
@@ -208,7 +208,7 @@ public sealed class InstanceCommandAppServiceStartRollbackTests : IDisposable
 
         result.IsSuccess.ShouldBeTrue();
         await _mapper.DidNotReceiveWithAnyArgs()
-            .MapTransitionDataAsync(default, default, default!, default!, default!, default, default);
+            .MapTransitionDataAsync(default, default, default!, default!, default!, default, default, default);
         await _uow.Received(1).CommitAsync(Arg.Any<CancellationToken>());
         await _uow.DidNotReceive().RollbackAsync(Arg.Any<CancellationToken>());
     }
@@ -223,7 +223,7 @@ public sealed class InstanceCommandAppServiceStartRollbackTests : IDisposable
         _workflow.SetHistory(HistoryMode.None);
         if (!mappingSucceeds)
         {
-            _mapper.MapTransitionDataAsync(default, default, default!, default!, default!, default, default)
+            _mapper.MapTransitionDataAsync(default, default, default!, default!, default!, default, default, default)
                 .ReturnsForAnyArgs(Result<object?>.Fail(
                     ExecutionErrors.TransitionMappingFailed("no customer", nameof(InvalidOperationException))));
         }

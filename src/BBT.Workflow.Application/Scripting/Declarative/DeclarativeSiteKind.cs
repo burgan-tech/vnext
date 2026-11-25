@@ -51,8 +51,15 @@ public sealed record DeclarativeSite(string Name, string Phase)
     /// </summary>
     public string? ErrorSubject { get; init; }
 
+    /// <summary>
+    /// The error code a failure of this site carries. <see cref="WorkflowErrorCodes.TaskExecution"/> by default (a task
+    /// binding); a transition output passes <see cref="WorkflowErrorCodes.ExecutionStepFailed"/>, the code a failing
+    /// transition mapping script returns. A caller-role provider failure (<c>Authorization:110006</c>) keeps its own code.
+    /// </summary>
+    public string ErrorCode { get; init; } = WorkflowErrorCodes.TaskExecution;
+
     /// <summary>The failure this site reports for <paramref name="detail"/>.</summary>
     internal Error Failure(string detail) =>
-        Error.Failure(WorkflowErrorCodes.TaskExecution,
+        Error.Failure(ErrorCode,
             $"{ErrorSubject ?? Name} declarative {Phase} mapping failed: {detail}");
 }

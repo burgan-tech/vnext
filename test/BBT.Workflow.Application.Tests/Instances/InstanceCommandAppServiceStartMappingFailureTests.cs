@@ -122,7 +122,7 @@ public sealed class InstanceCommandAppServiceStartMappingFailureTests : IDisposa
         _dataMapper.MapTransitionDataAsync(
                 Arg.Any<object?>(), Arg.Any<Transition?>(), Arg.Any<Definitions.Workflow>(),
                 Arg.Any<Instance>(),
-                Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<Action<Exception>?>(), Arg.Any<CancellationToken>())
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<Action<Exception>?>(), Arg.Any<BBT.Workflow.Shared.ExecutionActor?>(), Arg.Any<CancellationToken>())
             .Returns(call =>
             {
                 call.Arg<Action<Exception>?>()!.Invoke(thrown);

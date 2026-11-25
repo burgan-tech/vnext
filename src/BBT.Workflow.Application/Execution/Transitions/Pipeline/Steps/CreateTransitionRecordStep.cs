@@ -188,6 +188,7 @@ public sealed class CreateTransitionRecordStep(
             context.Instance,
             context.Headers,
             onScriptFailure: ex => context.FailureCause = ex,
+            actor: context.Actor,
             cancellationToken: cancellationToken);
     }
 
@@ -195,7 +196,7 @@ public sealed class CreateTransitionRecordStep(
     /// Applies non-data field mutations (tags/stage), persists the mapped data IMMEDIATELY
     /// through the InstanceData write service (identity computed under the row lock; identical
     /// merged content dedups to no row), and updates the transition body when a mapping script
-    /// was applied.
+    /// or a declarative output block was applied.
     /// </summary>
     private async Task AppendMappedDataAsync(
         TransitionExecutionContext context,
@@ -214,7 +215,7 @@ public sealed class CreateTransitionRecordStep(
             context.Instance.SetStage(context.Stage);
         }
 
-        if (mappedData != null && transition?.Mapping is not null)
+        if (mappedData != null && transition?.HasDataMapping == true)
         {
             mappedData = await OffloadMappedFilesAsync(context, mappedData, cancellationToken);
         }
@@ -236,7 +237,8 @@ public sealed class CreateTransitionRecordStep(
                 context.Workflow,
                 touchInstance: context.IsUpdateDataTransition());
 
-            if (transition?.Mapping is not null)
+            // The mapping's result (a script's, or a declarative output block's delta) replaces the record body.
+            if (transition?.HasDataMapping == true)
             {
                 instanceTransition.SetBody(new JsonData(mappedData));
             }
@@ -245,7 +247,8 @@ public sealed class CreateTransitionRecordStep(
 
     /// <summary>
     /// x-storage defence in depth (spec §3): <c>content</c> a transition mapping produces is offloaded (Trusted)
-    /// before it reaches the data funnel or the transition record body. Runs only for a mapped transition: the
+    /// before it reaches the data funnel or the transition record body. Runs only for a mapped transition (script or
+    /// declarative output block): the
     /// field lookup loads the master schema through the component cache once; no <c>x-storage</c> field ⇒ no
     /// conversion and no span. Otherwise a read-only probe over the element decides — only a <c>content</c> or a
     /// <c>file</c> member at an <c>x-storage</c> path opens the <c>Files.Offload</c> span and calls the offload (content is

@@ -44,7 +44,7 @@ public class CreateTransitionRecordStepRetryTests
                 Arg.Any<object?>(), Arg.Any<Transition?>(), Arg.Any<Definitions.Workflow>(),
                 Arg.Any<Instance>(),
                 Arg.Any<System.Collections.Generic.Dictionary<string, string?>>(),
-                Arg.Any<Action<Exception>?>(), Arg.Any<CancellationToken>())
+                Arg.Any<Action<Exception>?>(), Arg.Any<BBT.Workflow.Shared.ExecutionActor?>(), Arg.Any<CancellationToken>())
             .Returns(Result<object?>.Ok(null));
 
         _step = new CreateTransitionRecordStep(

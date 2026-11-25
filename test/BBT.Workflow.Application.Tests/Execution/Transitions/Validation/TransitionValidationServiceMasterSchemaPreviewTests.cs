@@ -146,6 +146,21 @@ public class TransitionValidationServiceMasterSchemaPreviewTests
         await AssertNotPreviewedAsync();
     }
 
+    [Fact]
+    public async Task OutputBlock_SkipsSchemaPreview()
+    {
+        // A declarative output block decides what is written, as a mapping script does: the request is not previewed.
+        var context = CreateContext();
+        BBT.Workflow.Application.Tests.Execution.Transitions.TransitionDataMapperDeclarativeTests.SetOutput(
+            context.Transition!,
+            BBT.Workflow.Application.Tests.Execution.Transitions.TransitionDataMapperDeclarativeTests.Block(set: [("$.x", "input.actor")]));
+
+        var result = await _service.ValidateAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await AssertNotPreviewedAsync();
+    }
+
     [Theory]
     [InlineData(TriggerType.Automatic)]
     [InlineData(TriggerType.Scheduled)]

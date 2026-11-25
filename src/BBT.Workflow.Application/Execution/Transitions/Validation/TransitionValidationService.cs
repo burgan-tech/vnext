@@ -84,8 +84,8 @@ public class TransitionValidationService(
     /// Scope is the caller's own body and nothing else:
     /// <list type="bullet">
     /// <item>Manual trigger only — a System hop's payload is not a client error to answer with 400.</item>
-    /// <item>No transition mapping — the mapping's output is what gets written, the flow author decides
-    /// it, and previewing it would mean running the script before admission.</item>
+    /// <item>No transition mapping (script or declarative <c>output</c> block) — the mapping's output is what gets
+    /// written, the flow author decides it, and previewing it would mean running the mapping before admission.</item>
     /// <item>Not a request the parent relays to its active SubFlow — the leaf records the body and
     /// previews it against its own master schema.</item>
     /// </list>
@@ -99,7 +99,7 @@ public class TransitionValidationService(
             || context.Trigger != TriggerType.Manual
             || context.Workflow?.Schema is null
             || context.Instance is null
-            || context.Transition?.Mapping is not null
+            || context.Transition?.HasDataMapping == true
             || SubflowForwardRule.WillForward(context))
             return Task.FromResult(Result.Ok());
 

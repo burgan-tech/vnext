@@ -462,6 +462,9 @@ public sealed class InstanceCommandAppService(
                 input.Headers,
                 onScriptFailure: ex => logger.StartTransitionMappingFailed(
                     data.Workflow.Key, data.Workflow.StartTransition.Key, data.Instance.Id, ex),
+                // The start hop's actor, as ToExecutionContext leaves it for the start pipeline (User): a declarative
+                // output block's `user` is the starting caller.
+                actor: Shared.ExecutionActor.User,
                 cancellationToken: cancellationToken)
             .TapAsync(async mappedData =>
             {

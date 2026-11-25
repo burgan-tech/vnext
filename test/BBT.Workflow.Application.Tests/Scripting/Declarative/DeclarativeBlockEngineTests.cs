@@ -130,6 +130,14 @@ public sealed class DeclarativeBlockEngineTests
 
         plan.IsSuccess.ShouldBeFalse();
         plan.Error.Message!.ShouldContain("set['$.x']");
+        // A compile failure naming the unknown identifier — not some other rejection of the entry (an empty
+        // expression, an unwritable target).
+        plan.Error.Message.ShouldContain("does not compile");
+        plan.Error.Message.ShouldContain("result");
+
+        // The same expression compiles where result IS a variable, so the failure is about `result` alone.
+        DeclarativeMappingPlan.Build(_compiler, Block(set: [("$.x", "result.data")]), DeclarativeSiteKind.SubFlowOutput)
+            .IsSuccess.ShouldBeTrue();
     }
 
     [Theory]
