@@ -57,6 +57,14 @@ mapping — added by a Chair override of the council's narrower proposal).
 | Declarative task mappings (`input`/`output` blocks; the `user` variable) on state OnEntry / OnExit and transition OnExecute | Yes, on caller-driven (User) hops | the caller who drove the hop; fail-closed (`user.available` false on System hops, a roles read there fails the mapping as a non-transient `TaskExecution` failure telling the author to guard with `user.available`) — [Declarative Task Mappings](declarative-task-mappings.md) | the mapping fails (`Authorization:110006`), error boundary applies |
 | Script task mappings (`.csx`), function tasks and extensions (`user.available` false), transition `mapping`, resource lock, event mappings | No | — | — |
 
+Dynamic Expresso rules and keys (`location: "dynamicExpresso"`) read the same accessor through the `user` variable
+(`user.available`, `user.roles`, `user.hasRole("x")`): a condition `rule` on any surface above sees the caller that
+surface gives a C# rule, with the same provider-failure outcome (the evaluator returns `Authorization:110006` and the
+accessor stays failed); CacheAside `key`, function cache `keyExpression` / `generationKeyExpression` and
+`resourceLock.keyExpression` have no caller (`user.available` false, a roles read fails the key). On a surface without
+a caller a roles read makes the rule not select — fail-closed, never an empty set. Slot list and variables:
+[Declarative Task Mappings § Dynamic Expresso outside task mappings](declarative-task-mappings.md#dynamic-expresso-outside-task-mappings).
+
 "No caller" means `IsAvailable` is false and a read throws — never an empty set:
 
 - **System hops** — a fired timer (`TransitionTimerJobHandler`, `ExecutionActor.System`, no headers), a SubFlow

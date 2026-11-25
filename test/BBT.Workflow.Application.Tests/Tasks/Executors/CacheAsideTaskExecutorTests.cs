@@ -65,6 +65,43 @@ public sealed class CacheAsideTaskExecutorTests
         ((bool)result.Value.Metadata!["Refreshed"]).ShouldBeTrue();
     }
 
+    private static readonly Dictionary<string, object?> SourceBlocks = new()
+    {
+        ["sourceInput"] = new Dictionary<string, object> { ["set"] = new Dictionary<string, string> { ["$.url"] = "\"https://x/\" + data.id" } },
+        ["sourceOutput"] = new Dictionary<string, object> { ["select"] = "$.body.profile", ["into"] = "$.profile" }
+    };
+
+    [Fact]
+    public async Task SourceBlocks_ArePassedToTheSourceBinding_AndRouteDeclaratively()
+    {
+        var harness = new Harness(withSourceMapping: false, extraConfig: SourceBlocks);
+
+        var result = await harness.ExecuteAsync();
+
+        result.IsSuccess.ShouldBeTrue();
+        var binding = harness.SourceContexts.ShouldHaveSingleItem().OnExecuteTask;
+        binding.Input.ShouldNotBeNull();
+        binding.Input!.Set!["$.url"].ShouldBe("\"https://x/\" + data.id");
+        binding.Output.ShouldNotBeNull();
+        binding.Output!.Select.ShouldBe("$.body.profile");
+        binding.Output.Into.ShouldBe("$.profile");
+        BBT.Workflow.Tasks.Mapping.TaskMappingRouter.InputKind(binding).ShouldBe(BBT.Workflow.Tasks.Mapping.TaskMappingKind.Declarative);
+        BBT.Workflow.Tasks.Mapping.TaskMappingRouter.OutputKind(binding).ShouldBe(BBT.Workflow.Tasks.Mapping.TaskMappingKind.Declarative);
+    }
+
+    [Fact]
+    public async Task SourceMappingAndBlocks_TheScriptWins()
+    {
+        var harness = new Harness(withSourceMapping: true, extraConfig: SourceBlocks);
+
+        await harness.ExecuteAsync();
+
+        var binding = harness.SourceContexts.ShouldHaveSingleItem().OnExecuteTask;
+        binding.Mapping.ShouldBe(harness.Task.SourceMapping);
+        BBT.Workflow.Tasks.Mapping.TaskMappingRouter.InputKind(binding).ShouldBe(BBT.Workflow.Tasks.Mapping.TaskMappingKind.Script);
+        BBT.Workflow.Tasks.Mapping.TaskMappingRouter.OutputKind(binding).ShouldBe(BBT.Workflow.Tasks.Mapping.TaskMappingKind.Script);
+    }
+
     [Fact]
     public async Task Hit_DoesNotRunSourceExecutor()
     {
@@ -470,7 +507,8 @@ public sealed class CacheAsideTaskExecutorTests
             bool forceRefresh = false,
             string? keyScriptCode = null,
             string staticKey = StaticKey,
-            bool withSourceTask = true)
+            bool withSourceTask = true,
+            IReadOnlyDictionary<string, object?>? extraConfig = null)
         {
             TaskFactory.CreateExecutionTaskAsync(Arg.Any<IReference>(), Arg.Any<CancellationToken>())
                 .Returns(Result<WorkflowTask>.Ok(SourceTask));
@@ -515,6 +553,9 @@ public sealed class CacheAsideTaskExecutorTests
             {
                 config["key"] = new { location = "./src/Key.csx", code = keyScriptCode, encoding = "NAT" };
             }
+
+            foreach (var (name, value) in extraConfig ?? new Dictionary<string, object?>())
+                config[name] = value;
 
             Task = CacheAsideTask.Create(JsonSerializer.SerializeToElement(config));
             Task.SetReference(new Reference("customer-cache", "core", "sys-tasks", "1.0.0"));

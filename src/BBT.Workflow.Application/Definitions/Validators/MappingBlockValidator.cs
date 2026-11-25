@@ -43,6 +43,15 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
         "The dynamicExpresso location is ignored on a task 'mapping': the mapping runs as a C# script. " +
         "Author the declarative 'input' and 'output' blocks for expression-based mappings.";
 
+    /// <summary>
+    /// Publish warning for a value slot (timer, timeout, timeout override, agent prompt, agent decision) labelled
+    /// <c>dynamicExpresso</c> that does not compile as an expression. Never an error: such a script ran as C# before the
+    /// label was honoured and still does (with a run-time warning).
+    /// </summary>
+    public const string ValueSlotNotAnExpressionWarning =
+        "Labelled dynamicExpresso but does not compile as a Dynamic Expresso expression ({0}); it will run as a C# script " +
+        "for compatibility. Rewrite it as an expression, or give the C# script a non-dynamicExpresso location.";
+
     private static readonly string[] InputVariables =
     [
         ExpressionScope.DataVariable, ExpressionScope.InputVariable, ExpressionScope.InstanceVariable,
@@ -88,6 +97,7 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
 
     private void ValidateWorkflow(Workflow workflow, ComponentValidationResult r)
     {
+        ValidateValueSlot(workflow.Timeout?.Mapping, "timeout.mapping", ValueSlotKind.Timer, r);
         ValidateTransition(workflow.StartTransition, "startTransition", r);
         ValidateTransition(workflow.Cancel, "cancel", r);
         ValidateTransition(workflow.UpdateData, "updateData", r);
@@ -100,6 +110,11 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
             var statePath = $"states[{state.Key}]";
             ValidateBindings(state.OnEntries, $"{statePath}.onEntries", r);
             ValidateBindings(state.OnExits, $"{statePath}.onExits", r);
+            ValidateValueSlot(state.SubFlow?.Overrides?.Timeout?.Mapping, $"{statePath}.subFlow.overrides.timeout.mapping",
+                ValueSlotKind.Timer, r);
+            if (state.Agent?.Prompt is { IsScript: true } prompt)
+                ValidateValueSlot(prompt.ToScriptCode(), $"{statePath}.agent.prompt", ValueSlotKind.AgentPrompt, r);
+            ValidateValueSlot(state.Agent?.Decision?.Mapping, $"{statePath}.agent.decision.mapping", ValueSlotKind.AgentDecision, r);
             foreach (var transition in state.Transitions)
                 ValidateTransition(transition, $"{statePath}.transitions[{transition.Key}]", r);
         }
@@ -116,7 +131,21 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
     {
         if (transition is null)
             return;
+        ValidateValueSlot(transition.Timer, $"{path}.timer", ValueSlotKind.Timer, r);
         ValidateBindings(transition.OnExecutionTasks, $"{path}.onExecutionTasks", r);
+    }
+
+    /// <summary>
+    /// A value slot labelled <c>dynamicExpresso</c> is compiled as an expression (publish warms the compile cache);
+    /// one that does not compile is a warning, never an error (see <see cref="ValueSlotNotAnExpressionWarning"/>).
+    /// </summary>
+    private void ValidateValueSlot(ScriptCode? script, string path, ValueSlotKind kind, ComponentValidationResult r)
+    {
+        if (script is null || !ConditionScriptLocations.IsDynamicExpresso(script.Location) || script.IsReference)
+            return;
+
+        if (ValueSlotExpressionEvaluator.CompileError(compiler, script, kind) is { } error)
+            Add(r.Warnings, path, string.Format(System.Globalization.CultureInfo.InvariantCulture, ValueSlotNotAnExpressionWarning, error));
     }
 
     private void ValidateBindings(IEnumerable<OnExecuteTask> bindings, string path, ComponentValidationResult r)

@@ -32,7 +32,7 @@ public sealed class CacheKeyEvaluatorTests
     public async Task DynamicExpresso_Native_DelegatesToExpresso()
     {
         var script = ScriptCode.FromNative("\"k:\" + context.Instance.Key", location: "dynamicExpresso");
-        _expresso.Evaluate(script, _context).Returns(Result<string>.Ok("k:1"));
+        _expresso.EvaluateAsync(script, _context, Arg.Any<CancellationToken>()).Returns(Result<string>.Ok("k:1"));
 
         (await Sut().EvaluateAsync(script, _context)).Value.ShouldBe("k:1");
     }
@@ -41,7 +41,7 @@ public sealed class CacheKeyEvaluatorTests
     public async Task DynamicExpresso_Base64_DelegatesToExpresso()
     {
         var script = ScriptCode.FromBase64("ImsiOg==", location: "dynamicExpresso");
-        _expresso.Evaluate(script, _context).Returns(Result<string>.Ok("k:"));
+        _expresso.EvaluateAsync(script, _context, Arg.Any<CancellationToken>()).Returns(Result<string>.Ok("k:"));
 
         (await Sut().EvaluateAsync(script, _context)).Value.ShouldBe("k:");
     }
@@ -51,7 +51,7 @@ public sealed class CacheKeyEvaluatorTests
     {
         var script = ScriptCode.FromReference(new Reference("key-expr", "core", "sys-mappings", "1.0.0"), location: "dynamicExpresso");
         StubMapping("key-expr", "\"from-ref\"");
-        _expresso.Evaluate(Arg.Is<ScriptCode>(s => s.Location == "dynamicExpresso" && s.DecodedCode == "\"from-ref\""), _context)
+        _expresso.EvaluateAsync(Arg.Is<ScriptCode>(s => s.Location == "dynamicExpresso" && s.DecodedCode == "\"from-ref\""), _context, Arg.Any<CancellationToken>())
             .Returns(Result<string>.Ok("from-ref"));
 
         (await Sut().EvaluateAsync(script, _context)).Value.ShouldBe("from-ref");
@@ -83,7 +83,7 @@ public sealed class CacheKeyEvaluatorTests
             .Returns(mapping);
 
         (await Sut().EvaluateAsync(script, _context)).Value.ShouldBe("cs:key");
-        _expresso.DidNotReceiveWithAnyArgs().Evaluate(default!, default!);
+        await _expresso.DidNotReceiveWithAnyArgs().EvaluateAsync(default!, default!, default);
     }
 
     [Fact]

@@ -298,7 +298,7 @@ public sealed class FunctionAppService(
                     "Function {FunctionKey}: cache enabled without varyByHeaders/varyByHeaderPrefixes; a keyExpression using varyKey() falls back to ALL request headers (poor hit rate).",
                     function.Key);
 
-            var keyResult = ResolveCacheKey(cache, scriptContext);
+            var keyResult = await ResolveCacheKeyAsync(cache, scriptContext, cancellationToken);
             if (!keyResult.IsSuccess)
             {
                 // A key that cannot be computed cannot be cached — never fail the endpoint over it; run uncached.
@@ -442,11 +442,12 @@ public sealed class FunctionAppService(
     /// Resolves the cache key from the function's cache config: evaluates the Dynamic Expresso
     /// <c>keyExpression</c> against the script context, or falls back to the static <c>key</c>.
     /// </summary>
-    private Result<string?> ResolveCacheKey(FunctionCache cache, ScriptContext scriptContext)
+    private async Task<Result<string?>> ResolveCacheKeyAsync(
+        FunctionCache cache, ScriptContext scriptContext, CancellationToken cancellationToken)
     {
         if (cache.KeyExpression is { } expression && expression.HasMappingCode)
         {
-            var result = keyEvaluator.Evaluate(expression, scriptContext);
+            var result = await keyEvaluator.EvaluateAsync(expression, scriptContext, cancellationToken);
             return result.IsSuccess
                 ? Result<string?>.Ok(result.Value)
                 : Result<string?>.Fail(result.Error);
@@ -470,7 +471,7 @@ public sealed class FunctionAppService(
         string? generationKey;
         if (cache.GenerationKeyExpression is { HasMappingCode: true } expression)
         {
-            var keyResult = keyEvaluator.Evaluate(expression, scriptContext);
+            var keyResult = await keyEvaluator.EvaluateAsync(expression, scriptContext, cancellationToken);
             if (!keyResult.IsSuccess)
                 return Result<string>.Fail(keyResult.Error);
             generationKey = keyResult.Value;

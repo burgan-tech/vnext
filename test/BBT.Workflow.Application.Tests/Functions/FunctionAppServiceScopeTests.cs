@@ -534,7 +534,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         SetupCachedFunction(keyExpressionCode: "varyKey(context)");
         // A failing key expression must NOT 500 the endpoint — it bypasses the cache and runs the function.
         _keyEvaluator
-            .Evaluate(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>())
+            .EvaluateAsync(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>())
             .Returns(Result<string>.Fail(Error.Failure("expr.fail", "boom")));
 
         var result = await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain);

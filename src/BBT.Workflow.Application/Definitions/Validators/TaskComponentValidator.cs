@@ -9,9 +9,17 @@ namespace BBT.Workflow.Definitions.Validators;
 /// Validates workflow task components (sys-tasks).
 /// Ensures task definitions are properly structured and contain required fields.
 /// </summary>
+/// <remarks>
+/// Registered as a singleton (<see cref="IComponentValidator"/>), so it must not take the scoped
+/// <see cref="MappingBlockValidator"/> from DI: it builds its own on the process-wide compiler, as
+/// <see cref="AgentComponentValidator"/> does.
+/// </remarks>
 public sealed partial class TaskComponentValidator(
     Microsoft.Extensions.Options.IOptions<BBT.Workflow.Tasks.Executors.McpOptions>? mcpOptions = null) : IComponentValidator
 {
+    private static readonly MappingBlockValidator _mappingBlocks =
+        new(BBT.Workflow.Scripting.Expressions.ExpressionCompiler.Shared);
+
     /// <inheritdoc />
     public bool CanHandle(string componentType) => componentType == RuntimeSysSchemaInfo.Tasks;
 
@@ -58,6 +66,8 @@ public sealed partial class TaskComponentValidator(
                     cacheAside.KeyScript,
                     $"{nameof(CacheAsideTask)}.key",
                     result.ValidationErrors);
+
+                ValidateCacheAsideSourceBlocks(cacheAside, result);
             }
 
             if (task is PythonTask python)
@@ -76,6 +86,43 @@ public sealed partial class TaskComponentValidator(
         {
             result.AddError($"Invalid JSON format for task: {ex.Message}", nameof(WorkflowTask));
             return result;
+        }
+    }
+
+    /// <summary>
+    /// <c>sourceInput</c> / <c>sourceOutput</c> are validated like a task binding's <c>input</c> / <c>output</c> blocks
+    /// (paths, compiled <c>set</c> expressions), and a <c>sourceMapping</c> beside them is rejected, the same rule as a
+    /// binding. At run time a stored definition carrying both runs the script.
+    /// </summary>
+    private void ValidateCacheAsideSourceBlocks(CacheAsideTask cacheAside, ComponentValidationResult result)
+    {
+        if (cacheAside.SourceInput is null && cacheAside.SourceOutput is null)
+            return;
+
+        if (cacheAside.SourceMapping is not null)
+        {
+            result.AddError(
+                "A CacheAside task cannot carry both a 'sourceMapping' script and declarative 'sourceInput'/'sourceOutput' blocks; use one.",
+                $"{nameof(CacheAsideTask)}.{nameof(CacheAsideTask.SourceMapping)}");
+        }
+
+        if (cacheAside.SourceTask is null)
+            return; // reported elsewhere; a block cannot be bound without the source reference
+
+        // Validated as the binding they become at run time; mapping null so the conflict above is reported once.
+        var binding = OnExecuteTask.Create(0, cacheAside.SourceTask, mapping: null,
+            input: cacheAside.SourceInput, output: cacheAside.SourceOutput);
+        var errors = new List<System.ComponentModel.DataAnnotations.ValidationResult>();
+        _mappingBlocks.ValidateBinding(binding, "source", errors);
+        foreach (var error in errors)
+        {
+            var message = (error.ErrorMessage ?? string.Empty)
+                .Replace("source.input", "sourceInput", StringComparison.Ordinal)
+                .Replace("source.output", "sourceOutput", StringComparison.Ordinal);
+            var member = (error.MemberNames.FirstOrDefault() ?? "source")
+                .Replace("source.input", "sourceInput", StringComparison.Ordinal)
+                .Replace("source.output", "sourceOutput", StringComparison.Ordinal);
+            result.AddError(message, $"{nameof(CacheAsideTask)}.{member}");
         }
     }
 

@@ -268,10 +268,14 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
                 taskType: TaskType.ToString());
         }
 
+        // sourceInput / sourceOutput run through the same mapping router as a binding's input / output blocks; a
+        // sourceMapping with code wins over them (its legacy meaning, the same rule as a task binding).
         var sourceOnExecute = OnExecuteTask.Create(
             context.OnExecuteTask.Order,
             task.SourceTask,
-            task.SourceMapping ?? ScriptCode.FromNative(string.Empty));
+            task.SourceMapping ?? ScriptCode.FromNative(string.Empty),
+            input: task.SourceInput,
+            output: task.SourceOutput);
 
         // Discarded, never merged back and not disposed — same convention as FanOutTaskExecutor's
         // per-item branch: the source's own response entries must not leak into the outer context;

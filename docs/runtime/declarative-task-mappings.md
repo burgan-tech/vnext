@@ -22,7 +22,7 @@ A task binding (`onExecuteTask` entry of a state `onEntries`/`onExits`, a transi
 - `input` and `output` are optional; each holds `select`, `into` and `set` (path to Dynamic Expresso expression, max 8000 characters each).
 - **`mapping` and the blocks are mutually exclusive per binding** — publish error if both are present. A binding stored with both before this validation existed keeps its legacy meaning: the script runs and the blocks are ignored.
 - A `mapping` with `location: "dynamicExpresso"` is a **publish warning**, not an error: the script engine never reads a mapping's `location`, so such a mapping runs as a C# `IMapping` script, as it always has (an empty one is a no-op). The warning reads `<location>.mapping: The dynamicExpresso location is ignored on a task 'mapping': the mapping runs as a C# script. Author the declarative 'input' and 'output' blocks for expression-based mappings.` Behaviour is unchanged; the label is deprecated (`task-mapping-dynamic-expresso-location` in `vnext-meta/unreleased/declarative-task-mappings.json`).
-- **Assignment is disabled** in mapping expressions (Dynamic Expresso `AssignmentOperators.None` on the mapping signatures): `data.x = 1` is a compile error at publish (`MappingBlockValidator`) and fails the mapping at run time. An expression produces a value; only `into` and `set` keys write. The legacy condition, cache-key and agent-tool expressions are unchanged.
+- **Assignment is disabled** in mapping expressions (Dynamic Expresso `AssignmentOperators.None` on the mapping signatures): `data.x = 1` is a compile error at publish (`MappingBlockValidator`) and fails the mapping at run time. An expression produces a value; only `into` and `set` keys write. Condition rules and string keys are assignment-off too (see [Dynamic Expresso outside task mappings](#dynamic-expresso-outside-task-mappings)); the agent-tool `binding.code` expressions are unchanged.
 - Paths use one in-house subset: `$`, `.name` (hyphens allowed), `['name']`, `[n]` and `[*]` (read only). No filters, no recursive descent. A write target (`into`, `set` key) must be writable: no index, no wildcard. An array is written whole (replace), like the full-merge model.
 
 ## Variables
@@ -56,6 +56,56 @@ Variables are bound lazily, only when an expression uses them; nothing is cloned
 - The input phase journals nothing (the values are not echoed into the task journal).
 - **FanOut, Notification and Human tasks reject a binding that carries declarative blocks at run time** (`TaskDeclarativeMappingFailed`). Every other task type runs both blocks.
 
+### Several headers
+
+One `set` key per header. With the task configured as
+`"headers": { "Content-Type": "application/json", "x-channel": "mobile" }`:
+
+```json
+"input": {
+  "set": {
+    "$.headers.x-channel": "\"web\"",
+    "$.headers.x-customer-id": "data.customer.id",
+    "$.headers.x-request-id": "instance.id",
+    "$.headers.x-amount": "data.amount",
+    "$.headers['x-correlation.id']": "instance.key",
+    "$.headers.Accept-Language": "data.lang ?? \"tr-TR\"",
+    "$.headers.x-approver": "user.available && user.hasRole(\"approver\") ? \"yes\" : \"no\""
+  }
+}
+```
+
+The task is called with:
+
+```json
+{
+  "Content-Type": "application/json",
+  "x-channel": "web",
+  "x-customer-id": "c-42",
+  "x-request-id": "8b1f…",
+  "x-amount": "1250.5",
+  "x-correlation.id": "BASVURU-001",
+  "Accept-Language": "tr-TR",
+  "x-approver": "no"
+}
+```
+
+| Case | Result |
+|---|---|
+| Configured header the block does not touch (`Content-Type`) | kept |
+| Configured header the block writes (`x-channel`) | the block's value wins |
+| Non-string value (`data.amount`) | sent as its JSON text (`1250.5` → `"1250.5"`; an object → its JSON) |
+| Hyphen in the name | plain segment: `$.headers.x-channel` |
+| Dot or space in the name | bracket segment: `$.headers['x-correlation.id']` |
+| Expression yields `null` or reads a missing value | nothing written; the configured value stays |
+| No `headers` (or `null`) in the configuration | an object is created first |
+| Configured `headers` is not an object | the mapping fails |
+
+- **`into: "$.headers"` replaces the whole object** — `{ "select": "$.data.outgoingHeaders", "into": "$.headers" }`
+  drops `Content-Type`. `into` writes its target as it is, it never merges; add headers one `set` key at a time.
+- A header cannot be removed: `null` means "write nothing". Send `"\"\""` for an empty value, or leave the header
+  out of the task definition.
+
 ### URL from configuration
 
 The `API_BASEURL` placeholder a C# `InputHandler` resolves with `GetConfigValue` is one expression:
@@ -85,6 +135,107 @@ The output phase sees the same `task` after the input phase, so `"$.calledUrl": 
 - **Deliberate difference — deep response bodies.** Before the in-place read, the runner re-serialized the whole response through default JSON options (depth limit 64), so a body nested deeper than about 63 levels failed the mapping even when the `select` / `set` touched only a shallow part. Now a `select` or member read on such a body succeeds; the limits that remain are 64 levels for the value copied into the delta and for materializing the whole `result`, and 256 levels (the runtime's `JsonSerializerConstants.JsonOptions.MaxDepth`) for serializing a non-JSON `Data`.
 - **Ordering:** `into` first, then `set` entries in declaration order (a later entry wins on a collision). One delta object results in **one** instance-data append, so x-encryption, versioning and ETag are inherited. Encrypted fields read in an expression are the stored tokens and stay tokens when written back. An empty delta writes no version.
 
+### What each part reads and writes
+
+| Part | Reads | Writes |
+|---|---|---|
+| `select` | the task response only: `result` = `{ body, headers, statusCode }`; `$` is `result`, default `$.body` | — |
+| `into` | the value `select` found | the delta (not instance data) |
+| `set` key | — | the same delta |
+| `set` value | every variable: `result`, `data`, `input`, `instance`, `now`, `user`, `task`, `config`, `context` | — |
+
+The block never edits instance data directly: it builds a delta, and the delta is merged once at the end. `data` in
+a `set` expression is therefore the data **before** this task's output — what `into` just wrote to the delta is not
+visible through `data`; read it from `result`.
+
+### Worked example
+
+Instance data before the task, and the task response:
+
+```json
+{ "customer": { "id": "c-42", "name": "Ayşe" },
+  "kyc": { "level": "basic", "score": 10, "history": [1, 2] } }
+```
+
+```json
+{ "statusCode": 200,
+  "headers": { "x-request-id": "r-991" },
+  "body": { "score": 87, "band": "A", "checks": ["id", "address"] } }
+```
+
+Block:
+
+```json
+"output": {
+  "select": "$.body.score",
+  "into": "$.kyc.score",
+  "set": { "$.kyc.checkedAt": "now", "$.kyc.state": "instance.currentState" }
+}
+```
+
+1. The delta starts empty.
+2. `select` + `into`: `result.body.score` is `87`, written at `$.kyc.score` (missing objects are created) →
+   `{ "kyc": { "score": 87 } }`.
+3. `set`, in declaration order →
+   `{ "kyc": { "score": 87, "checkedAt": "2026-11-24T10:15:03.123Z", "state": "kyc-check" } }`.
+4. The delta is merged into the latest data and stored as a new data version:
+
+```json
+{ "customer": { "id": "c-42", "name": "Ayşe" },
+  "kyc": { "level": "basic", "score": 87, "history": [1, 2],
+           "checkedAt": "2026-11-24T10:15:03.123Z", "state": "kyc-check" } }
+```
+
+`kyc.level` and `kyc.history` survive (not in the delta), `kyc.score` changes 10 → 87, `band` and `checks` are not
+written (`select` took only `score`).
+
+### `select` / `into` combinations
+
+With the response above:
+
+| Authored | Behaviour | Delta |
+|---|---|---|
+| `select` + `into` | the selected value at `into` | `"select": "$.body.band", "into": "$.kyc.band"` → `{ "kyc": { "band": "A" } }` |
+| `into` only | `select` defaults to `$.body` | `"into": "$.kyc.response"` → `{ "kyc": { "response": { "score": 87, "band": "A", "checks": [...] } } }` |
+| `select` only | the selected **object's members** merge at the data root | `"select": "$.body"` → `{ "score": 87, "band": "A", "checks": [...] }` |
+| `select` only, selected value not an object | the mapping fails | `"select": "$.body.score"` → `87` cannot merge at the root |
+| neither | only `set` runs | whatever `set` writes |
+
+Response headers and status code are readable too:
+
+```json
+"set": {
+  "$.audit.requestId": "result.headers[\"x-request-id\"]",
+  "$.audit.httpStatus": "result.statusCode",
+  "$.kyc.approved": "result.body.score.AsInt32() >= 70"
+}
+```
+
+### Collisions and edge cases
+
+- **Later wins:** `into: "$.kyc.score"` then `set: { "$.kyc.score": "result.body.score.AsInt32() * 2" }` → `174`.
+- **A parent path replaces the whole subtree in the delta:** a `set` key `"$.kyc"` replaces what `into` wrote under
+  `kyc`; the stored `kyc.level` still survives, because the final merge is deep.
+- **No path inside a non-object:** after `into` wrote `87` at `$.kyc.score`, a `set` key `"$.kyc.score.detail"` fails
+  the mapping (`'score' exists and is not a JSON object`).
+- **`data` is the previous value:** `{ "$.kyc.previousScore": "data.kyc.score" }` writes `10`.
+- **Failure is all or nothing:** any error other than a missing value (see [Missing values](#missing-values)) writes
+  no part of the delta.
+
+### Effect on instance data
+
+The delta goes through the same merge as every other write ([merge semantics](../domain/instance-data-merge-concept.md#merge-semantics--the-sharp-edges-client-facing)):
+
+1. **Objects merge deeply, key by key**; a field not in the delta is never removed.
+2. **Arrays are replaced whole**: `{ "$.kyc.history": "result.body.checks" }` turns `[1, 2]` into
+   `["id", "address"]`. This is why write paths take no `[n]` / `[*]`; `select` may read `"$.body.checks[0]"`.
+3. **A field cannot be removed**: a `null` from `set` writes nothing, and the merge never clears an existing key
+   with `null`. Use a sentinel (`""`, `false`, `"cleared"`) where "cleared" must be expressible.
+4. **Nothing written, no version.**
+
+In a function or extension the delta is not written to instance data: it is the task output an `OutputHandler`
+would return, in the function or extension response.
+
 ## Missing values
 
 A missing `select` path, a missing leaf, `?.`, or member access on a missing intermediate (`data.customer.id` with no `customer`) makes that entry **write nothing** — no error. A skipped `select` (path not found) or `set` entry (missing intermediate) raises the Debug log `TaskDeclarativeMappingEntrySkipped` (EventId 10269) with the task key, the phase and the path or `set` key — never the value; a plain null value or `?.` result skips silently. Every other evaluation error (bad cast, unwritable path, role provider failure) **fails the mapping**: the error boundary applies and `TaskDeclarativeMappingFailed` is logged. Inconsistency to know: legacy `context.*` paths still fail on a missing member.
@@ -94,6 +245,113 @@ A missing `select` path, a missing leaf, `?.`, or member access on a missing int
 `user` is available in task mappings on **caller-driven (User) hops** of state `onEntries` / `onExits` and transition `onExecutionTasks`. On System hops (fired timers, SubFlow resume, continuations) `user.available` is `false` and reading `user.roles` / `user.hasRole` — in a `set` expression or through an input `select` such as `$.user.roles` — fails the mapping (fail-closed, never an empty set). That failure is **deterministic, not transient**: a `TaskExecution` failure whose message says to guard the read with `user.available`, never `Authorization:110006`. `110006` (transient, retryable) is kept for a real role-provider failure while resolving the caller's roles. An input `select: "$.user.available"` reads the flag on any hop. Functions and extensions always see `user.available == false`. Roles are resolved once, and only when an expression uses them. Script mappings never see the caller. Provider and surfaces: [Script Caller Roles](script-caller-roles.md).
 
 **Persisting roles is the author's responsibility.** An output `set` such as `{ "$.approval.roles": "user.roles" }` writes the caller's roles into instance data, where every later reader of that data (state and data functions, scripts, other callers allowed to read the instance) sees them. Write roles into data only when that exposure is intended, and protect the field (`x-roles`, `x-masking`) as you would any other caller-derived value.
+
+## Dynamic Expresso outside task mappings
+
+A `ScriptCode` with `location: "dynamicExpresso"` (`encoding: "NAT"`) is an inline expression in these slots — no
+`.csx`, no Roslyn compile. **One standard for every slot:** the condition rules and the string keys bind the same
+variables as the value slots below — `data`, `input`, `instance` (camelCase), `now`, `user` — next to the legacy rule
+context `context` (PascalCase members), which is unchanged: every existing `context.*` expression compiles and returns
+what it did (same interpreter options, same number type). No `task`, `config` or `result`. Variables are bound lazily:
+a `context`-only rule builds the legacy context and nothing else, and resolves no roles.
+
+| Slot | Result | Evaluator (signature) | Variables |
+|---|---|---|---|
+| Transition `rule` (auto), view `rule`, transition / function `schemas[]` and contract `rule`, long-poll `rule`, state-notification `rule` | `bool` | `RoutingConditionEvaluator` → `DynamicExpressoConditionEvaluator` (`condition`) | `data`, `input`, `instance`, `now`, `user`, `context` |
+| CacheAside `key`, function cache `keyExpression` / `generationKeyExpression` | `string` | `CacheKeyEvaluator` / `FunctionAppService` → `DynamicExpressoValueEvaluator` (`key`) | the same, plus the functions `sha256(text)` and `varyKey(context)` |
+| Transition `resourceLock.keyExpression` | `string` (the lock key) | `ResourceLockStep` → `DynamicExpressoValueEvaluator` (`key`) | as above |
+| Agent tool `binding.code` (tool kind 2) | `object` | `AgentToolCatalog` (`agent-tool`) | `args`, `data` (`ExpandoObject`), `now` (`DateTime`) — **the one exception**, see below |
+
+Changes for an existing expression in a condition or key slot: assignment operators are disabled (`x = 1` no longer
+compiles; nothing in a rule or a key should write), and the compile cache keys these slots under their new signature
+names (`condition`, `key`), so the first evaluation after an upgrade compiles once.
+
+`input` per site — the transition request body as the shared script context of the hop carries it
+(`ScriptContext.CurrentTransition`), never `context.Body`, no fallback:
+
+| Site | `input` |
+|---|---|
+| CacheAside `key` of a task run by a transition's `onExecutionTasks` or a state's `onEntries` / `onExits` | the transition request body (`null` when the hop has none) |
+| Automatic-transition `rule` | the request body when a task step of the same hop (`onExecutionTasks`, `onExits`, `onEntries` with tasks) built the hop's shared context before the rule; `null` otherwise. Use `context.Body` for the hop's request data regardless |
+| Resource-lock `keyExpression` | `null`: the lock step (order 25) builds the hop's context before any task step. Use `data` or `context.Body` |
+| View, schema / contract, function, long-poll and state-notification rules; function cache keys; CacheAside in a function or extension | `null` (no transition request); a function's request body is `context.Body` |
+
+Missing values: `data.x?.y`, a missing member or index reads as `null` (a comparison is then just false); a conversion
+of a missing value (`data.nope.AsDouble()`) throws, and a throwing rule **does not select** (not satisfied / next entry
+/ not admitted / not sent), exactly as a throwing `context.*` rule always did; a throwing key fails as before (CacheAside
+and function cache run uncached or fail per their settings, a lock key fails the step with `Execution:200012`). JSON
+values need a conversion to compare: `data.amount.AsDouble() > 1000`, `data.customer.id.ToString() == "c-42"` — a key
+concatenates them as text (`"cust:" + data.customer.id`).
+
+`user` follows [User](#user) and [Script Caller Roles](script-caller-roles.md), fail-closed per site: on a hop with no
+caller (`user.available` false — System hops, and every surface whose accessor is closed: resource lock, function cache
+keys, CacheAside keys) reading `user.roles` / `user.hasRole` throws, so the rule does not select and the key fails —
+never an empty role set. When the role provider cannot answer (`Authorization:110006`), the evaluator returns that
+error and the accessor stays failed, so each site keeps its documented outcome: selection surfaces `503`, the
+automatic rule fails the step (no DefaultAutoTransition), a lock key fails with `110006` and is never retried as C#.
+Reading `user` at all (even `user.available`) on a caller-driven hop resolves the roles once, as in task mappings.
+
+**The agent-tool exception.** `tools[].binding.code` keeps its own variables (`args`, `data`, `now`) and assignment
+setting. Its `data` is an `ExpandoObject` and existing expressions rely on that dynamic access with implicit numeric
+conversion (`data.amount > 5`); the standard `data` view (`RuleJsonDynamic`) needs `data.amount.AsDouble() > 5` and
+would break them. A tool kind 1 (`binding.input` / `binding.output` blocks) already gets the standard mapping variables.
+
+The value slots below bind the mapping variables of a condition (decision D-1): `data`, `input`, `instance`
+(camelCase), `now`, `user`, `context` — no `task`, `config` or `result`, assignment disabled. They are evaluated by
+`ValueSlotExpressionEvaluator` (signature `mapping-condition`; the decision has its own, `agent-decision`).
+
+| Slot | JSON | Result | Extra variables |
+|---|---|---|---|
+| Transition timer | `transitions[].timer` | timer schedule (below) | — |
+| Workflow timeout | `attributes.timeout.mapping` | timer schedule; on failure the static `timeout.timer.duration` is used, as before | — |
+| SubFlow timeout override | `states[].subFlow.overrides.timeout.mapping` | same as the workflow timeout (the child resolves it) | — |
+| Agent prompt | `states[].agent.prompt` (`location` + `code`) | `string` (null fails) | — |
+| Agent decision, mode `script` | `states[].agent.decision.mapping` | transition key `string`; `null` = no decision (the fallback runs); a key that is not a candidate also takes the fallback | `outcome`, `candidates` |
+
+Timer schedule (decision D-2): `TimeSpan` → duration from now; `DateTime` / `DateTimeOffset` → that instant (a
+`DateTime` with no kind is UTC); a string (or a JSON string from `data`) → an ISO-8601 duration (`"PT15M"`), else an
+ISO-8601 date-time (invariant culture, UTC when it has no offset); `null` → immediate (`TimerSchedule.Immediate`: now + 2 s). Any other value — a number
+included, its unit is ambiguous — fails: write `TimeSpan.FromSeconds(...)`. Pass a `double` to the `TimeSpan`
+factories (`TimeSpan.FromMinutes(15.0)`): an `int` literal is ambiguous between their `long` and `double` overloads.
+A JSON value is not a number by itself: `TimeSpan.FromMinutes(data.waitMinutes.AsDouble())`.
+
+`outcome` (the agent run): `completed` (bool), `output` (the structured output, members read as
+`outcome.output.score`), `text` (the output as compact JSON text), `decision` (the output's `decision` member),
+`reason`, `failureReason`. `candidates`: `count`, `keys` (string array), `has("approve")`, `find("approve")` (null when
+absent), `candidates[0]`; each candidate has `key`, `when`, `whenSource`. Example:
+`candidates.has(outcome.decision) && outcome.output.score.AsDouble() < 0.5 ? outcome.decision : "manual-review"`.
+JSON values compare as views: call `.ToString()` / `.AsDouble()` / `.AsInt32()` / `.AsBoolean()` before comparing.
+
+Agent hints (`decision.hintsMapping`) stay C# only: they return a dictionary.
+
+Compatibility. Before these slots — and the resource-lock key — honoured the label, the script engine ignored the
+location, so a C# script labelled `dynamicExpresso` ran as a script. Such a script keeps working: when it does not
+evaluate as an expression it runs as the C# script it was, with one warning — `ResourceLockKeyExpressionRanAsScript`
+(EventId 10270) for a lock key, `ScriptLabelledDynamicExpressoRanAsScript` (EventId 10271, `Slot` = `timer`,
+`agent prompt`, `agent decision`) for a value slot. When neither works the expression's error is reported (code
+`Expression.ValueSlotFailed`; a lock key `Execution:200012`, an empty lock key `Execution:200011`). Each slot keeps its
+failure semantics: a failing transition timer fails the step, a failing timeout falls back to the static duration, a
+failing agent prompt or decision fails the hop. A caller-roles provider failure (`Authorization:110006`) is never retried
+as C#. Publish compiles these expressions and reports one that does not compile as a **warning** (it still publishes:
+it may be one of those C# scripts), never an error.
+
+Other value slots (transition / SubFlow / event / output mappings, state-notification metadata) still run as C#
+scripts.
+
+### Declarative blocks of a nested task
+
+Two places run a task outside a binding and now accept the binding's declarative blocks; the runner is the same
+(`DeclarativeTaskMappingRunner`), so the variables, phases and rules above apply unchanged:
+
+| Where | JSON | Exclusive with |
+|---|---|---|
+| CacheAside source task | `config.sourceInput`, `config.sourceOutput` (a `MappingBlock` each) | `config.sourceMapping` |
+| Agent tool kind 1 | `tools[].binding.input`, `tools[].binding.output` | `tools[].binding.mapping` |
+
+Publish validates both like a binding's blocks (`TaskComponentValidator` for the CacheAside task, errors at
+`sourceInput.…` / `sourceOutput.…`; `AgentComponentValidator` for the agent, errors at `Agent.tools[i].binding.input.…`)
+and rejects a script and blocks together. A definition stored with both before that check existed runs the script (its
+legacy meaning), the same rule as a task binding. The CacheAside `sourceOutput` result is what is cached.
 
 ## Publish validation
 

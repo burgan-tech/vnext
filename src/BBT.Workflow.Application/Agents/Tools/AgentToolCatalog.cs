@@ -132,14 +132,14 @@ public sealed class AgentToolCatalog(
             if (task.GetTaskType() is TaskType.FanOut)
                 return new AgentToolResult(AgentToolCallStatus.Rejected, string.Empty, "a FanOut task cannot run as an agent tool");
 
-            return await RunTaskAsync(ctx, reference, task.Clone(), tool.Binding.Mapping, invocation, cancellationToken);
+            return await RunTaskAsync(ctx, reference, task.Clone(), tool.Binding, invocation, cancellationToken);
         };
 
     private async Task<AgentToolResult> RunTaskAsync(
         AgentToolBuildContext ctx,
         IReference reference,
         WorkflowTask prepared,
-        ScriptCode? mapping,
+        AgentToolBinding? binding,
         AgentToolInvocation invocation,
         CancellationToken cancellationToken)
     {
@@ -152,7 +152,9 @@ public sealed class AgentToolCatalog(
         var onExecute = OnExecuteTask.Create(
             order: 0,
             task: reference,
-            mapping: mapping ?? ScriptCode.FromNative(string.Empty));
+            mapping: binding?.Mapping ?? ScriptCode.FromNative(string.Empty),
+            input: binding?.Input,
+            output: binding?.Output);
 
         var result = await engine.ExecuteAsync(
             onExecute,

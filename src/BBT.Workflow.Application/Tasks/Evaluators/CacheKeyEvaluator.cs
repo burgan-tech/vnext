@@ -38,13 +38,14 @@ public sealed class CacheKeyEvaluator(
         {
             if (!script.IsReference)
             {
-                return expressoEvaluator.Evaluate(script, context);
+                return await expressoEvaluator.EvaluateAsync(script, context, cancellationToken);
             }
 
             var body = await ResolveReferenceAsync(script.CodeReference!, cancellationToken);
             return body.IsSuccess
-                ? expressoEvaluator.Evaluate(
-                    ScriptCode.FromNative(body.Value!, location: ConditionScriptLocations.DynamicExpresso), context)
+                ? await expressoEvaluator.EvaluateAsync(
+                    ScriptCode.FromNative(body.Value!, location: ConditionScriptLocations.DynamicExpresso), context,
+                    cancellationToken)
                 : Result<string>.Fail(body.Error);
         }
 

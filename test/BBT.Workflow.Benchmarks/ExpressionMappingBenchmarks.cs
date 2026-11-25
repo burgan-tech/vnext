@@ -141,7 +141,7 @@ public class ExpressionMappingBenchmarks
             e => ScriptCode.FromNative(e, ConditionScriptLocations.DynamicExpresso));
         foreach (var script in _outputScripts)
         {
-            var r = _value.Evaluate(script, _context);
+            var r = _value.EvaluateAsync(script, _context).GetAwaiter().GetResult();
             if (!r.IsSuccess)
                 throw new InvalidOperationException("DeOutputMapping3Warm expression failed: " + r.Error.Message);
         }
@@ -152,7 +152,7 @@ public class ExpressionMappingBenchmarks
             .GetAwaiter().GetResult();
         if (!declWarm.IsSuccess || declWarm.Value is null)
             throw new InvalidOperationException("DeclarativeOutputWarm failed: " + (declWarm.IsSuccess ? "null delta" : declWarm.Error.Message));
-        var valueResult = _value.Evaluate(_valueScript, _context);
+        var valueResult = _value.EvaluateAsync(_valueScript, _context).GetAwaiter().GetResult();
         if (!valueResult.IsSuccess)
             throw new InvalidOperationException("DeValueWarm expression failed: " + valueResult.Error.Message);
     }
@@ -175,7 +175,7 @@ public class ExpressionMappingBenchmarks
         => _condition.EvaluateAsync(_conditionScript, _context).GetAwaiter().GetResult();
 
     [Benchmark]
-    public object DeValueWarm() => _value.Evaluate(_valueScript, _context);
+    public object DeValueWarm() => _value.EvaluateAsync(_valueScript, _context).GetAwaiter().GetResult();
 
     [Benchmark]
     public ScriptResponse RoslynOutputHandlerWarm()
@@ -208,7 +208,7 @@ public class ExpressionMappingBenchmarks
     {
         object? last = null;
         foreach (var script in _outputScripts)
-            last = _value.Evaluate(script, _context);
+            last = _value.EvaluateAsync(script, _context).GetAwaiter().GetResult();
         return last!;
     }
 }

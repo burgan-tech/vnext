@@ -52,6 +52,85 @@ public class ResourceLockStepTests
             _runtimeInfoProvider);
     }
 
+    /// <summary>A step wired with the real Dynamic Expresso value evaluator (the cache-key evaluator).</summary>
+    private ResourceLockStep StepWithExpressions() => new(
+        _scriptEngine,
+        _scriptContextFactory,
+        _instanceRepository,
+        _resourceLockService,
+        _runtimeInfoProvider,
+        expressionEvaluator: new BBT.Workflow.Tasks.Evaluators.DynamicExpressoValueEvaluator(
+            Substitute.For<ILogger<BBT.Workflow.Tasks.Evaluators.DynamicExpressoValueEvaluator>>()));
+
+    private static TransitionExecutionContext ExpressionKeyContext(string code) =>
+        CreateContext(new ResourceLockDefinition(
+            ScriptCode.FromNative(code, location: "dynamicExpresso"),
+            ResourceLockAction.Acquire,
+            DefaultTtl));
+
+    [Fact]
+    public async Task ExecuteAsync_DynamicExpressoKey_IsEvaluatedAsAnExpression_WithoutTheScriptEngine()
+    {
+        SetupScriptContextFactory();
+        _resourceLockService
+            .AcquireAsync(TestResourceKey, Arg.Any<string>(), DefaultTtl, Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var result = await StepWithExpressions().ExecuteAsync(
+            ExpressionKeyContext("\"seat:\" + \"concert1\" + \":A1\""), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _resourceLockService.Received(1)
+            .AcquireAsync(TestResourceKey, Arg.Any<string>(), DefaultTtl, Arg.Any<CancellationToken>());
+        await _scriptEngine.DidNotReceiveWithAnyArgs().CompileToInstanceAsync<ITransitionMapping>(default(ScriptCode)!);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DynamicExpressoKey_EmptyResult_FailsWithKeyEmpty()
+    {
+        SetupScriptContextFactory();
+
+        var result = await StepWithExpressions().ExecuteAsync(ExpressionKeyContext("\"  \""), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ResourceLockKeyEmpty);
+    }
+
+    /// <summary>
+    /// Compatibility: before the label was honoured a dynamicExpresso-labelled key ran as a C# script. One that does
+    /// not evaluate as an expression still runs as a script.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_DynamicExpressoLabelledCSharpKey_StillRunsAsAScript()
+    {
+        SetupScriptEngine(TestResourceKey);
+        _resourceLockService
+            .AcquireAsync(TestResourceKey, Arg.Any<string>(), DefaultTtl, Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var result = await StepWithExpressions().ExecuteAsync(
+            ExpressionKeyContext("return \"seat:concert1:A1\";"), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _scriptEngine.ReceivedWithAnyArgs(1).CompileToInstanceAsync<ITransitionMapping>(default(ScriptCode)!);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DynamicExpressoKey_FailingAsBoth_ReportsTheExpressionError()
+    {
+        SetupScriptContextFactory();
+        _scriptEngine
+            .CompileToInstanceAsync<ITransitionMapping>(Arg.Any<ScriptCode>())
+            .ReturnsForAnyArgs<Task<ITransitionMapping>>(_ => throw new InvalidOperationException("CS1002: ; expected"));
+
+        var result = await StepWithExpressions().ExecuteAsync(
+            ExpressionKeyContext("context.Body[\"seat\"]."), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ResourceLockKeyResolutionFailed);
+        result.Error.Message.ShouldNotContain("CS1002");
+    }
+
     [Fact]
     public void Order_ShouldBeResourceLock()
     {
@@ -281,7 +360,7 @@ public class ResourceLockStepTests
                 "key": "tr1", "from": "state1", "target": "state2",
                 "triggerType": "Manual", "versionStrategy": "Patch",
                 "resourceLock": {
-                  "keyExpression": { "location": "inline", "code": "dummy", "type": "L", "encoding": "NAT" },
+                  "keyExpression": { "location": {{System.Text.Json.JsonSerializer.Serialize(resourceLock.KeyExpression.Location)}}, "code": {{System.Text.Json.JsonSerializer.Serialize(resourceLock.KeyExpression.DecodedCode)}}, "type": "L", "encoding": "NAT" },
                   "action": "{{resourceLock.Action}}",
                   "ttlSeconds": {{resourceLock.TtlSeconds}},
                   "onConflict": "{{resourceLock.OnConflict}}"

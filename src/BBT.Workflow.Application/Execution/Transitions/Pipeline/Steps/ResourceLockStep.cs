@@ -5,22 +5,34 @@ using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Scripting.Rules;
+using BBT.Workflow.Tasks.Evaluators;
+using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Pipeline.Steps;
 
 /// <summary>
 /// Pipeline step that executes resource lock operations (Acquire / Release / Extend)
 /// based on the transition's <see cref="ResourceLockDefinition"/>.
-/// The lock key is resolved by compiling <c>keyExpression</c> as <see cref="ITransitionMapping"/>
-/// and calling its <c>Handler</c> method.
+/// The lock key is resolved from <c>keyExpression</c>: with <c>location: "dynamicExpresso"</c> it is a Dynamic Expresso
+/// expression over the condition-kind scope (<c>data</c>, <c>input</c>, <c>instance</c>, <c>now</c>, <c>user</c>,
+/// <c>context</c>) whose string result is the key (<see cref="IDynamicExpressoValueEvaluator"/>, the
+/// cache-key evaluator); any other location compiles it as <see cref="ITransitionMapping"/> and calls its <c>Handler</c>.
 /// </summary>
+/// <remarks>
+/// Before the label was honoured, a <c>dynamicExpresso</c>-labelled key ran as a C# script (the script engine ignores
+/// the location). Such a key keeps working: when it does not evaluate as an expression it runs as a script, with the
+/// warning <c>ResourceLockKeyExpressionRanAsScript</c>; when neither works the expression's error is reported.
+/// </remarks>
 public sealed class ResourceLockStep(
     IScriptEngine scriptEngine,
     IScriptContextFactory scriptContextFactory,
     IInstanceRepository instanceRepository,
     IResourceLockService resourceLockService,
     IRuntimeInfoProvider runtimeInfoProvider,
-    IClock? clock = null) : ITransitionStep
+    IClock? clock = null,
+    IDynamicExpressoValueEvaluator? expressionEvaluator = null,
+    ILogger<ResourceLockStep>? logger = null) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.ResourceLock;
@@ -56,19 +68,40 @@ public sealed class ResourceLockStep(
         ResourceLockDefinition lockDef,
         CancellationToken cancellationToken)
     {
+        string? expressionError = null;
         try
         {
             using var scriptActivity = ScriptActivityHelper.StartExecuteActivity("lockKey");
+
+            var scriptContext = await BuildScriptContextAsync(context, cancellationToken);
+
+            if (expressionEvaluator is not null && ConditionScriptLocations.IsDynamicExpresso(lockDef.KeyExpression.Location))
+            {
+                var evaluated = await expressionEvaluator.EvaluateAsync(lockDef.KeyExpression, scriptContext, cancellationToken);
+                if (evaluated.IsSuccess)
+                {
+                    return string.IsNullOrWhiteSpace(evaluated.Value)
+                        ? Result<string>.Fail(ExecutionErrors.ResourceLockKeyEmpty(context.TransitionKey))
+                        : Result<string>.Ok(evaluated.Value!);
+                }
+
+                // A caller-roles provider failure (Authorization:110006, retryable) is returned as is: never retried as C#.
+                if (evaluated.Error.Code == WorkflowErrors.CallerRolesUnavailable().Code)
+                    return Result<string>.Fail(evaluated.Error);
+
+                expressionError = evaluated.Error.Message ?? evaluated.Error.Code;
+            }
 
             var mapping = await scriptEngine.CompileToInstanceAsync<ITransitionMapping>(
                 lockDef.KeyExpression,
                 flowScripts: context.Workflow.Scripts,
                 cancellationToken: cancellationToken);
 
-            var scriptContext = await BuildScriptContextAsync(context, cancellationToken);
-
             dynamic result = await mapping.Handler(scriptContext);
             var key = result?.ToString();
+
+            if (expressionError is not null)
+                logger?.ResourceLockKeyExpressionRanAsScript(context.TransitionKey, expressionError);
 
             if (string.IsNullOrWhiteSpace(key))
                 return Result<string>.Fail(
@@ -78,8 +111,10 @@ public sealed class ResourceLockStep(
         }
         catch (Exception ex)
         {
+            // A dynamicExpresso-labelled key that fails as an expression AND as a script reports the expression's
+            // error: that is what its author wrote.
             return Result<string>.Fail(
-                ExecutionErrors.ResourceLockKeyResolutionFailed(context.TransitionKey, ex.Message));
+                ExecutionErrors.ResourceLockKeyResolutionFailed(context.TransitionKey, expressionError ?? ex.Message));
         }
     }
 

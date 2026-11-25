@@ -5,6 +5,16 @@ using DynamicExpresso;
 
 namespace BBT.Workflow.Scripting.Expressions;
 
+/// <summary>Delegate of <see cref="ExpressionSignatures.Condition"/>: data, input, instance, now, user, context → bool.</summary>
+public delegate bool ConditionDelegate(
+    RuleJsonDynamic? data, RuleJsonDynamic? input, ExpressionInstance? instance, DateTimeOffset now, ExpressionUser? user,
+    ExpressoRuleContext? context);
+
+/// <summary>Delegate of <see cref="ExpressionSignatures.Key"/>: data, input, instance, now, user, context → string.</summary>
+public delegate string KeyDelegate(
+    RuleJsonDynamic? data, RuleJsonDynamic? input, ExpressionInstance? instance, DateTimeOffset now, ExpressionUser? user,
+    ExpressoRuleContext? context);
+
 /// <summary>The expression-slot families compiled through <see cref="IExpressionCompiler"/>.</summary>
 public static class ExpressionSignatures
 {
@@ -35,6 +45,35 @@ public static class ExpressionSignatures
         });
 
     /// <summary>
+    /// Condition rules evaluated by <see cref="DynamicExpressoConditionEvaluator"/> (auto-transition, view, schema /
+    /// contract, long-poll and state-notification <c>rule</c>): the condition-kind scope — <c>data</c>, <c>input</c>,
+    /// <c>instance</c>, <c>now</c>, <c>user</c>, <c>context</c> (the <see cref="ValueSlot"/> variables, so every legacy
+    /// <c>context.*</c> expression compiles as before) — <see cref="bool"/> out, no functions, assignment disabled.
+    /// Compile as <see cref="ConditionDelegate"/>. Replaces <see cref="LegacyCondition"/> at run time; its own name, so
+    /// its compile-cache entries never mix with the legacy or value-slot ones.
+    /// </summary>
+    public static readonly ExpressionSignature Condition = new(
+        "condition",
+        [.. MappingVariables()],
+        typeof(bool),
+        NoFunctions,
+        AssignmentOperators.None);
+
+    /// <summary>
+    /// String keys evaluated by <see cref="DynamicExpressoValueEvaluator"/> (CacheAside <c>key</c>, function cache
+    /// <c>keyExpression</c> / <c>generationKeyExpression</c>, transition <c>resourceLock.keyExpression</c>): the
+    /// <see cref="Condition"/> variables, <see cref="string"/> out, with the <c>sha256</c> and <c>varyKey</c> functions of
+    /// <see cref="LegacyValue"/>, assignment disabled. Compile as <see cref="KeyDelegate"/>. Replaces
+    /// <see cref="LegacyValue"/> at run time.
+    /// </summary>
+    public static readonly ExpressionSignature Key = new(
+        "key",
+        [.. MappingVariables()],
+        typeof(string),
+        LegacyValue.Functions,
+        AssignmentOperators.None);
+
+    /// <summary>
     /// Agent inline-tool expressions: <c>args</c>, <c>data</c> (<see cref="ExpandoObject"/>) and <c>now</c>
     /// (<see cref="DateTime"/>) in, <see cref="object"/> out. Compile as
     /// <c>Func&lt;ExpandoObject, ExpandoObject, DateTime, object&gt;</c>.
@@ -63,6 +102,36 @@ public static class ExpressionSignatures
     private static readonly ExpressionSignature MappingOutput = BuildMapping("mapping-output", ScopeKind.MappingOutput);
 
     /// <summary>
+    /// Value slots outside task mappings (transition timer, workflow timeout, SubFlow timeout override, agent prompt):
+    /// the condition-kind scope — <c>data</c>, <c>input</c>, <c>instance</c>, <c>now</c>, <c>user</c>, <c>context</c> —
+    /// <see cref="object"/> out, assignment disabled. The same signature as <see cref="Mapping"/>(<see cref="ScopeKind.Condition"/>).
+    /// </summary>
+    public static ExpressionSignature ValueSlot => MappingCondition;
+
+    /// <summary>Name of the agent-run variable of <see cref="AgentDecision"/>.</summary>
+    public const string OutcomeVariable = "outcome";
+
+    /// <summary>Name of the candidate-list variable of <see cref="AgentDecision"/>.</summary>
+    public const string CandidatesVariable = "candidates";
+
+    /// <summary>
+    /// Agent decision in mode <c>script</c>: the <see cref="ValueSlot"/> variables plus <c>outcome</c>
+    /// (<see cref="ExpressionAgentOutcome"/>) and <c>candidates</c> (<see cref="ExpressionAgentCandidates"/>);
+    /// <see cref="object"/> out (a transition key, or null for no decision), assignment disabled. Its own name, so its
+    /// compile-cache entries never mix with the value slots'.
+    /// </summary>
+    public static readonly ExpressionSignature AgentDecision = new(
+        "agent-decision",
+        [
+            .. MappingCondition.Parameters,
+            new Parameter(OutcomeVariable, typeof(ExpressionAgentOutcome)),
+            new Parameter(CandidatesVariable, typeof(ExpressionAgentCandidates))
+        ],
+        typeof(object),
+        NoFunctions,
+        AssignmentOperators.None);
+
+    /// <summary>
     /// Declarative mapping / condition expressions bound by <see cref="ExpressionScope"/>, in this order:
     /// <c>data</c>, <c>input</c> (<see cref="RuleJsonDynamic"/>), <c>instance</c> (<see cref="ExpressionInstance"/>, camelCase members),
     /// <c>now</c> (<see cref="DateTimeOffset"/>), <c>user</c> (<see cref="ExpressionUser"/>), <c>context</c>
@@ -80,17 +149,20 @@ public static class ExpressionSignatures
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null)
     };
 
+    /// <summary>The condition-kind variables, in delegate order: data, input, instance, now, user, context.</summary>
+    private static List<Parameter> MappingVariables() =>
+    [
+        new(ExpressionScope.DataVariable, typeof(RuleJsonDynamic)),
+        new(ExpressionScope.InputVariable, typeof(RuleJsonDynamic)),
+        new(ExpressionScope.InstanceVariable, typeof(ExpressionInstance)),
+        new(ExpressionScope.NowVariable, typeof(DateTimeOffset)),
+        new(ExpressionScope.UserVariable, typeof(ExpressionUser)),
+        new(ExpressionScope.ContextVariable, typeof(ExpressoRuleContext))
+    ];
+
     private static ExpressionSignature BuildMapping(string name, ScopeKind? phase)
     {
-        List<Parameter> parameters =
-        [
-            new(ExpressionScope.DataVariable, typeof(RuleJsonDynamic)),
-            new(ExpressionScope.InputVariable, typeof(RuleJsonDynamic)),
-            new(ExpressionScope.InstanceVariable, typeof(ExpressionInstance)),
-            new(ExpressionScope.NowVariable, typeof(DateTimeOffset)),
-            new(ExpressionScope.UserVariable, typeof(ExpressionUser)),
-            new(ExpressionScope.ContextVariable, typeof(ExpressoRuleContext))
-        ];
+        var parameters = MappingVariables();
         if (phase is not null)
         {
             parameters.Add(new Parameter(ExpressionScope.TaskVariable, typeof(RuleJsonDynamic)));

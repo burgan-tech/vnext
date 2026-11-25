@@ -240,6 +240,9 @@ public static class TaskServiceCollectionExtensions
             .ValidateOnStart();
         services.TryAddSingleton<IExpressionCompiler, ExpressionCompiler>();
 
+        // Value slots honouring location "dynamicExpresso" (timer, timeout, timeout override, agent prompt / decision).
+        services.TryAddSingleton<ValueSlotExpressionEvaluator>();
+
         // Dynamic Expresso string evaluator (e.g. CacheAside key expressions).
         services.AddScoped<IDynamicExpressoValueEvaluator, DynamicExpressoValueEvaluator>();
         services.AddScoped<ICacheKeyEvaluator, CacheKeyEvaluator>();

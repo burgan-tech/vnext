@@ -904,6 +904,48 @@ public static partial class WorkflowLogs
         string reason);
 
     /// <summary>
+    /// Logs when a resource-lock key labelled <c>dynamicExpresso</c> did not evaluate as an expression but ran as a
+    /// C# script — the meaning such a key had before the label was honoured. Kept for compatibility; relabel the
+    /// script with a file location, or rewrite it as an expression.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10270,
+        Level = LogLevel.Warning,
+        Message = "Resource lock key labelled dynamicExpresso ran as a C# script. TransitionKey={TransitionKey}, ExpressionError={ExpressionError}")]
+    public static partial void ResourceLockKeyExpressionRanAsScript(
+        this ILogger logger,
+        string transitionKey,
+        string expressionError);
+
+    /// <summary>
+    /// Logs when a value slot (transition timer, workflow timeout, SubFlow timeout override, agent prompt, agent
+    /// decision) labelled <c>dynamicExpresso</c> did not evaluate as an expression but ran as a C# script — the meaning
+    /// such a script had before the label was honoured. Kept for compatibility; relabel the script with a file
+    /// location, or rewrite it as an expression.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10271,
+        Level = LogLevel.Warning,
+        Message = "Script labelled dynamicExpresso ran as a C# script. Slot={Slot}, ExpressionError={ExpressionError}")]
+    public static partial void ScriptLabelledDynamicExpressoRanAsScript(
+        this ILogger logger,
+        string slot,
+        string expressionError);
+
+    /// <summary>
+    /// Logs when a Dynamic Expresso key expression (CacheAside <c>key</c>, function cache <c>keyExpression</c> /
+    /// <c>generationKeyExpression</c>, resource-lock <c>keyExpression</c>) fails to compile or evaluate, or cannot read the
+    /// caller's roles. The key's site decides what the failure means.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10272,
+        Level = LogLevel.Warning,
+        Message = "Dynamic Expresso value evaluation failed: {Reason}")]
+    public static partial void DynamicExpressoValueEvaluationFailed(
+        this ILogger logger,
+        string reason);
+
+    /// <summary>
     /// Logs when task envelope creation fails.
     /// </summary>
     [LoggerMessage(
