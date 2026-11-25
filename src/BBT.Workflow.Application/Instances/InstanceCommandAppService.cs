@@ -694,7 +694,7 @@ public sealed class InstanceCommandAppService(
                 .WithBody(instance.LatestData?.Data ?? new JsonData("{}"))
                 .BuildAsync(cancellationToken)
                 // Armed by the start hop: `input` is the start request's attributes.
-                .WithHopInput(startInput);
+                .WithHopInputAsync(startInput);
 
             var mappingResult = await timerEvaluator.EvaluateAsync(
                 effectiveTimeout.Mapping, scriptContext, cancellationToken);

@@ -57,7 +57,7 @@ public sealed class TransitionSchemaResolver(
             .WithCaller(callerAccessorFactory.ForRequest(headerCopy, ct))
             .BuildAsync(ct)
             // `input` is the transition request body (null on the schema read path, which has none).
-            .WithHopInput(requestBody));
+            .WithHopInputAsync(requestBody));
 
         var selected = await selector.SelectAsync(
             candidates,

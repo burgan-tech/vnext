@@ -634,7 +634,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     /// <summary>
     /// The raw request payload that triggered the current hop — the value declarative expressions read as
     /// <c>input</c>. Fixed for the whole hop: the pipeline binds it once (<see cref="BindHopInput"/>, through
-    /// <c>TransitionExecutionContext.GetOrBuildScriptContextAsync</c> or the builder's <c>WithHopInput</c>), and
+    /// <c>TransitionExecutionContext.GetOrBuildScriptContextAsync</c> or the builder's <c>WithHopInputAsync</c>), and
     /// every step's expressions read the same value. <c>null</c> on hops with no request payload (timer, automatic
     /// continuation, SubFlow resume) and on read paths. Not <see cref="Body"/>, which task responses merge into.
     /// Internal: C# scripts keep <see cref="CurrentTransition"/> and <see cref="Body"/>; this only backs <c>input</c>.

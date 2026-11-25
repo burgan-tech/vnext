@@ -44,9 +44,9 @@ public class HopInputBindingTests
     }
 
     [Fact]
-    public async Task WithHopInput_BindsOnAStandaloneBuild()
+    public async Task WithHopInputAsync_BindsOnAStandaloneBuild()
     {
-        var built = await Task.FromResult(Plain()).WithHopInput("payload");
+        var built = await Task.FromResult(Plain()).WithHopInputAsync("payload");
 
         built.HasHopInput.ShouldBeTrue();
         built.HopInput.ShouldBe("payload");

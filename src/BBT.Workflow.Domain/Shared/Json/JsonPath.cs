@@ -23,7 +23,7 @@ namespace BBT.Workflow.Shared.Json;
 /// </summary>
 public sealed class JsonPath
 {
-    private enum SegmentKind : byte { Name, Index, Wildcard }
+    private enum SegmentKind { Name, Index, Wildcard }
 
     private readonly struct Segment
     {
@@ -80,7 +80,7 @@ public sealed class JsonPath
     public bool IsRoot => _segments.Length == 0;
 
     /// <summary>Parses <paramref name="text"/>; a failure carries a validation error naming the offending position.</summary>
-    public static Result<JsonPath> Parse(string text)
+    public static Result<JsonPath> Parse(string text) // skipcq: CS-R1140 — one linear scanner over the path grammar
     {
         if (text is null)
             return Fail("A JSON path is required.", text);
@@ -431,6 +431,8 @@ public sealed class JsonPath
                 }
 
                 break;
+            default:
+                break; // a wildcard, or a segment that does not fit the element's kind
         }
 
         child = default;
@@ -451,6 +453,8 @@ public sealed class JsonPath
                 }
 
                 break;
+            default:
+                break; // a wildcard, or a segment that does not fit the node's kind
         }
 
         child = null;

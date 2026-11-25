@@ -8,7 +8,7 @@ namespace BBT.Workflow.Scripting;
 internal static class ScriptContextHopInputExtensions
 {
     /// <summary>Awaits the build and binds <paramref name="hopInput"/> (<c>null</c> is a valid value).</summary>
-    internal static async Task<ScriptContext> WithHopInput(this Task<ScriptContext> build, object? hopInput)
+    internal static async Task<ScriptContext> WithHopInputAsync(this Task<ScriptContext> build, object? hopInput)
     {
         ArgumentNullException.ThrowIfNull(build);
         var context = await build.ConfigureAwait(false);
