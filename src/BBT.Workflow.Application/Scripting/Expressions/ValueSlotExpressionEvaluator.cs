@@ -11,12 +11,14 @@ using DecisionFn = System.Func<
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Rules.RuleJsonDynamic,
     BBT.Workflow.Scripting.Expressions.ExpressionInstance, System.DateTimeOffset,
     BBT.Workflow.Scripting.Expressions.ExpressionUser, BBT.Workflow.Scripting.Rules.ExpressoRuleContext,
+    BBT.Workflow.Scripting.Expressions.ExpressionHeaders,
     BBT.Workflow.Scripting.Expressions.ExpressionAgentOutcome, BBT.Workflow.Scripting.Expressions.ExpressionAgentCandidates,
     object>;
 using ValueFn = System.Func<
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Rules.RuleJsonDynamic,
     BBT.Workflow.Scripting.Expressions.ExpressionInstance, System.DateTimeOffset,
-    BBT.Workflow.Scripting.Expressions.ExpressionUser, BBT.Workflow.Scripting.Rules.ExpressoRuleContext, object>;
+    BBT.Workflow.Scripting.Expressions.ExpressionUser, BBT.Workflow.Scripting.Rules.ExpressoRuleContext,
+    BBT.Workflow.Scripting.Expressions.ExpressionHeaders, object>;
 
 namespace BBT.Workflow.Scripting.Expressions;
 
@@ -36,7 +38,7 @@ public enum ValueSlotKind
 /// <summary>
 /// Evaluates a <see cref="ScriptCode"/> labelled <c>location: "dynamicExpresso"</c> in a value slot (timer, timeout,
 /// timeout override, agent prompt, agent decision) as a Dynamic Expresso expression over the condition-kind scope
-/// (<c>data</c>, <c>input</c>, <c>instance</c>, <c>now</c>, <c>user</c>, <c>context</c>; the decision adds
+/// (<c>data</c>, <c>input</c>, <c>instance</c>, <c>now</c>, <c>user</c>, <c>context</c>, <c>headers</c>; the decision adds
 /// <c>outcome</c> and <c>candidates</c>), and converts its value to the slot's result type. Singleton, stateless; every
 /// expression goes through the shared <see cref="IExpressionCompiler"/>. Never throws: failures are results.
 /// </summary>
@@ -120,7 +122,7 @@ public sealed class ValueSlotExpressionEvaluator(IExpressionCompiler compiler, T
             var a = scope.Bind(ExpressionSignatures.ValueSlot.Parameters, used);
             value = Normalize(compiled.Value.Invoke(
                 (RuleJsonDynamic?)a[0]!, (RuleJsonDynamic?)a[1]!, (ExpressionInstance?)a[2]!, (DateTimeOffset)a[3]!,
-                (ExpressionUser?)a[4]!, (ExpressoRuleContext?)a[5]!,
+                (ExpressionUser?)a[4]!, (ExpressoRuleContext?)a[5]!, (ExpressionHeaders?)a[6]!,
                 new ExpressionAgentOutcome(outcome), new ExpressionAgentCandidates(candidates)));
         }
         catch (Exception ex)
@@ -250,7 +252,7 @@ public sealed class ValueSlotExpressionEvaluator(IExpressionCompiler compiler, T
             var a = scope.Bind(ExpressionSignatures.ValueSlot.Parameters, used);
             return Result<object?>.Ok(Normalize(compiled.Value.Invoke(
                 (RuleJsonDynamic?)a[0]!, (RuleJsonDynamic?)a[1]!, (ExpressionInstance?)a[2]!, (DateTimeOffset)a[3]!,
-                (ExpressionUser?)a[4]!, (ExpressoRuleContext?)a[5]!)));
+                (ExpressionUser?)a[4]!, (ExpressoRuleContext?)a[5]!, (ExpressionHeaders?)a[6]!)));
         }
         catch (Exception ex)
         {

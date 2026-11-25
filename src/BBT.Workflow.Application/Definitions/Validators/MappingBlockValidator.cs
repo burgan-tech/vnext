@@ -9,13 +9,14 @@ using InputFn = System.Func<
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Rules.RuleJsonDynamic,
     BBT.Workflow.Scripting.Expressions.ExpressionInstance, System.DateTimeOffset,
     BBT.Workflow.Scripting.Expressions.ExpressionUser, BBT.Workflow.Scripting.Rules.ExpressoRuleContext,
-    BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Expressions.ExpressionConfig, object>;
+    BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Expressions.ExpressionConfig,
+    BBT.Workflow.Scripting.Expressions.ExpressionHeaders, object>;
 using OutputFn = System.Func<
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Rules.RuleJsonDynamic,
     BBT.Workflow.Scripting.Expressions.ExpressionInstance, System.DateTimeOffset,
     BBT.Workflow.Scripting.Expressions.ExpressionUser, BBT.Workflow.Scripting.Rules.ExpressoRuleContext,
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Expressions.ExpressionConfig,
-    BBT.Workflow.Scripting.Rules.RuleJsonDynamic, object>;
+    BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Expressions.ExpressionHeaders, object>;
 
 namespace BBT.Workflow.Definitions.Validators;
 

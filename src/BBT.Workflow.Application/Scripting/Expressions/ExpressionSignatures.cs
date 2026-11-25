@@ -5,20 +5,27 @@ using DynamicExpresso;
 
 namespace BBT.Workflow.Scripting.Expressions;
 
-/// <summary>Delegate of <see cref="ExpressionSignatures.Condition"/>: data, input, instance, now, user, context → bool.</summary>
+/// <summary>Delegate of <see cref="ExpressionSignatures.Condition"/>: data, input, instance, now, user, context, headers → bool.</summary>
 public delegate bool ConditionDelegate(
     RuleJsonDynamic? data, RuleJsonDynamic? input, ExpressionInstance? instance, DateTimeOffset now, ExpressionUser? user,
-    ExpressoRuleContext? context);
+    ExpressoRuleContext? context, ExpressionHeaders? headers);
 
-/// <summary>Delegate of <see cref="ExpressionSignatures.Key"/>: data, input, instance, now, user, context → string.</summary>
+/// <summary>Delegate of <see cref="ExpressionSignatures.Key"/>: data, input, instance, now, user, context, headers → string.</summary>
 public delegate string KeyDelegate(
     RuleJsonDynamic? data, RuleJsonDynamic? input, ExpressionInstance? instance, DateTimeOffset now, ExpressionUser? user,
-    ExpressoRuleContext? context);
+    ExpressoRuleContext? context, ExpressionHeaders? headers);
 
 /// <summary>The expression-slot families compiled through <see cref="IExpressionCompiler"/>.</summary>
 public static class ExpressionSignatures
 {
     private static readonly IReadOnlyDictionary<string, Delegate> NoFunctions = new Dictionary<string, Delegate>();
+
+    /// <summary>
+    /// <c>headers</c>: always the LAST variable of a scope signature (after <c>result</c> in the output phase), so adding it
+    /// left every other variable's position unchanged. The agent tool <c>binding.code</c> (<see cref="AgentTool"/>) does not
+    /// have it. Declared first: the static signatures below read it during type initialization.
+    /// </summary>
+    private static readonly Parameter HeadersParameter = new(ExpressionScope.HeadersVariable, typeof(ExpressionHeaders));
 
     /// <summary>
     /// Auto-transition and other condition rules: <c>context</c> (<see cref="ExpressoRuleContext"/>) in,
@@ -47,14 +54,14 @@ public static class ExpressionSignatures
     /// <summary>
     /// Condition rules evaluated by <see cref="DynamicExpressoConditionEvaluator"/> (auto-transition, view, schema /
     /// contract, long-poll and state-notification <c>rule</c>): the condition-kind scope — <c>data</c>, <c>input</c>,
-    /// <c>instance</c>, <c>now</c>, <c>user</c>, <c>context</c> (the <see cref="ValueSlot"/> variables, so every legacy
+    /// <c>instance</c>, <c>now</c>, <c>user</c>, <c>context</c>, <c>headers</c> (the <see cref="ValueSlot"/> variables, so every legacy
     /// <c>context.*</c> expression compiles as before) — <see cref="bool"/> out, no functions, assignment disabled.
     /// Compile as <see cref="ConditionDelegate"/>. Replaces <see cref="LegacyCondition"/> at run time; its own name, so
     /// its compile-cache entries never mix with the legacy or value-slot ones.
     /// </summary>
     public static readonly ExpressionSignature Condition = new(
         "condition",
-        [.. MappingVariables()],
+        [.. MappingVariables(), HeadersParameter],
         typeof(bool),
         NoFunctions,
         AssignmentOperators.None);
@@ -68,7 +75,7 @@ public static class ExpressionSignatures
     /// </summary>
     public static readonly ExpressionSignature Key = new(
         "key",
-        [.. MappingVariables()],
+        [.. MappingVariables(), HeadersParameter],
         typeof(string),
         LegacyValue.Functions,
         AssignmentOperators.None);
@@ -103,8 +110,8 @@ public static class ExpressionSignatures
 
     /// <summary>
     /// Value slots outside task mappings (transition timer, workflow timeout, SubFlow timeout override, agent prompt):
-    /// the condition-kind scope — <c>data</c>, <c>input</c>, <c>instance</c>, <c>now</c>, <c>user</c>, <c>context</c> —
-    /// <see cref="object"/> out, assignment disabled. The same signature as <see cref="Mapping"/>(<see cref="ScopeKind.Condition"/>).
+    /// the condition-kind scope — <c>data</c>, <c>input</c>, <c>instance</c>, <c>now</c>, <c>user</c>, <c>context</c>,
+    /// <c>headers</c> — <see cref="object"/> out, assignment disabled. The same signature as <see cref="Mapping"/>(<see cref="ScopeKind.Condition"/>).
     /// </summary>
     public static ExpressionSignature ValueSlot => MappingCondition;
 
@@ -137,7 +144,8 @@ public static class ExpressionSignatures
     /// <c>now</c> (<see cref="DateTimeOffset"/>), <c>user</c> (<see cref="ExpressionUser"/>), <c>context</c>
     /// (<see cref="ExpressoRuleContext"/>); in both mapping phases also <c>task</c> (<see cref="RuleJsonDynamic"/>, the task's
     /// <c>config</c>), <c>config</c> (<see cref="ExpressionConfig"/>) and the <c>urlEncode</c> function; plus <c>result</c>
-    /// (<see cref="RuleJsonDynamic"/>) for <see cref="ScopeKind.MappingOutput"/> only. <see cref="object"/> out, assignment
+    /// (<see cref="RuleJsonDynamic"/>) for <see cref="ScopeKind.MappingOutput"/> only; and last, in every kind, <c>headers</c>
+    /// (<see cref="ExpressionHeaders"/>, the incoming request's headers). <see cref="object"/> out, assignment
     /// operators disabled (<see cref="AssignmentOperators.None"/>). Each kind has its own
     /// signature name, so the compile cache never mixes them.
     /// </summary>
@@ -149,7 +157,8 @@ public static class ExpressionSignatures
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null)
     };
 
-    /// <summary>The condition-kind variables, in delegate order: data, input, instance, now, user, context.</summary>
+
+    /// <summary>The condition-kind variables before <c>headers</c>, in delegate order: data, input, instance, now, user, context.</summary>
     private static List<Parameter> MappingVariables() =>
     [
         new(ExpressionScope.DataVariable, typeof(RuleJsonDynamic)),
@@ -171,6 +180,8 @@ public static class ExpressionSignatures
 
         if (phase == ScopeKind.MappingOutput)
             parameters.Add(new Parameter(ExpressionScope.ResultVariable, typeof(RuleJsonDynamic)));
+
+        parameters.Add(HeadersParameter);
 
         // Assignment is off: `data.x = 1` would write through a borrowed view instead of producing a value.
         return new ExpressionSignature(

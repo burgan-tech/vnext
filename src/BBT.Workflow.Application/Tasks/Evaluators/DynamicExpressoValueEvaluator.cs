@@ -17,7 +17,7 @@ namespace BBT.Workflow.Tasks.Evaluators;
 /// <see cref="string"/> key — CacheAside <c>key</c>, function cache <c>keyExpression</c> / <c>generationKeyExpression</c>,
 /// transition <c>resourceLock.keyExpression</c> — without a Roslyn <c>.csx</c> mapping. The expression sees the
 /// condition-kind scope (<see cref="ExpressionSignatures.Key"/>): <c>data</c>, <c>input</c>, <c>instance</c>, <c>now</c>,
-/// <c>user</c> and the legacy <c>context</c>, plus the <c>sha256</c> and <c>varyKey</c> functions.
+/// <c>user</c>, <c>headers</c> and the legacy <c>context</c>, plus the <c>sha256</c> and <c>varyKey</c> functions.
 /// </summary>
 public interface IDynamicExpressoValueEvaluator
 {
@@ -114,7 +114,7 @@ public sealed class DynamicExpressoValueEvaluator : IDynamicExpressoValueEvaluat
             var a = scope.Bind(ExpressionSignatures.Key.Parameters, used);
             var value = compiled.Value.Invoke(
                 (RuleJsonDynamic?)a[0], (RuleJsonDynamic?)a[1], (ExpressionInstance?)a[2], (DateTimeOffset)a[3]!,
-                (ExpressionUser?)a[4], (ExpressoRuleContext?)a[5]);
+                (ExpressionUser?)a[4], (ExpressoRuleContext?)a[5], (ExpressionHeaders?)a[6]);
             return Result<string>.Ok(value);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)

@@ -33,7 +33,8 @@ public enum ScopeKind
 /// Variables: <c>data</c> the instance's latest data, <c>input</c> the raw request payload of the hop
 /// (<see cref="ScriptContext.HopInput"/>; never the phase-dependent <see cref="ScriptContext.Body"/>), <c>instance</c> the read-only instance view,
 /// <c>now</c> one clock reading per scope, <c>user</c> the caller (fail-closed roles), <c>context</c> the
-/// legacy <see cref="ExpressoRuleContext"/>, and in the output phase <c>result</c> the task's standard
+/// legacy <see cref="ExpressoRuleContext"/>, <c>headers</c> the incoming request's headers (<see cref="ExpressionHeaders"/>, a
+/// view over <see cref="ScriptContext.Headers"/>: the <c>Workflow:HeaderExposure:Deny</c> names are absent), and in the output phase <c>result</c> the task's standard
 /// response (<c>body</c>, <c>headers</c>, <c>statusCode</c>). In both mapping phases <c>task</c> is the task's
 /// <c>config</c> JSON and <c>config</c> the host configuration (<see cref="ExpressionConfig"/>), both given by
 /// <see cref="WithTask"/>. <c>data</c>, <c>instance.Data</c>, a
@@ -72,6 +73,13 @@ public sealed class ExpressionScope
     /// <summary>Name of the host-configuration variable (mapping phases only).</summary>
     public const string ConfigVariable = "config";
 
+    /// <summary>
+    /// Name of the incoming-request-headers variable (<see cref="ExpressionHeaders"/>, every kind): a read-only view over
+    /// <see cref="ScriptContext.Headers"/>, so <c>Workflow:HeaderExposure:Deny</c> applies to it exactly as to
+    /// <c>context.Headers</c>.
+    /// </summary>
+    public const string HeadersVariable = "headers";
+
     private readonly ScriptContext _context;
     private readonly TimeProvider _clock;
     private readonly ICallerAccessor _caller;
@@ -94,6 +102,7 @@ public sealed class ExpressionScope
     private RuleJsonDynamic? _task;
     private IConfiguration? _configuration;
     private ExpressionConfig? _config;
+    private ExpressionHeaders? _headers;
     private bool _userPrepared;
     private string[]? _roles;
 
@@ -236,6 +245,8 @@ public sealed class ExpressionScope
         ResultVariable when _kind == ScopeKind.MappingOutput => ResultView(),
         TaskVariable when _kind != ScopeKind.Condition => TaskView(),
         ConfigVariable when _kind != ScopeKind.Condition => _config ??= new ExpressionConfig(_configuration),
+        // The script view (deny list applied), never TransportHeaders; wrapped, not copied.
+        HeadersVariable => _headers ??= new ExpressionHeaders((object?)_context.Headers),
         _ => throw new ArgumentException($"'{name}' is not a variable of a {_kind} expression scope.", nameof(name))
     };
 

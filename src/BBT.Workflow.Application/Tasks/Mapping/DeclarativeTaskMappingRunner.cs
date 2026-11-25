@@ -19,13 +19,14 @@ using InputFn = System.Func<
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Rules.RuleJsonDynamic,
     BBT.Workflow.Scripting.Expressions.ExpressionInstance, System.DateTimeOffset,
     BBT.Workflow.Scripting.Expressions.ExpressionUser, BBT.Workflow.Scripting.Rules.ExpressoRuleContext,
-    BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Expressions.ExpressionConfig, object>;
+    BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Expressions.ExpressionConfig,
+    BBT.Workflow.Scripting.Expressions.ExpressionHeaders, object>;
 using OutputFn = System.Func<
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Rules.RuleJsonDynamic,
     BBT.Workflow.Scripting.Expressions.ExpressionInstance, System.DateTimeOffset,
     BBT.Workflow.Scripting.Expressions.ExpressionUser, BBT.Workflow.Scripting.Rules.ExpressoRuleContext,
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Expressions.ExpressionConfig,
-    BBT.Workflow.Scripting.Rules.RuleJsonDynamic, object>;
+    BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Expressions.ExpressionHeaders, object>;
 
 namespace BBT.Workflow.Tasks.Mapping;
 
@@ -505,7 +506,7 @@ internal sealed class DeclarativeMappingPlan
             if (isInput)
             {
                 selectVariable = signature.Parameters.FirstOrDefault(
-                    p => p.Name == select.FirstSegment && p.Name != ExpressionScope.ConfigVariable);
+                    p => p.Name == select.FirstSegment && IsSelectable(p.Name));
                 if (selectVariable is null)
                     return Invalid($"input 'select' {select.Text} must start at a JSON variable ({string.Join(", ", SelectableInputVariables(signature))}).");
                 selectTail = select.WithoutFirstSegment();
@@ -543,7 +544,7 @@ internal sealed class DeclarativeMappingPlan
                 entry = new SetEntry(key, target.Value!,
                     a => fn((RuleJsonDynamic?)a[0], (RuleJsonDynamic?)a[1], (ExpressionInstance?)a[2],
                         (DateTimeOffset)a[3]!, (ExpressionUser?)a[4], (ExpressoRuleContext?)a[5],
-                        (RuleJsonDynamic?)a[6], (ExpressionConfig?)a[7]),
+                        (RuleJsonDynamic?)a[6], (ExpressionConfig?)a[7], (ExpressionHeaders?)a[8]),
                     compiled.Value.UsedIdentifiers);
             }
             else
@@ -555,7 +556,7 @@ internal sealed class DeclarativeMappingPlan
                 entry = new SetEntry(key, target.Value!,
                     a => fn((RuleJsonDynamic?)a[0], (RuleJsonDynamic?)a[1], (ExpressionInstance?)a[2],
                         (DateTimeOffset)a[3]!, (ExpressionUser?)a[4], (ExpressoRuleContext?)a[5],
-                        (RuleJsonDynamic?)a[6], (ExpressionConfig?)a[7], (RuleJsonDynamic?)a[8]),
+                        (RuleJsonDynamic?)a[6], (ExpressionConfig?)a[7], (RuleJsonDynamic?)a[8], (ExpressionHeaders?)a[9]),
                     compiled.Value.UsedIdentifiers);
                 needsResult |= compiled.Value.UsedIdentifiers.Contains(ExpressionScope.ResultVariable);
             }
@@ -571,9 +572,15 @@ internal sealed class DeclarativeMappingPlan
                 : null));
     }
 
-    /// <summary>The variables an input <c>select</c> may start at: every JSON-shaped one (not <c>config</c>).</summary>
+    /// <summary>
+    /// The variables an input <c>select</c> may start at: every JSON-shaped one — not <c>config</c>, not <c>headers</c>
+    /// (read a header with a <c>set</c> expression, <c>headers["x-channel"]</c>).
+    /// </summary>
     internal static IEnumerable<string> SelectableInputVariables(ExpressionSignature signature) =>
-        signature.Parameters.Select(p => p.Name).Where(name => name != ExpressionScope.ConfigVariable);
+        signature.Parameters.Select(p => p.Name).Where(IsSelectable);
+
+    private static bool IsSelectable(string name) =>
+        name is not (ExpressionScope.ConfigVariable or ExpressionScope.HeadersVariable);
 
     private static Result<JsonPath> Target(string text, string what, bool isInput, HashSet<string> partial)
     {

@@ -18,8 +18,8 @@ using Xunit;
 
 namespace BBT.Workflow.Application.Tests.Scripting.Expressions;
 
-using InputFn = Func<RuleJsonDynamic, RuleJsonDynamic, ExpressionInstance, DateTimeOffset, ExpressionUser, ExpressoRuleContext, RuleJsonDynamic, ExpressionConfig, object>;
-using OutputFn = Func<RuleJsonDynamic, RuleJsonDynamic, ExpressionInstance, DateTimeOffset, ExpressionUser, ExpressoRuleContext, RuleJsonDynamic, ExpressionConfig, RuleJsonDynamic, object>;
+using InputFn = Func<RuleJsonDynamic, RuleJsonDynamic, ExpressionInstance, DateTimeOffset, ExpressionUser, ExpressoRuleContext, RuleJsonDynamic, ExpressionConfig, ExpressionHeaders, object>;
+using OutputFn = Func<RuleJsonDynamic, RuleJsonDynamic, ExpressionInstance, DateTimeOffset, ExpressionUser, ExpressoRuleContext, RuleJsonDynamic, ExpressionConfig, RuleJsonDynamic, ExpressionHeaders, object>;
 
 public sealed class ExpressionScopeTests
 {
@@ -108,11 +108,11 @@ public sealed class ExpressionScopeTests
     public void Mapping_DeclaresVariables_ResultOnlyForOutput()
     {
         ExpressionSignatures.Mapping(ScopeKind.MappingInput).Parameters.Select(p => p.Name)
-            .ShouldBe(["data", "input", "instance", "now", "user", "context", "task", "config"]);
+            .ShouldBe(["data", "input", "instance", "now", "user", "context", "task", "config", "headers"]);
         ExpressionSignatures.Mapping(ScopeKind.MappingOutput).Parameters.Select(p => p.Name)
-            .ShouldBe(["data", "input", "instance", "now", "user", "context", "task", "config", "result"]);
+            .ShouldBe(["data", "input", "instance", "now", "user", "context", "task", "config", "result", "headers"]);
         ExpressionSignatures.Mapping(ScopeKind.Condition).Parameters.Select(p => p.Name)
-            .ShouldBe(["data", "input", "instance", "now", "user", "context"]);
+            .ShouldBe(["data", "input", "instance", "now", "user", "context", "headers"]);
         ExpressionSignatures.Mapping(ScopeKind.MappingInput).Functions.Keys.ShouldBe(["urlEncode"]);
         ExpressionSignatures.Mapping(ScopeKind.Condition).Functions.ShouldBeEmpty();
         ExpressionSignatures.Mapping(ScopeKind.MappingInput).ReturnType.ShouldBe(typeof(object));
@@ -387,7 +387,7 @@ public sealed class ExpressionScopeTests
     [Fact]
     public void TaskAndConfig_AreNotConditionVariables()
     {
-        _compiler.Compile<Func<RuleJsonDynamic, RuleJsonDynamic, ExpressionInstance, DateTimeOffset, ExpressionUser, ExpressoRuleContext, object>>(
+        _compiler.Compile<Func<RuleJsonDynamic, RuleJsonDynamic, ExpressionInstance, DateTimeOffset, ExpressionUser, ExpressoRuleContext, ExpressionHeaders, object>>(
                 "task.url", ExpressionSignatures.Mapping(ScopeKind.Condition))
             .IsSuccess.ShouldBeFalse();
     }

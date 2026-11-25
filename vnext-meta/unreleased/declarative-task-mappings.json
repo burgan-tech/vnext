@@ -31,6 +31,11 @@
         "status": "stable",
         "description": "One variable standard for every Dynamic Expresso slot: condition rules (auto-transition, view, transition/function schemas[] and contract, long-poll, state-notification rule) and string keys (CacheAside key, function cache keyExpression / generationKeyExpression, resourceLock.keyExpression) bind data, input, instance (camelCase), now and user beside the unchanged legacy context, lazily (a context-only rule resolves nothing extra). Every existing context.* expression compiles and returns the same value; assignment operators are disabled in these slots. A failing rule does not select; a key fails as before; user.roles on a hop with no caller fails (never an empty set) and a role-provider failure keeps each site's Authorization:110006 outcome. sha256 and varyKey stay available in keys. Agent tool binding.code keeps args/data(ExpandoObject)/now."
       },
+      "headersExpressionVariable": {
+        "since": "next",
+        "status": "stable",
+        "description": "Every Dynamic Expresso slot that binds the standard variables (task mapping input/output set expressions, condition rules, string keys, timer / timeout / agent prompt / agent decision value slots) has a headers variable: the incoming request's headers, read-only, headers[\"x-channel\"] (the value or null, case-insensitive name) and headers.has(\"x-channel\"). A view over the same dictionary as context.Headers, bound only when used, never copied: Workflow:HeaderExposure:Deny removes a name from both alike, and the runtime's transport headers are never reachable. Hyphenated names need the indexer. Not a select root (use a set expression). In a task mapping, task.headers is the task's configured outgoing headers, headers the incoming ones. context.Headers is unchanged; agent tool binding.code has no headers."
+      },
       "uniformHopInput": {
         "since": "next",
         "status": "stable",

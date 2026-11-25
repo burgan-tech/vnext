@@ -38,8 +38,26 @@ A task binding (`onExecuteTask` entry of a state `onEntries`/`onExits`, a transi
 | `task` | the task's `config` as authored (a JSON view like `data`): `task.url`, `task.body.x`; in the output phase, as the input phase left it |
 | `config` | the host configuration: `config.get("Key")`, `config.get("Key", "fallback")` (same reach as `GetConfigValue`) |
 | `result` | **output phase only**: the task's standard response `body`, `headers`, `statusCode` |
+| `headers` | the **incoming request's** headers, read-only: `headers["x-channel"]` (the value, or `null` when absent), `headers.has("x-channel")` (bool); names are case-insensitive — see [Headers](#headers) |
 
-Function: `urlEncode(value)` percent-encodes one URL component. `task`, `config` and `urlEncode` exist in task mappings only, not in condition rules.
+### Headers
+
+`headers` is a thin view over the same dictionary that backs `context.Headers` — nothing is copied or serialized, and
+it is bound only when an expression uses it. It therefore follows `Workflow:HeaderExposure:Deny` exactly as
+`context.Headers` does: a denied name is absent from both ([Header Exposure](header-exposure.md)). The runtime's own
+transport headers (the unreduced request the runtime uses for credentials and identity) are never reachable.
+
+- **Use the indexer for a hyphenated name**: `headers["x-channel"]`. `headers.x-channel` parses as a subtraction and
+  does not compile.
+- Two members only: the indexer and `has(name)`. A value is text (`headers["x-n"]` is `"5"`, not a number).
+- **`task.headers` is not `headers`.** In a task mapping, `task.headers` is the task's own configured **outgoing**
+  headers (its `config.headers`, what the task will send, written with `"$.headers.x-channel"` targets); `headers` is the
+  **incoming** request's headers. Forwarding one: `"set": { "$.headers.x-channel": "headers[\"x-channel\"]" }`.
+- `headers` is not a `select` root: `select` reads JSON variables only, so `"select": "$.headers.x"` is a publish error.
+  Read a header with a `set` expression instead: `"$.body.channel": "headers[\"x-channel\"]"`.
+- `context.Headers` is unchanged and keeps working.
+
+Function: `urlEncode(value)` percent-encodes one URL component. `task`, `config` and `urlEncode` exist in task mappings only, not in condition rules. `headers` exists in every slot below except the agent tool `binding.code`.
 
 Variables are bound lazily, only when an expression uses them; nothing is cloned.
 
@@ -52,7 +70,7 @@ Variables are bound lazily, only when an expression uses them; nothing is cloned
 - A path INTO a field whose configured value is not an object (`$.body.x` over an array body) fails instead of replacing it; target the field as a whole to replace it. An absent or `null` field becomes an object.
 - A `headers` object's values are written as strings (`"$.headers.x-count": "3"` sends `"3"`).
 - **A field the task type does not read is ignored**, as it would be in the task definition: a binding holds only a task reference, so publish cannot see the type, and the field set is the type's parser. Check spelling against the task's schema.
-- `select` + `into` copies one value; they must appear together (publish error otherwise). An input `select` starts with a JSON variable name (`$.data.customer`, `$.task.body`); `config` is not selectable.
+- `select` + `into` copies one value; they must appear together (publish error otherwise). An input `select` starts with a JSON variable name (`$.data.customer`, `$.task.body`); `config` and `headers` are not selectable (read a header with a `set` expression, `headers["x-channel"]`).
 - The input phase journals nothing (the values are not echoed into the task journal).
 - **FanOut, Notification and Human tasks reject a binding that carries declarative blocks at run time** (`TaskDeclarativeMappingFailed`). Every other task type runs both blocks.
 
@@ -142,7 +160,7 @@ The output phase sees the same `task` after the input phase, so `"$.calledUrl": 
 | `select` | the task response only: `result` = `{ body, headers, statusCode }`; `$` is `result`, default `$.body` | — |
 | `into` | the value `select` found | the delta (not instance data) |
 | `set` key | — | the same delta |
-| `set` value | every variable: `result`, `data`, `input`, `instance`, `now`, `user`, `task`, `config`, `context` | — |
+| `set` value | every variable: `result`, `data`, `input`, `instance`, `now`, `user`, `task`, `config`, `context`, `headers` | — |
 
 The block never edits instance data directly: it builds a delta, and the delta is merged once at the end. `data` in
 a `set` expression is therefore the data **before** this task's output — what `into` just wrote to the delta is not
@@ -250,14 +268,14 @@ A missing `select` path, a missing leaf, `?.`, or member access on a missing int
 
 A `ScriptCode` with `location: "dynamicExpresso"` (`encoding: "NAT"`) is an inline expression in these slots — no
 `.csx`, no Roslyn compile. **One standard for every slot:** the condition rules and the string keys bind the same
-variables as the value slots below — `data`, `input`, `instance` (camelCase), `now`, `user` — next to the legacy rule
+variables as the value slots below — `data`, `input`, `instance` (camelCase), `now`, `user`, `headers` — next to the legacy rule
 context `context` (PascalCase members), which is unchanged: every existing `context.*` expression compiles and returns
 what it did (same interpreter options, same number type). No `task`, `config` or `result`. Variables are bound lazily:
 a `context`-only rule builds the legacy context and nothing else, and resolves no roles.
 
 | Slot | Result | Evaluator (signature) | Variables |
 |---|---|---|---|
-| Transition `rule` (auto), view `rule`, transition / function `schemas[]` and contract `rule`, long-poll `rule`, state-notification `rule` | `bool` | `RoutingConditionEvaluator` → `DynamicExpressoConditionEvaluator` (`condition`) | `data`, `input`, `instance`, `now`, `user`, `context` |
+| Transition `rule` (auto), view `rule`, transition / function `schemas[]` and contract `rule`, long-poll `rule`, state-notification `rule` | `bool` | `RoutingConditionEvaluator` → `DynamicExpressoConditionEvaluator` (`condition`) | `data`, `input`, `instance`, `now`, `user`, `context`, `headers` |
 | CacheAside `key`, function cache `keyExpression` / `generationKeyExpression` | `string` | `CacheKeyEvaluator` / `FunctionAppService` → `DynamicExpressoValueEvaluator` (`key`) | the same, plus the functions `sha256(text)` and `varyKey(context)` |
 | Transition `resourceLock.keyExpression` | `string` (the lock key) | `ResourceLockStep` → `DynamicExpressoValueEvaluator` (`key`) | as above |
 | Agent tool `binding.code` (tool kind 2) | `object` | `AgentToolCatalog` (`agent-tool`) | `args`, `data` (`ExpandoObject`), `now` (`DateTime`) — **the one exception**, see below |
@@ -322,13 +340,13 @@ error and the accessor stays failed, so each site keeps its documented outcome: 
 automatic rule fails the step (no DefaultAutoTransition), a lock key fails with `110006` and is never retried as C#.
 Reading `user` at all (even `user.available`) on a caller-driven hop resolves the roles once, as in task mappings.
 
-**The agent-tool exception.** `tools[].binding.code` keeps its own variables (`args`, `data`, `now`) and assignment
+**The agent-tool exception.** `tools[].binding.code` keeps its own variables (`args`, `data`, `now`; no `headers`) and assignment
 setting. Its `data` is an `ExpandoObject` and existing expressions rely on that dynamic access with implicit numeric
 conversion (`data.amount > 5`); the standard `data` view (`RuleJsonDynamic`) needs `data.amount.AsDouble() > 5` and
 would break them. A tool kind 1 (`binding.input` / `binding.output` blocks) already gets the standard mapping variables.
 
 The value slots below bind the mapping variables of a condition (decision D-1): `data`, `input`, `instance`
-(camelCase), `now`, `user`, `context` — no `task`, `config` or `result`, assignment disabled. They are evaluated by
+(camelCase), `now`, `user`, `context`, `headers` — no `task`, `config` or `result`, assignment disabled. They are evaluated by
 `ValueSlotExpressionEvaluator` (signature `mapping-condition`; the decision has its own, `agent-decision`).
 
 | Slot | JSON | Result | Extra variables |

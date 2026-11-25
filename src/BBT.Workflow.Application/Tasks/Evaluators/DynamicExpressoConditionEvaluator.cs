@@ -12,7 +12,7 @@ namespace BBT.Workflow.Tasks.Evaluators;
 /// <summary>
 /// Evaluates condition rules (auto-transition, view, schema / contract, long-poll, state-notification <c>rule</c>) stored as
 /// plain text Dynamic Expresso expressions, over the condition-kind scope (<see cref="ExpressionSignatures.Condition"/>):
-/// <c>data</c>, <c>input</c>, <c>instance</c>, <c>now</c>, <c>user</c> and the legacy <c>context</c>, each bound only when
+/// <c>data</c>, <c>input</c>, <c>instance</c>, <c>now</c>, <c>user</c>, <c>headers</c> and the legacy <c>context</c>, each bound only when
 /// the expression uses it. A rule that fails (compile, evaluation, a <c>user.roles</c> read on a hop with no caller)
 /// returns a failure, which every selection site reads as "does not select"; a caller-roles provider failure returns
 /// <c>Authorization:110006</c> and leaves <see cref="BBT.Workflow.Scripting.Caller.ICallerAccessor.ResolutionFailed"/>
@@ -109,7 +109,7 @@ public sealed class DynamicExpressoConditionEvaluator : IConditionEvaluator
             var a = scope.Bind(ExpressionSignatures.Condition.Parameters, used);
             var value = compiled.Value.Invoke(
                 (RuleJsonDynamic?)a[0], (RuleJsonDynamic?)a[1], (ExpressionInstance?)a[2], (DateTimeOffset)a[3]!,
-                (ExpressionUser?)a[4], (ExpressoRuleContext?)a[5]);
+                (ExpressionUser?)a[4], (ExpressoRuleContext?)a[5], (ExpressionHeaders?)a[6]);
             return Result<bool>.Ok(value);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
