@@ -654,7 +654,11 @@ public sealed class InstanceRetryAppService(
     {
         logger.SubFlowRestartFailed(snapshot.InstanceId, subflowCorrelation.Id, error.Message ?? error.Code);
 
-        var faultRequest = new PostCommitFaultRequest(error.Code, error.Message ?? "Subflow restart failed", error.Detail);
+        // The restarted child may have been created and then faulted, settling this parent itself;
+        // the fault then steps aside for the parent's boundary (vnext#1256).
+        var faultRequest = new PostCommitFaultRequest(
+            error.Code, error.Message ?? "Subflow restart failed", error.Detail,
+            StartedSubflowCorrelationId: subflowCorrelation.Id);
 
         for (var attempt = 1; attempt <= MaxFaultCompensationAttempts; attempt++)
         {

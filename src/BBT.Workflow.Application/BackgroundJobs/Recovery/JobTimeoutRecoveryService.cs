@@ -1,8 +1,11 @@
 using System.Diagnostics;
+using BBT.Aether.Events;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Payloads;
+using BBT.Workflow.Execution.Cancellation;
 using BBT.Workflow.Execution.Pipeline;
+using BBT.Workflow.Execution.PostCommit.Relay;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Telemetry;
@@ -18,7 +21,8 @@ public sealed class JobTimeoutRecoveryService(
     IInstanceTransitionRepository transitionRepository,
     IOptions<WorkflowExecutionOptions> options,
     ILogger<JobTimeoutRecoveryService> logger,
-    ISubItemEventDataResolver? subItemDataResolver = null) : IJobTimeoutRecoveryService
+    ISubItemEventDataResolver? subItemDataResolver = null,
+    IPostCommitRelayDispatcher? relayDispatcher = null) : IJobTimeoutRecoveryService
 {
     public Task FaultInstanceAsync(TransitionJobPayload args, CancellationToken cancellationToken)
         => FaultInstanceAsync(
@@ -33,6 +37,9 @@ public sealed class JobTimeoutRecoveryService(
         string incidentErrorCode,
         CancellationToken cancellationToken)
     {
+        // Set only once the fault has committed, so a failed recovery relays nothing.
+        IReadOnlyList<DomainEventEnvelope> faultEvents = [];
+
         try
         {
             await using var uow = uowManager.Begin(
@@ -68,6 +75,9 @@ public sealed class JobTimeoutRecoveryService(
             instance.Fault(args.Domain,
                 subItemData: await subItemDataResolver.ResolveOrStoredAsync(instance, cancellationToken));
 
+            // Snapshot BEFORE the save: the SaveChanges sink drains and clears the aggregate's events.
+            var raisedEvents = instance.GetDomainEvents().ToList();
+
             var openTransition = await transitionRepository.GetLatestIncompleteAsync(
                 args.InstanceId, cancellationToken);
             if (openTransition != null)
@@ -84,6 +94,8 @@ public sealed class JobTimeoutRecoveryService(
                 await uow.CommitAsync(cancellationToken);
                 commitContext = commitActivity?.Context ?? default;
             }
+
+            faultEvents = raisedEvents;
 
             // The job's episode is still ambient here (TransitionJobHandler runs recovery inside its
             // lane scope): a job that timed out rests the instance Faulted, and that is the client's
@@ -115,5 +127,24 @@ public sealed class JobTimeoutRecoveryService(
                 "Recovery failed for instance {InstanceId}. Instance may remain in Busy status",
                 args.InstanceId);
         }
+
+        await RelayFaultEventsAsync(faultEvents);
+    }
+
+    /// <summary>
+    /// Relays the events the committed fault raised, outside its unit of work. A timed-out job that
+    /// is a sub item raised its parent's <c>InstanceSubFaultedEvent</c> here, in a unit of work no
+    /// runner relays from; without the relay a parent in another domain never hears of it, because
+    /// the child domain's Inbox drops the event (vnext#1256). Bounded by the compensation budget
+    /// rather than the recovery's own token, which is deliberately <c>None</c>; the dispatcher
+    /// never throws, and the outbox row stays the durable record.
+    /// </summary>
+    private async Task RelayFaultEventsAsync(IReadOnlyList<DomainEventEnvelope> faultEvents)
+    {
+        if (relayDispatcher is null || faultEvents.Count == 0)
+            return;
+
+        using var compensation = CompensationCancellation.Create();
+        await relayDispatcher.RelayAsync(faultEvents, compensation.Token);
     }
 }

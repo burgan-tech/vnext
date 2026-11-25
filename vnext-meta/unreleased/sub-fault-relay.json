@@ -1,0 +1,55 @@
+{
+  "releaseNote": {
+    "summary": "A SubFlow or SubProcess child that faults now tells a parent in another domain right after the fault commits, so that parent no longer stays Busy.",
+    "breaking": false,
+    "docs": []
+  },
+  "migrations": [
+    {
+      "id": "sub-fault-relayed-after-fault-commit",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "instance.sub.faulted (post-commit relay to {domain}/workflows/{workflow}/instances/{instance}/sub/fault, parent in another domain)",
+      "since": "next",
+      "severity": "info",
+      "title": "A sub item's fault reaches a parent in another domain right after the fault commits",
+      "description": "When a SubFlow or SubProcess child faults and its parent is hosted in another domain, the runtime now calls the parent's sub/fault endpoint through service invocation right after the child's fault commits: when a pipeline step failed with no error-boundary reroute, when post-commit coordination failed, when its transition job timed out, and when a parent faults while settling its own child because no error-boundary rule matched. Before, that fault was delivered only through the Inbox, and the child domain's Inbox drops an event whose parent it does not host, so the parent stayed Busy with no incident (vnext#1256). A parent hosted in the same runtime (including a domain co-hosted through APP_DOMAINS) is unchanged: it still learns of the fault through the Inbox.",
+      "action": "None required. A cross-domain parent's errorBoundary on its SubFlow state now runs when the child faults; review flows that relied on that parent staying Busy. Parents already stuck Busy by an earlier cross-domain fault are not recovered by the upgrade."
+    },
+    {
+      "id": "child-fault-wins-over-start-compensation",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "SubFlow start that fails after the child, in another domain than the parent, was created and faulted",
+      "since": "next",
+      "severity": "info",
+      "title": "A child's own fault wins over its parent's start compensation (parent in another domain)",
+      "description": "When a SubFlow child in another domain than its parent is created, faults in its own start chain and has already reported that fault to its parent, the parent's start compensation no longer faults the parent on top of it: the parent rests where its error boundary put it, with one incident (log 10268). Before, a parent whose boundary had routed it to a non-terminal recovery state was then faulted there with a second incident. The compensation steps aside only when the start's correlation is closed with outcome Faulted; a child that was never created, a missing correlation, a child that completed or was canceled, and a SubProcess start leave the parent faulted, as before. A parent in the same domain is unchanged: it learns of the child's fault through the Inbox, after the compensation has already faulted it.",
+      "action": "None required."
+    },
+    {
+      "id": "sub-fault-domain-mismatch-logged-as-warning",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "Inbox worker log EventId 40111 (SubFlowFaultIgnoredDomainMismatch); post-commit relay logs 40125, 40126, 40133, 40142",
+      "since": "next",
+      "severity": "info",
+      "title": "Relay failures are findable: ids on the relay logs, an Error for a lost cross-domain delivery",
+      "description": "The Inbox worker logs EventId 40111 at Warning instead of Debug when it drops an instance.sub.faulted event whose parent is hosted in another domain; it is written for every cross-domain child fault, whether or not the relay succeeded. The post-commit relay failure logs 40125, 40126 and 40133 now carry the sub and parent instance ids and the route, and no longer claim that the Inbox backup delivers on a remote route. A sub item's terminal event (completed, faulted, canceled) that could not be relayed to a parent in another domain additionally logs 40142 at Error.",
+      "action": "Alert on 40142. A 40111 with no 40124 for the same sub instance is a lost delivery as well (for example a process that stopped between the fault commit and the relay)."
+    }
+  ],
+  "knownIssues": [
+    {
+      "id": "sub-fault-cross-domain-relay-not-retried",
+      "affectedVersions": ">=next",
+      "severity": "warning",
+      "component": "runtime",
+      "path": "POST {domain}/workflows/{workflow}/instances/{instance}/sub/fault (cross-domain fault relay)",
+      "title": "A cross-domain child fault whose relay fails is not retried, and three parent-fault sites still do not relay upward.",
+      "description": "A child in another domain reports its fault to the parent through one post-commit relay call. That call has no durable backup: the child domain's Inbox drops a fault whose parent lives elsewhere. If the call fails or the process stops before it, the parent stays Busy (logs 40142, or 40111 with no 40124). Separately, a parent that faults while settling its own child because its definition cannot be loaded, or because its output mapping fails on completion, publishes its upward fault to the outbox only; in a chain whose upper two levels are in different domains, that grandparent is not told.",
+      "workaround": "Manual. Locate the fault by log 40142, or 40111 without 40124 for the same sub instance. Take the instance.sub.faulted row from the child domain's sys_queues.OutboxMessages, move terminationOrigin, initiatorInstanceId and cascadeId into one termination object, set sync to false, and POST it to the parent's sub/fault endpoint; a repeated post is a no-op (docs/runtime/event-publish-modes.md).",
+      "fixedIn": null
+    }
+  ]
+}

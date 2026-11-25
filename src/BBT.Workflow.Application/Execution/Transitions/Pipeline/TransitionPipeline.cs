@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using BBT.Aether.Clock;
+using BBT.Aether.Events;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
@@ -7,6 +8,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Cancellation;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.ErrorHandling;
+using BBT.Workflow.Execution.PostCommit.Relay;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Files;
 using BBT.Workflow.Instances;
@@ -30,6 +32,7 @@ public class TransitionPipeline
     /// <summary>Optional: when absent, a routable step failure simply faults as before.</summary>
     private readonly IErrorBoundaryResolver? _errorBoundaryResolver;
     private readonly ICarriedHeaderPolicy? _carriedHeaderPolicy;
+    private readonly IPostCommitRelayDispatcher? _relayDispatcher;
     private readonly ContinuationDispatcher _continuationDispatcher;
     private readonly IInstanceBusyManager _busyMarker;
     private readonly ITransitionContextFactory _contextFactory;
@@ -105,6 +108,7 @@ public class TransitionPipeline
     /// Initializes a new instance of the TransitionPipeline.
     /// </summary>
     /// <param name="carriedHeaderPolicy">Filters the request headers that ride the terminal event to the parent; null disables header capture, production DI always supplies it.</param>
+    /// <param name="relayDispatcher">Relays the events a fault commit raised (the upward <c>InstanceSubFaultedEvent</c>) to their receiver right after that commit; null leaves them to the outbox alone, production DI always supplies it.</param>
     public TransitionPipeline(
         TransitionExecutor executor,
         ContinuationDispatcher continuationDispatcher,
@@ -124,10 +128,12 @@ public class TransitionPipeline
         ISubItemEventDataResolver? subItemDataResolver = null,
         IInstanceDataWriteService? instanceDataWriteService = null,
         IErrorBoundaryResolver? errorBoundaryResolver = null,
-        ICarriedHeaderPolicy? carriedHeaderPolicy = null)
+        ICarriedHeaderPolicy? carriedHeaderPolicy = null,
+        IPostCommitRelayDispatcher? relayDispatcher = null)
     {
         _errorBoundaryResolver = errorBoundaryResolver;
         _carriedHeaderPolicy = carriedHeaderPolicy;
+        _relayDispatcher = relayDispatcher;
         _subItemDataResolver = subItemDataResolver;
         _instanceDataWriteService = instanceDataWriteService;
         _executor = executor;
@@ -804,21 +810,68 @@ public class TransitionPipeline
     }
 
     /// <summary>
-    /// Marks the workflow instance as faulted. The fault flip is serialized under the short
-    /// status lock (best effort — on acquisition failure it proceeds unguarded, because leaving
-    /// a failed pipeline invisible is worse than a narrow double-write window).
-    /// Uses a RequiresNew UoW scope so that any dirty state left on the current
-    /// DbContext by the failed pipeline step does not block SaveChanges.
+    /// Marks the workflow instance as faulted, then relays the events that fault raised.
+    /// <para>
+    /// The relay is what tells a parent its sub item faulted (vnext#1256). The fault commits in a
+    /// unit of work of its own, so the runner never sees its events: they are not in
+    /// <c>DeferredEvents</c>, and a client-facing error returns before the runner's relay anyway.
+    /// Without this call the upward <c>InstanceSubFaultedEvent</c> travelled the outbox alone, and a
+    /// child domain's Inbox drops it when the parent lives in another domain — that parent stayed
+    /// Busy for good. Relayed after the status lock and the fault's unit of work are released: the
+    /// parent's settlement can run its whole error-boundary chain, which must not sit inside this
+    /// instance's millisecond-scale lock.
+    /// </para>
     /// </summary>
     private async Task MarkInstanceFaultedAsync(
         TransitionExecutionContext context,
         Error error,
         CancellationToken callerCancellationToken)
     {
+        var faultEvents = await CommitInstanceFaultAsync(context, error);
+        await RelayFaultEventsAsync(faultEvents, callerCancellationToken);
+    }
+
+    /// <summary>
+    /// Hands the fault's events to the post-commit relay. An event with no registered relay is
+    /// skipped by the dispatcher and keeps travelling the outbox alone; the dispatcher never throws.
+    /// <para>
+    /// Runs under the caller's token while it is live — the same token the runner's relay runs
+    /// under, so a sync caller's response follows the parent's settled chain. A run that faulted
+    /// BECAUSE that token was cancelled (budget exhausted, host shutdown) still has to tell its
+    /// parent, so it relays under a fresh compensation budget instead.
+    /// </para>
+    /// </summary>
+    private async Task RelayFaultEventsAsync(
+        IReadOnlyList<DomainEventEnvelope> faultEvents,
+        CancellationToken callerCancellationToken)
+    {
+        if (_relayDispatcher is null || faultEvents.Count == 0)
+            return;
+
+        if (!callerCancellationToken.IsCancellationRequested)
+        {
+            await _relayDispatcher.RelayAsync(faultEvents, callerCancellationToken);
+            return;
+        }
+
+        using var compensation = CompensationCancellation.Create();
+        await _relayDispatcher.RelayAsync(faultEvents, compensation.Token);
+    }
+
+    /// <summary>
+    /// Writes and commits the fault, and returns the events it raised. The fault flip is serialized
+    /// under the short status lock (best effort — on acquisition failure it proceeds unguarded,
+    /// because leaving a failed pipeline invisible is worse than a narrow double-write window).
+    /// Uses a RequiresNew UoW scope so that any dirty state left on the current
+    /// DbContext by the failed pipeline step does not block SaveChanges.
+    /// </summary>
+    private async Task<IReadOnlyList<DomainEventEnvelope>> CommitInstanceFaultAsync(
+        TransitionExecutionContext context,
+        Error error)
+    {
         // The fault write is a compensation: it exists because the run failed, often because the
         // caller's token was cancelled (client disconnect). It runs on its own bounded token, so an
         // abandoned request cannot leave the instance stranded Busy.
-        _ = callerCancellationToken;
         using var compensation = CompensationCancellation.Create();
         var cancellationToken = compensation.Token;
 
@@ -874,6 +927,11 @@ public class TransitionPipeline
         instance.Fault(context.Domain, context.CallerMode == ExecMode.Sync,
             subItemData: await _subItemDataResolver.ResolveOrStoredAsync(instance, cancellationToken),
             carriedHeaders: _carriedHeaderPolicy?.Capture(context.Headers));
+
+        // Snapshot BEFORE the save: the SaveChanges sink drains and clears the aggregate's events.
+        // The outbox rows it writes stay the durable record; this copy only feeds the relay.
+        IReadOnlyList<DomainEventEnvelope> faultEvents = instance.GetDomainEvents().ToList();
+
         await _instanceRepository.UpdateAsync(instance, true, cancellationToken);
         ActivityContext commitContext;
         using (var commitActivity = PipelineStepActivityHelper.StartTransitionActivity(
@@ -897,5 +955,6 @@ public class TransitionPipeline
             settlingCommit: commitContext);
 
         _logger.InstanceFaultedSuccessfully(context.InstanceId);
+        return faultEvents;
     }
 }

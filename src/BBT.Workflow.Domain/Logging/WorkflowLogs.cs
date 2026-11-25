@@ -2131,12 +2131,14 @@ public static partial class WorkflowLogs
         string flow);
 
     /// <summary>
-    /// Logs when a SubFlow fault event is ignored due to domain mismatch.
+    /// Logs when the Inbox backup drops a SubFlow fault event because its parent lives in a domain
+    /// this runtime does not host. Warning, not Debug (vnext#1256): for that fault the post-commit
+    /// relay is the only delivery, so this line is the one trace left when a parent did not hear it.
     /// </summary>
     [LoggerMessage(
         EventId = 40111,
-        Level = LogLevel.Debug,
-        Message = "SubFlow fault event ignored: event domain {EventDomain} does not match runtime domain {RuntimeDomain}. SubInstance {SubInstanceId}, Parent {ParentInstanceId}")]
+        Level = LogLevel.Warning,
+        Message = "SubFlow fault event dropped by the Inbox: parent domain {EventDomain} is not hosted by runtime domain {RuntimeDomain}; only the producer's post-commit relay delivers it (see 40124 / 40142 for the same sub). SubInstance {SubInstanceId}, Parent {ParentInstanceId}")]
     public static partial void SubFlowFaultIgnoredDomainMismatch(
         this ILogger logger,
         string eventDomain,
@@ -2224,42 +2226,72 @@ public static partial class WorkflowLogs
         Guid parentInstanceId);
 
     /// <summary>
-    /// Logs when a post-commit relay attempt throws. The originating commit already stands, so the
-    /// durable Inbox backup delivers the same command shortly after.
+    /// Logs when a post-commit relay attempt throws. The originating commit already stands. On a
+    /// <c>local</c> route the durable Inbox backup delivers the same command shortly after; on a
+    /// <c>remote</c> route nothing does (a child domain's Inbox drops an event whose parent it does
+    /// not host), and a terminal event additionally logs <see cref="PostCommitTerminalRelayLost"/>.
     /// </summary>
     [LoggerMessage(
         EventId = 40125,
         Level = LogLevel.Warning,
-        Message = "Post-commit relay failed for {EventName}; Inbox backup will deliver")]
+        Message = "Post-commit relay failed for {EventName} (sub {SubInstanceId} -> parent {ParentInstanceId}, route {Route}); the Inbox backup delivers on a local route only")]
     public static partial void PostCommitEventRelayFailed(
         this ILogger logger,
         Exception exception,
-        string eventName);
+        string eventName,
+        Guid subInstanceId,
+        Guid parentInstanceId,
+        string route);
 
     /// <summary>
     /// Logs when a post-commit relay's gateway call returns a failed <c>Result</c> (not an
-    /// exception). The durable Inbox backup delivers the same command shortly after.
+    /// exception). Same backup rule as <see cref="PostCommitEventRelayFailed"/>.
     /// </summary>
     [LoggerMessage(
         EventId = 40126,
         Level = LogLevel.Warning,
-        Message = "Post-commit relay rejected for {EventName}: {Error}; Inbox backup will deliver")]
+        Message = "Post-commit relay rejected for {EventName} (sub {SubInstanceId} -> parent {ParentInstanceId}, route {Route}): {Error}; the Inbox backup delivers on a local route only")]
     public static partial void PostCommitEventRelayRejected(
         this ILogger logger,
         string eventName,
+        Guid subInstanceId,
+        Guid parentInstanceId,
+        string route,
         string error);
 
     /// <summary>
     /// Logs when a post-commit relay's CROSS-DOMAIN leg exceeded the relay's own bound. The hop is
-    /// released rather than held on a slow remote; the Inbox backup delivers.
+    /// released rather than held on a slow remote. Same backup rule as
+    /// <see cref="PostCommitEventRelayFailed"/>.
     /// </summary>
     [LoggerMessage(
         EventId = 40133,
         Level = LogLevel.Warning,
-        Message = "Post-commit relay timed out for {EventName}; Inbox backup will deliver")]
+        Message = "Post-commit relay timed out for {EventName} (sub {SubInstanceId} -> parent {ParentInstanceId}); the Inbox backup delivers on a local route only")]
     public static partial void PostCommitEventRelayTimedOut(
         this ILogger logger,
-        string eventName);
+        string eventName,
+        Guid subInstanceId,
+        Guid parentInstanceId);
+
+    /// <summary>
+    /// Logs when a sub item's TERMINAL event (completed, faulted, canceled) could not be relayed to a
+    /// parent in another domain. No durable path delivers it: the child domain's Inbox drops an event
+    /// whose parent it does not host, so the parent stays Busy until the command is re-driven by hand
+    /// from the child domain's outbox row (vnext#1256). Error, because this is the alert signal for a
+    /// stuck cross-domain parent; the preceding 40125/40126/40133 line carries the cause.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40142,
+        Level = LogLevel.Error,
+        Message = "Terminal {EventName} not delivered to parent {ParentInstanceId} in domain {ParentDomain} (sub {SubInstanceId}, outcome {Outcome}); no backup delivers it across domains, re-drive it from the child domain's outbox")]
+    public static partial void PostCommitTerminalRelayLost(
+        this ILogger logger,
+        string eventName,
+        Guid parentInstanceId,
+        string parentDomain,
+        Guid subInstanceId,
+        string outcome);
 
     /// <summary>
     /// Logs when the nested in-process relay chain hit its depth cap. Delivery is not lost — the
@@ -3167,6 +3199,23 @@ public static partial class WorkflowLogs
         string action,
         string flow,
         string? instance);
+
+    /// <summary>
+    /// Logs when a post-commit fault that compensates a failed child start is NOT applied, because the
+    /// child was created, faulted and already reported that fault to this parent: its settlement closed
+    /// the SubFlow correlation, and the parent's error boundary decided where the parent rests
+    /// (vnext#1256). Applying the start compensation on top would fault a parent the boundary had just
+    /// routed, with a second incident.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10268,
+        Level = LogLevel.Information,
+        Message = "Start compensation for instance {InstanceId} skipped: SubFlow correlation {CorrelationId} is already closed with outcome Faulted, so the parent's error boundary has decided where it rests ({ErrorCode})")]
+    public static partial void PostCommitStartFaultSupersededByChildSettlement(
+        this ILogger logger,
+        Guid instanceId,
+        Guid correlationId,
+        string errorCode);
 
     /// <summary>
     /// Logs when a distributed resource lock TTL is successfully extended.

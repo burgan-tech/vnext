@@ -16,6 +16,7 @@ using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Execution.Pipeline;
+using BBT.Workflow.Execution.PostCommit.Relay;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
@@ -818,7 +819,9 @@ public sealed class SubflowFaultServiceTests
         Options.Create(new SubFlowCarriedHeadersOptions { ApplyToResume = applyToResume }),
         NullLogger<CarriedHeaderPolicy>.Instance);
 
-    private SubflowFaultService CreateService(ICarriedHeaderPolicy? policy = null)
+    private SubflowFaultService CreateService(
+        ICarriedHeaderPolicy? policy = null,
+        IPostCommitRelayDispatcher? relayDispatcher = null)
     {
         var resolver = new ErrorBoundaryResolver(Mock.Of<ILogger<ErrorBoundaryResolver>>());
         var executor = new ErrorActionExecutor(Mock.Of<ILogger<ErrorActionExecutor>>());
@@ -836,8 +839,104 @@ public sealed class SubflowFaultServiceTests
             _eventBus.Object,
             Options.Create(new WorkflowExecutionOptions()),
             _logger.Object,
-            carriedHeaderPolicy: policy);
+            carriedHeaderPolicy: policy,
+            relayDispatcher: relayDispatcher);
     }
+
+    // vnext#1256 — a parent that faults HERE (no matching boundary resolves to Abort with no
+    // transition, the default path) raises its own upward fault in this settlement's unit of work,
+    // which no runner relays from. It is handed to the dispatcher after the commit and the lock.
+
+    [Fact]
+    public async Task FaultAsync_WhenTheParentFaultsHere_RelaysItsOwnUpwardFault_AfterTheCommit()
+    {
+        var order = new List<string>();
+        var grandparentId = Guid.NewGuid();
+        var parentInstance = CreateParentInstance(out var subInstanceId);
+        MakeSubFlowOf(parentInstance, grandparentId, "grand-domain");
+        SetupParent(parentInstance, CreateParentWorkflow(ErrorBoundary.AbortAll));
+        DrainEventsOnSave(parentInstance);
+        _uow.Setup(u => u.CommitAsync(It.IsAny<CancellationToken>()))
+            .Callback(() => order.Add("commit")).Returns(Task.CompletedTask);
+        _lockScope.Setup(x => x.DisposeAsync())
+            .Callback(() => order.Add("lock-released")).Returns(ValueTask.CompletedTask);
+        IReadOnlyList<DomainEventEnvelope> relayed = [];
+        var dispatcher = new Mock<IPostCommitRelayDispatcher>();
+        dispatcher.Setup(d => d.RelayAsync(It.IsAny<IReadOnlyList<DomainEventEnvelope>>(), It.IsAny<CancellationToken>()))
+            .Callback<IReadOnlyList<DomainEventEnvelope>, CancellationToken>((events, _) =>
+            {
+                order.Add("relay");
+                relayed = events;
+            })
+            .Returns(Task.CompletedTask);
+
+        await CreateService(relayDispatcher: dispatcher.Object)
+            .FaultAsync(CreateInput(parentInstance.Id, subInstanceId, CreateJsonElement("{}")), CancellationToken.None);
+
+        parentInstance.Status.ShouldBe(InstanceStatus.Faulted);
+        // The fault commits, the per-sub-item lock is released, this child's settlement marker
+        // commits in its own unit of work, and only then is the parent's own fault relayed upward.
+        order.ShouldBe(new[] { "commit", "lock-released", "commit", "relay" });
+        var upward = relayed.Select(e => e.Event).OfType<InstanceSubFaultedEvent>().Single();
+        upward.InstanceId.ShouldBe(grandparentId);
+        upward.SubInstanceId.ShouldBe(parentInstance.Id);
+        upward.Domain.ShouldBe("grand-domain");
+    }
+
+    [Fact]
+    public async Task FaultAsync_WhenTheBoundaryRoutesTheParent_RelaysNothing()
+    {
+        var parentInstance = CreateParentInstance(out var subInstanceId);
+        MakeSubFlowOf(parentInstance, Guid.NewGuid(), "grand-domain");
+        SetupParent(parentInstance, CreateParentWorkflow(
+            ErrorBoundary.Builder().OnError(ErrorAction.Notify, transition: "error-fallback").Build()));
+        _workflowExecutionService
+            .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<TransitionOutput>.Ok(new TransitionOutput { Id = parentInstance.Id, Status = InstanceStatus.Active }));
+        var dispatcher = new Mock<IPostCommitRelayDispatcher>();
+
+        await CreateService(relayDispatcher: dispatcher.Object)
+            .FaultAsync(CreateInput(parentInstance.Id, subInstanceId, CreateJsonElement("{}")), CancellationToken.None);
+
+        dispatcher.Verify(
+            d => d.RelayAsync(It.IsAny<IReadOnlyList<DomainEventEnvelope>>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task FaultAsync_WhenTheCommitThrows_RelaysNothing()
+    {
+        var parentInstance = CreateParentInstance(out var subInstanceId);
+        MakeSubFlowOf(parentInstance, Guid.NewGuid(), "grand-domain");
+        SetupParent(parentInstance, CreateParentWorkflow(ErrorBoundary.AbortAll));
+        _uow.Setup(u => u.CommitAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("commit failed"));
+        var dispatcher = new Mock<IPostCommitRelayDispatcher>();
+
+        await Should.ThrowAsync<InvalidOperationException>(() => CreateService(relayDispatcher: dispatcher.Object)
+            .FaultAsync(CreateInput(parentInstance.Id, subInstanceId, CreateJsonElement("{}")), CancellationToken.None));
+
+        dispatcher.Verify(
+            d => d.RelayAsync(It.IsAny<IReadOnlyList<DomainEventEnvelope>>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    /// <summary>Makes <paramref name="instance"/> a SubFlow child of <paramref name="parentId"/>.</summary>
+    private static void MakeSubFlowOf(Instance instance, Guid parentId, string parentDomain)
+    {
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = WorkflowType.SubFlow.Code;
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Id] = parentId.ToString();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Domain] = parentDomain;
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Flow] = "grand-flow";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Version] = "1.0.0";
+    }
+
+    /// <summary>The real save drains the aggregate's events into the outbox (SaveChanges sink).</summary>
+    private void DrainEventsOnSave(Instance instance) =>
+        _instanceRepository
+            .Setup(x => x.UpdateAsync(instance, true, It.IsAny<CancellationToken>()))
+            .Callback(() => instance.ClearDomainEvents())
+            .ReturnsAsync(instance);
 
     private void VerifyTerminalConflictLogged(string existingOutcome)
     {

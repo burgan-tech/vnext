@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BBT.Aether.Clock;
+using BBT.Aether.Events;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.Application.Tests.Telemetry;
@@ -15,6 +16,7 @@ using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.PostCommit;
+using BBT.Workflow.Execution.PostCommit.Relay;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Files;
 using BBT.Workflow.Application.Files;
@@ -1796,6 +1798,219 @@ public class TransitionPipelineTests
         result.IsSuccess.ShouldBeTrue();
         await _mockAdmissionService.DidNotReceive()
             .ReserveAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    #endregion
+
+    #region Fault relay to the parent (vnext#1256)
+
+    // The fault commits in a unit of work of its own, so the runner's relay never sees its events.
+    // A sub item's upward InstanceSubFaultedEvent then travelled the outbox alone, and the child
+    // domain's Inbox drops it when the parent lives in another domain: that parent stayed Busy.
+
+    [Fact]
+    public async Task RunAsync_WhenSubItemFaults_RelaysItsSubFaultedEvent_AfterTheCommitAndTheLockRelease()
+    {
+        var order = new List<string>();
+        var relay = new FaultRelayProbe(order);
+        var parentId = Guid.NewGuid();
+        var context = CreateSubFlowContext(parentId);
+        SetupContextFactory(context);
+        SetupFirstStepToFail(Error.Failure("step.failed", "boom"));
+        TrackFaultCommitAndLockRelease(order);
+
+        var result = await CreatePipelineWithRelay(relay.Dispatcher)
+            .RunAsync(CreateWorkflowExecutionContext(context), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        // The parent's settlement can run its whole error-boundary chain: it must start only once
+        // the fault is durable and this instance's status lock is free again.
+        order.ShouldBe(new[] { "commit", "lock-released", "relay" });
+        var evt = relay.Events.Select(e => e.Event).OfType<InstanceSubFaultedEvent>().Single();
+        evt.InstanceId.ShouldBe(parentId);
+        evt.SubInstanceId.ShouldBe(context.InstanceId);
+        evt.Domain.ShouldBe("parent-domain");
+        evt.Flow.ShouldBe("parent-flow");
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenTheFaultIsClientFacing_StillRelaysItsSubFaultedEvent()
+    {
+        // The pipeline returns the failure (→ 409), so the runner returns before its own relay:
+        // this call site is the only one that can reach the parent.
+        var relay = new FaultRelayProbe();
+        var context = CreateSubFlowContext(Guid.NewGuid());
+        SetupContextFactory(context);
+        SetupFirstStepToFail(Error.Conflict(WorkflowErrorCodes.ResourceLockConflict, "Resource is already locked"));
+        DrainEventsOnSave();
+
+        var result = await CreatePipelineWithRelay(relay.Dispatcher)
+            .RunAsync(CreateWorkflowExecutionContext(context), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        relay.Events.Select(e => e.Event).OfType<InstanceSubFaultedEvent>().ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenTheCallerTokenIsLive_RelaysUnderIt()
+    {
+        // Same token the runner's relay runs under, so a sync caller's response follows the
+        // parent's settled chain.
+        var relay = new FaultRelayProbe();
+        var context = CreateSubFlowContext(Guid.NewGuid());
+        SetupContextFactory(context);
+        SetupFirstStepToFail(Error.Failure("step.failed", "boom"));
+        using var cts = new CancellationTokenSource();
+
+        await CreatePipelineWithRelay(relay.Dispatcher)
+            .RunAsync(CreateWorkflowExecutionContext(context), cts.Token);
+
+        relay.Token.ShouldBe(cts.Token);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenTheCallerTokenIsCancelled_RelaysUnderALiveToken()
+    {
+        // A run that faulted because its token was cancelled still has to tell its parent.
+        var relay = new FaultRelayProbe();
+        var context = CreateSubFlowContext(Guid.NewGuid());
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        using var cts = new CancellationTokenSource();
+        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                cts.Cancel();
+                return Task.FromResult(Result<StepOutcome>.Fail(Error.Failure("step.failed", "boom")));
+            });
+
+        await CreatePipelineWithRelay(relay.Dispatcher)
+            .RunAsync(CreateWorkflowExecutionContext(context), cts.Token);
+
+        relay.Calls.ShouldBe(1);
+        relay.TokenWasCancelledAtRelay.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenTheFaultCommitThrows_RelaysNothing()
+    {
+        // Nothing is durable, so there is no fault to report: the parent must not be settled
+        // against a child that is still Busy.
+        var relay = new FaultRelayProbe();
+        var context = CreateSubFlowContext(Guid.NewGuid());
+        SetupContextFactory(context);
+        SetupFirstStepToFail(Error.Failure("step.failed", "boom"));
+        var faultUow = Substitute.For<IUnitOfWork>();
+        faultUow.CommitAsync(Arg.Any<CancellationToken>())
+            .Returns<Task>(_ => throw new InvalidOperationException("commit failed"));
+        _mockUowManager.Begin(Arg.Any<UnitOfWorkOptions>()).Returns(faultUow);
+
+        await Should.ThrowAsync<InvalidOperationException>(() => CreatePipelineWithRelay(relay.Dispatcher)
+            .RunAsync(CreateWorkflowExecutionContext(context), CancellationToken.None));
+
+        relay.Calls.ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenARootInstanceFaults_HandsOverNoSubFaultedEvent()
+    {
+        // A root instance has no parent: its fault raises cleanup events only, none of which has a
+        // registered relay, so the dispatcher skips them all.
+        var relay = new FaultRelayProbe();
+        var context = CreateTransitionExecutionContext();
+        SetupContextFactory(context);
+        SetupFirstStepToFail(Error.Failure("step.failed", "boom"));
+
+        await CreatePipelineWithRelay(relay.Dispatcher)
+            .RunAsync(CreateWorkflowExecutionContext(context), CancellationToken.None);
+
+        relay.Events.Select(e => e.Event).OfType<InstanceSubFaultedEvent>().ShouldBeEmpty();
+    }
+
+    /// <summary>Records what the pipeline hands to the post-commit relay, and under which token.</summary>
+    private sealed class FaultRelayProbe
+    {
+        public FaultRelayProbe(List<string>? order = null)
+        {
+            Dispatcher = Substitute.For<IPostCommitRelayDispatcher>();
+            Dispatcher.RelayAsync(Arg.Any<IReadOnlyList<DomainEventEnvelope>>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    Calls++;
+                    Events = call.ArgAt<IReadOnlyList<DomainEventEnvelope>>(0);
+                    Token = call.ArgAt<CancellationToken>(1);
+                    TokenWasCancelledAtRelay = Token.IsCancellationRequested;
+                    order?.Add("relay");
+                    return Task.CompletedTask;
+                });
+        }
+
+        public IPostCommitRelayDispatcher Dispatcher { get; }
+        public int Calls { get; private set; }
+        public IReadOnlyList<DomainEventEnvelope> Events { get; private set; } = [];
+        public CancellationToken Token { get; private set; }
+        public bool TokenWasCancelledAtRelay { get; private set; }
+    }
+
+    private TransitionPipeline CreatePipelineWithRelay(IPostCommitRelayDispatcher relayDispatcher) => new(
+        new TransitionExecutor(_mockSteps, Substitute.For<ILogger<TransitionExecutor>>()),
+        new ContinuationDispatcher(new IContinuationStrategy[] { new InlineContinuationStrategy() }),
+        _mockBusyMarker, _mockContextFactory, _mockInstanceRepository, _mockInstanceJobRepository,
+        _mockUowManager, _mockValidationService, new PipelineProfileResolver(),
+        _mockStateNotificationScheduler, _mockAdmissionService, _mockStatusLock, _fileAdmission,
+        _clock, _mockLogger, relayDispatcher: relayDispatcher);
+
+    /// <summary>A context whose instance is a SubFlow child of <paramref name="parentId"/> in another domain.</summary>
+    private TransitionExecutionContext CreateSubFlowContext(Guid parentId)
+    {
+        var context = CreateTransitionExecutionContext();
+        var instance = context.Instance;
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = WorkflowType.SubFlow.Code;
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Id] = parentId.ToString();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Domain] = "parent-domain";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Flow] = "parent-flow";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Version] = "1.0.0";
+        return context;
+    }
+
+    private void SetupFirstStepToFail(Error error)
+    {
+        SetupStepsToSucceed();
+        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<StepOutcome>.Fail(error)));
+    }
+
+    /// <summary>Makes the save drain the aggregate's events, as the real SaveChanges sink does.</summary>
+    private void DrainEventsOnSave() =>
+        _mockInstanceRepository
+            .UpdateAsync(Arg.Any<Instance>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var saved = call.ArgAt<Instance>(0);
+                saved.ClearDomainEvents();
+                return Task.FromResult(saved);
+            });
+
+    /// <summary>Records the fault's commit and the release of its status lock into <paramref name="order"/>.</summary>
+    private void TrackFaultCommitAndLockRelease(List<string> order)
+    {
+        DrainEventsOnSave();
+        var faultUow = Substitute.For<IUnitOfWork>();
+        faultUow.CommitAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            order.Add("commit");
+            return Task.CompletedTask;
+        });
+        _mockUowManager.Begin(Arg.Any<UnitOfWorkOptions>()).Returns(faultUow);
+
+        var statusScope = Substitute.For<ITransitionLockScope>();
+        statusScope.IsAcquired.Returns(true);
+        statusScope.DisposeAsync().Returns(_ =>
+        {
+            order.Add("lock-released");
+            return ValueTask.CompletedTask;
+        });
+        _mockStatusLock.AcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(statusScope);
     }
 
     #endregion

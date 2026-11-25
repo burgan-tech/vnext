@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using BBT.Aether.Events;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
@@ -10,6 +11,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Execution.PostCommit;
+using BBT.Workflow.Execution.PostCommit.Relay;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
@@ -334,12 +336,262 @@ public sealed class PostCommitParentMutationServiceTests
             .UpdateAsync(default!, default, default);
     }
 
+    // vnext#1256: the fault commits in a unit of work no runner relays from, so a sub item's upward
+    // InstanceSubFaultedEvent travelled the outbox alone — and never reached a parent in another domain.
+
+    [Fact]
+    public async Task FaultAsync_WhenTheInstanceIsASubItem_RelaysItsSubFaultedEvent_AfterTheCommitAndTheUnlock()
+    {
+        var parentId = Guid.NewGuid();
+        var authoritative = CreateBusySubFlowInstance(parentId);
+        var calls = new List<string>();
+        IReadOnlyList<DomainEventEnvelope> relayed = [];
+        var dispatcher = Substitute.For<IPostCommitRelayDispatcher>();
+        dispatcher.RelayAsync(Arg.Any<IReadOnlyList<DomainEventEnvelope>>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                calls.Add("relay");
+                relayed = call.ArgAt<IReadOnlyList<DomainEventEnvelope>>(0);
+                return Task.CompletedTask;
+            });
+        // The save drains the aggregate, as the real sink does: the relay must get the snapshot.
+        var fixture = CreateFixture(authoritative, calls, relayDispatcher: dispatcher, clearEventsOnSave: true);
+
+        var result = await fixture.Service.FaultAsync(
+            CreateSnapshot(authoritative.Id),
+            new PostCommitFaultRequest("PostCommit:Dependency", "child invocation failed"),
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        // The parent's settlement must start only once the fault is durable and the lock is free.
+        calls.SkipWhile(call => call != "commit").ShouldBe(new[] { "commit", "unlock", "relay" });
+        var evt = relayed.Select(e => e.Event).OfType<InstanceSubFaultedEvent>().Single();
+        evt.InstanceId.ShouldBe(parentId);
+        evt.SubInstanceId.ShouldBe(authoritative.Id);
+        evt.Domain.ShouldBe("parent-domain");
+    }
+
+    [Fact]
+    public async Task FaultAsync_WhenTheLockIsNotAcquired_RelaysNothing()
+    {
+        var dispatcher = Substitute.For<IPostCommitRelayDispatcher>();
+        var fixture = CreateFixture(
+            CreateBusySubFlowInstance(Guid.NewGuid()), lockAcquired: false, relayDispatcher: dispatcher);
+
+        var result = await fixture.Service.FaultAsync(
+            CreateSnapshot(Guid.NewGuid()),
+            new PostCommitFaultRequest("PostCommit:Dependency", "child invocation failed"),
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        await dispatcher.DidNotReceiveWithAnyArgs().RelayAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task FaultAsync_WhenTheInstanceIsAlreadyTerminal_RelaysNothing()
+    {
+        // No fault was written here, so there is no event of this call's to deliver.
+        var authoritative = CreateBusySubFlowInstance(Guid.NewGuid());
+        authoritative.Complete(Domain, sync: true);
+        authoritative.ClearDomainEvents();
+        var dispatcher = Substitute.For<IPostCommitRelayDispatcher>();
+        var fixture = CreateFixture(authoritative, relayDispatcher: dispatcher);
+
+        var result = await fixture.Service.FaultAsync(
+            CreateSnapshot(authoritative.Id),
+            new PostCommitFaultRequest("PostCommit:LateFailure", "late failure"),
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await dispatcher.DidNotReceiveWithAnyArgs().RelayAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task FaultAsync_WhenTheCommitThrows_RelaysNothing()
+    {
+        var dispatcher = Substitute.For<IPostCommitRelayDispatcher>();
+        var authoritative = CreateBusySubFlowInstance(Guid.NewGuid());
+        var fixture = CreateFixture(authoritative, relayDispatcher: dispatcher, failCommit: true);
+
+        await Should.ThrowAsync<InvalidOperationException>(() => fixture.Service.FaultAsync(
+            CreateSnapshot(authoritative.Id),
+            new PostCommitFaultRequest("PostCommit:Dependency", "child invocation failed"),
+            CancellationToken.None));
+
+        await dispatcher.DidNotReceiveWithAnyArgs().RelayAsync(default!, default);
+    }
+
+    // vnext#1256 — the start compensation steps aside when the child it created already faulted and
+    // settled this parent: the parent's error boundary decided where the parent rests.
+
+    [Fact]
+    public async Task FaultAsync_WhenTheStartedChildAlreadySettledItsFault_LeavesTheParentWhereItsBoundaryPutIt()
+    {
+        // The child's settlement closed the correlation with outcome Faulted and routed the parent
+        // to an Active recovery state; the reload carries open correlations only, so the closed one
+        // is read by id.
+        var authoritative = Instance.Create(Guid.NewGuid(), WorkflowKey, WorkflowVersion, "instance-key");
+        var correlation = ClosedCorrelation(authoritative.Id, SubFlowType.SubFlow, SubItemTerminalOutcome.Faulted);
+        var fixture = CreateFixture(authoritative, correlationRepository: CorrelationsReturning(correlation));
+
+        var result = await FaultForStartedCorrelationAsync(fixture, authoritative, correlation.Id);
+
+        result.IsSuccess.ShouldBeTrue();
+        authoritative.Status.ShouldBe(InstanceStatus.Active);
+        authoritative.GetLoadedIncidents().ShouldBeEmpty();
+        await fixture.Repository.DidNotReceiveWithAnyArgs().UpdateAsync(default!, default, default);
+    }
+
+    // Every case but "closed by the child's own fault" faults the parent, as on master (fail-safe).
+
+    [Fact]
+    public async Task FaultAsync_WhenTheStartedCorrelationDoesNotExist_FaultsTheParent()
+    {
+        // SubFlowCorrelationNotFound from the start handler: no child, no open correlation. Skipping
+        // here would leave the parent Busy with no owner — the #1256 symptom by another road.
+        var authoritative = CreateBusyInstance();
+        var fixture = CreateFixture(authoritative, correlationRepository: CorrelationsReturning(null));
+
+        await FaultForStartedCorrelationAsync(fixture, authoritative, Guid.NewGuid());
+
+        authoritative.Status.ShouldBe(InstanceStatus.Faulted);
+    }
+
+    [Fact]
+    public async Task FaultAsync_WhenTheStartedChildCompleted_FaultsTheParentAsBefore()
+    {
+        var authoritative = CreateBusyInstance();
+        var correlation = ClosedCorrelation(authoritative.Id, SubFlowType.SubFlow, SubItemTerminalOutcome.Completed);
+        var fixture = CreateFixture(authoritative, correlationRepository: CorrelationsReturning(correlation));
+
+        await FaultForStartedCorrelationAsync(fixture, authoritative, correlation.Id);
+
+        authoritative.Status.ShouldBe(InstanceStatus.Faulted);
+    }
+
+    [Fact]
+    public async Task FaultAsync_WhenTheStartedCorrelationIsAFaultedSubProcess_FaultsTheParent()
+    {
+        // A SubProcess fault only closes its correlation; no boundary of the parent ran.
+        var authoritative = CreateBusyInstance();
+        var correlation = ClosedCorrelation(authoritative.Id, SubFlowType.SubProcess, SubItemTerminalOutcome.Faulted);
+        var fixture = CreateFixture(authoritative, correlationRepository: CorrelationsReturning(correlation));
+
+        await FaultForStartedCorrelationAsync(fixture, authoritative, correlation.Id);
+
+        authoritative.Status.ShouldBe(InstanceStatus.Faulted);
+    }
+
+    [Fact]
+    public async Task FaultAsync_WhenTheFaultedCorrelationBelongsToAnotherParent_FaultsTheParent()
+    {
+        var authoritative = CreateBusyInstance();
+        var correlation = ClosedCorrelation(Guid.NewGuid(), SubFlowType.SubFlow, SubItemTerminalOutcome.Faulted);
+        var fixture = CreateFixture(authoritative, correlationRepository: CorrelationsReturning(correlation));
+
+        await FaultForStartedCorrelationAsync(fixture, authoritative, correlation.Id);
+
+        authoritative.Status.ShouldBe(InstanceStatus.Faulted);
+    }
+
+    [Fact]
+    public async Task FaultAsync_WithoutACorrelationRepository_NeverStepsAside()
+    {
+        var authoritative = CreateBusyInstance();
+        var fixture = CreateFixture(authoritative);
+
+        await FaultForStartedCorrelationAsync(fixture, authoritative, Guid.NewGuid());
+
+        authoritative.Status.ShouldBe(InstanceStatus.Faulted);
+    }
+
+    private static Task<Result<TransitionOutput>> FaultForStartedCorrelationAsync(
+        Fixture fixture, Instance authoritative, Guid correlationId) =>
+        fixture.Service.FaultAsync(
+            CreateSnapshot(authoritative.Id),
+            new PostCommitFaultRequest(
+                WorkflowErrorCodes.ResourceLockConflict, "child start refused",
+                StartedSubflowCorrelationId: correlationId),
+            CancellationToken.None);
+
+    /// <summary>A correlation of <paramref name="parentId"/> closed with <paramref name="outcome"/>.</summary>
+    private static InstanceCorrelation ClosedCorrelation(Guid parentId, SubFlowType type, SubItemTerminalOutcome outcome)
+    {
+        var owner = Instance.Create(parentId, WorkflowKey, WorkflowVersion, "owner");
+        var subInstanceId = Guid.NewGuid();
+        owner.AddCorrelation(InstanceCorrelation.Create(
+            Guid.NewGuid(), parentId, "state", subInstanceId, type.Code, "partner", "child-flow", "1.0.0"));
+        return owner.CompleteCorrelation(subInstanceId, outcome)!;
+    }
+
+    private static IInstanceCorrelationRepository CorrelationsReturning(InstanceCorrelation? correlation)
+    {
+        var repository = Substitute.For<IInstanceCorrelationRepository>();
+        repository.FindAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(correlation));
+        return repository;
+    }
+
+    [Fact]
+    public async Task FaultAsync_WhenTheStartedCorrelationIsStillOpen_FaultsTheParentAsBefore()
+    {
+        // The child never came to exist (or never reported): its correlation is still open, and the
+        // parent has a Busy nobody owns — the compensation applies exactly as before.
+        var authoritative = CreateBusyInstance();
+        var correlationId = Guid.NewGuid();
+        authoritative.AddCorrelation(InstanceCorrelation.Create(
+            correlationId, authoritative.Id, "state", Guid.NewGuid(), SubFlowType.SubFlow.Code,
+            "partner", "child-flow", "1.0.0"));
+        var fixture = CreateFixture(authoritative);
+
+        var result = await fixture.Service.FaultAsync(
+            CreateSnapshot(authoritative.Id),
+            new PostCommitFaultRequest(
+                WorkflowErrorCodes.ResourceLockConflict, "child start refused",
+                StartedSubflowCorrelationId: correlationId),
+            CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        authoritative.Status.ShouldBe(InstanceStatus.Faulted);
+        authoritative.GetLoadedIncidents().Single().ErrorCode.ShouldBe(WorkflowErrorCodes.ResourceLockConflict);
+    }
+
+    [Fact]
+    public async Task FaultAsync_WithoutAStartedCorrelation_FaultsEvenWithNoOpenCorrelation()
+    {
+        // Every other post-commit fault keeps its behaviour: the guard keys on the named correlation only.
+        var authoritative = CreateBusyInstance();
+        var fixture = CreateFixture(authoritative);
+
+        await fixture.Service.FaultAsync(
+            CreateSnapshot(authoritative.Id),
+            new PostCommitFaultRequest("PostCommit:Dependency", "failed"),
+            CancellationToken.None);
+
+        authoritative.Status.ShouldBe(InstanceStatus.Faulted);
+    }
+
+    private static Instance CreateBusySubFlowInstance(Guid parentId)
+    {
+        var instance = CreateBusyInstance();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.FlowType] = WorkflowType.SubFlow.Code;
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Id] = parentId.ToString();
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Domain] = "parent-domain";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Flow] = "parent-flow";
+        instance.ExtraProperties[DomainConsts.MetaDataKeys.Version] = "1.0.0";
+        return instance;
+    }
+
     private static Fixture CreateFixture(
         Instance authoritative,
         List<string>? calls = null,
         bool lockAcquired = true,
         Definitions.Workflow? workflow = null,
-        ICarriedHeaderPolicy? policy = null)
+        ICarriedHeaderPolicy? policy = null,
+        IPostCommitRelayDispatcher? relayDispatcher = null,
+        bool clearEventsOnSave = false,
+        bool failCommit = false,
+        IInstanceCorrelationRepository? correlationRepository = null)
     {
         calls ??= [];
         workflow ??= CreateWorkflow(State.Create("state", StateType.Intermediate, StateSubType.None, VersionStrategy.IncreaseMinor.Code));
@@ -364,6 +616,8 @@ public sealed class PostCommitParentMutationServiceTests
         var uow = Substitute.For<IUnitOfWork>();
         uow.CommitAsync(Arg.Any<CancellationToken>()).Returns(_ =>
         {
+            if (failCommit)
+                throw new InvalidOperationException("commit failed");
             calls.Add("commit");
             return Task.CompletedTask;
         });
@@ -385,6 +639,9 @@ public sealed class PostCommitParentMutationServiceTests
             .Returns(_ =>
             {
                 calls.Add("update");
+                // The real save drains the aggregate's events into the outbox (SaveChanges sink).
+                if (clearEventsOnSave)
+                    authoritative.ClearDomainEvents();
                 return Task.FromResult(authoritative);
             });
         // The settlement flip is an aggregate-aware CAS now: on success the repository applies
@@ -405,7 +662,9 @@ public sealed class PostCommitParentMutationServiceTests
             statusLock,
             notificationScheduler,
             NullLogger<PostCommitParentMutationService>.Instance,
-            carriedHeaderPolicy: policy);
+            carriedHeaderPolicy: policy,
+            relayDispatcher: relayDispatcher,
+            correlationRepository: correlationRepository);
 
         return new Fixture(service, repository, uowManager, statusLock, notificationScheduler);
     }

@@ -1,4 +1,9 @@
+using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
 using BBT.Aether.Events;
 using BBT.Workflow.Instances.Events;
 using BBT.Workflow.Logging;
@@ -7,6 +12,7 @@ using BBT.Workflow.SubFlow;
 using BBT.Workflow.Workers.Inbox.Forwarding;
 using BBT.Aether.Tracing;
 using BBT.Workflow.Workers.Inbox.Tracing;
+using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Workers.Inbox.Handlers;
 
@@ -28,6 +34,10 @@ internal sealed class InstanceSubFaultedEventHandler(
 
         if (!runtimeInfoProvider.IsDomainMatch(eventData.Domain))
         {
+            // The parent lives in another domain: this worker forwards only to its own
+            // Orchestration, so there is no backup for this fault and the child's post-commit relay
+            // was its only delivery. Logged as a warning so a parent that never heard of the fault
+            // can be traced back to the event that should have told it (vnext#1256).
             logger.SubFlowFaultIgnoredDomainMismatch(
                 eventData.Domain,
                 runtimeInfoProvider.Domain,

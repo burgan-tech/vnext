@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Reflection;
 using BBT.Aether.Events;
 using BBT.Aether.Results;
+using BBT.Workflow.Events;
 using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
@@ -95,17 +96,23 @@ public sealed class PostCommitRelayDispatcher(
         activity?.SetTag(TelemetryConstants.TagNames.DeliveryRole, "relay");
 
         CancellationTokenSource? timeoutSource = null;
+        // Read before the call so a failure can still be logged with its ids and route; default
+        // (empty ids, route "unknown") only if Describe itself threw.
+        PostCommitRelayTarget target = default;
+        var route = "unknown";
+        var isLocal = true;
         try
         {
-            var target = binding.Describe(relay, envelope.Event);
+            target = binding.Describe(relay, envelope.Event);
             activity?.SetTag(TelemetryConstants.TagNames.ParentInstanceId, target.ParentInstanceId);
             activity?.SetTag(TelemetryConstants.TagNames.SubflowInstanceId, target.SubInstanceId);
             if (target.Sync.HasValue)
                 activity?.SetTag(TelemetryConstants.TagNames.RelaySync, target.Sync.Value);
 
             // Same source the gateway routes by — the tag can never disagree with the actual route.
-            var isLocal = runtimeInfoProvider.IsDomainMatch(target.Domain);
-            activity?.SetTag(TelemetryConstants.TagNames.RelayRoute, isLocal ? "local" : "remote");
+            isLocal = runtimeInfoProvider.IsDomainMatch(target.Domain);
+            route = isLocal ? "local" : "remote";
+            activity?.SetTag(TelemetryConstants.TagNames.RelayRoute, route);
 
             // The relay declined this particular event; its outbox row is the only delivery.
             if (target.SkipReason is { } skipReason)
@@ -133,30 +140,48 @@ public sealed class PostCommitRelayDispatcher(
             else
             {
                 activity?.SetTag(TelemetryConstants.TagNames.RelayOutcome, PostCommitRelayOutcomes.Failed);
-                logger.PostCommitEventRelayRejected(eventType.Name, result.Error.Message);
+                logger.PostCommitEventRelayRejected(
+                    eventType.Name, target.SubInstanceId, target.ParentInstanceId, route, result.Error.Message);
+                LogIfTerminalLostAcrossDomains(envelope.Event, target, isLocal, PostCommitRelayOutcomes.Failed);
             }
         }
         catch (OperationCanceledException) when (timeoutSource?.IsCancellationRequested == true
                                                  && !cancellationToken.IsCancellationRequested)
         {
-            // The remote leg outran its bound. The child's hop must not wait any longer on it; the
-            // outbox row is already durable and the Inbox backup applies the same command.
+            // The remote leg outran its bound. The child's hop must not wait any longer on it.
             activity?.SetTag(TelemetryConstants.TagNames.RelayOutcome, PostCommitRelayOutcomes.Timeout);
             activity?.SetStatus(ActivityStatusCode.Error, "relay timeout");
-            logger.PostCommitEventRelayTimedOut(eventType.Name);
+            logger.PostCommitEventRelayTimedOut(eventType.Name, target.SubInstanceId, target.ParentInstanceId);
+            LogIfTerminalLostAcrossDomains(envelope.Event, target, isLocal, PostCommitRelayOutcomes.Timeout);
         }
         catch (Exception ex)
         {
-            // The originating commit already stands; the outbox row guarantees the Inbox backup
-            // delivers. Never fail the hop for a relay error.
+            // The originating commit already stands. Within one domain the outbox row guarantees the
+            // Inbox backup delivers; across domains nothing does. Never fail the hop for a relay error.
             activity?.SetTag(TelemetryConstants.TagNames.RelayOutcome, PostCommitRelayOutcomes.Failed);
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-            logger.PostCommitEventRelayFailed(ex, eventType.Name);
+            logger.PostCommitEventRelayFailed(ex, eventType.Name, target.SubInstanceId, target.ParentInstanceId, route);
+            LogIfTerminalLostAcrossDomains(envelope.Event, target, isLocal, PostCommitRelayOutcomes.Failed);
         }
         finally
         {
             timeoutSource?.Dispose();
         }
+    }
+
+    /// <summary>
+    /// A sub item's terminal event that failed on a REMOTE route has no backup: the child domain's
+    /// Inbox drops an event whose parent it does not host, so the parent stays Busy. That is the one
+    /// relay failure worth alerting on (vnext#1256). A state change is not terminal (the next one
+    /// corrects it), and a local route has the Inbox backup.
+    /// </summary>
+    private void LogIfTerminalLostAcrossDomains(object @event, PostCommitRelayTarget target, bool isLocal, string outcome)
+    {
+        if (isLocal || @event is not ISubflowTerminalEvent)
+            return;
+
+        logger.PostCommitTerminalRelayLost(
+            @event.GetType().Name, target.ParentInstanceId, target.Domain, target.SubInstanceId, outcome);
     }
 
     /// <summary>
