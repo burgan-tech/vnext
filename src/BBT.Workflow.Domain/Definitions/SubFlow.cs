@@ -29,16 +29,20 @@ public sealed class SubFlow
 
     public SubFlowType Type { get; private set; }
     public Reference Process { get; private set; }
+    /// <summary>
+    /// Optional C# mapping script (input handler / output handler). Mutually exclusive with <see cref="Input"/> and
+    /// <see cref="Output"/>: publish rejects both; a stored definition holding both runs the script.
+    /// </summary>
     public ScriptCode? Mapping { get; private set; }
 
     /// <summary>
-    /// Optional declarative block that shapes the child instance's start payload without a script.
+    /// Optional declarative block that shapes the child instance's start payload without a script. Mutually exclusive with <see cref="Mapping"/>.
     /// </summary>
     [JsonPropertyName("input")]
     public MappingBlock? Input { get; private set; }
 
     /// <summary>
-    /// Optional declarative block that files the child's result onto the parent without a script.
+    /// Optional declarative block that files the child's result onto the parent without a script. Mutually exclusive with <see cref="Mapping"/>.
     /// </summary>
     [JsonPropertyName("output")]
     public MappingBlock? Output { get; private set; }
