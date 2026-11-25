@@ -142,7 +142,6 @@ public abstract class TaskExecutorBase<TTask> : ITaskExecutor
             Logger.LogError("Task {TaskKey} input preparation failed: {Error}",
                 taskKey, inputResult.Error.Message);
             return Result<StandardTaskResponse>.Fail(inputResult.Error);
-            // return CreateErrorResponse(inputResult.Error, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
         }
         
         context.InputResponse = inputResult.Value;
@@ -154,7 +153,6 @@ public abstract class TaskExecutorBase<TTask> : ITaskExecutor
             Logger.LogError("Task {TaskKey} pre-processing failed: {Error}",
                 taskKey, preProcessResult.Error.Message);
             return Result<StandardTaskResponse>.Fail(preProcessResult.Error);
-            // return CreateErrorResponse(preProcessResult.Error, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
         }
 
         // 4. Invoke (abstract or virtual)
@@ -197,7 +195,6 @@ public abstract class TaskExecutorBase<TTask> : ITaskExecutor
             Logger.LogError("Task {TaskKey} post-processing failed: {Error}",
                 taskKey, postProcessResult.Error.Message);
             return Result<StandardTaskResponse>.Fail(postProcessResult.Error);
-            // return CreateErrorResponse(postProcessResult.Error, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
         }
 
         // 6. ProcessOutput (virtual - custom per executor)
@@ -213,7 +210,6 @@ public abstract class TaskExecutorBase<TTask> : ITaskExecutor
             Logger.LogError("Task {TaskKey} output processing failed: {Error}",
                 taskKey, outputResult.Error.Message);
             return Result<StandardTaskResponse>.Fail(outputResult.Error);
-            // return CreateErrorResponse(outputResult.Error, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
         }
         
         if (context.TaskTrigger == TaskTrigger.Extension)
@@ -479,5 +475,5 @@ public abstract class TaskExecutorBase<TTask> : ITaskExecutor
 
     /// <summary>The caller's request headers, the source of the forwarded credential (never provider-resolved roles).</summary>
     protected static IReadOnlyDictionary<string, string>? CallerHeadersOf(ScriptContext? scriptContext) =>
-        scriptContext?.Headers is null ? null : scriptContext.GetHeadersAsDictionary();
+        scriptContext?.Headers is null ? null : scriptContext.GetTransportHeadersAsDictionary();
 }

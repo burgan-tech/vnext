@@ -122,7 +122,7 @@ public class InstanceQueryAppServiceHistoryTests : IDisposable
         };
 
         _instanceRepository
-            .FindByIdentifierWithFullHistoryAsync(input.Instance, Arg.Any<CancellationToken>())
+            .FindByIdentifierAsReadOnlyAsync(input.Instance, Arg.Any<CancellationToken>())
             .Returns((Instance?)null);
 
         var result = await _service.GetInstanceHistoryAsync(input, CancellationToken.None);
@@ -162,7 +162,7 @@ public class InstanceQueryAppServiceHistoryTests : IDisposable
             header: new JsonData("{}"));
 
         _instanceRepository
-            .FindByIdentifierWithFullHistoryAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
+            .FindByIdentifierAsReadOnlyAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
             .Returns(instance);
 
         _instanceTransitionRepository
@@ -205,6 +205,10 @@ public class InstanceQueryAppServiceHistoryTests : IDisposable
         second.Stage.ShouldBeNull();
         second.FinishedAt.ShouldBeNull();
         second.DurationSeconds.ShouldBeNull();
+
+        // Transition history reads no stored data version: the instance is loaded latest-only.
+        await _instanceRepository.DidNotReceiveWithAnyArgs()
+            .FindByIdentifierWithFullHistoryAsync(default!, default);
     }
 
     [Fact]
@@ -213,7 +217,7 @@ public class InstanceQueryAppServiceHistoryTests : IDisposable
         var instance = Instance.Create(Guid.NewGuid(), TestWorkflow, TestVersion, "test-key");
 
         _instanceRepository
-            .FindByIdentifierWithFullHistoryAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
+            .FindByIdentifierAsReadOnlyAsync(instance.Id.ToString(), Arg.Any<CancellationToken>())
             .Returns(instance);
 
         _instanceTransitionRepository

@@ -10,10 +10,13 @@ services:
     environment:
       # `environment` wins over env_file — lets run-docker.sh pick the domain per run without editing files
       APP_DOMAIN: ${APP_DOMAIN:-core}
+      # Dapr local-delivery guard: the app reads the token daprd presents from this mounted file (run-docker.sh writes it).
+      Workflow__RuntimeCaller__AppApiTokenFile: /run/secrets/vnext/app-api-token
       ConnectionStrings__Default: "Host=vnext-postgres;Port=5432;Database=${VNEXT_DB:-Aether_WorkflowDb};Username=postgres;Password=postgres;"
     ports:
       - "4201:5000"
     volumes:
+      - "${VNEXT_APP_API_TOKEN_FILE:-/dev/null}:/run/secrets/vnext/app-api-token:ro"
       - ../..:/app
       - /app/orchestration/BBT.Workflow.Orchestration.HttpApi.Host/obj/
       - /app/orchestration/BBT.Workflow.Orchestration.HttpApi.Host/bin/
@@ -118,6 +121,8 @@ services:
       "--dapr-http-port", "42110",
       "--scheduler-host-address", "dapr-scheduler:50007",
     ]
+    environment:
+      APP_API_TOKEN: ${VNEXT_APP_API_TOKEN:-}
     volumes:
       - "../../etc/orchestration/dapr/components:/components"
       - "../../etc/orchestration/dapr/config.yaml:/dapr-config.yaml"

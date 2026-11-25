@@ -54,9 +54,7 @@ public sealed class CacheKeyEvaluator(
             var mapping = await scriptEngine.CompileToInstanceAsync<ICacheKeyMapping>(
                 script, flowScripts: context.Workflow?.Scripts, cancellationToken: ct);
             return await mapping.Handler(context) ?? string.Empty;
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Cache key script failed: {ScriptDiagnostics.Explain(ex)}"));
+        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context, ex, "Cache key script failed"));
     }
 
     private async Task<Result<string>> ResolveReferenceAsync(Reference reference, CancellationToken cancellationToken)

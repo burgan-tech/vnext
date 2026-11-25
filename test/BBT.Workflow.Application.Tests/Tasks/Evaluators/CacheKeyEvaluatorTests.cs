@@ -90,14 +90,17 @@ public sealed class CacheKeyEvaluatorTests
     public async Task Roslyn_HandlerThrows_Fails()
     {
         var script = ScriptCode.FromNative("class K {}", location: "./key.csx");
+        var thrown = new InvalidOperationException("boom");
         var mapping = Substitute.For<ICacheKeyMapping>();
-        mapping.Handler(_context).Returns<Task<string?>>(_ => throw new InvalidOperationException("boom"));
+        mapping.Handler(_context).Returns<Task<string?>>(_ => throw thrown);
         _engine.CompileToInstanceAsync<ICacheKeyMapping>(script, Arg.Any<ScriptSettings?>(), null, null, Arg.Any<CancellationToken>())
             .Returns(mapping);
 
         var result = await Sut().EvaluateAsync(script, _context);
         result.IsSuccess.ShouldBeFalse();
         result.Error.Message.ShouldContain("boom");
+        // vnext#1268: kept for the incident's stack trace; the task engine takes it after the run.
+        _context.FailureCause.ShouldBeSameAs(thrown);
     }
 
     [Fact]

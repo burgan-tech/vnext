@@ -81,9 +81,7 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
             return TaskInvocationResult.Success(
                 data: outputResponse.Data,
                 taskType: TaskType.ToString());
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Script output handler failed: {ScriptDiagnostics.Explain(ex)}"));
+        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "Script output handler failed"));
 
         if (!result.IsSuccess)
         {

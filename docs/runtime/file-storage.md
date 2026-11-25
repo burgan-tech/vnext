@@ -109,8 +109,11 @@ Applied per `x-storage` node of an incoming payload:
   rejected request therefore writes nothing to the store.
 - A store failure is `503` `FileStoreUnavailable`, synchronous, **before** any `202`. A failing `start`
   creates no instance (the swap runs before the instance row, so a retry with the same key is not turned
-  into an idempotent no-op). Inside a pipeline hop (funnel, mapping step) the failure takes the normal error
-  path.
+  into an idempotent no-op). The same holds for a start that fails after the swap (its start mapping): the
+  start transaction is rolled back. What the swap already did outside the database stays done: blobs it
+  wrote are not deleted, and the tickets of streamed uploads it claimed are not returned, so a retry that
+  references those uploads is refused (`400` `Instance:100048`) until they are uploaded again. Inside a
+  pipeline hop (funnel, mapping step) the failure takes the normal error path.
 - **Master schema unavailable.** When the flow names a master schema that cannot be loaded, the runtime does
   not know the `x-storage` paths. If any object in the payload carries a `content` or `file` member, the write
   is refused with `503` `FileSchemaUnavailable` (start and transition: synchronously, before any instance row,
@@ -387,7 +390,7 @@ options, in order of preference:
 
 | Limitation | Effect / guidance |
 |---|---|
-| Orphans on rollback | The blob is written before the unit of work commits; a rollback after `create` leaves an unreferenced object |
+| Orphans on rollback | The blob is written before the unit of work commits; a rollback after `create` leaves an unreferenced object. A streamed upload's ticket taken by the swap is not returned either: a retry must upload the file again |
 | Orphans on `409` after store | The swap runs before reserve/accept; a `409` (Busy, completion window) after the store leaves the objects behind |
 | No delete, replace or retention | Clearing or replacing a field never deletes the old object; there is no lifecycle or garbage collection (use the store's own lifecycle rules) |
 | Task records hold what a mapping puts there | `InstanceTask.Request/Response` are not protected: a mapping that puts bytes into a task request stores them there |

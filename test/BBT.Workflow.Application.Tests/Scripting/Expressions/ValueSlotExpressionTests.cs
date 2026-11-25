@@ -165,7 +165,7 @@ public sealed class ValueSlotExpressionTests
 
         result.IsSuccess.ShouldBeTrue();
         result.Value!.Duration.ShouldBe(TimeSpan.FromMinutes(7));
-        logger.EventIds.ShouldBe([10271]);
+        logger.EventIds.ShouldBe([10274]);
     }
 
     [Fact]
@@ -182,7 +182,7 @@ public sealed class ValueSlotExpressionTests
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(ValueSlotExpressionEvaluator.EvaluationFailedCode);
         result.Error.Message.ShouldNotContain("CS1002");
-        logger.EventIds.ShouldNotContain(10271);
+        logger.EventIds.ShouldNotContain(10274);
     }
 
     [Fact]
@@ -276,7 +276,7 @@ public sealed class ValueSlotExpressionTests
 
         result.IsSuccess.ShouldBeTrue();
         result.Value.ShouldBe("approve");
-        logger.EventIds.ShouldBe([10271]);
+        logger.EventIds.ShouldBe([10274]);
     }
 
     [Fact]

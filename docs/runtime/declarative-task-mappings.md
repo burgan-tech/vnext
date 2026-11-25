@@ -238,7 +238,7 @@ would return, in the function or extension response.
 
 ## Missing values
 
-A missing `select` path, a missing leaf, `?.`, or member access on a missing intermediate (`data.customer.id` with no `customer`) makes that entry **write nothing** — no error. A skipped `select` (path not found) or `set` entry (missing intermediate) raises the Debug log `TaskDeclarativeMappingEntrySkipped` (EventId 10269) with the task key, the phase and the path or `set` key — never the value; a plain null value or `?.` result skips silently. Every other evaluation error (bad cast, unwritable path, role provider failure) **fails the mapping**: the error boundary applies and `TaskDeclarativeMappingFailed` is logged. Inconsistency to know: legacy `context.*` paths still fail on a missing member.
+A missing `select` path, a missing leaf, `?.`, or member access on a missing intermediate (`data.customer.id` with no `customer`) makes that entry **write nothing** — no error. A skipped `select` (path not found) or `set` entry (missing intermediate) raises the Debug log `TaskDeclarativeMappingEntrySkipped` (EventId 10272) with the task key, the phase and the path or `set` key — never the value; a plain null value or `?.` result skips silently. Every other evaluation error (bad cast, unwritable path, role provider failure) **fails the mapping**: the error boundary applies and `TaskDeclarativeMappingFailed` is logged. Inconsistency to know: legacy `context.*` paths still fail on a missing member.
 
 ## User
 
@@ -358,7 +358,7 @@ Agent hints (`decision.hintsMapping`) stay C# only: they return a dictionary.
 Compatibility. Before these slots — and the resource-lock key — honoured the label, the script engine ignored the
 location, so a C# script labelled `dynamicExpresso` ran as a script. Such a script keeps working: when it does not
 evaluate as an expression it runs as the C# script it was, with one warning — `ResourceLockKeyExpressionRanAsScript`
-(EventId 10270) for a lock key, `ScriptLabelledDynamicExpressoRanAsScript` (EventId 10271, `Slot` = `timer`,
+(EventId 10273) for a lock key, `ScriptLabelledDynamicExpressoRanAsScript` (EventId 10274, `Slot` = `timer`,
 `agent prompt`, `agent decision`) for a value slot. When neither works the expression's error is reported (code
 `Expression.ValueSlotFailed`; a lock key `Execution:200012`, an empty lock key `Execution:200011`). Each slot keeps its
 failure semantics: a failing transition timer fails the step, a failing timeout falls back to the static duration, a

@@ -822,7 +822,7 @@ public class TransitionPipeline
         using var compensation = CompensationCancellation.Create();
         var cancellationToken = compensation.Token;
 
-        _logger.InstanceFaultedDueToPipelineError(context.InstanceId, error.Code, error.Message);
+        _logger.InstanceFaultedDueToPipelineError(context.InstanceId, error.Code, error.Message, context.FailureCause);
 
         // The failure path's own rest point: a status lock, a fresh unit of work, a reload and a
         // commit that used to run unnamed after the failing step's span had already closed.
@@ -865,6 +865,7 @@ public class TransitionPipeline
                 message: error.Message ?? "Unhandled pipeline error",
                 errorCode: error.Code ?? "Pipeline:Unhandled",
                 errorLayer: "Pipeline",
+                stackTrace: context.FailureCause?.ToString(),
                 traceId: context.TraceId);
 
             instance.AddIncident(incident);

@@ -397,6 +397,20 @@ public static partial class WorkflowLogs
         string? error);
 
     /// <summary>
+    /// Logs when the master-schema preview at transition intake (vnext#1255) could not evaluate a
+    /// request and accepted it, leaving the verdict to the write funnel.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10276,
+        Level = LogLevel.Warning,
+        Message = "Master-schema intake preview skipped for instance {InstanceId} (schema {SchemaKey}); the write funnel validates instead")]
+    public static partial void IntakeMasterSchemaPreviewSkipped(
+        this ILogger logger,
+        Exception exception,
+        Guid instanceId,
+        string? schemaKey);
+
+    /// <summary>
     /// Logs when the write funnel demoted a stale latest row (written by a concurrent
     /// transaction) under the FOR UPDATE lock before inserting the new head.
     /// </summary>
@@ -786,7 +800,8 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Guid instanceId,
         string? errorCode,
-        string? errorMessage);
+        string? errorMessage,
+        Exception? cause);
 
     /// <summary>
     /// Logs when an instance has been successfully persisted as faulted.
@@ -843,6 +858,52 @@ public static partial class WorkflowLogs
         Guid instanceId);
 
     /// <summary>
+    /// Logs the exception of a task script that threw — an input/output mapping, a script task, a
+    /// cache key — with its stack trace, the same detail the incident keeps (vnext#1268).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10268,
+        Level = LogLevel.Error,
+        Message = "Task script failed. TaskKey={TaskKey}, TaskType={TaskType}, InstanceId={InstanceId}")]
+    public static partial void TaskScriptFailed(
+        this ILogger logger,
+        string taskKey,
+        string taskType,
+        Guid instanceId,
+        Exception exception);
+
+    /// <summary>
+    /// Logs the exception of a transition mapping that threw while an instance was being started:
+    /// the start answers with the error and records no incident, so the log is where its stack trace
+    /// goes (vnext#1268).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10269,
+        Level = LogLevel.Error,
+        Message = "Start transition mapping failed. Workflow={WorkflowKey}, TransitionKey={TransitionKey}, InstanceId={InstanceId}")]
+    public static partial void StartTransitionMappingFailed(
+        this ILogger logger,
+        string workflowKey,
+        string transitionKey,
+        Guid instanceId,
+        Exception exception);
+
+    /// <summary>
+    /// Logs the exception of a condition script that threw. An automatic-transition rule that fails
+    /// counts as not satisfied and records no incident, so the log is where its stack trace goes
+    /// (vnext#1268).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10270,
+        Level = LogLevel.Error,
+        Message = "Condition script failed. InstanceId={InstanceId}, TransitionKey={TransitionKey}")]
+    public static partial void ConditionScriptFailed(
+        this ILogger logger,
+        Guid instanceId,
+        string? transitionKey,
+        Exception exception);
+
+    /// <summary>
     /// Logs when task input mapping/handler fails.
     /// </summary>
     [LoggerMessage(
@@ -876,7 +937,7 @@ public static partial class WorkflowLogs
     /// resolved for <c>user</c>. The task fails through the same error-boundary path as a failed script mapping.
     /// </summary>
     [LoggerMessage(
-        EventId = 10268,
+        EventId = 10271,
         Level = LogLevel.Error,
         Message = "Task declarative mapping failed. TaskKey={TaskKey}, TaskType={TaskType}, Phase={Phase}, InstanceId={InstanceId}, Error={ErrorMessage}")]
     public static partial void TaskDeclarativeMappingFailed(
@@ -893,7 +954,7 @@ public static partial class WorkflowLogs
     /// <c>set</c> key, never the value. The mapping continues; nothing is written for that entry.
     /// </summary>
     [LoggerMessage(
-        EventId = 10269,
+        EventId = 10272,
         Level = LogLevel.Debug,
         Message = "Task declarative mapping entry skipped: missing source. TaskKey={TaskKey}, Phase={Phase}, Path={Path}, Reason={Reason}")]
     public static partial void TaskDeclarativeMappingEntrySkipped(
@@ -909,7 +970,7 @@ public static partial class WorkflowLogs
     /// script with a file location, or rewrite it as an expression.
     /// </summary>
     [LoggerMessage(
-        EventId = 10270,
+        EventId = 10273,
         Level = LogLevel.Warning,
         Message = "Resource lock key labelled dynamicExpresso ran as a C# script. TransitionKey={TransitionKey}, ExpressionError={ExpressionError}")]
     public static partial void ResourceLockKeyExpressionRanAsScript(
@@ -924,7 +985,7 @@ public static partial class WorkflowLogs
     /// location, or rewrite it as an expression.
     /// </summary>
     [LoggerMessage(
-        EventId = 10271,
+        EventId = 10274,
         Level = LogLevel.Warning,
         Message = "Script labelled dynamicExpresso ran as a C# script. Slot={Slot}, ExpressionError={ExpressionError}")]
     public static partial void ScriptLabelledDynamicExpressoRanAsScript(
@@ -938,7 +999,7 @@ public static partial class WorkflowLogs
     /// caller's roles. The key's site decides what the failure means.
     /// </summary>
     [LoggerMessage(
-        EventId = 10272,
+        EventId = 10275,
         Level = LogLevel.Warning,
         Message = "Dynamic Expresso value evaluation failed: {Reason}")]
     public static partial void DynamicExpressoValueEvaluationFailed(
@@ -3871,6 +3932,43 @@ public static partial class WorkflowLogs
         string? errorCode,
         string? reason);
 
+    /// <summary>
+    /// Logs a Dapr-triggered endpoint delivery that did not come from this domain's own sidecar.
+    /// Under LogOnly the request is still served, so the entry reads "would reject".
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40996,
+        Level = LogLevel.Warning,
+        Message = "Dapr local delivery check failed (mode {Mode}; Enforce rejects, LogOnly would reject and still serves). Verdict: {Verdict}, Path: {Path}, RemoteAddress: {RemoteAddress}, CallerAppId: {CallerAppId}")]
+    public static partial void DaprLocalDeliveryRejected(
+        this ILogger logger,
+        string mode,
+        string verdict,
+        string? path,
+        string? remoteAddress,
+        string? callerAppId);
+
+    /// <summary>
+    /// Logs, per guarded request, that a configuration reload put the Dapr local-delivery guard into
+    /// Enforce mode without an app API token file, so the request is rejected. At startup the same
+    /// combination fails validation instead.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40997,
+        Level = LogLevel.Error,
+        Message = "Dapr local delivery guard is in Enforce mode but no app API token is configured (Workflow:RuntimeCaller:AppApiTokenFile); every Dapr-triggered delivery will be rejected")]
+    public static partial void DaprLocalDeliveryEnforcedWithoutToken(this ILogger logger);
+
+    /// <summary>
+    /// Logs once at startup that the Dapr local-delivery guard runs in LogOnly mode without an app API
+    /// token, so per-request checks are not reported until a token is configured.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40998,
+        Level = LogLevel.Information,
+        Message = "Dapr local delivery guard runs in LogOnly mode without a configured app API token (Workflow:RuntimeCaller:AppApiTokenFile); per-request checks are not reported until a token is set")]
+    public static partial void DaprLocalDeliveryLogOnlyWithoutToken(this ILogger logger);
+
     #endregion
 
     #region Authorization (authorize / permissions)
@@ -3955,14 +4053,15 @@ public static partial class WorkflowLogs
     public static partial void RuntimeCallerIdentityNotConfigured(this ILogger logger);
 
     /// <summary>
-    /// Logs at every start of a host that runs flow scripts and holds a runtime-caller key ring with
-    /// the script sandbox off, under the explicit <c>AllowWithoutScriptSandbox</c> bypass: any flow
-    /// script on this host can read the key and mint runtime calls for every domain sharing it.
+    /// Logs at every start of a host that runs flow scripts and holds a runtime-caller key ring or a
+    /// Dapr app API token file with the script sandbox off, under the explicit
+    /// <c>AllowWithoutScriptSandbox</c> bypass: any flow script on this host can read the file (the key
+    /// ring mints runtime calls for every domain sharing it).
     /// </summary>
     [LoggerMessage(
         EventId = 50049,
         Level = LogLevel.Critical,
-        Message = "Runtime-caller key ring loaded with the script sandbox disabled (AllowWithoutScriptSandbox); flow scripts on this host can read the key")]
+        Message = "A runtime-caller key ring or Dapr app API token file is loaded on a host that runs flow scripts with the script sandbox disabled (Workflow:RuntimeCaller:AllowWithoutScriptSandbox=true); an unsandboxed script can read these files")]
     public static partial void RuntimeCallerKeyRingWithoutScriptSandbox(this ILogger logger);
 
     /// <summary>

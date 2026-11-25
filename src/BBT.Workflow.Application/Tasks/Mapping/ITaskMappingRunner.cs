@@ -86,10 +86,22 @@ public sealed record TaskMappingSite(
     /// </summary>
     public bool MemoizesScriptCompile { get; init; } = true;
 
+    /// <summary>
+    /// What failed in a script input mapping, as <see cref="BBT.Workflow.Scripting.ScriptDiagnostics.TaskScriptError"/>
+    /// takes it: <see cref="InputFailurePrefix"/> without its trailing <c>": "</c> (<c>"Http task input handler failed"</c>).
+    /// </summary>
+    public string InputFailure => TrimSeparator(InputFailurePrefix);
+
+    /// <summary>What failed in a script output mapping; <see cref="OutputFailurePrefix"/> without its trailing <c>": "</c>.</summary>
+    public string OutputFailure => TrimSeparator(OutputFailurePrefix);
+
     /// <summary>The defaults for a task type: <c>"{type} task input/output handler failed: "</c>, no logger.</summary>
     public static TaskMappingSite For(TaskType taskType) => new(
         null,
         taskType.ToString(),
         $"{taskType} task input handler failed: ",
         $"{taskType} task output handler failed: ");
+
+    private static string TrimSeparator(string prefix) =>
+        prefix.EndsWith(": ", StringComparison.Ordinal) ? prefix[..^2] : prefix.TrimEnd();
 }

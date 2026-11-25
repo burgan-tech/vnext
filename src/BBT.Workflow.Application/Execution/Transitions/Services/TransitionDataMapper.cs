@@ -15,7 +15,8 @@ namespace BBT.Workflow.Execution.Transitions.Services;
 public sealed class TransitionDataMapper(
     IScriptEngine scriptEngine,
     IScriptContextFactory scriptContextFactory,
-    IInstanceRepository instanceRepository) : ITransitionDataMapper
+    IInstanceRepository instanceRepository,
+    IRuntimeInfoProvider runtimeInfoProvider) : ITransitionDataMapper
 {
     /// <inheritdoc />
     /// <summary>
@@ -27,8 +28,8 @@ public sealed class TransitionDataMapper(
         Transition? transition,
         Definitions.Workflow workflow,
         Instance instance,
-        IRuntimeInfoProvider runtimeInfoProvider,
         IReadOnlyDictionary<string, string?>? headers = null,
+        Action<Exception>? onScriptFailure = null,
         CancellationToken cancellationToken = default)
     {
         // Guard: No mapping defined - return payload as-is
@@ -37,8 +38,7 @@ public sealed class TransitionDataMapper(
 
         // Execute mapping script safely using TryAsync
         return ExecuteMappingScriptAsync(
-            payload, transition, workflow, instance,
-            runtimeInfoProvider, headers, cancellationToken);
+            payload, transition, workflow, instance, headers, onScriptFailure, cancellationToken);
     }
 
     /// <summary>
@@ -50,8 +50,8 @@ public sealed class TransitionDataMapper(
         Transition transition,
         Definitions.Workflow workflow,
         Instance instance,
-        IRuntimeInfoProvider runtimeInfoProvider,
         IReadOnlyDictionary<string, string?>? headers,
+        Action<Exception>? onScriptFailure,
         CancellationToken cancellationToken)
     {
         using var activity = ScriptActivityHelper.StartExecuteActivity("transitionMapping");
@@ -61,7 +61,7 @@ public sealed class TransitionDataMapper(
             {
                 var mappingInstance = await CompileMappingScriptAsync(transition, workflow.Scripts, ct);
                 var scriptContext = await BuildScriptContextAsync(
-                    payload, transition, workflow, instance, runtimeInfoProvider, headers, ct);
+                    payload, transition, workflow, instance, headers, ct);
                 
                 try
                 {
@@ -74,7 +74,12 @@ public sealed class TransitionDataMapper(
                 }
             },
             cancellationToken,
-            CreateMappingError);
+            ex =>
+            {
+                if (ex is not OperationCanceledException)
+                    onScriptFailure?.Invoke(ex);
+                return CreateMappingError(ex);
+            });
 
         if (!result.IsSuccess)
             activity.SetResultError(result.Error.Code, result.Error.Message);
@@ -107,7 +112,6 @@ public sealed class TransitionDataMapper(
         Transition transition,
         Definitions.Workflow workflow,
         Instance instance,
-        IRuntimeInfoProvider runtimeInfoProvider,
         IReadOnlyDictionary<string, string?>? headers,
         CancellationToken cancellationToken)
     {

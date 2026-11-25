@@ -1,0 +1,31 @@
+{
+  "releaseNote": {
+    "summary": "Dapr-triggered endpoints (events, schedule, job) now accept only deliveries from the domain's own sidecar; LogOnly by default, Enforce after the sidecar token is enabled.",
+    "breaking": false,
+    "docs": []
+  },
+  "migrations": [
+    {
+      "id": "dapr-local-delivery-guard",
+      "type": "behavior",
+      "component": "runtime",
+      "path": "Dapr:LocalDelivery:Mode | Workflow:RuntimeCaller:AppApiTokenFile | APP_API_TOKEN (daprd only)",
+      "since": "next",
+      "severity": "warning",
+      "title": "Dapr-triggered endpoints accept only the domain's own sidecar (security fix)",
+      "description": "POST .../instances/events, POST .../instances/schedule and Dapr Scheduler's /job/{jobName} used to answer any caller that could reach the port (vnext#1253). They now require exactly one dapr-api-token header equal to the app API token read from the file named by Workflow:RuntimeCaller:AppApiTokenFile (read once at start, trimmed; the app does not read APP_API_TOKEN or any env/config token value; a set path with a missing or empty file fails startup) and no dapr-caller-app-id header (the marker of a service-invocation call from another app); otherwise the request gets an empty-body 403 (not 404: Dapr pub/sub drops a message for good on 404 and retries any other status, so a misconfigured own-sidecar delivery stays retryable). Dapr:LocalDelivery:Mode is Off, LogOnly or Enforce and defaults to LogOnly: a failing request is still served and logged as EventId 40996, so nothing changes until Enforce is set. With the path unset, LogOnly logs EventId 40998 once at startup and nothing per request, and Enforce fails startup (options validation); a configuration reload into that state rejects every guarded request and logs EventId 40997. The dapr-api-token header is removed right after routing, before controllers and any Dapr job handler run. Scope of this release: the orchestration host only; execution, inbox and outbox hosts and vNext-to-vNext internal endpoints (for example transitions/{key}/enqueue) follow in a later phase.",
+      "action": "Give daprd the token (APP_API_TOKEN on daprd; Kubernetes: one Secret per domain with key token, annotation dapr.io/app-token-secret on the orchestration Deployment only) and mount the same Secret read-only into the orchestration container, setting Workflow__RuntimeCaller__AppApiTokenFile to the mount path. Do not set APP_API_TOKEN on the app container. Keep Scripting__Sandbox__Enabled=true on Orchestration. Rotate by changing the Secret and restarting the orchestration Deployment. Run in LogOnly until EventId 40996 is zero, then set Dapr:LocalDelivery:Mode=Enforce. Roll back with Mode=LogOnly. Keep the sidecar API on loopback (dapr.io/sidecar-listen-addresses default [::1],127.0.0.1): a call through the runtime's own sidecar API passes the guard. Hand-made calls to these endpoints must send the dapr-api-token header."
+    },
+    {
+      "id": "event-drop-reason-is-code-only",
+      "type": "behavior",
+      "component": "event",
+      "path": "POST .../instances/events | .../instances/schedule response body reason",
+      "since": "next",
+      "severity": "info",
+      "title": "DROP response reason carries only the error code",
+      "description": "The body of a 200 DROP answer from the events and schedule endpoints now holds only the error code (for example NotAnEventTransition, InvalidEventAction, InvalidEventPayload) in reason, instead of 'Code: message', because the message can name flows and transitions. The full message stays in the EventDeliveryDropped log (EventId 40994). Dapr reads only the top-level status, so delivery behavior is unchanged.",
+      "action": "Tests or tooling that matched the text after the code in reason must read the EventId 40994 log instead."
+    }
+  ]
+}

@@ -71,12 +71,22 @@ public sealed class ScriptTimerEvaluator : ITimerEvaluator
 
     private async Task<TimerSchedule> RunScriptAsync(ScriptCode script, ScriptContext context, CancellationToken ct)
     {
-        var scriptRunner = await _scriptEngine.CompileToInstanceAsync<ITimerMapping>(
-            script,
-            flowScripts: context.Workflow?.Scripts,
-            cancellationToken: ct);
+        try
+        {
+            var scriptRunner = await _scriptEngine.CompileToInstanceAsync<ITimerMapping>(
+                script,
+                flowScripts: context.Workflow?.Scripts,
+                cancellationToken: ct);
 
-        // ITimerMapping.Handler directly returns TimerSchedule
-        return await scriptRunner.Handler(context);
+            // ITimerMapping.Handler directly returns TimerSchedule
+            return await scriptRunner.Handler(context);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Kept for the fault incident's stack trace (vnext#1268); TryAsync (or the expression fallback) still
+            // turns the exception into the error, exactly as before.
+            context.FailureCause = ex;
+            throw;
+        }
     }
 }

@@ -44,24 +44,23 @@ public sealed class ScriptConditionEvaluator : IConditionEvaluator
 
         var evaluation = await ResultExtensions.TryAsync(async ct =>
             {
-                var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IConditionMapping>(
-                    script,
-                    flowScripts: context.Workflow?.Scripts,
-                    cancellationToken: ct);
-                
                 try
                 {
-                    var result = await scriptRunner.Handler(context);
-                    return result;
+                    var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IConditionMapping>(
+                        script,
+                        flowScripts: context.Workflow?.Scripts,
+                        cancellationToken: ct);
+
+                    return await scriptRunner.Handler(context);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
+                    // With its stack trace (vnext#1268): a failing automatic rule records no incident,
+                    // so this line is the only place the trace goes. TryAsync still maps the error.
+                    _logger.ConditionScriptFailed(context.Instance?.Id ?? Guid.Empty, context.Transition?.Key, ex);
                     throw;
                 }
-            }, cancellationToken)
-            .OnFailure(error => _logger.LogError(
-                "Condition script evaluation failed: {Error}",
-                error.Message));
+            }, cancellationToken);
 
         if (!evaluation.IsSuccess)
             activity.SetResultError(evaluation.Error.Code, evaluation.Error.Message);

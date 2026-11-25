@@ -14,12 +14,12 @@
       "resourceLockKeyExpression": {
         "since": "next",
         "status": "stable",
-        "description": "A transition resourceLock.keyExpression with location \"dynamicExpresso\" is a Dynamic Expresso expression over the standard slot variables (data, input, instance, now, user, context) whose string result is the lock key (the cache-key evaluator); no .csx needed. A dynamicExpresso-labelled C# key from before (the label used to be ignored) that does not evaluate as an expression still runs as a script, with the warning ResourceLockKeyExpressionRanAsScript (10270)."
+        "description": "A transition resourceLock.keyExpression with location \"dynamicExpresso\" is a Dynamic Expresso expression over the standard slot variables (data, input, instance, now, user, context) whose string result is the lock key (the cache-key evaluator); no .csx needed. A dynamicExpresso-labelled C# key from before (the label used to be ignored) that does not evaluate as an expression still runs as a script, with the warning ResourceLockKeyExpressionRanAsScript (10273)."
       },
       "valueSlotDynamicExpresso": {
         "since": "next",
         "status": "stable",
-        "description": "Transition timer, workflow attributes.timeout.mapping, SubFlow overrides.timeout.mapping, agent prompt and agent decision.mapping (mode script) honour location \"dynamicExpresso\": an inline expression over data, input, instance, now, user, context (the decision adds outcome and candidates). Timer value: TimeSpan (duration), DateTime/DateTimeOffset (instant), ISO-8601 duration or date-time string, null (immediate); numbers are rejected. A dynamicExpresso-labelled C# script that does not evaluate as an expression still runs as C#, with the warning ScriptLabelledDynamicExpressoRanAsScript (10271); publish reports a non-compiling one as a warning, never an error. Agent hintsMapping stays C#."
+        "description": "Transition timer, workflow attributes.timeout.mapping, SubFlow overrides.timeout.mapping, agent prompt and agent decision.mapping (mode script) honour location \"dynamicExpresso\": an inline expression over data, input, instance, now, user, context (the decision adds outcome and candidates). Timer value: TimeSpan (duration), DateTime/DateTimeOffset (instant), ISO-8601 duration or date-time string, null (immediate); numbers are rejected. A dynamicExpresso-labelled C# script that does not evaluate as an expression still runs as C#, with the warning ScriptLabelledDynamicExpressoRanAsScript (10274); publish reports a non-compiling one as a warning, never an error. Agent hintsMapping stays C#."
       },
       "nestedTaskDeclarativeBlocks": {
         "since": "next",
@@ -59,7 +59,7 @@
       "removedAt": null,
       "replacement": "Rewrite the script as a Dynamic Expresso expression, or label the C# script with its file location",
       "severity": "warning",
-      "message": "A C# script labelled location dynamicExpresso in a transition timer, workflow or SubFlow-override timeout mapping, agent prompt, agent decision mapping or resource-lock keyExpression is now evaluated as an expression first; when that fails it still runs as C# (warning 10271, 10270 for a lock key). The fallback will be removed in a later release."
+      "message": "A C# script labelled location dynamicExpresso in a transition timer, workflow or SubFlow-override timeout mapping, agent prompt, agent decision mapping or resource-lock keyExpression is now evaluated as an expression first; when that fails it still runs as C# (warning 10274, 10273 for a lock key). The fallback will be removed in a later release."
     }
   ]
 }

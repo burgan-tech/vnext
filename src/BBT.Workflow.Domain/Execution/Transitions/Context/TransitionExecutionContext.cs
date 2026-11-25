@@ -196,6 +196,14 @@ public sealed class TransitionExecutionContext
     /// </summary>
     public BBT.Workflow.Instances.Agents.AgentHopDecision? AgentDecision { get; set; }
 
+    /// <summary>
+    /// The exception behind this hop's failure, when one was thrown: a step's own exception, or a
+    /// transition-mapping, resource-lock key or timer script that failed (vnext#1268). The pipeline
+    /// writes it into the fault incident's stack trace. It is not in the step's <c>Error</c>, whose
+    /// detail is written into HTTP error bodies.
+    /// </summary>
+    public Exception? FailureCause { get; set; }
+
     public ClientResponse? ClientResponse { get; set; }
 
     /// <summary>

@@ -1,4 +1,6 @@
 
+using BBT.Workflow.Middlewares;
+
 namespace Microsoft.AspNetCore.Builder;
 
 /// <summary>
@@ -42,6 +44,7 @@ public static class OrchestrationApiApplicationBuilderExtensions
             useSwagger: !app.Environment.IsProduction(),
             useSwaggerUi: !app.Environment.IsProduction());
         app.UseRouting();
+        app.UseMiddleware<DaprLocalDeliveryMiddleware>();
         app.UseDomainResolution();
         app.UseSchemaResolution();
         app.UseAetherUnitOfWork();

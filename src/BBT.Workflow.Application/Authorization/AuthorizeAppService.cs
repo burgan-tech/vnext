@@ -598,7 +598,9 @@ public sealed class AuthorizeAppService(
 
         if (!string.IsNullOrWhiteSpace(transitionKey))
         {
-            var transition = workflow.FindTransitionInContext(transitionKey);
+            // Resolved in the instance's CurrentState first: a key declared on several states with
+            // different grants must be judged by the state the instance is in (#1334).
+            var transition = workflow.FindTransitionInState(transitionKey, instance?.CurrentState);
             if (transition == null)
                 return false;
 

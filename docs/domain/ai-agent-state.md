@@ -113,7 +113,7 @@ candidate, or finds no free slot in the bulkhead. There is no silent default.
 was entered more often than allowed.
 
 Expression variables of the prompt and the decision, the `outcome` / `candidates` members and the C# compatibility
-fallback (a C# script labelled `dynamicExpresso` still runs, with warning 10271):
+fallback (a C# script labelled `dynamicExpresso` still runs, with warning 10274):
 [Dynamic Expresso outside task mappings](../runtime/declarative-task-mappings.md#dynamic-expresso-outside-task-mappings).
 `hintsMapping` stays C# only.
 

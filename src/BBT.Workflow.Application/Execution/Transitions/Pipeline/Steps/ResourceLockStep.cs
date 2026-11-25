@@ -111,6 +111,8 @@ public sealed class ResourceLockStep(
         }
         catch (Exception ex)
         {
+            if (ex is not OperationCanceledException)
+                context.FailureCause = ex;
             // A dynamicExpresso-labelled key that fails as an expression AND as a script reports the expression's
             // error: that is what its author wrote.
             return Result<string>.Fail(

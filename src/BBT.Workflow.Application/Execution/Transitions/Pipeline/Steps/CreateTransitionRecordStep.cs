@@ -4,7 +4,6 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Files;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Runtime;
 using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Logging;
@@ -22,10 +21,10 @@ public sealed class CreateTransitionRecordStep(
     IInstanceDataWriteService instanceDataWriteService,
     IGuidGenerator guidGenerator,
     ITransitionDataMapper transitionDataMapper,
-    IRuntimeInfoProvider runtimeInfoProvider,
     IFileOffloadService fileOffloadService,
     ILogger<CreateTransitionRecordStep> logger,
-    Persistence.IBookkeepingWriter? bookkeepingWriter = null) : ITransitionStep
+    Persistence.IBookkeepingWriter? bookkeepingWriter = null,
+    Headers.IHeaderExposureDenyList? headerExposureDenyList = null) : ITransitionStep
 {
     /// <inheritdoc />
     public int Order => LifecycleOrder.CreateTransition;
@@ -158,13 +157,21 @@ public sealed class CreateTransitionRecordStep(
             context.Instance.GetCurrentState,
             context.Trigger,
             new JsonData(context.Data),
-            new JsonData(JsonSerializer.Serialize(context.Headers)));
+            new JsonData(JsonSerializer.Serialize(RecordedHeaders(context))));
 
         var state = context.Workflow.GetState(context.Instance.GetCurrentState).Value!;
         var transition = context.Workflow.ResolveTransition(transitionKey, state);
 
         return (instanceTransition, transition);
     }
+
+    /// <summary>
+    /// The request headers the transition record keeps: <c>Workflow:HeaderExposure:Deny</c> names are never written.
+    /// Only the record is reduced — <see cref="TransitionExecutionContext.Headers"/> stays as it arrived, because the
+    /// runtime's own role, identity and credential reads use it for the rest of the hop.
+    /// </summary>
+    private IReadOnlyDictionary<string, string?> RecordedHeaders(TransitionExecutionContext context) =>
+        headerExposureDenyList is null or { IsEmpty: true } ? context.Headers : headerExposureDenyList.Filter(context.Headers);
 
     /// <summary>
     /// Maps transition data using the data mapper service.
@@ -179,9 +186,9 @@ public sealed class CreateTransitionRecordStep(
             transition,
             context.Workflow,
             context.Instance,
-            runtimeInfoProvider,
             context.Headers,
-            cancellationToken);
+            onScriptFailure: ex => context.FailureCause = ex,
+            cancellationToken: cancellationToken);
     }
 
     /// <summary>

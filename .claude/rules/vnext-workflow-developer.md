@@ -104,6 +104,9 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   (`Instance.AcceptLoadedIncidents` keeps them detached — attaching caused `23505 PK_InstanceIncidents`).
 - A task step records the incident BEFORE its own `UpdateAsync(instance, autoSave: true)`; nothing
   records one after a save. Resolve is set-based (`Instance.ResolveOpenIncidents()`), never single-row.
+- A script's exception never goes into a new `Error` (`Detail` reaches HTTP bodies; SubFlow mapping errors are the
+  old exception): task scripts report through `ScriptDiagnostics.TaskScriptError` (the engine takes the cause),
+  pipeline failures set `TransitionExecutionContext.FailureCause`; the incident's `StackTrace` comes from there.
 - Retry loads no-tracking (`GetResultAsReadOnlyAsync`) and unfaults with the `TryUnfaultAsync` CAS,
   committed before `ExecuteRetryAsync`. Never mutate an ambient-tracked aggregate and leave the write
   to an inner `RequiresNew` scope (`Instance:100027`).
@@ -141,7 +144,8 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 - `x-masking.roles` / `x-encryption.roles` are allow-only exemption lists; `deny` is rejected at publish;
   a role-less caller never satisfies a role-bound grant (`IsUnprovableRoleBoundGrant`).
 - ONE read path: `IInstanceDataReadService` (GET, list, data function, sync response, Get* tasks). Do not
-  call the filter from a surface directly. Get* tasks read as their header set.
+  call the filter from a surface directly. Get* tasks read as their header set. Transition history bodies are
+  plaintext: `CreateHistoryBodyReaderAsync` withholds them when the plan is `Unavailable`, never serves them as stored.
 - `InstanceData.Data` is the column as stored (tokens included). Decrypt only via
   `IInstanceDataProtector.UnprotectAsync` / `context.Instance.DecryptAsync`; never reintroduce a plaintext
   member; never write `InstancesData."Data"` outside `InstanceDataWriteService`. Prefix-driven, never schema-driven.
@@ -213,6 +217,9 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
   `x-vnext-runtime-token` admits before any grant. A runtime caller of them stamps last via `IRuntimeCallerSigner`;
   never forward or log that header. Full guide: `docs/runtime/sub-endpoint-gate.md`.
 - Instance-call credential (SubFlow start, SubProcess/Start/DirectTrigger/Get* tasks): the mapping decides, blank included; only an ABSENT credential is filled from the caller. Never read blank as "not set"; never fill from baggage (`HttpTaskInvocation.ResolveInstanceCallCredential`). Full guide: `docs/domain/role-grant-authorization.md#caller-credential-on-instance-calls`.
+- `Workflow:HeaderExposure:Deny` (deny only, empty = no change) reduces EXPOSURE only: the transition record, history
+  read, `ScriptContext.Headers`, carried headers. Never reduce `TransitionExecutionContext.Headers`; a runtime read from a
+  script context uses `GetTransportHeadersAsDictionary`, never the script view. Full guide: `docs/runtime/header-exposure.md`.
 - Full guide: `docs/domain/role-grant-authorization.md`, `docs/domain/authorize-function.md`.
 
 ## Sync vs Async
@@ -329,6 +336,8 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
   (`docs/runtime/event-publish-modes.md#substate-changed-is-emitted-once-per-activation-episode`).
 - Never remove the explicit flush at creation in `InstanceCommandAppService` — it is the parent's only
   notification when the start transition targets the initial state.
+- `PrepareInstanceAsync` commits the creation (row, initial data, that flush) only on success and rolls it
+  back otherwise; never commit a failed result. Full guide: `docs/architecture/subflow-execution.md`.
 - `SubflowStateService` takes the per-sub-item lock; equal `ChangedAt` is re-applied, only older rejected.
 - Never add a correlation-first CAS before the parent load — write order stays P → C (40P01 otherwise).
 - Full guide: `docs/runtime/event-publish-modes.md`.

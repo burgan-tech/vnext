@@ -130,6 +130,9 @@ public sealed class ScriptMappingCharacterizationTests
         input.Error.Code.ShouldBe(WorkflowErrorCodes.TaskExecution);
         input.Error.Prefix.ShouldBe(Error.Failure("x").Prefix);
         input.Error.Message.ShouldBe(prefix + ScriptDiagnostics.Explain(boom));
+        // vnext#1268: reported through ScriptDiagnostics.TaskScriptError, so the exception stays on the script
+        // context for the incident's stack trace (the task engine takes it after the run).
+        harness.Context.ScriptContext.FailureCause.ShouldBeSameAs(boom);
         if (!logged)
         {
             harness.Logger.Events.ShouldBeEmpty();
@@ -161,6 +164,7 @@ public sealed class ScriptMappingCharacterizationTests
         output.IsSuccess.ShouldBeFalse();
         output.Error.Code.ShouldBe(WorkflowErrorCodes.TaskExecution);
         output.Error.Message.ShouldBe(prefix + ScriptDiagnostics.Explain(boom));
+        harness.Context.ScriptContext.FailureCause.ShouldBeSameAs(boom);
         if (!logged)
         {
             harness.Logger.Events.ShouldBeEmpty();

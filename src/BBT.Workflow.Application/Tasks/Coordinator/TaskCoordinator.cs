@@ -25,6 +25,14 @@ namespace BBT.Workflow.Tasks.Coordinator;
 /// </remarks>
 public sealed class TaskCoordinator : ITaskCoordinatorExtended
 {
+    // The coordinator takes an unhandled failure as an outcome, so the engine's ExecutionError — its
+    // stack trace included — reaches the incident instead of being rebuilt from an Error (vnext#1268).
+    private static readonly TaskEngineExecutionOptions Coordinated =
+        TaskEngineExecutionOptions.Default with { ReportUnhandledFailureAsOutcome = true };
+
+    private static readonly TaskEngineExecutionOptions CoordinatedFreshRecord =
+        TaskEngineExecutionOptions.FreshTransitionRecord with { ReportUnhandledFailureAsOutcome = true };
+
     private readonly ITaskExecutionEngine _executionEngine;
     private readonly IServiceScopeFactory _serviceScopeFactory;
     private readonly IConditionEvaluator _conditionEvaluator;
@@ -132,9 +140,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
     {
         // One shared options instance per call: fresh-record executions skip the guaranteed-empty
         // journal probe, everything else keeps the engine's default (probing) behavior.
-        var engineOptions = skipJournalProbe
-            ? TaskEngineExecutionOptions.FreshTransitionRecord
-            : TaskEngineExecutionOptions.Default;
+        var engineOptions = skipJournalProbe ? CoordinatedFreshRecord : Coordinated;
 
         // No span of its own: the coordinator is a pure fan-out wrapper. Its former
         // "TaskCoordinator.Execute" span added a level between transition/{key} and
@@ -270,7 +276,10 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         List<TaskExecutionSummary> executedTasks,
         long totalStartTimestamp)
     {
-        // Infrastructure error
+        // Infrastructure error. With ReportUnhandledFailureAsOutcome the engine answers every
+        // unhandled failure as an outcome itself (re-derived exactly like this, plus the stack trace);
+        // what still arrives here is a failure before any task ran, e.g. a flow task without a
+        // transition record id.
         if (!taskResult.IsSuccess)
         {
             var infraError = _errorFactory.CreateFromError(
@@ -431,6 +440,7 @@ public sealed class TaskCoordinator : ITaskCoordinatorExtended
         if (result.IsSuccess)
             return result;
 
+        // Same remaining producers as ProcessTaskResult's infrastructure branch.
         var durationMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
         var infrastructureError = _errorFactory.CreateFromError(result.Error, task.Task.Key, "Unknown", durationMs);
         return Result<TasksExecutionResult>.Ok(

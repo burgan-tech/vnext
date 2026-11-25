@@ -74,6 +74,16 @@ public sealed record TaskEngineExecutionOptions
     public bool CaptureResponse { get; init; }
 
     /// <summary>
+    /// When true, a failure no boundary handles comes back as the unhandled-failure outcome
+    /// (<see cref="TasksExecutionResult.TaskError"/> set, no boundary action) instead of a failed
+    /// <c>Result</c>. The task coordinator sets it: it turned a failed <c>Result</c> into exactly that
+    /// outcome anyway, but by then only the <c>Error</c> was left, and the stack trace the incident
+    /// needs was lost (vnext#1268). FanOut items and agent tools leave it off — their cancellation
+    /// handling reads the failed <c>Result</c>.
+    /// </summary>
+    public bool ReportUnhandledFailureAsOutcome { get; init; }
+
+    /// <summary>
     /// Overrides the script-context variable name this task's response is filed under — both the
     /// <c>TaskResponse</c> merge (<c>TaskExecutorBase.UpdateScriptContextWithResponse</c>) and, for
     /// Extension-triggered tasks, the raw <c>OutputResponse</c> entry (<c>SetOutputResponse</c>).

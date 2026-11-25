@@ -21,6 +21,14 @@ public sealed class RuntimeCallerOptions
     public string? KeyFile { get; set; }
 
     /// <summary>
+    /// Path to the file holding the Dapr app API token the local-delivery guard compares against the
+    /// <c>dapr-api-token</c> header (a read-only mounted Kubernetes Secret). Path only: the file is read
+    /// once at start, and token material in configuration fails startup because flow scripts can read
+    /// configuration. Orchestration only.
+    /// </summary>
+    public string? AppApiTokenFile { get; set; }
+
+    /// <summary>
     /// When true, the host refuses to start with a blank <see cref="KeyFile"/>. Set it together with the
     /// mount so a host that lost its configuration cannot silently send unsigned calls. A set
     /// <see cref="KeyFile"/> must always load: a missing, unreadable or invalid file fails startup whatever this says.

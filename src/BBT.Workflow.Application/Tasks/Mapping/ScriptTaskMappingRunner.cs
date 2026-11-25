@@ -11,8 +11,9 @@ namespace BBT.Workflow.Tasks.Mapping;
 /// Runs a binding's Roslyn <see cref="IMapping"/> script: <c>InputHandler(task, context)</c> before the task is invoked,
 /// <c>OutputHandler(context).Data</c> after. This is the mapping block every executor used to carry a copy of, moved
 /// here verbatim: the same compile path (the per-execution memo, <see cref="GetOrCompileMappingAsync{T}"/>), the same
-/// <see cref="Error.Failure(string, string?, string?)"/> with <see cref="WorkflowErrorCodes.TaskExecution"/> and the
-/// executor's message prefix in front of <see cref="ScriptDiagnostics.Explain"/>, and the same
+/// error through <see cref="ScriptDiagnostics.TaskScriptError"/> (<see cref="WorkflowErrorCodes.TaskExecution"/>,
+/// <c>"{executor's failure}: {Explain}"</c>, the exception kept on the script context for the incident's stack trace,
+/// vnext#1268), and the same
 /// <c>TaskInputHandlerFailed</c> / <c>TaskOutputHandlerFailed</c> events on the executor's logger
 /// (<see cref="TaskMappingSite"/>). Stateless; one instance serves every execution.
 /// </summary>
@@ -31,9 +32,7 @@ public sealed class ScriptTaskMappingRunner(IScriptEngine scriptEngine) : ITaskM
         {
             var scriptRunner = await CompileAsync(ctx, site, token);
             return await scriptRunner.InputHandler(task, ctx.ScriptContext);
-        }, ct, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"{site.InputFailurePrefix}{ScriptDiagnostics.Explain(ex)}"));
+        }, ct, ex => ScriptDiagnostics.TaskScriptError(ctx.ScriptContext, ex, site.InputFailure));
 
         if (!result.IsSuccess && site.LogsScriptInputFailures)
         {
@@ -62,9 +61,7 @@ public sealed class ScriptTaskMappingRunner(IScriptEngine scriptEngine) : ITaskM
             var scriptRunner = await CompileAsync(ctx, site, token);
             var outputResponse = await scriptRunner.OutputHandler(ctx.ScriptContext);
             return outputResponse.Data;
-        }, ct, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"{site.OutputFailurePrefix}{ScriptDiagnostics.Explain(ex)}"));
+        }, ct, ex => ScriptDiagnostics.TaskScriptError(ctx.ScriptContext, ex, site.OutputFailure));
 
         if (!output.IsSuccess && site.LogsScriptOutputFailures)
         {

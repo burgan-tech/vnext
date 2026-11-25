@@ -373,6 +373,14 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     public dynamic? Headers { get; private set; }
 
     /// <summary>
+    /// The request headers as they arrived, for the runtime's own reads (the instance-call credential it forwards, the
+    /// identity it propagates to a remote task). Never exposed to scripts: <see cref="Headers"/> is the script view and
+    /// omits the <c>Workflow:HeaderExposure:Deny</c> names. The same object as <see cref="Headers"/> when nothing is
+    /// denied; <c>null</c> falls back to <see cref="Headers"/>.
+    /// </summary>
+    internal dynamic? TransportHeaders { get; private set; }
+
+    /// <summary>
     /// Contains route values and URL parameters extracted from the transition request.
     /// These values are typically derived from URL path segments and query parameters.
     /// </summary>
@@ -537,6 +545,23 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             (exposed as CallerAccessor)?.Close();
             owner.Caller = previous;
         }
+    }
+
+    /// <summary>
+    /// The exception of a script that failed on this context, kept for the incident's stack trace
+    /// (vnext#1268). The <c>Error</c> the failure is reported as cannot carry it: its detail is written
+    /// into HTTP error bodies. Whoever ran the script takes it with <see cref="TakeFailureCause"/>
+    /// right after the run, so it never outlives that run. Internal so a script cannot see it, and not
+    /// copied by <see cref="CreateParallelBranch"/>: each branch keeps its own.
+    /// </summary>
+    internal Exception? FailureCause { get; set; }
+
+    /// <summary>Returns <see cref="FailureCause"/> and clears it.</summary>
+    internal Exception? TakeFailureCause()
+    {
+        var cause = FailureCause;
+        FailureCause = null;
+        return cause;
     }
 
     /// <summary>
@@ -766,7 +791,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             var value = ToDynamic(output, JsonScriptBodyOptions);
             if (value != null)
             {
-                OutputResponse[taskKey!] = value;
+                OutputResponse[taskKey] = value;
             }
         }
     }
@@ -867,6 +892,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         ScriptContextActivity.TagInstanceShape(activity, Instance);
         activity?.SetTag("vnext.script.context.has_body", Body is not null);
 
+        var branchHeaders = CloneTransportMetadata(Headers);
         var branch = new ScriptContext(logger)
         {
             // Shared until first write — MergeToBody's EnsureBodyOwned copies it on the branch.
@@ -874,7 +900,10 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             // Headers/RouteValues/QueryParameters are transport metadata, NOT user payload — they
             // are cloned type-preservingly, deliberately not through CloneDynamic. See
             // CloneTransportMetadata for why collapsing these back into CloneDynamic breaks scripts.
-            Headers = CloneTransportMetadata(Headers),
+            Headers = branchHeaders,
+            TransportHeaders = TransportHeaders is null || ReferenceEquals(TransportHeaders, Headers)
+                ? branchHeaders
+                : CloneTransportMetadata(TransportHeaders),
             RouteValues = CloneTransportMetadata(RouteValues),
             QueryParameters = CloneTransportMetadata(QueryParameters),
             // Read-only for mappings (no writer funnel besides the Builder) — safe to share.
@@ -986,7 +1015,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             OutputResponse[key] = CloneDynamic(value);
 
         foreach (var (key, value) in metadataWrites)
-            MetaData[key] = CloneDynamic(value)!;
+            MetaData[key] = CloneDynamic(value);
 
         foreach (var branch in branches)
         {
@@ -1142,6 +1171,17 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         public Builder SetHeaders(object? headers)
         {
             _context.Headers = headers;
+            _context.TransportHeaders = headers;
+            return this;
+        }
+
+        /// <summary>
+        /// Sets the headers as they arrived when the script view (<see cref="SetHeaders"/>) was reduced. Call after
+        /// <see cref="SetHeaders"/>, which resets both to the same object.
+        /// </summary>
+        public Builder SetTransportHeaders(object? headers)
+        {
+            _context.TransportHeaders = headers;
             return this;
         }
 

@@ -1,3 +1,4 @@
+using BBT.Workflow.Middlewares;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 
@@ -18,6 +19,7 @@ internal sealed class RuntimeCallerOptionsValidator(IConfiguration configuration
     private static readonly HashSet<string> KnownKeys = new(StringComparer.OrdinalIgnoreCase)
     {
         nameof(RuntimeCallerOptions.KeyFile),
+        nameof(RuntimeCallerOptions.AppApiTokenFile),
         nameof(RuntimeCallerOptions.Required),
         nameof(RuntimeCallerOptions.MaxClockSkewSeconds),
         nameof(RuntimeCallerOptions.AllowWithoutScriptSandbox)
@@ -31,40 +33,62 @@ internal sealed class RuntimeCallerOptionsValidator(IConfiguration configuration
             failures.Add($"{RuntimeCallerOptions.SectionName}:MaxClockSkewSeconds ({options.MaxClockSkewSeconds}) " +
                          $"must be between {MinClockSkewSeconds} and {MaxClockSkewSeconds}.");
 
-        foreach (var child in configuration.GetSection(RuntimeCallerOptions.SectionName).GetChildren())
-        {
-            if (!KnownKeys.Contains(child.Key)
-                && (child.Key.Contains("key", StringComparison.OrdinalIgnoreCase)
-                    || child.Key.Contains("secret", StringComparison.OrdinalIgnoreCase)))
-                failures.Add($"{RuntimeCallerOptions.SectionName}:{child.Key} looks like key material. Keys belong " +
-                             "in the mounted key file named by KeyFile: flow scripts can read configuration.");
-        }
+        AddKeyMaterialFailures(failures);
+        AddKeyRingFailures(options, failures);
 
-        if (string.IsNullOrWhiteSpace(options.KeyFile))
-        {
-            if (options.Required)
-                failures.Add($"{RuntimeCallerOptions.SectionName}:Required is true but no KeyFile is configured.");
-        }
-        else
-        {
-            try
-            {
-                RuntimeCallerKeyRingLoader.Load(options.KeyFile);
-            }
-            catch (InvalidOperationException exception)
-            {
-                failures.Add(exception.Message);
-            }
+        var hasKeyFile = !string.IsNullOrWhiteSpace(options.KeyFile);
+        var hasAppApiTokenFile = !string.IsNullOrWhiteSpace(options.AppApiTokenFile);
+        if (hasAppApiTokenFile)
+            AddLoadFailure(failures, () => DaprAppApiTokenLoader.Load(options.AppApiTokenFile));
 
-            if (runsFlowScripts
-                && !configuration.GetValue<bool>(SandboxEnabledKey)
-                && !options.AllowWithoutScriptSandbox)
-                failures.Add("A runtime-caller key ring is configured on a host that runs flow scripts with " +
-                             $"{SandboxEnabledKey}=false: an unsandboxed script can read the key file. Enable the " +
-                             $"sandbox, or set {RuntimeCallerOptions.SectionName}:AllowWithoutScriptSandbox=true " +
-                             "(logged as Critical at every start).");
-        }
+        if ((hasKeyFile || hasAppApiTokenFile) && IsUnsandboxedScriptHost(options))
+            failures.Add("A runtime-caller key file (KeyFile) or Dapr app API token file (AppApiTokenFile) is " +
+                         $"configured on a host that runs flow scripts with {SandboxEnabledKey}=false: an " +
+                         "unsandboxed script can read the mounted file. Enable the sandbox, or set " +
+                         $"{RuntimeCallerOptions.SectionName}:AllowWithoutScriptSandbox=true " +
+                         "(logged as Critical at every start).");
 
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
     }
+
+    private void AddKeyMaterialFailures(List<string> failures)
+    {
+        var suspicious = configuration.GetSection(RuntimeCallerOptions.SectionName).GetChildren()
+            .Select(child => child.Key)
+            .Where(key => !KnownKeys.Contains(key) && LooksLikeKeyMaterial(key));
+
+        foreach (var key in suspicious)
+            failures.Add($"{RuntimeCallerOptions.SectionName}:{key} looks like key material. Keys belong " +
+                         "in the mounted files named by KeyFile and AppApiTokenFile: flow scripts can read configuration.");
+    }
+
+    private static bool LooksLikeKeyMaterial(string key) =>
+        key.Contains("key", StringComparison.OrdinalIgnoreCase)
+        || key.Contains("secret", StringComparison.OrdinalIgnoreCase)
+        || key.Contains("token", StringComparison.OrdinalIgnoreCase);
+
+    private static void AddKeyRingFailures(RuntimeCallerOptions options, List<string> failures)
+    {
+        if (!string.IsNullOrWhiteSpace(options.KeyFile))
+            AddLoadFailure(failures, () => RuntimeCallerKeyRingLoader.Load(options.KeyFile));
+        else if (options.Required)
+            failures.Add($"{RuntimeCallerOptions.SectionName}:Required is true but no KeyFile is configured.");
+    }
+
+    private static void AddLoadFailure(List<string> failures, Action load)
+    {
+        try
+        {
+            load();
+        }
+        catch (InvalidOperationException exception)
+        {
+            failures.Add(exception.Message);
+        }
+    }
+
+    private bool IsUnsandboxedScriptHost(RuntimeCallerOptions options) =>
+        runsFlowScripts
+        && !configuration.GetValue<bool>(SandboxEnabledKey)
+        && !options.AllowWithoutScriptSandbox;
 }
