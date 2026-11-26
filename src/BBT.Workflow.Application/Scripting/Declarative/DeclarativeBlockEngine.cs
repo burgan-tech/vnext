@@ -44,7 +44,8 @@ internal static class DeclarativeBlockEngine
     /// <summary>
     /// Applies <paramref name="plan"/> to <paramref name="target"/>. <paramref name="result"/> is the document a
     /// result-site <c>select</c> reads (<see cref="DeclarativeSiteKind.SubFlowOutput"/>: <c>{ data, status }</c>;
-    /// <see cref="DeclarativeSiteKind.TaskOutput"/>: <c>{ body, headers, statusCode }</c>); ignored elsewhere. The
+    /// <see cref="DeclarativeSiteKind.TaskOutput"/>: <c>{ body, headers, statusCode }</c>;
+    /// <see cref="DeclarativeSiteKind.FunctionOutput"/>: <c>{ &lt;task&gt;: { body, headers, statusCode } }</c>); ignored elsewhere. The
     /// <c>result</c> expression variable comes from <paramref name="scope"/>, which the caller built for the site's
     /// <see cref="DeclarativeMappingPlan.ScopeOf"/> kind.
     /// </summary>

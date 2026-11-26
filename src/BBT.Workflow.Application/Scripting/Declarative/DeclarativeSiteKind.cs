@@ -29,7 +29,27 @@ public enum DeclarativeSiteKind
     /// A SubFlow's <c>output</c> (child completion): targets are instance-data paths, <c>select</c> reads the child's
     /// result document <c>{ data, status }</c> (default <c>$.data</c>).
     /// </summary>
-    SubFlowOutput
+    SubFlowOutput,
+
+    /// <summary>
+    /// An event's <c>input</c> (the event mapping): targets start at <c>key</c> (only as a whole) or <c>attributes</c>,
+    /// <c>select</c> reads a variable (<c>input</c>, <c>now</c>, <c>context</c> — no <c>data</c>, <c>instance</c> or
+    /// <c>user</c>) and needs <c>into</c>.
+    /// </summary>
+    EventInput,
+
+    /// <summary>
+    /// A workflow's <c>output</c> (the sync response): targets start at <c>data</c>, <c>statusCode</c> (only as a whole)
+    /// or <c>headers</c>, <c>select</c> reads a variable and needs <c>into</c>.
+    /// </summary>
+    WorkflowOutput,
+
+    /// <summary>
+    /// A function's <c>output</c>: targets start at <c>data</c>, <c>statusCode</c> (only as a whole) or <c>headers</c>,
+    /// <c>select</c> reads the result document <c>{ &lt;task&gt;: { body, headers, statusCode } }</c> (no default) and
+    /// needs <c>into</c>.
+    /// </summary>
+    FunctionOutput
 }
 
 /// <summary>

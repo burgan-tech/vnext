@@ -220,6 +220,161 @@ public sealed class DeclarativeBlockEngineTests
             .ShouldBe(["data", "input", "instance", "now", "user", "context", "headers"]);
     }
 
+    [Fact]
+    public void EventInput_DataIsUnknown()
+    {
+        var plan = DeclarativeMappingPlan.Build(
+            _compiler, Block(set: [("$.key", "data.id")]), DeclarativeSiteKind.EventInput);
+
+        plan.IsSuccess.ShouldBeFalse();
+        plan.Error.Message!.ShouldContain("does not compile");
+        plan.Error.Message.ShouldContain("data");
+
+        // instance and user are not event variables either; input is.
+        DeclarativeMappingPlan.Build(_compiler, Block(set: [("$.key", "instance.key")]), DeclarativeSiteKind.EventInput)
+            .IsSuccess.ShouldBeFalse();
+        DeclarativeMappingPlan.Build(_compiler, Block(set: [("$.key", "user.available")]), DeclarativeSiteKind.EventInput)
+            .IsSuccess.ShouldBeFalse();
+        DeclarativeMappingPlan.Build(_compiler, Block(set: [("$.key", "input.id")]), DeclarativeSiteKind.EventInput)
+            .IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void EventInput_KeyMustBeWholeMember()
+    {
+        var plan = DeclarativeMappingPlan.Build(
+            _compiler, Block(set: [("$.key.x", "\"k\"")]), DeclarativeSiteKind.EventInput);
+
+        plan.IsSuccess.ShouldBeFalse();
+        plan.Error.Message!.ShouldContain("$.key.x");
+
+        var outside = DeclarativeMappingPlan.Build(
+            _compiler, Block(set: [("$.data.x", "1")]), DeclarativeSiteKind.EventInput);
+        outside.IsSuccess.ShouldBeFalse();
+        outside.Error.Message!.ShouldContain("key, attributes");
+
+        DeclarativeMappingPlan.Build(_compiler, Block(set: [("$.key", "\"k\"")]), DeclarativeSiteKind.EventInput)
+            .IsSuccess.ShouldBeTrue();
+        DeclarativeMappingPlan.Build(_compiler, Block(set: [("$.attributes.a.b", "1")]), DeclarativeSiteKind.EventInput)
+            .IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task EventInput_SelectInputIntoAttributes()
+    {
+        var plan = Build(Block(select: "$.input", into: "$.attributes"), DeclarativeSiteKind.EventInput);
+        var scope = ExpressionScope.Create(Context(input: new Dictionary<string, object> { ["a"] = 1 }), _clock,
+            NullCallerAccessor.Instance, ScopeKind.EventInput);
+        var target = new JsonObject();
+
+        var applied = await DeclarativeBlockEngine.ApplyAsync(plan, scope, target, null, Site(), CancellationToken.None);
+
+        applied.IsSuccess.ShouldBeTrue(applied.IsSuccess ? null : applied.Error.Message);
+        target.ToJsonString().ShouldBe("""{"attributes":{"a":1}}""");
+    }
+
+    [Theory]
+    [InlineData(DeclarativeSiteKind.WorkflowOutput)]
+    [InlineData(DeclarativeSiteKind.FunctionOutput)]
+    public void WorkflowOutput_TargetOutsideDocument_Fails(DeclarativeSiteKind kind)
+    {
+        var plan = DeclarativeMappingPlan.Build(_compiler, Block(set: [("$.foo", "1")]), kind);
+
+        plan.IsSuccess.ShouldBeFalse();
+        plan.Error.Message!.ShouldContain("$.foo");
+        plan.Error.Message.ShouldContain("data, statusCode, headers");
+
+        DeclarativeMappingPlan.Build(_compiler, Block(set: [("$.statusCode.x", "1")]), kind)
+            .IsSuccess.ShouldBeFalse();
+        DeclarativeMappingPlan.Build(
+                _compiler, Block(set: [("$.statusCode", "201"), ("$.data.a", "1"), ("$.headers.x-a", "\"v\"")]), kind)
+            .IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task FunctionOutput_SelectReadsResult()
+    {
+        var plan = Build(Block(select: "$.getX.body", into: "$.data"), DeclarativeSiteKind.FunctionOutput);
+        var result = JsonSerializer.Deserialize<JsonElement>(
+            """{"getX":{"body":{"n":1},"headers":{},"statusCode":200}}""");
+        var scope = ExpressionScope.Create(Context(), _clock, NullCallerAccessor.Instance, ScopeKind.FunctionOutput, result);
+        var target = new JsonObject();
+
+        var applied = await DeclarativeBlockEngine.ApplyAsync(plan, scope, target, result, Site(), CancellationToken.None);
+
+        applied.IsSuccess.ShouldBeTrue(applied.IsSuccess ? null : applied.Error.Message);
+        target.ToJsonString().ShouldBe("""{"data":{"n":1}}""");
+    }
+
+    [Fact]
+    public async Task FunctionOutput_SetReadsResult()
+    {
+        var plan = Build(Block(set: [("$.statusCode", "result.getX.statusCode")]), DeclarativeSiteKind.FunctionOutput);
+        var result = JsonSerializer.Deserialize<JsonElement>(
+            """{"getX":{"body":{"n":1},"headers":{},"statusCode":200}}""");
+        var scope = ExpressionScope.Create(Context(), _clock, NullCallerAccessor.Instance, ScopeKind.FunctionOutput, result);
+        var target = new JsonObject();
+
+        var applied = await DeclarativeBlockEngine.ApplyAsync(plan, scope, target, result, Site(), CancellationToken.None);
+
+        applied.IsSuccess.ShouldBeTrue(applied.IsSuccess ? null : applied.Error.Message);
+        target.ToJsonString().ShouldBe("""{"statusCode":200}""");
+    }
+
+    [Theory]
+    [InlineData(DeclarativeSiteKind.EventInput, "$.input")]
+    [InlineData(DeclarativeSiteKind.WorkflowOutput, "$.data")]
+    [InlineData(DeclarativeSiteKind.FunctionOutput, "$.getX.body")]
+    public void NewSites_SelectWithoutInto_Fails(DeclarativeSiteKind kind, string select)
+    {
+        var plan = DeclarativeMappingPlan.Build(_compiler, Block(select: select), kind);
+
+        plan.IsSuccess.ShouldBeFalse();
+        plan.Error.Message!.ShouldContain("'into'");
+    }
+
+    [Theory]
+    [InlineData(DeclarativeSiteKind.EventInput, "$.attributes")]
+    [InlineData(DeclarativeSiteKind.WorkflowOutput, "$.data")]
+    [InlineData(DeclarativeSiteKind.FunctionOutput, "$.data")]
+    public void NewSites_IntoWithoutSelect_Fails(DeclarativeSiteKind kind, string into)
+    {
+        var plan = DeclarativeMappingPlan.Build(_compiler, Block(into: into), kind);
+
+        plan.IsSuccess.ShouldBeFalse();
+        plan.Error.Message!.ShouldContain("'select'");
+    }
+
+    [Fact]
+    public void WorkflowOutput_ResultIsNotAVariable()
+    {
+        DeclarativeMappingPlan.Build(_compiler, Block(set: [("$.data.x", "result.a")]), DeclarativeSiteKind.WorkflowOutput)
+            .IsSuccess.ShouldBeFalse();
+        DeclarativeMappingPlan.Build(_compiler, Block(set: [("$.data.x", "result.a")]), DeclarativeSiteKind.FunctionOutput)
+            .IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void NewSites_SignaturesAndScopes()
+    {
+        DeclarativeMappingPlan.ScopeOf(DeclarativeSiteKind.EventInput).ShouldBe(ScopeKind.EventInput);
+        DeclarativeMappingPlan.ScopeOf(DeclarativeSiteKind.WorkflowOutput).ShouldBe(ScopeKind.WorkflowOutput);
+        DeclarativeMappingPlan.ScopeOf(DeclarativeSiteKind.FunctionOutput).ShouldBe(ScopeKind.FunctionOutput);
+
+        ExpressionSignatures.Mapping(ScopeKind.EventInput).Name.ShouldBe("event-input");
+        ExpressionSignatures.Mapping(ScopeKind.WorkflowOutput).Name.ShouldBe("workflow-output");
+        ExpressionSignatures.Mapping(ScopeKind.FunctionOutput).Name.ShouldBe("function-output");
+        ExpressionSignatures.Mapping(ScopeKind.EventInput).Parameters.Select(p => p.Name)
+            .ShouldBe(["input", "now", "context", "headers"]);
+        ExpressionSignatures.Mapping(ScopeKind.WorkflowOutput).Parameters.Select(p => p.Name)
+            .ShouldBe(["data", "input", "instance", "now", "user", "context", "headers"]);
+        ExpressionSignatures.Mapping(ScopeKind.FunctionOutput).Parameters.Select(p => p.Name)
+            .ShouldBe(["data", "input", "instance", "now", "user", "context", "result", "headers"]);
+
+        Build(Block(select: "$.input", into: "$.attributes"), DeclarativeSiteKind.EventInput).IsInputStyle.ShouldBeTrue();
+        Build(Block(set: [("$.data", "data")]), DeclarativeSiteKind.WorkflowOutput).IsInputStyle.ShouldBeFalse();
+    }
+
     // ---- helpers ----
 
     private DeclarativeMappingPlan Build(MappingBlock block, DeclarativeSiteKind kind)
@@ -236,7 +391,8 @@ public sealed class DeclarativeBlockEngineTests
             ? null
             : new OrderedStringMap(set.Select(e => new KeyValuePair<string, string>(e.Path, e.Expr))));
 
-    private static ScriptContext Context(string instanceJson = """{"customer":{"id":7}}""")
+    private static ScriptContext Context(
+        string instanceJson = """{"customer":{"id":7}}""", Dictionary<string, object>? input = null)
     {
         var instance = Instance.Create(Guid.NewGuid(), "test-flow", "1.0.0", "ctx-key");
         var row = new InstanceData(Guid.NewGuid(), instance.Id, "1.0.0", new JsonData(instanceJson), true);
@@ -246,7 +402,7 @@ public sealed class DeclarativeBlockEngineTests
             .SetRuntime(Substitute.For<IRuntimeInfoProvider>())
             .SetInstance(instance)
             .SetCurrentTransition(new ScriptTransitionRequest(
-                () => new Dictionary<string, object> { ["application"] = new Dictionary<string, object> { ["amount"] = 7 } },
+                () => input ?? new Dictionary<string, object> { ["application"] = new Dictionary<string, object> { ["amount"] = 7 } },
                 () => new Dictionary<string, object?>()))
             .Build();
     }

@@ -22,6 +22,9 @@ using OutputFn = System.Func<
     BBT.Workflow.Scripting.Expressions.ExpressionUser?, BBT.Workflow.Scripting.Rules.ExpressoRuleContext?,
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic?, BBT.Workflow.Scripting.Expressions.ExpressionConfig?,
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic?, BBT.Workflow.Scripting.Expressions.ExpressionHeaders?, object>;
+using EventFn = System.Func<
+    BBT.Workflow.Scripting.Rules.RuleJsonDynamic?, System.DateTimeOffset,
+    BBT.Workflow.Scripting.Rules.ExpressoRuleContext?, BBT.Workflow.Scripting.Expressions.ExpressionHeaders?, object>;
 using ResultFn = System.Func<
     BBT.Workflow.Scripting.Rules.RuleJsonDynamic?, BBT.Workflow.Scripting.Rules.RuleJsonDynamic?,
     BBT.Workflow.Scripting.Expressions.ExpressionInstance?, System.DateTimeOffset,
@@ -42,6 +45,8 @@ internal sealed class DeclarativeMappingPlan
     internal static readonly JsonPath DefaultSubFlowOutputSelect = JsonPath.Parse("$.data").Value!;
 
     private static readonly string[] SubFlowInputRoots = ["attributes", "headers", "key", "tags"];
+    private static readonly string[] EventInputRoots = ["key", "attributes"];
+    private static readonly string[] ResponseRoots = ["data", "statusCode", "headers"];
 
     private DeclarativeMappingPlan(
         DeclarativeSiteKind kind, IReadOnlyList<Parameter> parameters, JsonPath? select, JsonPath? into, SetEntry[] set,
@@ -86,8 +91,9 @@ internal sealed class DeclarativeMappingPlan
     public bool NeedsResult { get; }
 
     /// <summary>
-    /// Result sites only (<see cref="DeclarativeSiteKind.TaskOutput"/>, <see cref="DeclarativeSiteKind.SubFlowOutput"/>):
-    /// the path read under <c>result</c> — the <c>select</c>, or the site's default when only <c>into</c> is authored;
+    /// Result sites only (<see cref="DeclarativeSiteKind.TaskOutput"/>, <see cref="DeclarativeSiteKind.SubFlowOutput"/>,
+    /// <see cref="DeclarativeSiteKind.FunctionOutput"/>): the path read under <c>result</c> — the <c>select</c>, or the
+    /// site's default when only <c>into</c> is authored (a function output has none: its <c>into</c> needs a <c>select</c>);
     /// null when the block has neither.
     /// </summary>
     public JsonPath? ResultSelectPath { get; }
@@ -124,10 +130,11 @@ internal sealed class DeclarativeMappingPlan
     }
 
     /// <summary>
-    /// True for the input-style sites (<see cref="DeclarativeSiteKind.TaskInput"/>, <see cref="DeclarativeSiteKind.SubFlowInput"/>):
-    /// <c>select</c> and <c>into</c> are authored together, never merged at the root.
+    /// True for the input-style sites (<see cref="DeclarativeSiteKind.TaskInput"/>, <see cref="DeclarativeSiteKind.SubFlowInput"/>,
+    /// <see cref="DeclarativeSiteKind.EventInput"/>): <c>select</c> and <c>into</c> are authored together, never merged at the root.
     /// </summary>
-    public bool IsInputStyle => Kind is DeclarativeSiteKind.TaskInput or DeclarativeSiteKind.SubFlowInput;
+    public bool IsInputStyle =>
+        Kind is DeclarativeSiteKind.TaskInput or DeclarativeSiteKind.SubFlowInput or DeclarativeSiteKind.EventInput;
 
     /// <summary>One compiled <c>set</c> entry.</summary>
     internal sealed record SetEntry(
@@ -141,20 +148,28 @@ internal sealed class DeclarativeMappingPlan
         DeclarativeSiteKind.TransitionOutput => ScopeKind.TransitionOutput,
         DeclarativeSiteKind.SubFlowInput => ScopeKind.SubFlowInput,
         DeclarativeSiteKind.SubFlowOutput => ScopeKind.SubFlowOutput,
+        DeclarativeSiteKind.EventInput => ScopeKind.EventInput,
+        DeclarativeSiteKind.WorkflowOutput => ScopeKind.WorkflowOutput,
+        DeclarativeSiteKind.FunctionOutput => ScopeKind.FunctionOutput,
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null)
     };
 
     /// <summary>
     /// Builds the plan of <paramref name="block"/> for <paramref name="kind"/>. Target rule: task input — a task-config
     /// field; task / transition / SubFlow output — an instance-data path; SubFlow input — first segment
-    /// <c>attributes</c>, <c>headers</c>, <c>key</c> or <c>tags</c> (<c>$.key</c> / <c>$.tags</c> only as a whole).
+    /// <c>attributes</c>, <c>headers</c>, <c>key</c> or <c>tags</c> (<c>$.key</c> / <c>$.tags</c> only as a whole);
+    /// event input — first segment <c>key</c> (only as a whole) or <c>attributes</c>; workflow / function output — first
+    /// segment <c>data</c>, <c>statusCode</c> (only as a whole) or <c>headers</c>.
     /// Select: task output — the task result view (default <c>$.body</c>); SubFlow output — a path under <c>result</c>
-    /// (default <c>$.data</c>); the others — a variable-prefixed path (<c>$.data…</c>, <c>$.input…</c>).
+    /// (default <c>$.data</c>); function output — a path under <c>result</c> (no default); the others — a
+    /// variable-prefixed path (<c>$.data…</c>, <c>$.input…</c>). SubFlow input, event input and workflow / function
+    /// output need <c>select</c> and <c>into</c> together.
     /// </summary>
     public static Result<DeclarativeMappingPlan> Build(IExpressionCompiler compiler, MappingBlock block, DeclarativeSiteKind kind)
     {
         var signature = ExpressionSignatures.Mapping(ScopeOf(kind));
-        var readsResult = kind is DeclarativeSiteKind.TaskOutput or DeclarativeSiteKind.SubFlowOutput;
+        var readsResult = kind is DeclarativeSiteKind.TaskOutput or DeclarativeSiteKind.SubFlowOutput
+            or DeclarativeSiteKind.FunctionOutput;
         var partial = new HashSet<string>(StringComparer.Ordinal);
 
         JsonPath? select = null;
@@ -191,6 +206,15 @@ internal sealed class DeclarativeMappingPlan
             return Invalid(select is null
                 ? $"'into' {into!.Text} needs a 'select': a SubFlow input has no default source."
                 : $"'select' {select.Text} needs an 'into' naming the start-request path it copies to.");
+        }
+
+        // The event and response documents have no root to merge into and no default source: a select names its 'into'.
+        if (kind is DeclarativeSiteKind.EventInput or DeclarativeSiteKind.WorkflowOutput or DeclarativeSiteKind.FunctionOutput
+            && (select is null) != (into is null))
+        {
+            return Invalid(select is null
+                ? $"'into' {into!.Text} needs a 'select': {SiteNoun(kind)} has no default source."
+                : $"'select' {select.Text} needs an 'into' naming the {SiteNoun(kind)} path it copies to.");
         }
 
         if (kind == DeclarativeSiteKind.TransitionOutput && into is not null && select is null)
@@ -255,7 +279,7 @@ internal sealed class DeclarativeMappingPlan
                         (RuleJsonDynamic?)a[6], (ExpressionConfig?)a[7], (RuleJsonDynamic?)a[8], (ExpressionHeaders?)a[9]),
                     compiled.Value.UsedIdentifiers));
             }
-            case DeclarativeSiteKind.SubFlowOutput:
+            case DeclarativeSiteKind.SubFlowOutput or DeclarativeSiteKind.FunctionOutput:
             {
                 var compiled = compiler.Compile<ResultFn>(expression, signature);
                 if (!compiled.IsSuccess)
@@ -265,6 +289,17 @@ internal sealed class DeclarativeMappingPlan
                     a => fn((RuleJsonDynamic?)a[0], (RuleJsonDynamic?)a[1], (ExpressionInstance?)a[2],
                         (DateTimeOffset)a[3]!, (ExpressionUser?)a[4], (ExpressoRuleContext?)a[5],
                         (RuleJsonDynamic?)a[6], (ExpressionHeaders?)a[7]),
+                    compiled.Value.UsedIdentifiers));
+            }
+            case DeclarativeSiteKind.EventInput:
+            {
+                var compiled = compiler.Compile<EventFn>(expression, signature);
+                if (!compiled.IsSuccess)
+                    return Result<(Func<object?[], object?>, IReadOnlySet<string>)>.Fail(compiled.Error);
+                var fn = compiled.Value!.Invoke;
+                return Result<(Func<object?[], object?>, IReadOnlySet<string>)>.Ok((
+                    a => fn((RuleJsonDynamic?)a[0], (DateTimeOffset)a[1]!, (ExpressoRuleContext?)a[2],
+                        (ExpressionHeaders?)a[3]),
                     compiled.Value.UsedIdentifiers));
             }
             default:
@@ -292,6 +327,10 @@ internal sealed class DeclarativeMappingPlan
     private static bool IsSelectable(string name) =>
         name is not (ExpressionScope.ConfigVariable or ExpressionScope.HeadersVariable);
 
+    /// <summary>How a select/into pairing failure names the event and response sites.</summary>
+    private static string SiteNoun(DeclarativeSiteKind kind) =>
+        kind == DeclarativeSiteKind.EventInput ? "an event input" : "an output response";
+
     // The task input wording is kept verbatim: it is what a task binding's failure message has always said.
     private static string SelectWord(DeclarativeSiteKind kind) =>
         kind == DeclarativeSiteKind.TaskInput ? "input 'select'" : "'select'";
@@ -306,8 +345,8 @@ internal sealed class DeclarativeMappingPlan
             return Result<JsonPath>.Fail(Error.Validation(WorkflowErrorCodes.TaskExecution,
                 $"{what} {text} is not a writable property path."));
 
-        // Only the input sites ask whether the path is the first member as a whole (an output target needs no check,
-        // and WithoutFirstSegment allocates).
+        // Only the input sites and the response documents check the first segment (an instance-data target needs no
+        // check, and WithoutFirstSegment allocates).
         switch (kind)
         {
             case DeclarativeSiteKind.TaskInput when !IsWholeMember(path):
@@ -319,6 +358,18 @@ internal sealed class DeclarativeMappingPlan
             case DeclarativeSiteKind.SubFlowInput when path.FirstSegment is "key" or "tags" && !IsWholeMember(path):
                 return Result<JsonPath>.Fail(Error.Validation(WorkflowErrorCodes.TaskExecution,
                     $"{what} {text} must address $.{path.FirstSegment} as a whole."));
+            case DeclarativeSiteKind.EventInput when Array.IndexOf(EventInputRoots, path.FirstSegment) < 0:
+                return Result<JsonPath>.Fail(Error.Validation(WorkflowErrorCodes.TaskExecution,
+                    $"{what} {text} must start at one of the event mapping's members ({string.Join(", ", EventInputRoots)})."));
+            case DeclarativeSiteKind.EventInput when path.FirstSegment == "key" && !IsWholeMember(path):
+            case DeclarativeSiteKind.WorkflowOutput or DeclarativeSiteKind.FunctionOutput
+                when path.FirstSegment == "statusCode" && !IsWholeMember(path):
+                return Result<JsonPath>.Fail(Error.Validation(WorkflowErrorCodes.TaskExecution,
+                    $"{what} {text} must address $.{path.FirstSegment} as a whole."));
+            case DeclarativeSiteKind.WorkflowOutput or DeclarativeSiteKind.FunctionOutput
+                when Array.IndexOf(ResponseRoots, path.FirstSegment) < 0:
+                return Result<JsonPath>.Fail(Error.Validation(WorkflowErrorCodes.TaskExecution,
+                    $"{what} {text} must start at one of the response's members ({string.Join(", ", ResponseRoots)})."));
             default:
                 // Output sites and whole-member input targets need no further check.
                 break;
