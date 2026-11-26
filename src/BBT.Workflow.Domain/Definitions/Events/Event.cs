@@ -15,7 +15,9 @@ namespace BBT.Workflow.Definitions.Events;
 /// <c>action=transition</c> to advance an existing instance. Its presence is what makes a transition
 /// reachable by an event; it does not remove the transition's existing (non-event) trigger.</description></item>
 /// </list>
-/// The referenced <see cref="Mapping"/> script implements <see cref="IEventMapping"/>.
+/// The event is mapped either by the <see cref="Mapping"/> script (implements <see cref="IEventMapping"/>) or
+/// by the declarative <see cref="Input"/> block. Publish rejects an event declaring both; a stored definition
+/// holding both runs the script.
 /// </remarks>
 public sealed class Event
 {
@@ -23,15 +25,24 @@ public sealed class Event
     {
     }
 
+    /// <summary>Creates an event mapped by a script, a declarative block, or (stored only) both.</summary>
     [JsonConstructor]
-    public Event(ScriptCode mapping)
+    public Event(ScriptCode? mapping, MappingBlock? input = null)
     {
         Mapping = mapping;
+        Input = input;
     }
 
     /// <summary>
     /// The mapping script (implements <see cref="IEventMapping"/>) that turns the raw event
-    /// payload into an <c>InstanceKey</c> + <c>Body</c>.
+    /// payload into an <c>InstanceKey</c> + <c>Body</c>. <c>null</c> when the event uses <see cref="Input"/>.
     /// </summary>
-    public ScriptCode Mapping { get; private set; } = null!;
+    public ScriptCode? Mapping { get; private set; }
+
+    /// <summary>
+    /// Optional declarative block that shapes the target document <c>{ key, attributes }</c> from the event
+    /// payload without a script. Mutually exclusive with <see cref="Mapping"/>.
+    /// </summary>
+    [JsonPropertyName("input")]
+    public MappingBlock? Input { get; private set; }
 }

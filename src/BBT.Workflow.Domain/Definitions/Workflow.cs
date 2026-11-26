@@ -215,12 +215,25 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     public ScriptSettings? Scripts { get; private set; }
 
     /// <summary>
-    /// Optional output mapping script executed when the workflow is called with <c>sync=true</c>.
-    /// When defined, the script result replaces the default instance attributes in the sync response.
-    /// Implements <see cref="BBT.Workflow.Scripting.IOutputHandler"/>.
+    /// The authored <c>output</c> member: a script or a declarative block (see <see cref="OutputDefinition"/>).
     /// </summary>
     [JsonInclude] [JsonPropertyName("output")]
-    public ScriptCode? Output { get; private set; }
+    private OutputDefinition? output;
+
+    /// <summary>
+    /// Optional output mapping script executed when the workflow is called with <c>sync=true</c>.
+    /// When defined, the script result replaces the default instance attributes in the sync response.
+    /// Implements <see cref="BBT.Workflow.Scripting.IOutputHandler"/>. <c>null</c> when <c>output</c> is a block.
+    /// </summary>
+    [JsonIgnore]
+    public ScriptCode? Output => output?.Script;
+
+    /// <summary>
+    /// Optional declarative output block shaping the sync response document <c>{ data, statusCode, headers }</c>
+    /// without a script. <c>null</c> when <c>output</c> is a script or absent.
+    /// </summary>
+    [JsonIgnore]
+    public MappingBlock? OutputBlock => output?.Block;
 
     /// <summary>
     /// Root-level query roles for state-based visibility. When a state has no queryRoles, this is used.
@@ -344,7 +357,7 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
 
     public void SetOutput(ScriptCode output)
     {
-        Output = output;
+        this.output = new OutputDefinition(output, null);
     }
 
     public void SetCancel(Transition cancel)
