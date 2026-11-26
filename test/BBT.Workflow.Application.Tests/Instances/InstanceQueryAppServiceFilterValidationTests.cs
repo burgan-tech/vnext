@@ -206,6 +206,31 @@ public sealed class InstanceQueryAppServiceFilterValidationTests : IDisposable
     }
 
     [Fact]
+    public async Task GetInstanceListAsync_ShouldReturnMasterSchemaPolicyRefusal_AsValidationError()
+    {
+        // A master-schema policy refusal (field not filterable, operator not in x-filterOperators, encrypted
+        // path) is thrown by the SQL builders as SchemaFilterValidationException. Its code already mapped to
+        // 400 over HTTP, but left to escape TryAsync it came back Failure-prefixed, and the GetInstances task
+        // classifies by prefix: it read a 500. It is returned as a Validation error, like #1080's.
+        _instanceRepository
+            .GetPagedResultsWithGroupsAsync(
+                Arg.Any<int>(), Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<string?>(),
+                Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<SchemaFilterContext?>(),
+                Arg.Any<CancellationToken>())
+            .Returns<Task<(HateoasPagedList<Instance>, List<GroupSummary>?)>>(_ =>
+                throw new BBT.Workflow.ExceptionHandling.SchemaFilterValidationException(
+                    "Operator 'eq' is not allowed for field 'amount'."));
+
+        var result = await InvokeAsync("""{"attributes":{"amount":{"eq":1}}}""");
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Prefix.ShouldBe(BBT.Aether.Results.ErrorCodes.Prefixes.Validation);
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.SchemaFilterValidation);
+        result.Error.Target.ShouldBe("filter");
+        result.Error.Message.ShouldBe("Operator 'eq' is not allowed for field 'amount'.");
+    }
+
+    [Fact]
     public async Task GetInstanceListAsync_ShouldKeepExtensionErrorCodeAndMessage_WhenExtensionFails()
     {
         // One row on the page, a resolvable flow, and an extension that fails. The list is

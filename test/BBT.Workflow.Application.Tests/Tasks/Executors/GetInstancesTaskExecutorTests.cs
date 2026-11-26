@@ -190,6 +190,48 @@ public sealed class GetInstancesTaskExecutorTests
         captured.ApplyRowSecurity.ShouldBeTrue();
     }
 
+    /// <summary>
+    /// A local list failure reaches the flow with the status its error PREFIX maps to — the same class the
+    /// remote (Dapr) path would answer. The refusals the list returns for a master-schema policy decision
+    /// (field not filterable, encrypted, or restricted for the task's credential) are Validation errors and
+    /// must arrive as 400; "the caller's roles could not be resolved" is Transient and must arrive as 503.
+    /// A task that reads with no role (a timer or an automatic hop) is refused on a guarded field with the
+    /// same Validation error, so its failure is a permanent 400, never a retryable one. Neither may fall back
+    /// to 500: an error boundary or a retry rule keys on this number.
+    /// </summary>
+    [Theory]
+    [InlineData("validation", WorkflowErrorCodes.SchemaFilterValidation, 400)]
+    [InlineData("transient", WorkflowErrorCodes.CallerRolesUnavailable, 503)]
+    [InlineData("failure", "App:900000", 500)]
+    public async Task ExecuteAsync_LocalListFailure_CarriesTheStatusOfTheErrorPrefix(
+        string kind, string code, int expectedStatus)
+    {
+        var error = kind switch
+        {
+            "validation" => Error.Validation(
+                code, "Field 'assignedUser' is restricted for the caller (x-roles / x-masking) and cannot be filtered.",
+                target: "filter"),
+            "transient" => Error.Transient(code, "The caller's roles could not be resolved"),
+            _ => Error.Failure(code, "boom")
+        };
+        var task = WorkflowTaskFactory.CreateGetInstancesTask(
+            domain: "test-domain", flow: "test-flow",
+            filter: """{"attributes":{"assignedUser":{"eq":"U-1"}}}""");
+        var gateway = Substitute.For<IInstanceQueryGateway>();
+        gateway.GetInstanceListAsync(Arg.Any<GetInstanceListInput>(), Arg.Any<CancellationToken>())
+            .Returns(Result<InstanceListWithGroupsResponse<GetInstanceOutput>>.Fail(error));
+        var runtime = Substitute.For<IRuntimeInfoProvider>();
+        runtime.Domain.Returns("test-domain");
+
+        var result = await CreateExecutor(gateway, runtime)
+            .ExecuteAsync(CreateContext(task), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.IsSuccess.ShouldBeFalse();
+        result.Value.StatusCode.ShouldBe(expectedStatus);
+        result.Value.ErrorMessage.ShouldBe(error.Message);
+    }
+
     [Theory]
     // Unsupported operator using the schema-side spelling.
     [InlineData("""{"attributes":{"amount":{"gte":100}}}""")]

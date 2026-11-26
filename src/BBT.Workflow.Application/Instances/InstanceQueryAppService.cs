@@ -371,6 +371,18 @@ public sealed class InstanceQueryAppService(
                         groups = result.Groups;
                     }
                 }
+                catch (SchemaFilterValidationException ex)
+                {
+                    // A master-schema policy refusal: field not filterable / sortable, operator not in
+                    // x-filterOperators, encrypted path. Returned as a Validation-prefixed error, never left to
+                    // escape, for the reason given below (#1080): a thrown one reaches prefix readers — the
+                    // GetInstances task above all — as a 500.
+                    var refusal = Error.Validation(WorkflowErrorCodes.SchemaFilterValidation, ex.Message, target: FilterTarget);
+                    logger.InstanceQueryParameterRejected(
+                        input.Domain, input.Workflow, FilterTarget, refusal.Code, refusal.Message ?? refusal.Code);
+                    filterFailure = refusal;
+                    return null!;
+                }
                 catch (Exception ex) when (ex is ArgumentException or FormatException or FilterCompilationException)
                 {
                     // The filter passed boundary validation but still could not be compiled into
@@ -381,12 +393,11 @@ public sealed class InstanceQueryAppService(
                     // this logs at Error; the caller still gets a 400, not a 500, because the
                     // request is unservable either way.
                     //
-                    // SchemaFilterValidationException is deliberately NOT caught here: it is a
-                    // master-schema policy decision (field not filterable, operator not in
-                    // x-filterOperators) that the boundary validator intentionally does not
-                    // duplicate. Treating it as drift would fire this alarm on every routine
-                    // policy rejection. It already carries its own 400-mapping code and passes
-                    // through untouched.
+                    // SchemaFilterValidationException is deliberately NOT caught here but in its own
+                    // block above: it is a master-schema policy decision (field not filterable,
+                    // operator not in x-filterOperators) that the boundary validator intentionally
+                    // does not duplicate. Treating it as drift would fire this alarm on every routine
+                    // policy rejection.
                     logger.InstanceFilterCompilationFailed(ex, input.Domain, input.Workflow);
 
                     // Returned as a Validation-prefixed error, never thrown (#1080). A thrown
