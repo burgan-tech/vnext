@@ -236,6 +236,90 @@ public sealed class WorkflowOutputDeclarativeTests
         host.Builder.Received(1).WithHeaders(Arg.Is<Dictionary<string, string?>>(h => h["x-req"] == "r-1"));
     }
 
+    [Fact]
+    public async Task Transition_FileMember_BlockEchoesTheHandleNotTheBytes()
+    {
+        // A real output service echoing `input`; the pipeline's file admission is simulated at its seam: it writes
+        // the handle payload back to the WorkflowExecutionContext (and context.HopInput), never to TransitionInput.
+        const string handle = """{"doc":{"component":"files","file":"f-1","name":"a.txt","mimeType":"text/plain","size":3,"eTag":"e"}}""";
+        using var host = new CommandHost(
+            WorkflowWithOutput("""{"select":"$.input","into":"$.data"}"""),
+            new WorkflowOutputMappingService(Substitute.For<IScriptEngine>(), NullLogger<WorkflowOutputMappingService>.Instance));
+        host.Reload(Instance.Create(host.InstanceId, Flow, Version, "key"));
+        host.OnExecute = ctx => ctx.Data!.Attributes = JsonDocument.Parse(handle).RootElement.Clone();
+        var input = Input("""{"doc":{"content":"QUJD","name":"a.txt"}}""");
+
+        var result = await host.TransitionAsync(input);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.HasOutputResponse.ShouldBeTrue();
+        Json(result.Value.OutputData).ShouldBe(handle);
+        Json(result.Value.OutputData).ShouldNotContain("QUJD");
+        // The request DTO still holds the bytes — which is why it is not the source of `input`.
+        input.Data!.Attributes!.Value.GetRawText().ShouldContain("QUJD");
+    }
+
+    [Fact]
+    public async Task Transition_RelayedToActiveSubflow_InputIsNull()
+    {
+        using var host = new CommandHost(WorkflowWithOutput("""{"set":{"$.statusCode":"201"}}"""));
+        host.Reload(Instance.Create(host.InstanceId, Flow, Version, "key"));
+        host.OnExecute = ctx => ctx.RelayedToSubflow = true;
+        var seen = host.CaptureHop();
+
+        var result = await host.TransitionAsync(Input());
+
+        result.IsSuccess.ShouldBeTrue();
+        seen().ShouldNotBeNull();
+        seen()!.Input.ShouldBeNull();
+        seen()!.Actor.ShouldBe(ExecutionActor.User);
+    }
+
+    [Fact]
+    public async Task Transition_ProxiedToActiveSubflow_InputIsNull()
+    {
+        using var host = new CommandHost(WorkflowWithOutput("""{"set":{"$.statusCode":"201"}}"""));
+        host.Reload(Instance.Create(host.InstanceId, Flow, Version, "key"));
+        host.Proxy.TryProxyAsync(
+                Arg.Any<InstanceExecutionSnapshot>(), Arg.Any<Definitions.Workflow>(), Arg.Any<string>(),
+                Arg.Any<TransitionInput>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<Result<TransitionOutput>?>(Result<TransitionOutput>.Ok(
+                new TransitionOutput { Id = host.InstanceId, Status = InstanceStatus.Active, ExecutedAsync = false })));
+        var seen = host.CaptureHop();
+
+        var result = await host.TransitionAsync(Input());
+
+        result.IsSuccess.ShouldBeTrue();
+        seen().ShouldNotBeNull();
+        seen()!.Input.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task IdempotentStart_InputIsNull()
+    {
+        using var host = new CommandHost(WorkflowWithOutput("""{"set":{"$.statusCode":"201"}}"""));
+        var existing = Instance.Create(host.InstanceId, Flow, Version, "key");
+        host.Repository.FindActiveByKeyLeanAsync("key", Arg.Any<CancellationToken>()).Returns(existing);
+        host.Reload(existing);
+        var seen = host.CaptureHop();
+
+        var result = await host.StartAsync(new StartInstanceInput(Domain, Flow, sync: true)
+        {
+            Instance = new CreateInstanceInput
+            {
+                Key = "key",
+                Attributes = JsonDocument.Parse("""{"amount":5}""").RootElement.Clone()
+            },
+            Headers = new Dictionary<string, string?> { ["x-req"] = "r-1" }
+        });
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Id.ShouldBe(host.InstanceId);
+        seen().ShouldNotBeNull();
+        seen()!.Input.ShouldBeNull();
+        seen()!.Actor.ShouldBe(ExecutionActor.User);
+    }
+
     private static int OutputFailedId =>
         typeof(WorkflowLogs).GetMethod(nameof(WorkflowLogs.WorkflowOutputScriptFailed))!
             .GetCustomAttributes(typeof(LoggerMessageAttribute), false).Cast<LoggerMessageAttribute>().Single().EventId;
@@ -281,8 +365,8 @@ public sealed class WorkflowOutputDeclarativeTests
         return workflow;
     }
 
-    private static TransitionInput Input() =>
-        new(Domain, Flow, new TransitionDataInput(JsonDocument.Parse("""{"amount":5}""").RootElement.Clone()), sync: true)
+    private static TransitionInput Input(string body = """{"amount":5}""") =>
+        new(Domain, Flow, new TransitionDataInput(JsonDocument.Parse(body).RootElement.Clone()), sync: true)
         {
             Headers = new Dictionary<string, string?> { ["x-req"] = "r-1" },
             RouteValues = new Dictionary<string, string?>()
@@ -291,7 +375,6 @@ public sealed class WorkflowOutputDeclarativeTests
     /// <summary>An <see cref="InstanceCommandAppService"/> on substitutes, for the sync enrichment gate.</summary>
     private sealed class CommandHost : IDisposable
     {
-        private readonly IInstanceRepository _instanceRepository = Substitute.For<IInstanceRepository>();
         private readonly IWorkflowExecutionService _executionService = Substitute.For<IWorkflowExecutionService>();
         private readonly IServiceProvider _ambient;
         private readonly IServiceProvider? _previousAmbient;
@@ -300,10 +383,16 @@ public sealed class WorkflowOutputDeclarativeTests
         public Guid InstanceId { get; } = Guid.NewGuid();
         public IScriptContextFactory ScriptContextFactory { get; } = Substitute.For<IScriptContextFactory>();
         public IScriptContextBuilder Builder { get; } = Substitute.For<IScriptContextBuilder>();
-        public IWorkflowOutputMappingService OutputService { get; } = Substitute.For<IWorkflowOutputMappingService>();
+        public IWorkflowOutputMappingService OutputService { get; }
+        public IInstanceRepository Repository { get; } = Substitute.For<IInstanceRepository>();
+        public BBT.Workflow.SubFlow.ISubflowProxyService Proxy { get; } = Substitute.For<BBT.Workflow.SubFlow.ISubflowProxyService>();
 
-        public CommandHost(Definitions.Workflow workflow)
+        /// <summary>Runs on the dispatched <see cref="WorkflowExecutionContext"/>, as the pipeline would mutate it.</summary>
+        public Action<WorkflowExecutionContext>? OnExecute { get; set; }
+
+        public CommandHost(Definitions.Workflow workflow, IWorkflowOutputMappingService? outputService = null)
         {
+            OutputService = outputService ?? Substitute.For<IWorkflowOutputMappingService>();
             var uow = Substitute.For<IUnitOfWorkManager>();
             uow.BeginAsync(Arg.Any<UnitOfWorkOptions>(), Arg.Any<CancellationToken>())
                 .Returns(Task.FromResult(Substitute.For<IUnitOfWork>()));
@@ -317,10 +406,14 @@ public sealed class WorkflowOutputDeclarativeTests
             cache.GetFlowAsync(Domain, Flow, Arg.Any<string?>(), Arg.Any<CancellationToken>())
                 .Returns(Result<Definitions.Workflow>.Ok(workflow));
 
-            _instanceRepository.GetExecutionSnapshotAsync(InstanceId.ToString(), Arg.Any<CancellationToken>())
+            Repository.GetExecutionSnapshotAsync(InstanceId.ToString(), Arg.Any<CancellationToken>())
                 .Returns(new InstanceExecutionSnapshot(InstanceId, "key", InstanceStatus.Active, "state1", Flow, Version, false));
             _executionService.ExecuteTransitionAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
-                .Returns(Result<TransitionOutput>.Ok(new TransitionOutput { Id = InstanceId, Status = InstanceStatus.Active }));
+                .Returns(call =>
+                {
+                    OnExecute?.Invoke(call.Arg<WorkflowExecutionContext>());
+                    return Result<TransitionOutput>.Ok(new TransitionOutput { Id = InstanceId, Status = InstanceStatus.Active });
+                });
 
             Builder.WithWorkflow(Arg.Any<Definitions.Workflow>()).Returns(Builder);
             Builder.WithInstance(Arg.Any<Instance>()).Returns(Builder);
@@ -338,7 +431,7 @@ public sealed class WorkflowOutputDeclarativeTests
                 runtimeInfoProvider: Substitute.For<IRuntimeInfoProvider>(),
                 workflowExecutionService: _executionService,
                 componentCacheStore: cache,
-                instanceRepository: _instanceRepository,
+                instanceRepository: Repository,
                 instanceDataWriteService: Substitute.For<IInstanceDataWriteService>(),
                 instanceJobRepository: Substitute.For<IInstanceJobRepository>(),
                 backgroundJobService: Substitute.For<IBackgroundJobService>(),
@@ -358,13 +451,27 @@ public sealed class WorkflowOutputDeclarativeTests
                 workflowOutputMappingService: OutputService,
                 fileOffloadService: BBT.Workflow.Application.Files.FileTestDoubles.PassThroughOffload(),
                 rawBodyProvider: Substitute.For<IRequestRawBodyProvider>(),
-                subflowProxyService: Substitute.For<BBT.Workflow.SubFlow.ISubflowProxyService>(),
+                subflowProxyService: Proxy,
                 logger: Substitute.For<ILogger<InstanceCommandAppService>>());
         }
 
+        /// <summary>Captures the hop the (substituted) output service receives; the getter reads the last one.</summary>
+        public Func<WorkflowOutputHop?> CaptureHop()
+        {
+            WorkflowOutputHop? seen = null;
+            OutputService.ApplyAsync(
+                    Arg.Any<Definitions.Workflow>(), Arg.Any<ScriptContext>(), Arg.Do<WorkflowOutputHop?>(h => seen = h),
+                    Arg.Any<CancellationToken>())
+                .Returns(Result<WorkflowOutputResult?>.Ok(new WorkflowOutputResult(null, 201, null)));
+            return () => seen;
+        }
+
         public void Reload(Instance instance) =>
-            _instanceRepository.FindByIdentifierAsReadOnlyAsync(InstanceId.ToString(), Arg.Any<CancellationToken>())
+            Repository.FindByIdentifierAsReadOnlyAsync(InstanceId.ToString(), Arg.Any<CancellationToken>())
                 .Returns(instance);
+
+        public Task<Result<StartInstanceOutput>> StartAsync(StartInstanceInput input) =>
+            _service.StartAsync(input, CancellationToken.None);
 
         public Task<Result<TransitionOutput>> TransitionAsync(TransitionInput input) =>
             _service.TransitionAsync(InstanceId.ToString(), "regular-transition", input, CancellationToken.None);

@@ -737,6 +737,31 @@ public class TransitionPipelineTests
             .TakeOverAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunAsync_MarksTheWorkflowContextWhenTheRequestIsRelayedToTheActiveSubflow(bool activeSubflow)
+    {
+        // The sync response's declarative output reads `input` as null for a relayed request: its payload was
+        // neither admitted nor swapped here. The mark follows SubflowForwardRule, taken before any step runs.
+        var context = CreateTransitionExecutionContext();
+        if (activeSubflow)
+        {
+            context.Instance.ChangeState(context.Current!);
+            context.Instance.AddCorrelation(InstanceCorrelation.Create(
+                Guid.NewGuid(), context.Instance.Id, "state1", Guid.NewGuid(), SubFlowType.SubFlow.Code,
+                "test-domain", "child-flow", "1.0.0"));
+        }
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        workflowContext.RelayedToSubflow.ShouldBe(activeSubflow);
+    }
+
     [Fact]
     public async Task RunAsync_BusyParentWithActiveSubflow_ShouldRunWithoutReserve()
     {

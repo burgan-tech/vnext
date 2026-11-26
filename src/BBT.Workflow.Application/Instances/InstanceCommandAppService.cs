@@ -108,7 +108,9 @@ public sealed class InstanceCommandAppService(
         if (existingInstanceResult.HasValue)
         {
             if (input.Sync && existingInstanceResult.Value.IsSuccess)
-                return await EnrichSyncOutputAsync(existingInstanceResult.Value.Value!, existingInstanceResult.Value.Value!.Id, workflow, input, cancellationToken);
+                return await EnrichSyncOutputAsync(existingInstanceResult.Value.Value!, existingInstanceResult.Value.Value!.Id, workflow, input,
+                    // Idempotent answer: no hop ran here (nothing admitted or swapped), so there is no `input`.
+                    hopInput: null, cancellationToken);
             return existingInstanceResult.Value;
         }
 
@@ -562,7 +564,9 @@ public sealed class InstanceCommandAppService(
             // sync run returns the full instance, a forced-async accept returns identity only — so the body
             // matches the 200/202 the controller shapes from ExecutedAsync.
             .ThenAsync(output => context.Mode == ExecMode.Sync && !input.SuppressResponseEnrichment
-                ? EnrichSyncOutputAsync(output, output.Id, data.Workflow, input, cancellationToken)
+                ? EnrichSyncOutputAsync(output, output.Id, data.Workflow, input,
+                    // Offloaded in place before the instance row (ApplyFileOffloadAsync): handles, never bytes.
+                    hopInput: input.Instance.Attributes, cancellationToken)
                 : Task.FromResult(Result<StartInstanceOutput>.Ok(output)));
     }
 
@@ -835,7 +839,8 @@ public sealed class InstanceCommandAppService(
             // meanwhile settled terminal); an async client and a runtime-internal relay get identity.
             if (proxiedOutput.ExecutedAsync != true && !input.SuppressResponseEnrichment)
                 return await EnrichSyncOutputAsync(proxiedOutput, proxiedOutput.Id, workflowDefinition,
-                    input, cancellationToken);
+                    // The hop ran at the leaf (which also swapped the payload): no `input` here.
+                    input, hopInput: null, cancellationToken);
 
             proxiedOutput.Key = snapshot.Key;
             return proxyResult;
@@ -863,7 +868,12 @@ public sealed class InstanceCommandAppService(
                 // status. A runtime-internal relay (SuppressResponseEnrichment) awaits the pipeline like any
                 // sync caller but takes the identity-only response — see TransitionInput.
                 if (context.Mode == ExecMode.Sync && !input.SuppressResponseEnrichment)
-                    return EnrichSyncOutputAsync(output, output.Id, workflowDefinition, input, cancellationToken);
+                    return EnrichSyncOutputAsync(output, output.Id, workflowDefinition, input,
+                        // The pipeline's hop input — the payload after the x-storage swap (FileAdmission writes the
+                        // handles back to context.Data), never TransitionInput.Data, which keeps the inline bytes.
+                        // A request relayed to the active SubFlow ran at the leaf: no `input`.
+                        hopInput: context.RelayedToSubflow ? null : context.Data?.Attributes,
+                        cancellationToken);
                 output.Key = snapshot.Key;
                 // Identity-only relay that still ran sync: carry the state from the pipeline's own
                 // instance, no read (vnext#1182). Null when the pipeline answered from a ClientResponse.
@@ -961,34 +971,38 @@ public sealed class InstanceCommandAppService(
     /// <summary>
     /// Enriches a sync=true StartInstanceOutput with attributes (schema-filtered), etag, entityEtag and key.
     /// The instance is reloaded from the repository to ensure post-execution state is reflected.
-    /// <paramref name="input"/> is the start request: its attributes, actor and headers back a declarative output
-    /// block's <c>input</c>, <c>user</c> and <c>headers</c>.
+    /// <paramref name="input"/> is the start request: its actor and headers back a declarative output block's
+    /// <c>user</c> and <c>headers</c>; <paramref name="hopInput"/> is its <c>input</c> — the admitted (swapped)
+    /// payload of the hop this process ran, or null when none ran here.
     /// </summary>
     private Task<Result<StartInstanceOutput>> EnrichSyncOutputAsync(
         StartInstanceOutput output,
         Guid instanceId,
         Definitions.Workflow? workflow,
         StartInstanceInput input,
+        object? hopInput,
         CancellationToken cancellationToken)
         => EnrichOutputCoreAsync(output, instanceId, workflow, new AuthorizationRequestContext(input.Headers),
             // A start is always a user hop (the start transition's actor).
-            new WorkflowOutputHop(input.Instance?.Attributes, Shared.ExecutionActor.User, input.Headers),
+            new WorkflowOutputHop(hopInput, Shared.ExecutionActor.User, input.Headers),
             cancellationToken);
 
     /// <summary>
     /// Enriches a sync=true TransitionOutput with attributes (schema-filtered), etag, entityEtag and key.
     /// The instance is reloaded from the repository to ensure post-execution state is reflected.
-    /// <paramref name="input"/> is the transition request: its body, actor and headers back a declarative output
-    /// block's <c>input</c>, <c>user</c> and <c>headers</c>.
+    /// <paramref name="input"/> is the transition request: its actor and headers back a declarative output block's
+    /// <c>user</c> and <c>headers</c>; <paramref name="hopInput"/> is its <c>input</c> — the admitted (swapped)
+    /// payload of the hop this process ran, or null when none ran here.
     /// </summary>
     private Task<Result<TransitionOutput>> EnrichSyncOutputAsync(
         TransitionOutput output,
         Guid instanceId,
         Definitions.Workflow? workflow,
         TransitionInput input,
+        object? hopInput,
         CancellationToken cancellationToken)
         => EnrichOutputCoreAsync(output, instanceId, workflow, new AuthorizationRequestContext(input.Headers),
-            new WorkflowOutputHop(input.Data?.Attributes, input.Actor, input.Headers),
+            new WorkflowOutputHop(hopInput, input.Actor, input.Headers),
             cancellationToken);
 
     private async Task<Result<TOutput>> EnrichOutputCoreAsync<TOutput>(

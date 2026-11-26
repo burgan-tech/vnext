@@ -7,6 +7,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Cancellation;
 using BBT.Workflow.Execution.Continuations;
 using BBT.Workflow.Execution.ErrorHandling;
+using BBT.Workflow.Execution.Transitions;
 using BBT.Workflow.Execution.Validation;
 using BBT.Workflow.Files;
 using BBT.Workflow.Instances;
@@ -169,6 +170,11 @@ public class TransitionPipeline
         context.EnqueueContinuations = workflowContext.EnqueueContinuations;
         context.IsPreReserved = workflowContext.IsPreReserved;
         context.SubflowChainReserved = workflowContext.SubflowChainReserved;
+        // The decision ForwardToActiveSubflowStep and the file admission make, taken while the instance is
+        // still as the request found it; the caller's sync response reads it (no hop input on a relay).
+        workflowContext.RelayedToSubflow =
+            context.Profile?.ExcludedStepOrders.Contains(LifecycleOrder.ForwardToActiveSubflow) != true
+            && SubflowForwardRule.WillForward(context);
 
         // 2) Cheap Busy pre-check (aggregate already loaded — no extra round trip). A timer firing
         //    in an interaction wait is the one Normal request that expects Busy: that state parks
