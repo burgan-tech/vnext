@@ -237,6 +237,14 @@ public static class GraphQLJsonFilterService
 
                 // Schema policy, not drift: sortability lives in the master schema and is
                 // deliberately not duplicated in the boundary validator.
+                // IsSafeJsonPath (and the boundary validator) accept padded segments ("customer . nationalId") and the
+                // accessor below trims each one. The policy checks must judge the path the SQL reads, not the
+                // spelling the caller sent — otherwise padding walks past every path-keyed rule (vnext#1262).
+                jsonPath = string.Join('.', jsonPath.Split('.').Select(static segment => segment.Trim()));
+
+                // The order of the rows is an oracle on a value the caller may not read.
+                schemaContext?.EnsureNotRestricted(jsonPath, "sorted");
+
                 if (schemaContext != null && !schemaContext.IsFieldSortable(jsonPath))
                 {
                     throw new SchemaFilterValidationException(
@@ -624,6 +632,9 @@ public static class GraphQLJsonFilterService
 
         // A policy-exempt (planner-emitted) leaf skips the filterability / operator whitelist only; the
         // encrypted-path refusal and type casts are applied per operator by AttributeConditionBuilder.
+        if (!policyExempt && condition.GetOperators().Any())
+            schemaContext?.EnsureNotRestricted(sanitizedField, "filtered");
+
         if (!policyExempt && schemaContext != null && condition.GetOperators().Any() && !schemaContext.IsFieldFilterable(sanitizedField))
             throw new SchemaFilterValidationException($"Field '{sanitizedField}' is not filterable.");
 

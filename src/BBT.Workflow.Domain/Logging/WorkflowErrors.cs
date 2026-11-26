@@ -776,6 +776,16 @@ public static class WorkflowErrors
             WorkflowErrorCodes.CallerRolesUnavailable,
             "The caller's roles could not be resolved, so a rule-based selection that reads them cannot be decided; the request can be retried");
 
+    /// <summary>
+    /// A list query named a field guarded by <c>x-roles</c> / <c>x-masking</c> and the role provider could not
+    /// answer, so whether the caller may query it is unknown (vnext#1262). Never an admit; retryable (HTTP 503)
+    /// rather than the 400 a caller without the role gets, because nothing in the request is wrong.
+    /// </summary>
+    public static Error QueryCallerRolesUnavailable()
+        => Error.Transient(
+            WorkflowErrorCodes.CallerRolesUnavailable,
+            "The caller's roles could not be resolved, so a query on a field guarded by x-roles / x-masking cannot be decided; the request can be retried");
+
     #endregion
 
     #region Discovery Errors

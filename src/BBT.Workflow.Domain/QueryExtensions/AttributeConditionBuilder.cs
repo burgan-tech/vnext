@@ -34,7 +34,8 @@ public static class AttributeConditionBuilder
     /// <param name="schemaContext">Schema metadata (filterability, operator whitelist, encrypted paths, types).</param>
     /// <param name="policyExempt">
     /// True for a runtime-planned row-security subtree (vnext#1107): the schema filterability and operator
-    /// whitelist are skipped because the predicate is policy, not caller input. The encrypted-path refusal and
+    /// whitelist are skipped because the predicate is policy, not caller input — and so is the caller's
+    /// restricted-path refusal (<see cref="SchemaFilterContext.RestrictedPaths"/>). The encrypted-path refusal and
     /// the schema type casts still apply.
     /// </param>
     /// <returns>The SQL predicate.</returns>
@@ -57,10 +58,14 @@ public static class AttributeConditionBuilder
                 throw new BBT.Workflow.ExceptionHandling.SchemaFilterValidationException(
                     $"Field '{field}' is not filterable.");
         }
-        else if (schemaContext != null && (!schemaContext.IsFieldFilterable(field) ||
-            !schemaContext.IsOperatorAllowed(field, operatorType)))
-            throw new BBT.Workflow.ExceptionHandling.SchemaFilterValidationException(
-                $"Operator '{operatorType}' is not allowed for field '{field}'.");
+        else if (schemaContext != null)
+        {
+            // Caller input only: a planned row-security leaf above may legitimately name an x-roles path.
+            schemaContext.EnsureNotRestricted(field, "filtered");
+            if (!schemaContext.IsFieldFilterable(field) || !schemaContext.IsOperatorAllowed(field, operatorType))
+                throw new BBT.Workflow.ExceptionHandling.SchemaFilterValidationException(
+                    $"Operator '{operatorType}' is not allowed for field '{field}'.");
+        }
         var sql = operatorType.ToLowerInvariant() switch
         {
             "eq" => BuildEqualsCondition(field, value, jsonColumnName, parameters, ref parameterIndex),

@@ -258,6 +258,65 @@ it) are refused on the list endpoint (400 `Validation:900010`) whatever `Enforce
 Publish rejects `x-masking`/`hash`/`encrypt` together with `x-filterOperators`, `x-sortable` or `x-indexed`.
 **Gap:** event selectors (`FindByFilterAsync`) carry no schema context and are not guarded.
 
+**Per-caller refusal (`x-roles`, `x-masking`).** A filter, sort, groupBy or aggregation runs in SQL on the stored
+value and answers for many rows at once — the grouped response never reaches the per-instance exposure pass — so a
+group key or a `min`/`max` would return a hidden value outright and a filter or a sort order would be an oracle on
+it (vnext#1262). The list therefore binds its schema context to the caller before the query
+(`InstanceQueryAppService.RestrictQueryFieldsAsync` → `SchemaQueryRestrictedPaths` →
+`SchemaFilterContext.RestrictedPaths`) and the SQL builders refuse a caller-supplied field that touches a
+restricted path with 400 `Validation:900010`, whatever `EnforceMasterSchemaFiltering` says. The guards are those
+of the flow the list resolves — the **default version's** master schema (see *Not covered* below):
+
+| Path | Restricted for |
+|---|---|
+| `x-roles` | a caller the grant set does not admit **for every row** |
+| `x-masking` (while `SchemaMasking:Enabled`) | a caller that matches no exemption grant; a rule without `roles` restricts everyone |
+| `x-encryption: hash` | nobody — the column holds the digest every reader gets |
+| `x-encryption: encrypt` | everybody, through `EncryptedPaths` (above) |
+
+- **Related paths count.** A restricted `customer.nationalId` also refuses `customer` (the parent object would
+  return or contain-match it) and anything under the restricted path.
+- **Decided for the set, not per row** (`TransitionAuthorizationManager.EvaluateRolesForRowSet`). A grant whose
+  answer depends on the instance — `$InstanceStarter`, `$PreviousUser`, `$user.…`, `$userBehalfOf.…`, `$role.…` —
+  is *unknown* here: as an allow it does not open the path, as a deny it closes it. So a field the plain list shows
+  on the rows a caller started is still not queryable by that caller; only static roles and `$Everyone` open a
+  path. Never use `EvaluateRolesStatic` for this: it reads such a leaf as "no match" and a deny would never fire.
+- **Same caller as the list body.** Roles come from `ICallerRoleResolver` over the request's header set — for a
+  `GetInstances` task, the task's header set. A filter written in a task definition is therefore judged as
+  caller input, like the body the task reads; it is not policy the way a row-security leaf is. Roles are
+  resolved only when the request carries a query part and the schema guards something.
+- **A caller with no roles gets the 400, permanently.** That includes a `GetInstances` task that reads with no
+  credential (a timer, an automatic hop): its filter on a guarded field fails 400 on every run, and a task whose
+  `acceptedStatusCodes` admits `400` / `4xx` turns that refusal into a success that carries no rows.
+- **A mask without `roles` exempts nobody,** so no caller — an administrator or a system task included — can
+  filter, sort or group on that field. Sending a role does not help; name the roles that may query it in
+  `x-masking.roles`.
+- **Role provider could not answer.** Read through `ResolveRoleSetAsync`, because the built-in providers turn an
+  outage into an empty role set on `ResolveRolesAsync` and only the outcome (`CallerRoleOutcome.Failed`) tells it
+  from "holds no roles". Every guarded path is restricted (fail closed); a query that names one answers the
+  retryable 503 `Authorization:110006` instead of the 400, and a query on open fields is still served. On a flow
+  that declares `rowSecurity` the 503 is never reached: row security decides first and a failed provider
+  answers an empty page (200) there.
+- **Returned, not thrown.** `GetInstanceListAsync` turns a `SchemaFilterValidationException` (this refusal and
+  the older not-filterable / operator / encrypted ones) into a Validation-prefixed error. Left thrown, it came
+  out of `TryAsync` Failure-prefixed: 400 over HTTP, but a 500 to every prefix reader — a same-domain
+  `GetInstances` task above all. `CallerRestricted` on the exception marks the per-caller refusal.
+- **Row security is not caller input.** A planned rule leaf (`PolicyExempt`) may name an `x-roles` path and is
+  never checked against the restriction; the rule set is planned against the unrestricted context.
+- **Not covered** (known issues `list-query-guards-follow-default-version` and
+  `list-query-unguarded-without-schema-context`):
+  - *Flow versions.* The list body is filtered per row with each instance's own flow version; the query guard
+    reads one schema, the default version's. A path guarded only in another version's schema — a pilot version
+    published above the default pointer, a field that gained `x-roles` in a later version — is pruned from the
+    rows and can still be filtered, sorted, grouped and aggregated.
+  - *No schema context.* When the flow declares no master schema, or its lookup fails (in practice: the
+    reference has no published version yet), nothing is bound and the query runs without the schema's policy —
+    the per-caller restriction and the `encrypt` refusal alike. The plain list serves the rows as stored in the
+    same condition. Neither fails closed.
+  - `x-roles` under array `items` is not parsed (#106), and event selectors carry no schema context (above).
+- The object form of a nested filter lowercases field names (`{"customer":{"nationalId":…}}` reads
+  `customer.nationalid`); the restriction compares, ordinally, the key the SQL actually reads.
+
 ### Honest scope
 
 Only `InstancesData` rows written after a field became `hash`/`encrypt` are protected. Still in plaintext:

@@ -397,6 +397,10 @@ public static class GraphQLAggregationService
             throw new BBT.Workflow.ExceptionHandling.SchemaFilterValidationException(
                 $"Field '{path}' is encrypted (x-encryption type 'encrypt') and cannot be grouped or aggregated.");
 
+        // Same reason for a path the caller's roles do not open (x-roles) or that it reads masked (x-masking):
+        // a group key and a min/max ARE the stored value, and count/sum/avg over it are statistics of it.
+        context?.EnsureNotRestricted(path, "grouped or aggregated");
+
         return column == "Data" ? AttributeSqlExpression.Resolve(path, numeric ? "numeric" : "text", fallback, context) : fallback;
     }
 

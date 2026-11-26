@@ -56,6 +56,69 @@ public sealed class SchemaFilterContext
 
         return false;
     }
+    /// <summary>
+    /// Data paths the CALLER of this query may not read as stored: an <c>x-roles</c> path its roles do not open, or
+    /// an <c>x-masking</c> path it is not exempt from. Empty for a context that is not bound to a caller (row
+    /// security, publish checks). A filter, sort, groupBy or aggregation runs on the stored value and answers for a
+    /// set of rows, so on such a path — or on a path under it, or on an ancestor that contains it — it is refused
+    /// whatever <see cref="EnforceFiltering"/> says: a group key or a <c>min</c>/<c>max</c> returns the value
+    /// outright, and a filter or a sort order is an oracle on it. A runtime-planned row-security leaf
+    /// (<c>policyExempt</c>) is policy, not caller input, and is never checked against this set.
+    /// </summary>
+    public IReadOnlySet<string> RestrictedPaths { get; init; } = new HashSet<string>();
+
+    /// <summary>
+    /// True when <paramref name="fieldPath"/> is a restricted path, sits under one, or is an ancestor of one.
+    /// </summary>
+    /// <param name="fieldPath">Data path relative to the instance data root (dot-separated, no <c>attributes.</c> prefix).</param>
+    public bool IsRestrictedOrRelated(string fieldPath)
+    {
+        if (RestrictedPaths.Count == 0 || string.IsNullOrEmpty(fieldPath))
+            return false;
+        if (RestrictedPaths.Contains(fieldPath))
+            return true;
+
+        var prefix = fieldPath + ".";
+        foreach (var path in RestrictedPaths)
+        {
+            if (path.StartsWith(prefix, StringComparison.Ordinal) ||
+                fieldPath.StartsWith(path + ".", StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Refuses a caller-supplied query field that touches a restricted path (<see cref="IsRestrictedOrRelated"/>).
+    /// </summary>
+    /// <param name="fieldPath">Data path relative to the instance data root.</param>
+    /// <param name="usage">What the query does with the field, for the message: <c>filtered</c>, <c>sorted</c>,
+    /// <c>grouped or aggregated</c>.</param>
+    /// <exception cref="BBT.Workflow.ExceptionHandling.SchemaFilterValidationException">The path is restricted.</exception>
+    public void EnsureNotRestricted(string fieldPath, string usage)
+    {
+        if (IsRestrictedOrRelated(fieldPath))
+            throw new BBT.Workflow.ExceptionHandling.SchemaFilterValidationException(
+                $"Field '{fieldPath}' is restricted for the caller (x-roles / x-masking) and cannot be {usage}.")
+            {
+                CallerRestricted = true
+            };
+    }
+
+    /// <summary>
+    /// A copy of this context bound to a caller: same fields, policy switch, encrypted paths and ready indexes,
+    /// with <paramref name="restrictedPaths"/> as <see cref="RestrictedPaths"/>.
+    /// </summary>
+    /// <param name="restrictedPaths">The paths the caller may not read as stored.</param>
+    public SchemaFilterContext WithRestrictedPaths(IReadOnlySet<string> restrictedPaths) => new(_fields)
+    {
+        EnforceFiltering = EnforceFiltering,
+        EncryptedPaths = EncryptedPaths,
+        ReadyIndexes = ReadyIndexes,
+        RestrictedPaths = restrictedPaths ?? throw new ArgumentNullException(nameof(restrictedPaths))
+    };
+
     public IReadOnlyDictionary<string, SchemaFieldMetadata> Fields => _fields;
     public IReadOnlySet<string> ReadyIndexes { get; init; } = new HashSet<string>();
 
@@ -81,7 +144,7 @@ public sealed class SchemaFilterContext
     /// </summary>
     public bool IsFieldFilterable(string fieldPath)
     {
-        if (IsEncryptedOrAncestor(fieldPath)) return false;
+        if (IsEncryptedOrAncestor(fieldPath) || IsRestrictedOrRelated(fieldPath)) return false;
         var metadata = GetFieldMetadata(fieldPath);
         return !EnforceFiltering || (metadata is not null && metadata.IsFilterable);
     }
@@ -92,7 +155,7 @@ public sealed class SchemaFilterContext
     /// </summary>
     public bool IsOperatorAllowed(string fieldPath, string internalOperator)
     {
-        if (IsEncryptedOrAncestor(fieldPath)) return false;
+        if (IsEncryptedOrAncestor(fieldPath) || IsRestrictedOrRelated(fieldPath)) return false;
         if (!EnforceFiltering) return true;
         var metadata = GetFieldMetadata(fieldPath);
         if (metadata is null || !metadata.IsFilterable)
@@ -107,7 +170,7 @@ public sealed class SchemaFilterContext
     /// </summary>
     public bool IsFieldSortable(string fieldPath)
     {
-        if (IsEncryptedOrAncestor(fieldPath)) return false;
+        if (IsEncryptedOrAncestor(fieldPath) || IsRestrictedOrRelated(fieldPath)) return false;
         var metadata = GetFieldMetadata(fieldPath);
         return !EnforceFiltering || (metadata is not null && metadata.Sortable);
     }
