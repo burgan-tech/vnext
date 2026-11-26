@@ -320,6 +320,7 @@ internal sealed class DeclarativeMappingPlan
                 return Result<JsonPath>.Fail(Error.Validation(WorkflowErrorCodes.TaskExecution,
                     $"{what} {text} must address $.{path.FirstSegment} as a whole."));
             default:
+                // Output sites and whole-member input targets need no further check.
                 break;
         }
 
