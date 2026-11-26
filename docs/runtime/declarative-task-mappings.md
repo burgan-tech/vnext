@@ -599,3 +599,21 @@ A caller-roles provider failure stays `Authorization:110006` (retryable; on the 
 ## Publish validation
 
 `MappingBlockValidator` parses every path and compiles every `set` expression (warming the cache). Error locations are camelCase JSON paths, for example `states[review].onEntries[0].output.set['$.kyc.score']: ...`, unlike older validators' PascalCase member paths.
+
+## Performance: blocks vs `.csx`
+
+Measured on the same task mapping in both forms, through the runners production uses, with a new execution context
+per call (`MappingFormBenchmarks`; numbers, shape and command in
+[`test/BBT.Workflow.Benchmarks/baselines/2026-11-26-mapping-form.md`](../../test/BBT.Workflow.Benchmarks/baselines/2026-11-26-mapping-form.md)):
+
+| Phase | `.csx` | Block |
+|---|---|---|
+| Output mapping, compiled (per execution) | 0.67 us, 2.5 KB | 1.54 us, 5.2 KB |
+| Input mapping, compiled (per execution) | 1.3 us, 3.7 KB | 3.5 us, 10 KB |
+| First execution (compile) | 7.1 ms, 1.6 MB | 0.48 ms, 164 KB |
+| Memory kept per compiled mapping | about 11 KB | about 4 KB |
+
+Both forms stay flat from a 10 KB to a 200 KB payload. Once compiled, a `.csx` runs a mapping 2-2.6x faster than a
+block; the gap is 1-2 us, small against a transition hop. A block is 15x cheaper to compile, the cost a `.csx` pays
+once per mapping per pod after a publish or a restart, and keeps less memory. Choose blocks for readability,
+publish-time checking and that compile cost, not for per-call speed.
