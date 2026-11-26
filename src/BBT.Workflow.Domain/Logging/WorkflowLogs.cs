@@ -1006,6 +1006,23 @@ public static partial class WorkflowLogs
         string errorMessage);
 
     /// <summary>
+    /// Logs when a function's <c>output</c> — the <c>IOutputHandler</c> script or the declarative block — fails while
+    /// the response is built. The call answers <c>ExtensionExecutionFailed</c>. <paramref name="exception"/> is the
+    /// script's exception (or the block's thrown one); null for a block failure reported as a result.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10280,
+        Level = LogLevel.Error,
+        Message = "Function '{FunctionKey}' output mapping failed. Domain={Domain}, InstanceId={InstanceId}, Error={ErrorMessage}")]
+    public static partial void FunctionOutputMappingFailed(
+        this ILogger logger,
+        string functionKey,
+        string domain,
+        Guid? instanceId,
+        string errorMessage,
+        Exception? exception);
+
+    /// <summary>
     /// Logs when a declarative task mapping skips an entry because its source is missing (RF-1): a <c>select</c> path
     /// that reads nothing, or a <c>set</c> expression that reads through a missing intermediate. Carries the path or
     /// <c>set</c> key, never the value. The mapping continues; nothing is written for that entry.

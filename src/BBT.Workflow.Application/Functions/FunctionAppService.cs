@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Globalization;
 using BBT.Aether.Application.Services;
 using BBT.Aether.MultiSchema;
@@ -14,7 +15,10 @@ using BBT.Workflow.Functions.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Shared;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Scripting.Declarative;
+using BBT.Workflow.Scripting.Expressions;
 using BBT.Workflow.Tasks;
 using BBT.Workflow.Tasks.Coordinator;
 using BBT.Workflow.Tasks.Evaluators;
@@ -45,6 +49,12 @@ public sealed class FunctionAppService(
     ICallerAccessorFactory callerAccessorFactory)
     : ApplicationService(serviceProvider), IFunctionAppService
 {
+    /// <summary>The <c>Script.Execute</c> span kind of the function <c>output</c> (script and block).</summary>
+    private const string FunctionOutputScriptKind = "functionOutput";
+
+    /// <summary>The phase name of the declarative <c>output</c> block (skip logs and failure messages).</summary>
+    private const string FunctionOutputPhase = "output";
+
     /// <inheritdoc />
     public async Task<Result<FunctionResponseOutput>> GetFunctionByKeyAsync(
         string key,
@@ -402,7 +412,7 @@ public sealed class FunctionAppService(
             return Result<FunctionResponseOutput>.Fail(executeResult.Error);
         }
 
-        var responseResult = await BuildResponseAsync(function, scriptContext, cancellationToken);
+        var responseResult = await BuildResponseAsync(function, scriptContext, headers, cancellationToken);
         if (!responseResult.IsSuccess)
         {
             Logger.LogError(
@@ -505,60 +515,23 @@ public sealed class FunctionAppService(
     };
 
     /// <summary>
-    /// Builds the final response: uses the <c>output</c> script when defined, otherwise falls back to
-    /// legacy single-task extraction from <see cref="ScriptContext.OutputResponse"/>.
+    /// Builds the final response: the <c>output</c> script when defined, else the declarative <c>output</c> block,
+    /// otherwise legacy single-task extraction from <see cref="ScriptContext.OutputResponse"/>.
     /// When <see cref="Function.RawResponse"/> is <c>true</c>, data is returned unwrapped.
     /// </summary>
     private async Task<Result<FunctionResponseOutput>> BuildResponseAsync(
         Function function,
         ScriptContext scriptContext,
+        Dictionary<string, string?>? headers,
         CancellationToken cancellationToken)
     {
         using var buildResponseActivity = FunctionActivityHelper.StartPhase(FunctionActivityHelper.OperationBuildResponse);
 
         if (function.Output != null)
-        {
-            try
-            {
-                var handler = await scriptEngine.CompileToInstanceAsync<IOutputHandler>(
-                    function.Output, flowScripts: scriptContext.Workflow?.Scripts, cancellationToken: cancellationToken);
+            return await BuildScriptResponseAsync(function, function.Output, scriptContext, cancellationToken);
 
-                ScriptResponse scriptResponse;
-                using (ScriptActivityHelper.StartExecuteActivity("functionOutput"))
-                {
-                    scriptResponse = await handler.OutputHandler(scriptContext);
-                }
-
-                if (function.RawResponse)
-                    return Result<FunctionResponseOutput>.Ok(CreateRawResponse(
-                        function,
-                        scriptContext,
-                        scriptResponse.Data,
-                        (object?)scriptResponse.Headers,
-                        scriptResponse.StatusCode));
-
-                return Result<FunctionResponseOutput>.Ok(new FunctionResponseOutput
-                {
-                    Data = new Dictionary<string, dynamic?> { [function.Key.ToVariableName()] = scriptResponse.Data }
-                });
-            }
-            catch (Exception ex)
-            {
-                if (ex is not OperationCanceledException)
-                {
-                }
-                Logger.LogError(
-                    ex,
-                    "Custom function {FunctionKey} output ScriptMapping failed. Domain={Domain}, InstanceId={InstanceId}",
-                    function.Key,
-                    function.Domain,
-                    scriptContext.Instance?.Id);
-
-                return Result<FunctionResponseOutput>.Fail(Error.Failure(
-                    WorkflowErrorCodes.ExtensionExecutionFailed,
-                    $"Function '{function.Key}' output ScriptMapping failed: {ScriptDiagnostics.Explain(ex)}"));
-            }
-        }
+        if (function.OutputBlock is { } block)
+            return await BuildBlockResponseAsync(function, block, scriptContext, headers, cancellationToken);
 
         if (function.RawResponse)
             return Result<FunctionResponseOutput>.Ok(CreateRawResponse(
@@ -568,6 +541,163 @@ public sealed class FunctionAppService(
 
         return Result<FunctionResponseOutput>.Ok(CreateWrappedResponse(function, scriptContext));
     }
+
+    /// <summary>Runs the <c>output</c> script (<see cref="IOutputHandler"/>) and shapes its response.</summary>
+    private async Task<Result<FunctionResponseOutput>> BuildScriptResponseAsync(
+        Function function,
+        ScriptCode output,
+        ScriptContext scriptContext,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var handler = await scriptEngine.CompileToInstanceAsync<IOutputHandler>(
+                output, flowScripts: scriptContext.Workflow?.Scripts, cancellationToken: cancellationToken);
+
+            ScriptResponse scriptResponse;
+            using (ScriptActivityHelper.StartExecuteActivity(FunctionOutputScriptKind))
+            {
+                scriptResponse = await handler.OutputHandler(scriptContext);
+            }
+
+            return Result<FunctionResponseOutput>.Ok(ShapeOutput(
+                function, scriptContext, scriptResponse.Data, (object?)scriptResponse.Headers, scriptResponse.StatusCode));
+        }
+        catch (Exception ex)
+        {
+            return OutputFailed(function, scriptContext, Error.Failure(
+                WorkflowErrorCodes.ExtensionExecutionFailed,
+                $"Function '{function.Key}' output ScriptMapping failed: {ScriptDiagnostics.Explain(ex)}"), ex);
+        }
+    }
+
+    /// <summary>
+    /// Runs the declarative <c>output</c> block into an empty document <c>{ data, statusCode, headers }</c>. Variables:
+    /// the condition set (<c>data</c> / <c>instance</c> null for a domain-scoped call; <c>input</c> the request body;
+    /// <c>user</c> the function's caller) plus <c>result</c> = <c>{ &lt;responseVariableKey&gt;: { body, headers,
+    /// statusCode } }</c> for every executed task. Any failure — a plan that does not build, a failing expression, a
+    /// document of the wrong shape — answers <see cref="WorkflowErrorCodes.ExtensionExecutionFailed"/>, like a failing
+    /// script.
+    /// </summary>
+    private async Task<Result<FunctionResponseOutput>> BuildBlockResponseAsync(
+        Function function,
+        MappingBlock block,
+        ScriptContext scriptContext,
+        Dictionary<string, string?>? headers,
+        CancellationToken cancellationToken)
+    {
+        using var activity = ScriptActivityHelper.StartExecuteActivity(FunctionOutputScriptKind);
+        var site = new DeclarativeSite(function.Key, FunctionOutputPhase)
+        {
+            Logger = Logger,
+            ErrorSubject = $"Function '{function.Key}' output",
+            ErrorCode = WorkflowErrorCodes.ExtensionExecutionFailed
+        };
+
+        try
+        {
+            var plan = DeclarativePlanCache.GetOrBuild(ExpressionCompiler.Shared, block, DeclarativeSiteKind.FunctionOutput);
+            if (!plan.IsSuccess)
+                return BlockFailed(site.Failure(plan.Error.Message ?? plan.Error.Code), exception: null);
+
+            using var resultDocument = BuildResultDocument(function, scriptContext);
+            var caller = callerAccessorFactory.ForHop(ExecutionActor.User, headers, cancellationToken);
+            var scope = ExpressionScope.Create(
+                scriptContext, TimeProvider.System, caller, ScopeKind.FunctionOutput, resultDocument.RootElement);
+
+            var document = new JsonObject();
+            var applied = await DeclarativeBlockEngine.ApplyAsync(
+                plan.Value!, scope, document, resultDocument.RootElement, site, cancellationToken);
+            // A caller-role provider failure keeps its own code (Authorization:110006); every other failure is the site's.
+            if (!applied.IsSuccess)
+                return BlockFailed(applied.Error, exception: null);
+
+            var output = DeclarativeOutputDocument.Read(document, site);
+            if (!output.IsSuccess)
+                return BlockFailed(output.Error, exception: null);
+
+            return Result<FunctionResponseOutput>.Ok(ShapeOutput(
+                function, scriptContext, output.Value!.Data, output.Value.Headers, output.Value.StatusCode));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return BlockFailed(site.Failure(ScriptDiagnostics.Explain(ex)), ex);
+        }
+
+        Result<FunctionResponseOutput> BlockFailed(Error error, Exception? exception)
+        {
+            activity.SetError(exception ?? new InvalidOperationException(error.Message ?? error.Code));
+            return OutputFailed(function, scriptContext, error, exception);
+        }
+    }
+
+    /// <summary>
+    /// The output's response: unwrapped through <see cref="CreateRawResponse"/> when <see cref="Function.RawResponse"/>
+    /// is set, otherwise <c>{ &lt;function key&gt;: data }</c> (status code and headers do not apply).
+    /// </summary>
+    private static FunctionResponseOutput ShapeOutput(
+        Function function, ScriptContext scriptContext, object? data, object? headers, int? statusCode) =>
+        function.RawResponse
+            ? CreateRawResponse(function, scriptContext, data, headers, statusCode)
+            : new FunctionResponseOutput
+            {
+                Data = new Dictionary<string, dynamic?> { [function.Key.ToVariableName()] = data }
+            };
+
+    /// <summary>The shared failure path of the output script and block: logged once, the error returned.</summary>
+    private Result<FunctionResponseOutput> OutputFailed(
+        Function function, ScriptContext scriptContext, Error error, Exception? exception)
+    {
+        Logger.FunctionOutputMappingFailed(
+            function.Key, function.Domain, scriptContext.Instance?.Id, error.Message ?? error.Code, exception);
+        return Result<FunctionResponseOutput>.Fail(error);
+    }
+
+    /// <summary>
+    /// The block's <c>result</c>: <c>{ &lt;responseVariableKey&gt;: { body, headers, statusCode } }</c> for every task
+    /// entry whose response slot was filed. A <see cref="StandardTaskResponse"/> gives <c>Data</c> / <c>Headers</c> /
+    /// <c>StatusCode</c>; any other stored value is the <c>body</c> with null <c>headers</c> / <c>statusCode</c>. A
+    /// missing slot (the task was skipped) is absent.
+    /// </summary>
+    internal static JsonDocument BuildResultDocument(Function function, ScriptContext scriptContext)
+    {
+        var result = new JsonObject();
+        foreach (var entry in function.GetExecuteTasks())
+        {
+            var slot = entry.ResponseVariableKey;
+            if (string.IsNullOrEmpty(slot) || result.ContainsKey(slot)
+                || !scriptContext.TaskResponse.TryGetValue(slot, out var stored))
+                continue;
+
+            object? value = stored;
+            var (body, headers, statusCode) = value is StandardTaskResponse standard
+                ? ((object?)standard.Data, standard.Headers, standard.StatusCode)
+                : (value, (Dictionary<string, string>?)null, (int?)null);
+
+            result[slot] = new JsonObject
+            {
+                ["body"] = ToNode(body),
+                // Header names as sent: serialized without the camelCase dictionary key policy.
+                ["headers"] = headers is null ? null : JsonSerializer.SerializeToNode(headers),
+                ["statusCode"] = statusCode is { } code ? JsonValue.Create(code) : null
+            };
+        }
+
+        return JsonSerializer.SerializeToDocument(result);
+    }
+
+    private static JsonNode? ToNode(object? value) => value switch
+    {
+        null => null,
+        JsonElement { ValueKind: JsonValueKind.Undefined } => null,
+        JsonElement element => JsonNode.Parse(element.GetRawText()),
+        JsonDocument document => JsonNode.Parse(document.RootElement.GetRawText()),
+        _ => JsonSerializer.SerializeToNode(value, value.GetType(), JsonSerializerConstants.JsonOptions)
+    };
 
     /// <summary>
     /// Converts an arbitrary object to a flat <c>Dictionary&lt;string, dynamic?&gt;</c> for raw responses.

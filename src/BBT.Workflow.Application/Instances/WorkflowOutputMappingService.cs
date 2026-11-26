@@ -39,9 +39,6 @@ public sealed class WorkflowOutputMappingService(
 {
     private const string ScriptKind = "workflowOutput";
     private const string OutputPhase = "output";
-    private const string DataMember = "data";
-    private const string StatusCodeMember = "statusCode";
-    private const string HeadersMember = "headers";
 
     private readonly IExpressionCompiler _compiler = expressionCompiler ?? ExpressionCompiler.Shared;
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
@@ -136,9 +133,10 @@ public sealed class WorkflowOutputMappingService(
             if (!applied.IsSuccess)
                 return Fallback(workflow, activity, BlockFailure(applied.Error));
 
-            var output = ToOutputResult(document, site);
+            var output = DeclarativeOutputDocument.Read(document, site);
             return output.IsSuccess
-                ? Result<WorkflowOutputResult?>.Ok(output.Value)
+                ? Result<WorkflowOutputResult?>.Ok(
+                    new WorkflowOutputResult(output.Value!.Data, output.Value.StatusCode, output.Value.Headers))
                 : Fallback(workflow, activity, BlockFailure(output.Error));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -149,56 +147,6 @@ public sealed class WorkflowOutputMappingService(
         {
             return Fallback(workflow, activity, ex);
         }
-    }
-
-    /// <summary>
-    /// Converts the block's document to the response: <c>data</c> (absent → empty response), <c>statusCode</c> (an
-    /// integer JSON number, or absent) and <c>headers</c> (an object of string values, or absent).
-    /// </summary>
-    private static Result<WorkflowOutputResult> ToOutputResult(JsonObject document, DeclarativeSite site)
-    {
-        // An owned element: the response body serializes as the JSON the block wrote.
-        object? data = document[DataMember] is { } dataNode ? JsonSerializer.SerializeToElement(dataNode) : null;
-
-        int? statusCode = null;
-        switch (document[StatusCodeMember])
-        {
-            case null:
-                break;
-            case JsonValue value when value.GetValueKind() == JsonValueKind.Number && value.TryGetValue<int>(out var code):
-                statusCode = code;
-                break;
-            case JsonNode other:
-                return Result<WorkflowOutputResult>.Fail(
-                    site.Failure($"$.statusCode is a JSON {other.GetValueKind()} ({other.ToJsonString()}), not an integer."));
-        }
-
-        Dictionary<string, string>? headers = null;
-        switch (document[HeadersMember])
-        {
-            case null:
-                break;
-            case JsonObject members:
-                headers = new Dictionary<string, string>(members.Count, StringComparer.Ordinal);
-                foreach (var (name, node) in members)
-                {
-                    if (node is not JsonValue headerValue || !headerValue.TryGetValue<string>(out var text))
-                    {
-                        return Result<WorkflowOutputResult>.Fail(site.Failure(
-                            $"$.headers.{name} is a JSON {node?.GetValueKind() ?? JsonValueKind.Null}, not a string."));
-                    }
-
-                    headers[name] = text;
-                }
-
-                break;
-            case JsonNode other:
-                return Result<WorkflowOutputResult>.Fail(
-                    site.Failure($"$.headers is a JSON {other.GetValueKind()}, not an object."));
-        }
-
-        return Result<WorkflowOutputResult>.Ok(
-            new WorkflowOutputResult(data, statusCode, headers is { Count: > 0 } ? headers : null));
     }
 
     /// <summary>A block failure as the exception the script failure path logs.</summary>
