@@ -743,7 +743,7 @@ public sealed class InstanceCommandAppService(
         // The request opened the activation episode (seeded by the request middleware from the
         // server span); name it. An entry point that already classified itself — an event
         // delivery, a relayed subflow forward — keeps its trigger, only the key is refreshed.
-        using var episode = WorkflowTraceLane.UseEpisode(TelemetryConstants.ActivationTriggers.Manual, transitionKey);
+        using var episode = WorkflowTraceLane.UseEpisode(TelemetryConstants.ActivationTriggers.Manual, transitionKey); // skipcq: CS-W1100 — the episode scope ends on dispose
 
         // 1) Light Busy check FIRST — a single-row projection (no DataList, no includes) so a
         //    Busy rejection never pays the full aggregate load. The snapshot also carries the

@@ -231,7 +231,7 @@ public sealed class SubflowOutputMappingService(
 
             var scriptContext = await builder.BuildAsync(cancellationToken);
 
-            using var scriptActivity = ScriptActivityHelper.StartExecuteActivity(SubFlowOutputMappingScriptKind);
+            using var scriptActivity = ScriptActivityHelper.StartExecuteActivity(SubFlowOutputMappingScriptKind); // skipcq: CS-W1100 — the span ends on dispose
 
             ScriptResponse? outputMappingResult = null;
             if (plan.ParentState.SubFlow!.Type.Equals(SubFlowType.SubFlow)

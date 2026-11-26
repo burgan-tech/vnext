@@ -319,6 +319,8 @@ internal sealed class DeclarativeMappingPlan
             case DeclarativeSiteKind.SubFlowInput when path.FirstSegment is "key" or "tags" && !IsWholeMember(path):
                 return Result<JsonPath>.Fail(Error.Validation(WorkflowErrorCodes.TaskExecution,
                     $"{what} {text} must address $.{path.FirstSegment} as a whole."));
+            default:
+                break;
         }
 
         return parsed;

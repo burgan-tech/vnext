@@ -358,7 +358,7 @@ public sealed class SubflowStarter(
 
         return await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
         {
-            using var scriptActivity = ScriptActivityHelper.StartExecuteActivity(SubFlowInputMappingScriptKind);
+            using var scriptActivity = ScriptActivityHelper.StartExecuteActivity(SubFlowInputMappingScriptKind); // skipcq: CS-W1100 — the span ends on dispose
 
             // Cast to the appropriate mapping interface and execute InputHandler
             if (subFlowConfig.Type.Code == "S")
@@ -472,29 +472,32 @@ public sealed class SubflowStarter(
         if (document[AttributesMember] is { } attributes)
             response.Data = attributes;
 
-        switch (document[HeadersMember])
+        var headersNode = document[HeadersMember];
+        switch (headersNode)
         {
             case null:
                 break;
             case JsonObject headers:
                 response.Headers = HeadersAsStrings(headers);
                 break;
-            case var other:
-                return Fail(site, $"$.headers is a JSON {other.GetValueKind()}, not an object.");
+            default:
+                return Fail(site, $"$.headers is a JSON {headersNode.GetValueKind()}, not an object.");
         }
 
-        switch (document[KeyMember])
+        var keyNode = document[KeyMember];
+        switch (keyNode)
         {
             case null:
                 break;
             case JsonValue value when value.TryGetValue<string>(out var key):
                 response.Key = key;
                 break;
-            case var other:
-                return Fail(site, $"$.key is a JSON {other.GetValueKind()}, not a string.");
+            default:
+                return Fail(site, $"$.key is a JSON {keyNode.GetValueKind()}, not a string.");
         }
 
-        switch (document[TagsMember])
+        var tagsNode = document[TagsMember];
+        switch (tagsNode)
         {
             case null:
                 break;
@@ -509,8 +512,8 @@ public sealed class SubflowStarter(
 
                 response.Tags = values;
                 break;
-            case var other:
-                return Fail(site, $"$.tags is a JSON {other.GetValueKind()}, not an array; tags must be an array of strings.");
+            default:
+                return Fail(site, $"$.tags is a JSON {tagsNode.GetValueKind()}, not an array; tags must be an array of strings.");
         }
 
         return Result<ScriptResponse?>.Ok(response);
