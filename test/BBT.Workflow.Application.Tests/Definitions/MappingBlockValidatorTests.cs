@@ -448,6 +448,20 @@ public class MappingBlockValidatorTests
         FlowErrors(subFlowExtra: "\"output\":{\"set\":{\"$.childStatus\":\"result.status\"}}").ShouldBeEmpty();
 
     [Fact]
+    public void EmptyBlocks_OnTransitionOutput_AndSubFlowInputOutput_AreErrors()
+    {
+        const string empty = "the block is empty: give it a 'select', an 'into' or a 'set' entry, or remove it.";
+        FlowErrors(stateTransitionExtra: "\"output\":{}")
+            .ShouldHaveSingleItem().ShouldBe($"states[review].transitions[submit].output: {empty}");
+        FlowErrors(startExtra: "\"output\":{\"set\":{}}")
+            .ShouldHaveSingleItem().ShouldBe($"startTransition.output: {empty}");
+        FlowErrors(subFlowExtra: "\"input\":{}")
+            .ShouldHaveSingleItem().ShouldBe($"states[wait].subFlow.input: {empty}");
+        FlowErrors(subFlowExtra: "\"output\":{}")
+            .ShouldHaveSingleItem().ShouldBe($"states[wait].subFlow.output: {empty}");
+    }
+
+    [Fact]
     public void SubFlow_BlockOnSubProcess_IsError()
     {
         var errors = FlowErrors(subFlowType: "P", subFlowExtra: "\"output\":{\"set\":{\"$.a\":\"1\"}}");

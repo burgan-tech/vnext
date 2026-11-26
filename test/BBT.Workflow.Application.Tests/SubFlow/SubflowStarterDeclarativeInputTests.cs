@@ -155,6 +155,29 @@ public sealed class SubflowStarterDeclarativeInputTests
     }
 
     [Fact]
+    public async Task CodelessStoredMappingAndBlock_RunsBlock()
+    {
+        // "Script present" is HasMappingCode on both SubFlow sides (SubflowOutputMappingService agrees).
+        var result = await StartAsync(Block(set: [("$.attributes.fromBlock", "true")]),
+            script: ScriptCode.FromNative(" "));
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        JsonSerializer.Serialize(_captured!.Instance.Attributes).ShouldBe("""{"fromBlock":true}""");
+        await _engine.DidNotReceiveWithAnyArgs().CompileToInstanceAsync<ISubFlowMapping>(
+            default!, default, default, default, default);
+    }
+
+    [Fact]
+    public async Task InputBlock_OnSubProcess_DoesNotRun()
+    {
+        // Publish rejects blocks on a 'P'; a stored one is ignored at run time, as the output block is.
+        var result = await StartAsync(Block(set: [("$.attributes.fromBlock", "true")]), type: "P");
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        _captured!.Instance.Attributes.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task InputBlock_UserReadsTheParentHopCaller()
     {
         var caller = Substitute.For<ICallerAccessor>();
@@ -188,16 +211,17 @@ public sealed class SubflowStarterDeclarativeInputTests
     }
 
     private async Task<Result<string?>> StartAsync(
-        MappingBlock? block, bool withScript = false, ExecutionActor? actor = null)
+        MappingBlock? block, bool withScript = false, ExecutionActor? actor = null, ScriptCode? script = null,
+        string type = "S")
     {
         var starter = new SubflowStarter(_gateway, new ConfigurationBuilder().Build(), _engine, _logger,
             callerAccessorFactory: _callerFactory);
         var state = StateFactory.CreateDefault("child", StateType.SubFlow);
-        state.SetSubFlow("S", new Reference("child-flow", "remote", "sys-flows", "1.0.0"),
-            withScript ? ScriptCode.FromNative("// mapping") : null!, null);
+        state.SetSubFlow(type, new Reference("child-flow", "remote", "sys-flows", "1.0.0"),
+            script ?? (withScript ? ScriptCode.FromNative("// mapping") : null!), null);
         typeof(Definitions.SubFlow).GetProperty(nameof(Definitions.SubFlow.Input))!.SetValue(state.SubFlow, block);
         var correlation = InstanceCorrelation.Create(Guid.NewGuid(), _parent.Id, state.Key,
-            Guid.NewGuid(), "S", "remote", "child-flow", "1.0.0");
+            Guid.NewGuid(), type, "remote", "child-flow", "1.0.0");
 
         return await starter.StartAsync(_workflow, _parent, state, TransitionFactory.CreateDefault(),
             correlation, Context(), ExecMode.Sync, actor);

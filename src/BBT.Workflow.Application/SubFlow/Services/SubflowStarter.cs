@@ -100,9 +100,10 @@ public sealed class SubflowStarter(
             [TelemetryConstants.TagNames.RootInstanceId] = rootInstanceId,
         });
 
-        // Handle input mapping if mapping is configured
+        // Handle input mapping if a script mapping is configured. "Script present" is the same test the output side
+        // uses (SubflowOutputMappingService.PrepareAsync): a stored mapping with no code does not shadow a block.
         ScriptResponse? inputMappingResult = null;
-        if (subFlowConfig.Mapping != null)
+        if (subFlowConfig.Mapping is { HasMappingCode: true })
         {
             var mappingResult = await HandleInputMappingAsync(subFlowConfig, workflow, context, cancellationToken);
             if (!mappingResult.IsSuccess)
@@ -113,11 +114,11 @@ public sealed class SubflowStarter(
 
             inputMappingResult = mappingResult.Value;
         }
-        else if (subFlowConfig.Input is { } inputBlock)
+        else if (subFlowConfig.Input is { } inputBlock && subFlowConfig.Type.Equals(SubFlowType.SubFlow))
         {
             // Declarative input block (Phase C1): builds the same ScriptResponse the InputHandler returns, so the
             // path below (MappingHeadersOf → ResolveInstanceCallCredential) runs unchanged. A stored definition with
-            // both `mapping` and `input` runs the script (above).
+            // both `mapping` and `input` runs the script (above). Like the output block, only an S SubFlow runs it.
             var blockResult = await ExecuteInputBlockAsync(
                 subFlowConfig, inputBlock, workflow, parentInstance, targetState.Key, context, actor, cancellationToken);
             if (!blockResult.IsSuccess)

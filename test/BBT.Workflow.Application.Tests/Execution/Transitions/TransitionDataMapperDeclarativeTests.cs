@@ -145,6 +145,31 @@ public sealed class TransitionDataMapperDeclarativeTests
     }
 
     [Fact]
+    public async Task ScriptContextBuildFailure_FailsLikeABlockFailure()
+    {
+        // The context is built inside the script path's TryAsync guard: a throw there is the transition mapping error.
+        var failing = Substitute.For<IScriptContextBuilder>();
+        failing.WithRuntime(Arg.Any<IRuntimeInfoProvider>()).Returns(failing);
+        failing.WithWorkflow(Arg.Any<Definitions.Workflow>()).Returns(failing);
+        failing.WithInstance(Arg.Any<Instance>()).Returns(failing);
+        failing.WithTransition(Arg.Any<Transition>()).Returns(failing);
+        failing.WithBody(Arg.Any<object>()).Returns(failing);
+        failing.WithHeaders(Arg.Any<Dictionary<string, string?>>()).Returns(failing);
+        failing.BuildAsync(Arg.Any<CancellationToken>())
+            .Returns<Task<ScriptContext>>(_ => throw new InvalidOperationException("context boom"));
+        _scriptContextFactory.NewBuilder(Arg.Any<IInstanceRepository>()).Returns(failing);
+        var (workflow, transition) = WorkflowWithTransition(output: Block(set: [("$.x", "1")]));
+
+        var result = await Map(workflow, transition);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ExecutionStepFailed);
+        result.Error.Message!.ShouldStartWith("Failed to execute transition mapping: ");
+        result.Error.Message.ShouldContain("context boom");
+        _logger.Entries.ShouldContain(e => e.EventId == 10277 && e.Level == LogLevel.Error);
+    }
+
+    [Fact]
     public async Task OutputBlockThatDoesNotBuild_FailsLikeScriptFailure()
     {
         var (workflow, transition) = WorkflowWithTransition(output: Block(set: [("$.x", "result.data")]));

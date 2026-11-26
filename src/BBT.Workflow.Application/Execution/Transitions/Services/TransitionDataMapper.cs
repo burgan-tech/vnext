@@ -129,15 +129,16 @@ public sealed class TransitionDataMapper(
         if (!planResult.IsSuccess)
             return OutputBlockFailed(workflow, transition, instance, planResult.Error);
 
-        var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
-            .WithRuntime(runtimeInfoProvider)
-            .WithWorkflow(workflow)
-            .WithInstance(instance)
-            .WithTransition(transition)
-            .WithBody(payload)
-            .WithHeaders(headers?.ToDictionary(kvp => kvp.Key, kvp => kvp.Value))
-            .BuildAsync(cancellationToken)
-            .WithHopInputAsync(payload);
+        // The context is built inside the same TryAsync guard the script path builds it in, so a failure here is
+        // shaped as the transition mapping error and logged (10277) like any other block failure.
+        var contextResult = await ResultExtensions.TryAsync(
+            async ct => await BuildScriptContextAsync(payload, transition, workflow, instance, headers, ct)
+                .WithHopInputAsync(payload),
+            cancellationToken,
+            CreateMappingError);
+        if (!contextResult.IsSuccess)
+            return OutputBlockFailed(workflow, transition, instance, contextResult.Error);
+        var scriptContext = contextResult.Value!;
 
         var caller = callerAccessorFactory is not null && actor is { } hopActor
             ? callerAccessorFactory.ForHop(hopActor, headers, cancellationToken)

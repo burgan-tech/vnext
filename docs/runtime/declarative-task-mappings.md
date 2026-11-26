@@ -451,6 +451,7 @@ Three more sites take a declarative block in place of a C# `mapping` script: a t
 - `input` builds what goes **to** a callee, `output` writes what comes **back**. A single-block site rejects the other block at publish: a transition carrying an `input` member is a publish error (`'input' is not supported on a transition; use 'output'.`).
 - `select` reads `result` when the site has one, otherwise the variables except `headers` (`$.data…`, `$.input…`); `headers` is never a `select` root, as for a task binding (see [Headers](#headers)) — read a header with a `set` expression.
 - A block and a C# `mapping` on the same site is a publish error; a stored definition holding both runs the script.
+- An empty block (no `select`, no `into`, no `set` entry) is a publish error at these three sites (`the block is empty: give it a 'select', an 'into' or a 'set' entry, or remove it.`): an empty transition `output` would drop the whole request. A task binding's empty block keeps its shipped meaning.
 
 | Site | Variables | `select` root | Target | Delta starts | Result goes to |
 |---|---|---|---|---|---|
@@ -480,7 +481,7 @@ Applies to `transitions[]`, `startTransition`, shared transitions and the well-k
 
 For `type: S` only; a `P` SubProcess rejects both blocks (it is started by its own task). The target document is `{ attributes, headers, key, tags }`:
 
-- `select` needs `into`; `key` must be a string and `tags` an array of strings, anything else fails the start before a child is created.
+- `select` needs `into`; `key` must be a string and `tags` an array of strings, anything else fails the start before a child is created. **`key` must be a string; convert a number with `.ToString()`** (`"\"kyc-\" + data.customer.id.ToString()"`) — a JSON number written into `$.key` is not converted.
 - `$.headers.sub` written blank stays blank (the [instance-call credential rule](../architecture/subflow-execution.md)).
 - `input` is the request of the hop that entered the SubFlow state: null on an automatic chain and on a retry restart (the restart carries no data; its actor is the retrying requester, so `user` and `headers` are theirs), as for the script.
 
@@ -493,7 +494,7 @@ For `type: S` only; a `P` SubProcess rejects both blocks (it is started by its o
       "$.attributes.customerId": "data.customer.id",
       "$.attributes.amount": "input.amount",
       "$.headers.x-channel": "\"web\"",
-      "$.key": "data.customer.id",
+      "$.key": "\"kyc-\" + data.customer.id.ToString()",
       "$.tags": "new string[] { \"kyc\" }"
     }
   }

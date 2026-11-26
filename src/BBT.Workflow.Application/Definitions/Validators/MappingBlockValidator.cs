@@ -175,8 +175,16 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
     }
 
     // The plan builder is the single target / select / compile check of the non-task sites.
+    // An empty block is rejected here (not on a task binding, whose empty block is shipped behaviour): an empty
+    // transition output would silently drop the whole payload, an empty SubFlow block would do nothing at all.
     private void ValidatePlan(MappingBlock block, DeclarativeSiteKind kind, string path, IList<ValidationResult> errors)
     {
+        if (block.Select is null && block.Into is null && (block.Set is null || block.Set.Count == 0))
+        {
+            Add(errors, path, "the block is empty: give it a 'select', an 'into' or a 'set' entry, or remove it.");
+            return;
+        }
+
         var plan = DeclarativeMappingPlan.Build(compiler, block, kind);
         if (!plan.IsSuccess)
             Add(errors, path, plan.Error.Message ?? "The declarative block is invalid.");
