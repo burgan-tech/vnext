@@ -652,7 +652,10 @@ public sealed class FunctionAppService(
 
     /// <summary>
     /// The block's <c>result</c>: <c>{ &lt;responseVariableKey&gt;: { body, headers, statusCode } }</c> for every task
-    /// entry whose response slot was filed. A <see cref="StandardTaskResponse"/> gives <c>Data</c> / <c>Headers</c> /
+    /// entry whose response slot was filed. The slot holds what <see cref="ScriptContext.SetStandardResponse"/> stored:
+    /// a deep-cloned dynamic copy of the <see cref="StandardTaskResponse"/> envelope (an <c>IDictionary</c>, members
+    /// camelCase as the script-body serializer writes them), so <c>body</c> is its <c>data</c> and <c>statusCode</c> /
+    /// <c>headers</c> are its members. A <see cref="StandardTaskResponse"/> object gives <c>Data</c> / <c>Headers</c> /
     /// <c>StatusCode</c>; any other stored value is the <c>body</c> with null <c>headers</c> / <c>statusCode</c>. A
     /// missing slot (the task was skipped) is absent.
     /// </summary>
@@ -667,21 +670,54 @@ public sealed class FunctionAppService(
                 continue;
 
             object? value = stored;
-            var (body, headers, statusCode) = value is StandardTaskResponse standard
-                ? ((object?)standard.Data, standard.Headers, standard.StatusCode)
-                : (value, (Dictionary<string, string>?)null, (int?)null);
-
-            result[slot] = new JsonObject
+            result[slot] = value switch
             {
-                ["body"] = ToNode(body),
-                // Header names as sent: serialized without the camelCase dictionary key policy.
-                ["headers"] = headers is null ? null : JsonSerializer.SerializeToNode(headers),
-                ["statusCode"] = statusCode is { } code ? JsonValue.Create(code) : null
+                StandardTaskResponse standard => ResultEntry(
+                    ToNode(standard.Data),
+                    // Header names as sent: serialized without the camelCase dictionary key policy.
+                    standard.Headers is null ? null : JsonSerializer.SerializeToNode(standard.Headers),
+                    standard.StatusCode is { } code ? JsonValue.Create(code) : null),
+                IDictionary<string, object?> envelope => EnvelopeEntry(envelope),
+                _ => ResultEntry(ToNode(value), null, null)
             };
         }
 
         return JsonSerializer.SerializeToDocument(result);
     }
+
+    /// <summary>
+    /// One stored envelope as <c>{ body, headers, statusCode }</c>: <c>data</c> → <c>body</c>; <c>statusCode</c> only when
+    /// it is an integer, <c>headers</c> only when it is an object (else null). Serialized with the options that stored
+    /// it, so member and header names stay as stored.
+    /// </summary>
+    private static JsonObject EnvelopeEntry(IDictionary<string, object?> envelope)
+    {
+        TryGetDictionaryValue(envelope, "data", out var data);
+        TryGetDictionaryValue(envelope, "statusCode", out var status);
+        TryGetDictionaryValue(envelope, "headers", out var headers);
+
+        var statusNode = ToStoredNode(status);
+        var headersNode = ToStoredNode(headers);
+        return ResultEntry(
+            ToStoredNode(data),
+            headersNode is JsonObject ? headersNode : null,
+            statusNode is JsonValue statusValue && statusValue.TryGetValue<int>(out var code) ? JsonValue.Create(code) : null);
+    }
+
+    private static JsonObject ResultEntry(JsonNode? body, JsonNode? headers, JsonNode? statusCode) => new()
+    {
+        ["body"] = body,
+        ["headers"] = headers,
+        ["statusCode"] = statusCode
+    };
+
+    /// <summary>A value of a stored envelope as JSON, written with the script-body options that stored it.</summary>
+    private static JsonNode? ToStoredNode(object? value) => value switch
+    {
+        null => null,
+        JsonElement or JsonDocument => ToNode(value),
+        _ => JsonSerializer.SerializeToNode(value, value.GetType(), ScriptContext.JsonScriptBodyOptions)
+    };
 
     private static JsonNode? ToNode(object? value) => value switch
     {

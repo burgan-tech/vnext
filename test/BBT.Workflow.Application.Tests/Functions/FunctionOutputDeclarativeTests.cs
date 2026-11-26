@@ -51,6 +51,12 @@ public sealed class FunctionOutputDeclarativeTests : IDisposable
     /// <summary>Every log entry the service writes.</summary>
     private readonly CapturingLoggerProvider _logs = new();
 
+    /// <summary>
+    /// Task responses the coordinator files through <see cref="ScriptContext.SetStandardResponse"/> — the runtime's own
+    /// write path (<c>TaskExecutorBase</c>), which stores a deep-cloned dynamic envelope, not the object.
+    /// </summary>
+    private readonly Dictionary<string, StandardTaskResponse> _storedResponses = new();
+
     /// <summary>The task responses the coordinator files, keyed by response slot.</summary>
     private readonly Dictionary<string, object?> _taskResponses = new();
 
@@ -92,6 +98,8 @@ public sealed class FunctionOutputDeclarativeTests : IDisposable
                 var context = call.ArgAt<ScriptContext>(4);
                 foreach (var (slot, response) in _taskResponses)
                     context.TaskResponse[slot] = response;
+                foreach (var (slot, response) in _storedResponses)
+                    context.SetStandardResponse(response, slot);
                 return Task.FromResult(Result.Ok());
             });
 
@@ -202,6 +210,74 @@ public sealed class FunctionOutputDeclarativeTests : IDisposable
         result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
         Json(result.Value!.Data).ShouldBe(
             """{"limits":{"daily":100},"ok":true,"checkStatus":200,"limitsHasNoStatus":true,"limitsHasNoHeaders":true}""");
+    }
+
+    [Fact]
+    public async Task StoredEnvelope_Wrapped_BodyIsTheTaskData()
+    {
+        _storedResponses["myTask"] = new StandardTaskResponse
+        {
+            Data = Element("""{"limit":500,"Code_X":"k"}"""), StatusCode = 200, IsSuccess = true
+        };
+        Register(FunctionTestFactory.FromJson(FunctionTestFactory.Attributes(
+            """ "output": {"select":"$.myTask.body","into":"$.data","set":{"$.data.status":"result.myTask.statusCode"}} """),
+            FunctionKey));
+
+        var result = await Call();
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        Json(result.Value!.Data).ShouldBe("""{"myFn":{"limit":500,"Code_X":"k","status":200}}""");
+    }
+
+    [Fact]
+    public async Task StoredEnvelope_Raw_UsesStatusAndHeaders()
+    {
+        _storedResponses["myTask"] = new StandardTaskResponse
+        {
+            Data = Element("""{"id":"o-1","score":7}"""),
+            StatusCode = 202,
+            Headers = new Dictionary<string, string> { ["X-Dml-Score"] = "7" }
+        };
+        Register(FunctionTestFactory.FromJson(FunctionTestFactory.Attributes(
+            """ "rawResponse": true, "output": {"select":"$.myTask.body","into":"$.data","set":{"$.statusCode":"result.myTask.statusCode","$.headers.x-dml-score":"result.myTask.headers[\"X-Dml-Score\"]"}} """),
+            FunctionKey));
+
+        var result = await Call();
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        Json(result.Value!.Data).ShouldBe("""{"id":"o-1","score":7}""");
+        result.Value.StatusCode.ShouldBe(202);
+        result.Value.Headers.ShouldNotBeNull();
+        result.Value.Headers!["x-dml-score"].ShouldBe("7");
+    }
+
+    [Fact]
+    public async Task StoredEnvelope_MultiTask_ReadsEachSlot()
+    {
+        _storedResponses["check"] = new StandardTaskResponse { Data = Element("""{"ok":true}"""), StatusCode = 200 };
+        _storedResponses["limits"] = new StandardTaskResponse { Data = Element("""{"daily":100}"""), StatusCode = 201 };
+        var attributes = $$"""
+            {
+              "scope": "D",
+              "rawResponse": true,
+              "task": { "order": 1, "task": {{FunctionTestFactory.Ref("t1", "sys-tasks")}}, "mapping": {{FunctionTestFactory.Rule("")}} },
+              "onExecutionTasks": [
+                { "order": 1, "variableKey": "check", "task": {{FunctionTestFactory.Ref("t1", "sys-tasks")}}, "mapping": {{FunctionTestFactory.Rule("")}} },
+                { "order": 2, "variableKey": "limits", "task": {{FunctionTestFactory.Ref("t2", "sys-tasks")}}, "mapping": {{FunctionTestFactory.Rule("")}} }
+              ],
+              "output": {
+                "select": "$.limits.body", "into": "$.data.limits",
+                "set": { "$.data.ok": "result.check.body.ok", "$.data.checkStatus": "result.check.statusCode", "$.statusCode": "result.limits.statusCode" }
+              }
+            }
+            """;
+        Register(FunctionTestFactory.FromJson(attributes, FunctionKey));
+
+        var result = await Call();
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        Json(result.Value!.Data).ShouldBe("""{"limits":{"daily":100},"ok":true,"checkStatus":200}""");
+        result.Value.StatusCode.ShouldBe(201);
     }
 
     [Fact]
