@@ -283,7 +283,7 @@ public sealed class FunctionAppService(
             // `input` is the function's request body (null when the call has none — a GET).
             .WithHopInputAsync(body));
 
-        Result inputValidation;
+        Result inputValidation; // skipcq: CS-W1022 — assigned inside the span scope below; the compiler enforces definite assignment
         using (FunctionActivityHelper.StartPhase(FunctionActivityHelper.OperationValidateRequest))
         {
             inputValidation = await functionRequestValidationService.ValidateRequestAsync(
@@ -375,7 +375,7 @@ public sealed class FunctionAppService(
             }
         }
 
-        Result executeResult;
+        Result executeResult; // skipcq: CS-W1022 — assigned in the try; the catch returns, so every read follows the assignment
         try
         {
             executeResult = await taskCoordinator.ExecuteAsync(
@@ -516,7 +516,7 @@ public sealed class FunctionAppService(
         ScriptContext scriptContext,
         CancellationToken cancellationToken)
     {
-        using var buildResponseActivity = FunctionActivityHelper.StartPhase(FunctionActivityHelper.OperationBuildResponse);
+        using var buildResponseActivity = FunctionActivityHelper.StartPhase(FunctionActivityHelper.OperationBuildResponse); // skipcq: CS-W1100 — held for its scope; disposing ends the span
 
         if (function.Output != null)
             return await BuildScriptResponseAsync(function, function.Output, scriptContext, cancellationToken);
@@ -545,7 +545,7 @@ public sealed class FunctionAppService(
             var handler = await scriptEngine.CompileToInstanceAsync<IOutputHandler>(
                 output, flowScripts: scriptContext.Workflow?.Scripts, cancellationToken: cancellationToken);
 
-            ScriptResponse scriptResponse;
+            ScriptResponse scriptResponse; // skipcq: CS-W1022 — assigned inside the span scope below; the compiler enforces definite assignment
             using (ScriptActivityHelper.StartExecuteActivity(FunctionOutputScriptKind))
             {
                 scriptResponse = await handler.OutputHandler(scriptContext);

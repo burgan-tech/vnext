@@ -105,7 +105,7 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
     /// The authored <c>output</c> member: a script or a declarative block (see <see cref="OutputDefinition"/>).
     /// </summary>
     [JsonInclude] [JsonPropertyName("output")]
-    private OutputDefinition? output;
+    private readonly OutputDefinition? output;
 
     /// <summary>
     /// Optional output mapping script (implements <c>IOutputHandler</c>).

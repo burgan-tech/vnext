@@ -165,7 +165,7 @@ internal sealed class DeclarativeMappingPlan
     /// variable-prefixed path (<c>$.data…</c>, <c>$.input…</c>). SubFlow input, event input and workflow / function
     /// output need <c>select</c> and <c>into</c> together.
     /// </summary>
-    public static Result<DeclarativeMappingPlan> Build(IExpressionCompiler compiler, MappingBlock block, DeclarativeSiteKind kind)
+    public static Result<DeclarativeMappingPlan> Build(IExpressionCompiler compiler, MappingBlock block, DeclarativeSiteKind kind) // skipcq: CS-R1140 — one rule check per block member and site kind, kept together so publish and runtime share it
     {
         var signature = ExpressionSignatures.Mapping(ScopeOf(kind));
         var readsResult = kind is DeclarativeSiteKind.TaskOutput or DeclarativeSiteKind.SubFlowOutput

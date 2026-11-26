@@ -60,7 +60,7 @@ public sealed class EventAppService(
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
 
     /// <inheritdoc />
-    public async Task<Result<object?>> HandleAsync(EventInput input, CancellationToken cancellationToken = default)
+    public async Task<Result<object?>> HandleAsync(EventInput input, CancellationToken cancellationToken = default) // skipcq: CS-R1140 — one event delivery, its resolve / map / start-or-transition branches in order
     {
         // A misrouted subscription is a permanent defect, so surface it as a Result the delivery mapper
         // can turn into a Dapr DROP. Letting NotFoundDomainException escape would produce a 500 that the

@@ -38,20 +38,22 @@ internal static class DeclarativeOutputDocument
             return Result<DeclarativeOutput>.Ok(new DeclarativeOutput(data, null, null));
 
         int? statusCode = null;
-        switch (document[StatusCodeMember])
+        var statusNode = document[StatusCodeMember];
+        switch (statusNode)
         {
             case null:
                 break;
             case JsonValue value when value.GetValueKind() == JsonValueKind.Number && value.TryGetValue<int>(out var code):
                 statusCode = code;
                 break;
-            case JsonNode other:
+            default:
                 return Result<DeclarativeOutput>.Fail(
-                    site.Failure($"$.statusCode is a JSON {other.GetValueKind()} ({other.ToJsonString()}), not an integer."));
+                    site.Failure($"$.statusCode is a JSON {statusNode.GetValueKind()} ({statusNode.ToJsonString()}), not an integer."));
         }
 
         Dictionary<string, string>? headers = null;
-        switch (document[HeadersMember])
+        var headersNode = document[HeadersMember];
+        switch (headersNode)
         {
             case null:
                 break;
@@ -69,9 +71,9 @@ internal static class DeclarativeOutputDocument
                 }
 
                 break;
-            case JsonNode other:
+            default:
                 return Result<DeclarativeOutput>.Fail(
-                    site.Failure($"$.headers is a JSON {other.GetValueKind()}, not an object."));
+                    site.Failure($"$.headers is a JSON {headersNode.GetValueKind()}, not an object."));
         }
 
         return Result<DeclarativeOutput>.Ok(
