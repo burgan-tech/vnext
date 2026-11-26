@@ -1,6 +1,6 @@
 {
   "releaseNote": {
-    "summary": "A task binding can shape its input and write its output with declarative input/output set, into and select blocks (Dynamic Expresso, no .csx).",
+    "summary": "Declarative select/into/set blocks (Dynamic Expresso, no .csx) now cover task bindings, transition and SubFlow mappings, event input, and workflow and function output.",
     "breaking": false,
     "docs": []
   },
@@ -45,6 +45,11 @@
         "since": "next",
         "status": "stable",
         "description": "Declarative blocks beside the C# mapping on three more sites: a transition output (transitions, startTransition, shared, cancel/updateData/exit; not automatic or scheduled), a SubFlow input (start document attributes, headers, key, tags) and a SubFlow output (result = { data, status }, runs on completion and fault; status is \"completed\" or \"faulted\"). Delta starts empty, select reads result where the site has one; exclusive with mapping at publish, a stored definition with both runs the script. Failures keep the scripts' error codes and add log events 10277, 10278, 10279."
+      },
+      "declarativeEventAndOutputBlocks": {
+        "since": "next",
+        "status": "stable",
+        "description": "Declarative blocks beside the C# script on three more sites: an event input (document { key, attributes }; variables input, now, context, headers; Selector stays C#), a workflow output and a function output (document { data, statusCode, headers }; a function block also reads result and has no caller, so reading user is a publish error). select and into must pair; an event with both mapping and input, or an output holding script and block members, is rejected at publish; a stored definition with both runs the script. Binary function responses stay script-only. A failing workflow output block falls back to the standard envelope; a function output failure is logged once as FunctionOutputMappingFailed (10280, script failures included)."
       }
     }
   },

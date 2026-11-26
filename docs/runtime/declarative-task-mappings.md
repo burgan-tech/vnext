@@ -446,7 +446,7 @@ legacy meaning), the same rule as a task binding. The CacheAside `sourceOutput` 
 
 ## Blocks outside task bindings
 
-Three more sites take a declarative block in place of a C# `mapping` script: a transition's `output`, a SubFlow state's `input` and its `output`. The block grammar (`select`, `into`, `set`) and the expression rules are those of a task binding; what differs is the variables, the target document and where the result goes.
+Six more sites take a declarative block in place of a C# script: a transition's `output`, a SubFlow state's `input` and its `output` (below), then an event's `input`, a workflow's `output` and a function's `output` ([further down](#event-input-workflow-output-and-function-output)). The block grammar (`select`, `into`, `set`) and the expression rules are those of a task binding; what differs is the variables, the target document and where the result goes.
 
 - `input` builds what goes **to** a callee, `output` writes what comes **back**. A single-block site rejects the other block at publish: a transition carrying an `input` member is a publish error (`'input' is not supported on a transition; use 'output'.`).
 - `select` reads `result` when the site has one, otherwise the variables except `headers` (`$.data…`, `$.input…`); `headers` is never a `select` root, as for a task binding (see [Headers](#headers)) — read a header with a `set` expression.
@@ -514,6 +514,67 @@ Runs on completion **and** on fault; `result.status` tells them apart (a script 
     "into": "$.kyc.score",
     "set": { "$.kyc.outcome": "result.status", "$.kyc.settledAt": "now" }
   }
+}
+```
+
+### Event `input`, workflow `output` and function `output`
+
+Three more sites take a block beside their script: an event's `input` (beside `mapping`), and a workflow's or a function's `output` (beside the `output` script). `select` and `into` must come together on these three (either alone is a publish error), an empty block (`{"set":{}}`) is a publish error, and `headers` is never a `select` root. `select` reads the variables (`$.input…`, `$.data…`), except on a function output, where it reads `result` and has no default.
+
+| Site | Variables | Target document | Used for |
+|---|---|---|---|
+| Event `input` | `input`, `now`, `context`, `headers` | `{ key, attributes }` | start / transition body of the event delivery |
+| Workflow `output` | `data`, `input`, `instance`, `now`, `user`, `context`, `headers` | `{ data, statusCode, headers }` | the sync start / transition response |
+| Function `output` | `data`, `input`, `instance`, `now`, `context`, `headers`, `result` | `{ data, statusCode, headers }` | the function response |
+
+#### Event `input`
+
+`input` is the event payload after CloudEvent unwrapping (null for an empty body); `headers` are the event's headers (deny-filtered script view). `data`, `instance` and `user` do not exist here: naming one is a publish error. `attributes` starts empty; `key` is a string or absent, anything else is a mapping failure. The instance lookup by filter (`Selector`) stays C#-only: a transition event whose block sets no key is ignored like an unmatched event. `mapping` and `input` on one event is a publish error (`event: 'mapping' and 'input' are mutually exclusive`); a stored event holding both runs the script, and one holding neither stays the runtime `EventDefinitionMissing`. The check covers the workflow `event` and every transition that carries an `event`.
+
+```json
+"event": {
+  "input": {
+    "select": "$.input.payload",
+    "into": "$.attributes",
+    "set": { "$.key": "input.customerId.ToString()", "$.attributes.channel": "headers[\"x-channel\"]" }
+  }
+}
+```
+
+A failure logs `EventMappingFailed` (40993) with error code `EventMappingFailed` under the `Script.Execute` span, kind `eventMapping`, as the script does.
+
+#### Workflow `output`
+
+Shapes a sync start / transition response only, and never for a sub-flow instance. In the `output` JSON an object with `location` or `code` is a script; one with `select` / `into` / `set` and neither of those is a block; both kinds of members together is a deserialization error, a publish 400 (`InvalidWorkflow`, the message names `output`). A script `output` round-trips byte for byte as before.
+
+- `data` is the latest instance data (`x-encryption` fields stay tokens). `input` is the admitted hop payload when this process ran the hop: the start attributes after file offload, or the transition payload after the `x-storage` swap (a file member is the stored handle, never inline base64). It is null when no hop ran here: an idempotent start that returned an existing instance, a transition proxied to a SubFlow, a parent transition relayed to its active SubFlow.
+- `statusCode` must be an integer JSON number and `headers` an object of string values; `data` absent or null is an empty response.
+- Any block failure, a wrong-typed `statusCode` / `headers` included, falls back to the standard envelope with log `WorkflowOutputScriptFailed` and a span error, exactly like a failing script.
+
+```json
+"output": {
+  "select": "$.data.score",
+  "into": "$.data.score",
+  "set": { "$.statusCode": "201", "$.headers.x-score-band": "data.score > 700 ? \"high\" : \"low\"" }
+}
+```
+
+#### Function `output`
+
+`result` is `{ <variableKey>: { body, headers, statusCode } }` for every executed task (`variableKey`, or the task key's variable name); a skipped task is absent. `instance` is null for a domain- or flow-scoped function.
+
+- **No caller.** `user.available` is false and a block that reads `user` is a publish error (`function output has no caller: the function response cache does not vary by role`), as for the output script, whose caller is closed.
+- Order: the output script if present, else the block, else the old single-task extraction.
+- `rawResponse: false`: the response is `{ <function key as variable name>: data }`; `statusCode` and `headers` are ignored and not type-checked, and publish warns when the block targets them (the message names `rawResponse`). `rawResponse: true`: `data`, `statusCode` (integer) and `headers` (object of strings) are used, and wrong types fail the call.
+- Binary responses (`byte[]`, `ScriptFile`) are script-only.
+- The function response cache stores a block-built response like a script-built one.
+- A failure is `ExtensionExecutionFailed` with the message `Function '{key}' output declarative output mapping failed: {detail}`, logged once as `FunctionOutputMappingFailed` (10280; script failures use it now too). A caller-roles outage would keep `Authorization:110006`, which is not reachable while a function output has no caller.
+
+```json
+"output": {
+  "select": "$.fetch.body.items",
+  "into": "$.data.items",
+  "set": { "$.data.count": "result.fetch.body.items.Count", "$.statusCode": "200" }
 }
 ```
 
