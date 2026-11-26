@@ -591,4 +591,16 @@ public class MappingBlockValidatorTests
         rawTrue.ValidationErrors.ShouldBeEmpty();
         rawTrue.Warnings.ShouldBeEmpty();
     }
+
+    [Theory]
+    [InlineData("""{"set":{"$.data.admin":"user.hasRole(\"admin\")"}}""")]
+    [InlineData("""{"set":{"$.data.caller":"user.available"}}""")]
+    [InlineData("""{"select":"$.t.body","into":"$.data","set":{"$.data.roles":"user.roles"}}""")]
+    public void Function_OutputReadingUser_IsError(string output)
+    {
+        var r = FunctionResult(output, rawResponse: true);
+
+        r.ValidationErrors.ShouldHaveSingleItem().ErrorMessage
+            .ShouldBe($"output: {MappingBlockValidator.FunctionOutputNoCallerError}");
+    }
 }

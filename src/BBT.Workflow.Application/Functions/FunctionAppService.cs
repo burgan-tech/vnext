@@ -15,8 +15,8 @@ using BBT.Workflow.Functions.Validation;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
-using BBT.Workflow.Shared;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Scripting.Caller;
 using BBT.Workflow.Scripting.Declarative;
 using BBT.Workflow.Scripting.Expressions;
 using BBT.Workflow.Tasks;
@@ -412,18 +412,10 @@ public sealed class FunctionAppService(
             return Result<FunctionResponseOutput>.Fail(executeResult.Error);
         }
 
-        var responseResult = await BuildResponseAsync(function, scriptContext, headers, cancellationToken);
+        var responseResult = await BuildResponseAsync(function, scriptContext, cancellationToken);
+        // An output failure is already logged once (FunctionOutputMappingFailed) where it happened.
         if (!responseResult.IsSuccess)
-        {
-            Logger.LogError(
-                "Custom function {FunctionKey} response mapping failed. Domain={Domain}, InstanceId={InstanceId}, Error={ErrorMessage}",
-                function.Key,
-                function.Domain,
-                instance?.Id,
-                responseResult.Error.Message ?? "Unknown error");
-
             return responseResult;
-        }
 
         // Write-through: cache the computed response on a miss (best-effort unless bypass is disabled).
         if (function.Cache is { } writeCache && !string.IsNullOrWhiteSpace(cacheKey))
@@ -522,7 +514,6 @@ public sealed class FunctionAppService(
     private async Task<Result<FunctionResponseOutput>> BuildResponseAsync(
         Function function,
         ScriptContext scriptContext,
-        Dictionary<string, string?>? headers,
         CancellationToken cancellationToken)
     {
         using var buildResponseActivity = FunctionActivityHelper.StartPhase(FunctionActivityHelper.OperationBuildResponse);
@@ -531,7 +522,7 @@ public sealed class FunctionAppService(
             return await BuildScriptResponseAsync(function, function.Output, scriptContext, cancellationToken);
 
         if (function.OutputBlock is { } block)
-            return await BuildBlockResponseAsync(function, block, scriptContext, headers, cancellationToken);
+            return await BuildBlockResponseAsync(function, block, scriptContext, cancellationToken);
 
         if (function.RawResponse)
             return Result<FunctionResponseOutput>.Ok(CreateRawResponse(
@@ -574,7 +565,7 @@ public sealed class FunctionAppService(
     /// <summary>
     /// Runs the declarative <c>output</c> block into an empty document <c>{ data, statusCode, headers }</c>. Variables:
     /// the condition set (<c>data</c> / <c>instance</c> null for a domain-scoped call; <c>input</c> the request body;
-    /// <c>user</c> the function's caller) plus <c>result</c> = <c>{ &lt;responseVariableKey&gt;: { body, headers,
+    /// <c>user</c> unavailable — a function output has no caller) plus <c>result</c> = <c>{ &lt;responseVariableKey&gt;: { body, headers,
     /// statusCode } }</c> for every executed task. Any failure — a plan that does not build, a failing expression, a
     /// document of the wrong shape — answers <see cref="WorkflowErrorCodes.ExtensionExecutionFailed"/>, like a failing
     /// script.
@@ -583,7 +574,6 @@ public sealed class FunctionAppService(
         Function function,
         MappingBlock block,
         ScriptContext scriptContext,
-        Dictionary<string, string?>? headers,
         CancellationToken cancellationToken)
     {
         using var activity = ScriptActivityHelper.StartExecuteActivity(FunctionOutputScriptKind);
@@ -601,9 +591,11 @@ public sealed class FunctionAppService(
                 return BlockFailed(site.Failure(plan.Error.Message ?? plan.Error.Code), exception: null);
 
             using var resultDocument = BuildResultDocument(function, scriptContext);
-            var caller = callerAccessorFactory.ForHop(ExecutionActor.User, headers, cancellationToken);
+            // No caller, as the output script has none: the caller is closed before the cache key and the tasks
+            // because the response cache does not vary by role (publish rejects a block reading `user`).
             var scope = ExpressionScope.Create(
-                scriptContext, TimeProvider.System, caller, ScopeKind.FunctionOutput, resultDocument.RootElement);
+                scriptContext, TimeProvider.System, NullCallerAccessor.Instance, ScopeKind.FunctionOutput,
+                resultDocument.RootElement);
 
             var document = new JsonObject();
             var applied = await DeclarativeBlockEngine.ApplyAsync(
@@ -612,7 +604,8 @@ public sealed class FunctionAppService(
             if (!applied.IsSuccess)
                 return BlockFailed(applied.Error, exception: null);
 
-            var output = DeclarativeOutputDocument.Read(document, site);
+            // Wrapped ({ key: data }): statusCode / headers are ignored entirely, so they are not type-checked.
+            var output = DeclarativeOutputDocument.Read(document, site, dataOnly: !function.RawResponse);
             if (!output.IsSuccess)
                 return BlockFailed(output.Error, exception: null);
 

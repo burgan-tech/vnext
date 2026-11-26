@@ -64,6 +64,13 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
     ];
 
     /// <summary>
+    /// The error for a function <c>output</c> block that reads <c>user</c>: the function's caller is closed before the
+    /// response cache key and the tasks, so the output has no caller (as the output script has none).
+    /// </summary>
+    public const string FunctionOutputNoCallerError =
+        "function output has no caller: the function response cache does not vary by role";
+
+    /// <summary>
     /// Publish warning for a function output block that targets <c>$.statusCode</c> or <c>$.headers…</c> while
     /// <c>rawResponse</c> is <c>false</c>: the response is then <c>{ "functionKey": data }</c> and those members are ignored.
     /// </summary>
@@ -151,7 +158,9 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
 
         if (function.OutputBlock is not { } output)
             return;
-        ValidatePlan(output, DeclarativeSiteKind.FunctionOutput, "output", r.ValidationErrors);
+        var plan = ValidatePlan(output, DeclarativeSiteKind.FunctionOutput, "output", r.ValidationErrors);
+        if (plan is not null && plan.Reads(ExpressionScope.UserVariable))
+            Add(r.ValidationErrors, "output", FunctionOutputNoCallerError);
         if (!function.RawResponse)
             WarnResponseMembersIgnored(output, r.Warnings);
     }
@@ -233,17 +242,22 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
     // The plan builder is the single target / select / compile check of the non-task sites.
     // An empty block is rejected here (not on a task binding, whose empty block is shipped behaviour): an empty
     // transition output would silently drop the whole payload, an empty SubFlow block would do nothing at all.
-    private void ValidatePlan(MappingBlock block, DeclarativeSiteKind kind, string path, IList<ValidationResult> errors)
+    // Returns the built plan, or null when the block is empty or does not build (the error is already added).
+    private DeclarativeMappingPlan? ValidatePlan(
+        MappingBlock block, DeclarativeSiteKind kind, string path, IList<ValidationResult> errors)
     {
         if (block.Select is null && block.Into is null && (block.Set is null || block.Set.Count == 0))
         {
             Add(errors, path, "the block is empty: give it a 'select', an 'into' or a 'set' entry, or remove it.");
-            return;
+            return null;
         }
 
         var plan = DeclarativeMappingPlan.Build(compiler, block, kind);
-        if (!plan.IsSuccess)
-            Add(errors, path, plan.Error.Message ?? "The declarative block is invalid.");
+        if (plan.IsSuccess)
+            return plan.Value;
+
+        Add(errors, path, plan.Error.Message ?? "The declarative block is invalid.");
+        return null;
     }
 
     /// <summary>

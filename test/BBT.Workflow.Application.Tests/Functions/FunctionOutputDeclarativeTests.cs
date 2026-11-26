@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -22,6 +23,7 @@ using BBT.Workflow.Tasks.Coordinator;
 using BBT.Workflow.Tasks.Evaluators;
 using BBT.Workflow.Tasks.Executors;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Shouldly;
@@ -46,6 +48,9 @@ public sealed class FunctionOutputDeclarativeTests : IDisposable
     private readonly IServiceProvider? _previousAmbientServiceProvider;
     private readonly FunctionAppService _service;
 
+    /// <summary>Every log entry the service writes.</summary>
+    private readonly CapturingLoggerProvider _logs = new();
+
     /// <summary>The task responses the coordinator files, keyed by response slot.</summary>
     private readonly Dictionary<string, object?> _taskResponses = new();
 
@@ -57,7 +62,7 @@ public sealed class FunctionOutputDeclarativeTests : IDisposable
             .Returns(Task.FromResult(Substitute.For<IUnitOfWork>()));
         var services = new ServiceCollection();
         services.AddSingleton(unitOfWorkManager);
-        services.AddLogging();
+        services.AddLogging(logging => logging.AddProvider(_logs));
         services.AddTransient<ILazyServiceProvider, LazyServiceProvider>();
         _ambientServiceProvider = services.BuildServiceProvider();
         _previousAmbientServiceProvider = AmbientServiceProvider.Current;
@@ -231,6 +236,52 @@ public sealed class FunctionOutputDeclarativeTests : IDisposable
     }
 
     [Fact]
+    public async Task BlockFailure_LogsFunctionOutputMappingFailedOnce()
+    {
+        _taskResponses["myTask"] = new StandardTaskResponse { Data = Element("{}"), StatusCode = 200 };
+        Register(FunctionTestFactory.FromJson(FunctionTestFactory.Attributes(
+            """ "rawResponse": true, "output": {"set":{"$.statusCode":"\"201\""}} """),
+            FunctionKey));
+
+        var result = await Call();
+
+        result.IsSuccess.ShouldBeFalse();
+        _logs.Entries.Count(e => e.EventId.Id == 10280).ShouldBe(1);
+        _logs.Entries.Count(e => e.Level >= LogLevel.Error).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Wrapped_StatusCodeAndHeaders_AreIgnored_NotTypeChecked()
+    {
+        _taskResponses["myTask"] = new StandardTaskResponse { Data = Element("""{"v":1}"""), StatusCode = 200 };
+        Register(FunctionTestFactory.FromJson(FunctionTestFactory.Attributes(
+            """ "output": {"set":{"$.data.v":"result.myTask.body.v","$.statusCode":"\"x\"","$.headers":"1"}} """),
+            FunctionKey));
+
+        var result = await Call();
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        Json(result.Value!.Data).ShouldBe("""{"myFn":{"v":1}}""");
+        result.Value.StatusCode.ShouldBeNull();
+        result.Value.Headers.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Block_HasNoCaller_UserIsUnavailable()
+    {
+        // Publish rejects a function output reading `user`; a stored definition that does so still has no caller.
+        _taskResponses["myTask"] = new StandardTaskResponse { Data = Element("{}"), StatusCode = 200 };
+        Register(FunctionTestFactory.FromJson(FunctionTestFactory.Attributes(
+            """ "output": {"set":{"$.data.caller":"user.available"}} """),
+            FunctionKey));
+
+        var result = await Call(headers: new Dictionary<string, string?> { ["role"] = "admin" });
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        Json(result.Value!.Data).ShouldBe("""{"myFn":{"caller":false}}""");
+    }
+
+    [Fact]
     public async Task FailingSetExpression_FailsLikeScript()
     {
         _taskResponses["myTask"] = new StandardTaskResponse { Data = Element("""{"amount":"abc"}"""), StatusCode = 200 };
@@ -330,13 +381,47 @@ public sealed class FunctionOutputDeclarativeTests : IDisposable
             .GetFunctionAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
             .Returns(Result<Function>.Ok(function));
 
-    private Task<Result<FunctionResponseOutput>> Call(string? body = null) =>
+    private Task<Result<FunctionResponseOutput>> Call(
+        string? body = null, Dictionary<string, string?>? headers = null) =>
         _service.GetFunctionByKeyAsync(
             FunctionKey, FunctionTestFactory.Domain,
+            headers: headers,
             body: body is null ? null : Element(body),
             httpMethod: body is null ? "GET" : "POST");
 
     private static JsonElement Element(string json) => JsonDocument.Parse(json).RootElement.Clone();
 
     private static string Json(object? value) => JsonSerializer.Serialize(value, JsonSerializerConstants.JsonOptions);
+}
+
+/// <summary>Records every log entry (level and event id) written through the loggers it creates.</summary>
+internal sealed class CapturingLoggerProvider : ILoggerProvider
+{
+    private readonly List<(LogLevel Level, EventId EventId)> _entries = new();
+
+    /// <summary>The entries written so far.</summary>
+    public IReadOnlyList<(LogLevel Level, EventId EventId)> Entries
+    {
+        get { lock (_entries) return _entries.ToArray(); }
+    }
+
+    public ILogger CreateLogger(string categoryName) => new Logger(this);
+
+    public void Dispose()
+    {
+    }
+
+    private sealed class Logger(CapturingLoggerProvider owner) : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            lock (owner._entries)
+                owner._entries.Add((logLevel, eventId));
+        }
+    }
 }

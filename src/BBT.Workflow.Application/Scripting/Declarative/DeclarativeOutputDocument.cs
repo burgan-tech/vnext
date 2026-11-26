@@ -26,12 +26,16 @@ internal static class DeclarativeOutputDocument
 
     /// <summary>
     /// Converts <paramref name="document"/> to the response, or fails with <paramref name="site"/>'s failure when
-    /// <c>statusCode</c> or <c>headers</c> has the wrong shape.
+    /// <c>statusCode</c> or <c>headers</c> has the wrong shape. With <paramref name="dataOnly"/> (a function without
+    /// <c>rawResponse</c>, which answers <c>{ key: data }</c>) only <c>data</c> is read: <c>statusCode</c> and
+    /// <c>headers</c> are ignored entirely, not type-checked.
     /// </summary>
-    public static Result<DeclarativeOutput> Read(JsonObject document, DeclarativeSite site)
+    public static Result<DeclarativeOutput> Read(JsonObject document, DeclarativeSite site, bool dataOnly = false)
     {
         // An owned element: the response body serializes as the JSON the block wrote.
         object? data = document[DataMember] is { } dataNode ? JsonSerializer.SerializeToElement(dataNode) : null;
+        if (dataOnly)
+            return Result<DeclarativeOutput>.Ok(new DeclarativeOutput(data, null, null));
 
         int? statusCode = null;
         switch (document[StatusCodeMember])
