@@ -451,7 +451,7 @@ Six more sites take a declarative block in place of a C# script: a transition's 
 - `input` builds what goes **to** a callee, `output` writes what comes **back**. A single-block site rejects the other block at publish: a transition carrying an `input` member is a publish error (`'input' is not supported on a transition; use 'output'.`).
 - `select` reads `result` when the site has one, otherwise the variables except `headers` (`$.data…`, `$.input…`); `headers` is never a `select` root, as for a task binding (see [Headers](#headers)) — read a header with a `set` expression.
 - A block and a C# `mapping` on the same site is a publish error; a stored definition holding both runs the script.
-- An empty block (no `select`, no `into`, no `set` entry) is a publish error at these three sites (`the block is empty: give it a 'select', an 'into' or a 'set' entry, or remove it.`): an empty transition `output` would drop the whole request. A task binding's empty block keeps its shipped meaning.
+- An empty block (no `select`, no `into`, no `set` entry) is a publish error at all six sites (`the block is empty: give it a 'select', an 'into' or a 'set' entry, or remove it.`): an empty transition `output` would drop the whole request. A task binding's empty block keeps its shipped meaning.
 
 | Site | Variables | `select` root | Target | Delta starts | Result goes to |
 |---|---|---|---|---|---|
@@ -541,13 +541,15 @@ Three more sites take a block beside their script: an event's `input` (beside `m
 }
 ```
 
+`.ToString()` on an absent member (`input.customerId` missing from the payload) fails the mapping; guard an optional field with `input.customerId != null ? input.customerId.ToString() : null`.
+
 A failure logs `EventMappingFailed` (40993) with error code `EventMappingFailed` under the `Script.Execute` span, kind `eventMapping`, as the script does.
 
 #### Workflow `output`
 
 Shapes a sync start / transition response only, and never for a sub-flow instance. In the `output` JSON an object with `location` or `code` is a script; one with `select` / `into` / `set` and neither of those is a block; both kinds of members together is a deserialization error, a publish 400 (`InvalidWorkflow`, the message names `output`). A script `output` round-trips byte for byte as before.
 
-- `data` is the latest instance data (`x-encryption` fields stay tokens). `input` is the admitted hop payload when this process ran the hop: the start attributes after file offload, or the transition payload after the `x-storage` swap (a file member is the stored handle, never inline base64). It is null when no hop ran here: an idempotent start that returned an existing instance, a transition proxied to a SubFlow, a parent transition relayed to its active SubFlow.
+- `data` is the latest instance data (`x-encryption` fields stay tokens). `input` is the admitted hop payload when this process ran the hop: the start attributes after file offload, or the transition payload after the `x-storage` swap (a file member is the stored handle, never inline base64). It is null when no hop payload was admitted here: an idempotent start that returned an existing instance, a transition proxied to a SubFlow, a parent transition relayed to its active SubFlow (whatever its trigger: the payload belongs to the SubFlow, which swaps its files).
 - `statusCode` must be an integer JSON number and `headers` an object of string values; `data` absent or null is an empty response.
 - Any block failure, a wrong-typed `statusCode` / `headers` included, falls back to the standard envelope with log `WorkflowOutputScriptFailed` and a span error, exactly like a failing script.
 
@@ -555,7 +557,7 @@ Shapes a sync start / transition response only, and never for a sub-flow instanc
 "output": {
   "select": "$.data.score",
   "into": "$.data.score",
-  "set": { "$.statusCode": "201", "$.headers.x-score-band": "data.score > 700 ? \"high\" : \"low\"" }
+  "set": { "$.statusCode": "201", "$.headers.x-score-band": "data.score.AsDouble() > 700 ? \"high\" : \"low\"" }
 }
 ```
 
@@ -565,28 +567,32 @@ Shapes a sync start / transition response only, and never for a sub-flow instanc
 
 - **No caller.** `user.available` is false and a block that reads `user` is a publish error (`function output has no caller: the function response cache does not vary by role`), as for the output script, whose caller is closed.
 - Order: the output script if present, else the block, else the old single-task extraction.
-- `rawResponse: false`: the response is `{ <function key as variable name>: data }`; `statusCode` and `headers` are ignored and not type-checked, and publish warns when the block targets them (the message names `rawResponse`). `rawResponse: true`: `data`, `statusCode` (integer) and `headers` (object of strings) are used, and wrong types fail the call.
+- `rawResponse: false`: the response is `{ <function key as variable name>: data }`; `statusCode` and `headers` are ignored and not type-checked, and publish warns when the block targets them (the message names `rawResponse`). `rawResponse: true`: `data`, `statusCode` (integer) and `headers` (object of strings) are used, and wrong types fail the call. The example below needs `rawResponse: true`.
 - Binary responses (`byte[]`, `ScriptFile`) are script-only.
 - The function response cache stores a block-built response like a script-built one.
 - A failure is `ExtensionExecutionFailed` with the message `Function '{key}' output declarative output mapping failed: {detail}`, logged once as `FunctionOutputMappingFailed` (10280; script failures use it now too). A caller-roles outage would keep `Authorization:110006`, which is not reachable while a function output has no caller.
 
 ```json
+"rawResponse": true,
 "output": {
   "select": "$.fetch.body.items",
   "into": "$.data.items",
-  "set": { "$.data.count": "result.fetch.body.items.Count", "$.statusCode": "200" }
+  "set": { "$.data.count": "result.fetch.body.items.AsArrayLength()", "$.statusCode": "200" }
 }
 ```
 
 ### Failures
 
-Each site fails with the error its script fails with, under the same `Script.Execute` span, and logs a new event:
+Each site fails with the error its script fails with, under the same `Script.Execute` span; the first three log a new event, the last three the event their script logs:
 
 | Site | Error code | Span kind | Log event |
 |---|---|---|---|
 | Transition `output` | `Execution` transition mapping error (`ExecutionStepFailed`) | transition mapping | 10277 `TransitionDeclarativeOutputFailed` |
 | SubFlow `input` | `SubFlowInputMappingFailed` | SubFlow input mapping | 10278 `SubFlowDeclarativeInputFailed` |
 | SubFlow `output` | `SubFlowOutputMappingFailed` | `subflowOutputMapping` | 10279 `SubFlowDeclarativeOutputFailed` |
+| Event `input` | `EventMappingFailed` | `eventMapping` | 40993 `EventMappingFailed` (shared with the script) |
+| Workflow `output` | none: falls back to the standard envelope | `workflowOutput` | 10132 `WorkflowOutputScriptFailed` (shared with the script) |
+| Function `output` | `ExtensionExecutionFailed` | `functionOutput` | 10280 `FunctionOutputMappingFailed` (shared with the script) |
 
 A caller-roles provider failure stays `Authorization:110006` (retryable; on the SubFlow output completion path the event is redelivered); reading `user.roles` with no caller is a permanent failure.
 

@@ -92,14 +92,15 @@ public sealed class WorkflowExecutionContext
     public bool ChainReservedRelay { get; set; }
 
     /// <summary>
-    /// Set by the transition pipeline when this request is relayed to the instance's active SubFlow
-    /// (<c>SubflowForwardRule</c>, on a profile that runs the forward step): the hop runs at the leaf,
-    /// which also swaps <c>x-storage</c> content, so <see cref="Data"/> keeps the unswapped request
-    /// payload and is not this instance's hop input. The sync response's declarative output block reads
-    /// <c>input</c> as null then. Transport-only, never serialized.
+    /// Set by the transition pipeline when this instance did not admit the request payload: the condition
+    /// under which the file admission skips the <c>x-storage</c> swap (<c>SubflowForwardRule.WillForward</c>,
+    /// whatever the pipeline profile — the payload belongs to the active SubFlow, which swaps it against its
+    /// own master schema). <see cref="Data"/> then keeps the unswapped request payload and is not this
+    /// instance's hop input, so the sync response's declarative output block reads <c>input</c> as null.
+    /// Read only by <c>InstanceCommandAppService</c>. Transport-only, never serialized.
     /// </summary>
     [System.Text.Json.Serialization.JsonIgnore]
-    public bool RelayedToSubflow { get; set; }
+    public bool HopPayloadNotAdmitted { get; set; }
 
     /// <summary>Gets or sets the transition key to execute.</summary>
     [Enrich(Name = "vnext.transition.key")]

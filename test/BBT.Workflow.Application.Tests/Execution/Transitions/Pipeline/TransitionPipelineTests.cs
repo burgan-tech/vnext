@@ -759,7 +759,31 @@ public class TransitionPipelineTests
         var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        workflowContext.RelayedToSubflow.ShouldBe(activeSubflow);
+        workflowContext.HopPayloadNotAdmitted.ShouldBe(activeSubflow);
+    }
+
+    [Theory]
+    [InlineData(TriggerType.Event)]
+    [InlineData(TriggerType.Scheduled)]
+    [InlineData(TriggerType.Automatic)]
+    public async Task RunAsync_ProfileWithoutForwardStep_ActiveSubflow_StillMarksThePayloadNotAdmitted(TriggerType trigger)
+    {
+        // FileAdmission skips the x-storage swap whenever SubflowForwardRule.WillForward holds, whatever the
+        // profile; the mark must follow the same condition, or a workflow output block's `input` would carry the
+        // unswapped (inline base64) payload on an Event / Scheduled / AutoChain hop with an active SubFlow.
+        var context = CreateTransitionExecutionContext();
+        context.Instance.ChangeState(context.Current!);
+        context.Instance.AddCorrelation(InstanceCorrelation.Create(
+            Guid.NewGuid(), context.Instance.Id, "state1", Guid.NewGuid(), SubFlowType.SubFlow.Code,
+            "test-domain", "child-flow", "1.0.0"));
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        workflowContext.TriggerType = trigger;
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+
+        await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        workflowContext.HopPayloadNotAdmitted.ShouldBeTrue();
     }
 
     [Fact]

@@ -52,8 +52,10 @@ public enum ScopeKind
 /// (<see cref="ScriptContext.HopInput"/>; never the phase-dependent <see cref="ScriptContext.Body"/>), <c>instance</c> the read-only instance view,
 /// <c>now</c> one clock reading per scope, <c>user</c> the caller (fail-closed roles), <c>context</c> the
 /// legacy <see cref="ExpressoRuleContext"/>, <c>headers</c> the incoming request's headers (<see cref="ExpressionHeaders"/>, a
-/// view over <see cref="ScriptContext.Headers"/>: the <c>Workflow:HeaderExposure:Deny</c> names are absent), and in the output phase <c>result</c> the task's standard
-/// response (<c>body</c>, <c>headers</c>, <c>statusCode</c>). In both mapping phases <c>task</c> is the task's
+/// view over <see cref="ScriptContext.Headers"/>: the <c>Workflow:HeaderExposure:Deny</c> names are absent), and <c>result</c> on a result site: the task's standard
+/// response (<c>body</c>, <c>headers</c>, <c>statusCode</c>) for a task output mapping, <c>{ data, status }</c> for a SubFlow
+/// output, <c>{ &lt;task&gt;: { body, headers, statusCode } }</c> for a function output (none for an event input or a
+/// workflow output). In both mapping phases <c>task</c> is the task's
 /// <c>config</c> JSON and <c>config</c> the host configuration (<see cref="ExpressionConfig"/>), both given by
 /// <see cref="WithTask"/>. <c>data</c>, <c>instance.Data</c>, a
 /// <see cref="JsonElement"/> <c>input</c> and <c>result</c> are borrowed (<see cref="RuleJsonDynamic.Borrow"/>), never

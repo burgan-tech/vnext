@@ -871,8 +871,8 @@ public sealed class InstanceCommandAppService(
                     return EnrichSyncOutputAsync(output, output.Id, workflowDefinition, input,
                         // The pipeline's hop input — the payload after the x-storage swap (FileAdmission writes the
                         // handles back to context.Data), never TransitionInput.Data, which keeps the inline bytes.
-                        // A request relayed to the active SubFlow ran at the leaf: no `input`.
-                        hopInput: context.RelayedToSubflow ? null : context.Data?.Attributes,
+                        // A payload this instance did not admit (FileAdmission skipped it for the active SubFlow): no `input`.
+                        hopInput: context.HopPayloadNotAdmitted ? null : context.Data?.Attributes,
                         cancellationToken);
                 output.Key = snapshot.Key;
                 // Identity-only relay that still ran sync: carry the state from the pipeline's own

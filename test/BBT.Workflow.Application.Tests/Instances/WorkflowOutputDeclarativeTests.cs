@@ -264,7 +264,7 @@ public sealed class WorkflowOutputDeclarativeTests
     {
         using var host = new CommandHost(WorkflowWithOutput("""{"set":{"$.statusCode":"201"}}"""));
         host.Reload(Instance.Create(host.InstanceId, Flow, Version, "key"));
-        host.OnExecute = ctx => ctx.RelayedToSubflow = true;
+        host.OnExecute = ctx => ctx.HopPayloadNotAdmitted = true;
         var seen = host.CaptureHop();
 
         var result = await host.TransitionAsync(Input());

@@ -9,11 +9,14 @@ using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Events;
 using BBT.Workflow.Events;
+using BBT.Workflow.Headers;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Scripting.Related;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 using Shouldly;
 using Xunit;
@@ -36,7 +39,7 @@ public sealed class EventAppServiceDeclarativeTests
 
     private readonly IComponentCacheStore _cacheStore = Substitute.For<IComponentCacheStore>();
     private readonly IScriptEngine _scriptEngine = Substitute.For<IScriptEngine>();
-    private readonly IScriptContextFactory _scriptContextFactory = Substitute.For<IScriptContextFactory>();
+    private IScriptContextFactory _scriptContextFactory = Substitute.For<IScriptContextFactory>();
     private readonly IInstanceRepository _instanceRepository = Substitute.For<IInstanceRepository>();
     private readonly IInstanceCommandAppService _commands = Substitute.For<IInstanceCommandAppService>();
     private readonly IInstanceSelectorResolver _selectorResolver = Substitute.For<IInstanceSelectorResolver>();
@@ -192,6 +195,55 @@ public sealed class EventAppServiceDeclarativeTests
     }
 
     [Fact]
+    public async Task BlockCancelled_MarksTheEventMappingSpanAsFailed()
+    {
+        // A thrown exception / cancellation in the block path marks the span as the script branch does.
+        UseWorkflow(startEvent: new Event(null, Block(set: [("$.key", "input.orderId")])));
+        using var spans = new BBT.Workflow.Application.Tests.Telemetry.TraceSpanCollector("BBT.Workflow.Scripting");
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+
+        var result = await Handle(EventAction.Start, Payload, cancellationToken: cancelled.Token);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe("EventMappingFailed");
+        _started.ShouldBeNull();
+        var span = spans.Spans.Where(a => a.DisplayName == "Script.Execute").ShouldHaveSingleItem();
+        span.GetTagItem(BBT.Workflow.Logging.TelemetryConstants.TagNames.ScriptKind).ShouldBe("eventMapping");
+        span.Status.ShouldBe(System.Diagnostics.ActivityStatusCode.Error);
+    }
+
+    [Fact]
+    public async Task DeniedHeader_IsNotVisibleToTheInputBlock()
+    {
+        // `headers` is the script view: a Workflow:HeaderExposure:Deny name is absent, an allowed one is read.
+        _scriptContextFactory = new ScriptContextFactory(
+            Substitute.For<IComponentCacheStore>(),
+            NullLogger<ScriptContext>.Instance,
+            NullLogger<RelatedInstanceAccessor>.Instance,
+            headerExposureDenyList: new HeaderExposureDenyList(
+                Options.Create(new HeaderExposureOptions { Deny = ["x-secret"] })));
+        UseWorkflow(startEvent: new Event(null, Block(set:
+        [
+            ("$.key", "input.orderId"),
+            ("$.attributes.secret", "headers[\"x-secret\"]"),
+            ("$.attributes.channel", "headers[\"x-channel\"]"),
+        ])));
+        var headers = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["x-secret"] = "s3cr3t",
+            ["x-channel"] = "web",
+        };
+
+        var result = await Handle(EventAction.Start, Payload, headers);
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        var attributes = _started!.Instance!.Attributes!.Value.GetRawText();
+        attributes.ShouldContain("\"channel\":\"web\"");
+        attributes.ShouldNotContain("s3cr3t");
+    }
+
+    [Fact]
     public async Task NonStringKey_FailsLikeScript()
     {
         UseWorkflow(startEvent: new Event(null, Block(set: [("$.key", "input.amount")])));
@@ -219,7 +271,9 @@ public sealed class EventAppServiceDeclarativeTests
         typeof(BBT.Workflow.Logging.WorkflowLogs).GetMethod(nameof(BBT.Workflow.Logging.WorkflowLogs.EventMappingFailed))!
             .GetCustomAttributes(typeof(LoggerMessageAttribute), false).Cast<LoggerMessageAttribute>().Single().EventId;
 
-    private Task<Result<object?>> Handle(EventAction action, string payload) =>
+    private Task<Result<object?>> Handle(
+        EventAction action, string payload, Dictionary<string, string?>? headers = null,
+        CancellationToken cancellationToken = default) =>
         new EventAppService(
                 _cacheStore, _scriptEngine, _scriptContextFactory, _instanceRepository, _commands, _selectorResolver,
                 Substitute.For<IRuntimeInfoProvider>(), _logger)
@@ -229,8 +283,9 @@ public sealed class EventAppServiceDeclarativeTests
                 Workflow = Flow,
                 Action = action,
                 TransitionKey = action == EventAction.Transition ? TransitionKey : null,
-                Payload = JsonDocument.Parse(payload).RootElement.Clone()
-            });
+                Payload = JsonDocument.Parse(payload).RootElement.Clone(),
+                Headers = headers ?? new()
+            }, cancellationToken);
 
     private static MappingBlock Block(string? select = null, string? into = null, (string Path, string Expr)[]? set = null) =>
         new(select, into, set is null

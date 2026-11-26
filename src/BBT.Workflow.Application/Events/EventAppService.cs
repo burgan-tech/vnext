@@ -166,24 +166,24 @@ public sealed class EventAppService(
                 .WithHopInputAsync(hopInput);
 
             using var mappingActivity = ScriptActivityHelper.StartExecuteActivity(EventMappingScriptKind);
-            if (inputBlock is not null)
+            try
             {
-                var blockResult = await RunInputBlockAsync(
-                    inputBlock, input, workflow, scriptContext, cancellationToken);
-                if (!blockResult.IsSuccess)
+                if (inputBlock is not null)
                 {
-                    // The script's failure path: same log, same error code, the span marked as failed.
-                    var message = blockResult.Error.Message ?? blockResult.Error.Code;
-                    mappingActivity.SetError(message);
-                    logger.EventMappingFailed(input.Domain, input.Workflow, input.TransitionKey, message);
-                    return Result<object?>.Fail(Error.Failure("EventMappingFailed", message));
-                }
+                    var blockResult = await RunInputBlockAsync(
+                        inputBlock, input, workflow, scriptContext, cancellationToken);
+                    if (!blockResult.IsSuccess)
+                    {
+                        // The script's failure path: same log, same error code, the span marked as failed.
+                        var message = blockResult.Error.Message ?? blockResult.Error.Code;
+                        mappingActivity.SetError(message);
+                        logger.EventMappingFailed(input.Domain, input.Workflow, input.TransitionKey, message);
+                        return Result<object?>.Fail(Error.Failure("EventMappingFailed", message));
+                    }
 
-                mapping = blockResult.Value;
-            }
-            else
-            {
-                try
+                    mapping = blockResult.Value;
+                }
+                else
                 {
                     var runner = await scriptEngine.CompileToInstanceAsync<IEventMapping>(
                         eventDefinition.Mapping!,
@@ -192,11 +192,13 @@ public sealed class EventAppService(
 
                     mapping = await runner.Handler(scriptContext);
                 }
-                catch (Exception ex)
-                {
-                    mappingActivity.SetError(ex);
-                    throw;
-                }
+            }
+            catch (Exception ex)
+            {
+                // Either branch (a thrown script, a cancelled block run): the span is marked as failed, then the
+                // outer handler logs EventMappingFailed once.
+                mappingActivity.SetError(ex);
+                throw;
             }
         }
         catch (Exception ex)
