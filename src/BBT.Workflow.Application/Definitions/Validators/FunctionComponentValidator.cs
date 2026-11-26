@@ -36,7 +36,8 @@ public sealed class FunctionComponentValidator : IComponentValidator
 
             if (function.OnExecutionTasks.Any())
             {
-                if (function.Output == null)
+                // A declarative output block answers the response as well as an output script does.
+                if (function.Output == null && function.OutputBlock == null)
                 {
                     result.AddError("Function output is required.", $"{nameof(Function)}.{nameof(Function.Output)}");
                 }

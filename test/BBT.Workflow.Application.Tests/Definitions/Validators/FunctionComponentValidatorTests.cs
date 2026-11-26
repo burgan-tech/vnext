@@ -582,4 +582,57 @@ public class FunctionComponentValidatorTests
 
         result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("Function.OnExecutionTasks[0].VariableKey"));
     }
+
+    [Fact]
+    public void Function_OutputBlock_SatisfiesRequiredOutput()
+    {
+        // A multi-task function whose 'output' is a declarative block and carries no script.
+        var attributes = JsonDocument.Parse("""
+        {
+            "scope": "F",
+            "onExecutionTasks": [
+                { "order": 1, "task": {"key": "t", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"} }
+            ],
+            "output": { "select": "$.t.body", "into": "$.data" }
+        }
+        """).RootElement;
+
+        var result = _validator.Validate(attributes);
+
+        result.ValidationErrors.ShouldNotContain(e => e.ErrorMessage == "Function output is required.");
+        result.IsValid.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Function_WithoutOutput_StillRequiresOne()
+    {
+        var attributes = JsonDocument.Parse("""
+        {
+            "scope": "F",
+            "onExecutionTasks": [
+                { "order": 1, "task": {"key": "t", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"} }
+            ]
+        }
+        """).RootElement;
+
+        _validator.Validate(attributes).ValidationErrors
+            .ShouldContain(e => e.ErrorMessage == "Function output is required.");
+    }
+
+    [Fact]
+    public void Function_MixedOutputShape_IsValidationError()
+    {
+        var attributes = JsonDocument.Parse("""
+        {
+            "scope": "F",
+            "onExecutionTasks": [
+                { "order": 1, "task": {"key": "t", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"} }
+            ],
+            "output": { "location": "./src/Output.csx", "code": "cmV0dXJuIHRydWU7", "set": { "$.data.x": "1" } }
+        }
+        """).RootElement;
+
+        var error = _validator.Validate(attributes).ValidationErrors.ShouldHaveSingleItem();
+        error.ErrorMessage!.ShouldContain("'output'");
+    }
 }

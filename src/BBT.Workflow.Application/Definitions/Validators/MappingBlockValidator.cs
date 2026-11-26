@@ -26,7 +26,9 @@ namespace BBT.Workflow.Definitions.Validators;
 /// (<see cref="OnExecuteTask"/>) wherever a component holds them: flow states (<c>onEntries</c>,
 /// <c>onExits</c>), state / start / shared / well-known (<c>cancel</c>, <c>updateData</c>, <c>exit</c>)
 /// transitions (<c>onExecutionTasks</c>), function (<c>task</c>, <c>onExecutionTasks</c>) and extension
-/// (<c>task</c>) definitions.
+/// (<c>task</c>) definitions; and the non-task declarative blocks: transition <c>output</c>, SubFlow
+/// <c>input</c>/<c>output</c>, event <c>input</c> (workflow <c>event</c> and every transition's <c>event</c>), workflow
+/// <c>output</c> and function <c>output</c>.
 /// </summary>
 /// <remarks>
 /// Every path is parsed with <see cref="JsonPath"/> and every <c>set</c> expression is compiled with the
@@ -60,6 +62,14 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
         ExpressionScope.NowVariable, ExpressionScope.UserVariable, ExpressionScope.ContextVariable,
         ExpressionScope.TaskVariable
     ];
+
+    /// <summary>
+    /// Publish warning for a function output block that targets <c>$.statusCode</c> or <c>$.headers…</c> while
+    /// <c>rawResponse</c> is <c>false</c>: the response is then <c>{ "functionKey": data }</c> and those members are ignored.
+    /// </summary>
+    public const string StatusCodeOrHeadersWithoutRawResponseWarning =
+        "'rawResponse' is false: the function answers {{ \"<functionKey>\": data }} and ignores $.{0}. " +
+        "Set 'rawResponse': true to send the status code and headers, or remove the target.";
 
     /// <summary>Whether <paramref name="componentType"/> can hold task bindings this validator checks.</summary>
     public static bool AppliesTo(string componentType) =>
@@ -106,6 +116,9 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
 
     private void ValidateWorkflow(Workflow workflow, ComponentValidationResult r)
     {
+        ValidateEvent(workflow.Event, "event", r);
+        if (workflow.OutputBlock is not null)
+            ValidatePlan(workflow.OutputBlock, DeclarativeSiteKind.WorkflowOutput, "output", r.ValidationErrors);
         ValidateValueSlot(workflow.Timeout?.Mapping, "timeout.mapping", ValueSlotKind.Timer, r);
         ValidateTransition(workflow.StartTransition, "startTransition", r);
         ValidateTransition(workflow.Cancel, "cancel", r);
@@ -135,6 +148,48 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
         if (function.Task is not null)
             ValidateBinding(function.Task, "task", r.ValidationErrors, r.Warnings);
         ValidateBindings(function.OnExecutionTasks, "onExecutionTasks", r);
+
+        if (function.OutputBlock is not { } output)
+            return;
+        ValidatePlan(output, DeclarativeSiteKind.FunctionOutput, "output", r.ValidationErrors);
+        if (!function.RawResponse)
+            WarnResponseMembersIgnored(output, r.Warnings);
+    }
+
+    /// <summary>
+    /// Without <c>rawResponse</c> a function answers <c>{ "functionKey": data }</c>: a <c>statusCode</c> or <c>headers</c>
+    /// target is accepted (turning <c>rawResponse</c> on later makes it live) but is reported as ignored.
+    /// </summary>
+    private static void WarnResponseMembersIgnored(MappingBlock block, IList<ValidationResult> warnings)
+    {
+        if (block.Into is not null)
+            WarnIfResponseMember(block.Into, "output.into", warnings);
+        foreach (var key in block.Set?.Keys ?? Enumerable.Empty<string>())
+            WarnIfResponseMember(key, $"output.set['{key}']", warnings);
+    }
+
+    private static void WarnIfResponseMember(string target, string location, IList<ValidationResult> warnings)
+    {
+        var parsed = JsonPath.Parse(target);
+        if (parsed.IsSuccess && parsed.Value!.FirstSegment is "statusCode" or "headers")
+        {
+            Add(warnings, location, string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                StatusCodeOrHeadersWithoutRawResponseWarning, parsed.Value.FirstSegment));
+        }
+    }
+
+    /// <summary>
+    /// An event's <c>input</c> block: exclusive with the <c>mapping</c> script and checked by the plan builder (targets
+    /// <c>key</c> / <c>attributes</c>; no <c>data</c>, <c>instance</c> or <c>user</c>). An event with neither stays as
+    /// today (the runtime answers <c>EventDefinitionMissing</c>).
+    /// </summary>
+    private void ValidateEvent(Events.Event? @event, string path, ComponentValidationResult r)
+    {
+        if (@event?.Input is null)
+            return;
+        if (@event.Mapping is not null)
+            Add(r.ValidationErrors, path, "'mapping' and 'input' are mutually exclusive");
+        ValidatePlan(@event.Input, DeclarativeSiteKind.EventInput, $"{path}.input", r.ValidationErrors);
     }
 
     private void ValidateTransition(Transition? transition, string path, ComponentValidationResult r)
@@ -143,6 +198,7 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
             return;
         ValidateValueSlot(transition.Timer, $"{path}.timer", ValueSlotKind.Timer, r);
         ValidateBindings(transition.OnExecutionTasks, $"{path}.onExecutionTasks", r);
+        ValidateEvent(transition.Event, $"{path}.event", r);
 
         if (transition.Output is null)
             return;
