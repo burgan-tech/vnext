@@ -28,8 +28,11 @@ if(builder.Configuration.GetValue<bool>("Vault:Enabled", false)){
     builder.Configuration.AddDaprSecretStore(builder.Configuration["DAPR_SECRET_STORE_NAME"] ?? "vnext-secret", daprClient);
 }
 
-// After every connection-string source: adds Application Name when the string has none.
-builder.Configuration.ApplyDatabaseConnectionDefaults("vnext-worker-outbox");
+// After every connection-string source: ConnectionStrings:<role> (if set) replaces Default for this
+// process, then Application Name is added when the string has none.
+builder.Configuration.ApplyDatabaseConnectionDefaults(
+    "vnext-worker-outbox",
+    DatabaseConnectionDefaultsConfigurationExtensions.OutboxRole);
 
 builder.Services.AddWorkerOutboxModule();
 
