@@ -134,6 +134,31 @@ Also tell authors:
 Filter, sort, groupBy and aggregation on an `encrypt` path (or its parent object) are refused with 400
 `Validation:900010`.
 
+The same refusal applies **per caller** to an `x-roles` path the caller's roles do not open and to an `x-masking`
+path the caller is not exempt from (their parent object and sub-paths included): the list's filter, sort, groupBy
+and aggregations answer 400 `Validation:900010` instead of running on the hidden value. The decision is made once
+for the whole result set, so an instance-dependent grant (`$InstanceStarter`, `$PreviousUser`, `$user.…`,
+`$userBehalfOf.…`, `$role.…`) never opens a field for these queries — only static roles and `$Everyone` do. A
+client that builds a filter or a grouped report must use fields its role can read; a designer should warn when a
+`GetInstances` filter names a guarded field. Migration `list-query-refused-on-guarded-fields`.
+
+One answer is **not** the caller's mistake and is worth a retry: 503 `Authorization:110006` when the role provider
+could not answer and the query names a guarded field (a flow with `rowSecurity` answers an empty page instead).
+
+For a designer and a task author:
+
+- A same-domain `GetInstances` task now receives every master-schema refusal as a validation error (400-class).
+  It used to see a 500, so an error-boundary rule or a retry keyed on `500` no longer matches. With no error
+  boundary the failure faults the transition (migration `unbounded-task-failure-faults-transition`, same release).
+- A task that reads with no role (timer, automatic hop) and filters on a guarded field fails 400 on **every** run;
+  it is not retryable. Give the task a role in its headers, or drop the field from its filter.
+- `acceptedStatusCodes` that admit `400` / `4xx` turn the refusal into a success with no rows. Warn on a
+  `GetInstances` task that both filters on a guarded field and accepts 4xx.
+- An `x-masking` rule without `roles` cannot be queried by anybody. Sending a role does not help; the schema has
+  to name the roles that may filter on the field in `x-masking.roles`.
+- The guard reads the **default** flow version's master schema. A field guarded only in another version (a pilot
+  version above the default pointer) is still queryable — known issue `list-query-guards-follow-default-version`.
+
 ---
 
 ## 5. Scripts — token and `DecryptAsync`
@@ -182,7 +207,8 @@ and DirectTrigger tasks:
 | `Instance:100041` | 400 | a request introduces a value starting with `ENCRYPTED:AES256:` (anywhere) or `HASHED:` (on a hash path) that is not the value already stored there. Checked before admission, so the instance is not faulted |
 | `Instance:100043` | 503 | the schema cannot be resolved while the instance already carries protected values; the write is refused rather than stored in plaintext |
 | `Instance:100040` | 503 | a write would carry forward a value whose secret is gone (secret row deleted outside the runtime, or token tampered). Reads never fail on such a value; they serve the token |
-| `Validation:900010` | 400 | a list query filters, sorts or groups on an `encrypt` path |
+| `Validation:900010` | 400 | a list query filters, sorts, groups or aggregates on an `encrypt` path, or on an `x-roles` / `x-masking` path the caller cannot read |
+| `Authorization:110006` | 503 | the same query on an `x-roles` / `x-masking` path while the role provider could not answer; retryable |
 
 ---
 

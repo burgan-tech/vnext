@@ -224,6 +224,7 @@ public static class PostgreSqlJsonFilterService
         var sanitizedField = SanitizeFieldName(field);
         var parameters = new List<NpgsqlParameter>();
         
+        schemaContext?.EnsureNotRestricted(sanitizedField, "filtered");
         if (schemaContext != null && (!schemaContext.IsFieldFilterable(sanitizedField) ||
             !schemaContext.IsOperatorAllowed(sanitizedField, operatorType)))
             throw new SchemaFilterValidationException($"Operator '{operatorType}' is not allowed for field '{sanitizedField}'.");

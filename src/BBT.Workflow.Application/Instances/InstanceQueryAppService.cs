@@ -72,7 +72,8 @@ public sealed class InstanceQueryAppService(
     ILogger<InstanceQueryAppService> logger,
     IRowSecurityService? rowSecurityService = null,
     ICallerAccessorFactory? callerAccessorFactory = null,
-    Headers.IHeaderExposureDenyList? headerExposureDenyList = null)
+    Headers.IHeaderExposureDenyList? headerExposureDenyList = null,
+    IOptions<SchemaMaskingOptions>? schemaMaskingOptions = null)
     : ApplicationService(serviceProvider), IInstanceQueryAppService
 {
     private static readonly ConcurrentDictionary<string, BuildGate> ActiveSubflowBuildGates = new();
@@ -250,6 +251,7 @@ public sealed class InstanceQueryAppService(
 
                 SchemaFilterContext? schemaContext;
                 RowSecurityDecision? rowSecurity = null;
+                var callerRolesUnavailable = false;
                 using (InstanceReadActivityHelper.StartListPhase("metadata"))
                 {
                     var (ctx, exposure, flowResult) = await ResolveListMetadataAsync(input.Domain, input.Workflow, ct);
@@ -272,6 +274,11 @@ public sealed class InstanceQueryAppService(
                             return null!;
                         }
                     }
+
+                    // After the row-security decision on purpose: its rules are policy and are planned against the
+                    // unrestricted context; only the caller's own filter / sort / groupBy / aggregations are bound.
+                    (schemaContext, callerRolesUnavailable) =
+                        await RestrictQueryFieldsAsync(schemaContext, exposure, input, ct);
                 }
 
                 // Parse filter parameter - check if it's in GraphQLFilterRequest format
@@ -372,6 +379,24 @@ public sealed class InstanceQueryAppService(
                         groups = result.Groups;
                     }
                 }
+                catch (SchemaFilterValidationException ex)
+                {
+                    // A master-schema policy refusal: field not filterable / sortable, operator not in
+                    // x-filterOperators, encrypted, or restricted for this caller (vnext#1262). Returned as a
+                    // Validation-prefixed error, never left to escape, for the reason given below (#1080): a
+                    // thrown one reaches prefix readers — the GetInstances task above all — as a 500.
+                    //
+                    // One refusal is not the caller's mistake: the field is restricted only because the role
+                    // provider could not answer. Every guarded path is refused then (fail closed), and a query
+                    // that names one gets the retryable 503 instead of a 400 it cannot act on.
+                    var refusal = ex.CallerRestricted && callerRolesUnavailable
+                        ? WorkflowErrors.QueryCallerRolesUnavailable()
+                        : Error.Validation(WorkflowErrorCodes.SchemaFilterValidation, ex.Message, target: FilterTarget);
+                    logger.InstanceQueryParameterRejected(
+                        input.Domain, input.Workflow, FilterTarget, refusal.Code, refusal.Message ?? refusal.Code);
+                    filterFailure = refusal;
+                    return null!;
+                }
                 catch (Exception ex) when (ex is ArgumentException or FormatException or FilterCompilationException)
                 {
                     // The filter passed boundary validation but still could not be compiled into
@@ -382,12 +407,11 @@ public sealed class InstanceQueryAppService(
                     // this logs at Error; the caller still gets a 400, not a 500, because the
                     // request is unservable either way.
                     //
-                    // SchemaFilterValidationException is deliberately NOT caught here: it is a
-                    // master-schema policy decision (field not filterable, operator not in
-                    // x-filterOperators) that the boundary validator intentionally does not
-                    // duplicate. Treating it as drift would fire this alarm on every routine
-                    // policy rejection. It already carries its own 400-mapping code and passes
-                    // through untouched.
+                    // SchemaFilterValidationException is deliberately NOT caught here but in its own
+                    // block above: it is a master-schema policy decision (field not filterable,
+                    // operator not in x-filterOperators) that the boundary validator intentionally
+                    // does not duplicate. Treating it as drift would fire this alarm on every routine
+                    // policy rejection.
                     logger.InstanceFilterCompilationFailed(ex, input.Domain, input.Workflow);
 
                     // Returned as a Validation-prefixed error, never thrown (#1080). A thrown
@@ -553,6 +577,55 @@ public sealed class InstanceQueryAppService(
 
         return WorkflowErrors.InstanceNotFound(input.Instance);
     }
+
+    /// <summary>
+    /// Binds the list's schema context to the caller (vnext#1262): the <c>x-roles</c> paths its roles do not open
+    /// and the <c>x-masking</c> paths it is not exempt from become
+    /// <see cref="SchemaFilterContext.RestrictedPaths"/>, and the SQL builders refuse a filter, sort, groupBy or
+    /// aggregation that touches one (<see cref="SchemaQueryRestrictedPaths"/>). The grouped response returns
+    /// before the per-instance exposure pass, so this is the only place those values are guarded.
+    /// </summary>
+    /// <remarks>
+    /// Roles come from the resolver the page reader uses, over the same header set, so the list body and the
+    /// query refusal always describe the same caller. They are resolved only for a request that carries a query
+    /// part on a flow whose schema guards something: a plain list, or a schema without <c>x-roles</c> /
+    /// <c>x-masking</c>, costs nothing here.
+    /// <para>
+    /// Two limits, both recorded as known issues. The guards are those of the flow this list resolved — the
+    /// DEFAULT version's master schema — while the list body is filtered per row with each instance's own flow
+    /// version, so a path guarded only in another version's schema is not restricted here. And with no schema
+    /// context at all (the flow declares no schema, or its lookup failed) nothing is bound: the query runs
+    /// without the schema's policy, exactly as before this guard existed.
+    /// </para>
+    /// <para>
+    /// <see cref="ICallerRoleResolver.ResolveRoleSetAsync"/> rather than <c>ResolveRolesAsync</c>: the built-in
+    /// providers turn an outage into an empty role set there, and only the outcome tells "the provider could not
+    /// answer" from "the caller holds no roles". Both restrict every guarded path; <c>RolesUnavailable</c> lets
+    /// the caller answer the first with a retryable error instead of a 400.
+    /// </para>
+    /// </remarks>
+    private async Task<(SchemaFilterContext? Ctx, bool RolesUnavailable)> RestrictQueryFieldsAsync(
+        SchemaFilterContext? schemaContext, SchemaExposureMetadata exposure, GetInstanceListInput input,
+        CancellationToken ct)
+    {
+        if (schemaContext is null)
+            return (null, false);
+
+        var maskingEnabled = schemaMaskingOptions?.Value.Enabled ?? true;
+        if (!HasQueryPart(input) || !SchemaQueryRestrictedPaths.HasGuardedPaths(exposure, maskingEnabled))
+            return (schemaContext, false);
+
+        var resolution = await callerRoleResolver.ResolveRoleSetAsync(input.Headers, ct);
+        var rolesResolved = resolution.Outcome != CallerRoleOutcome.Failed;
+        var restricted = SchemaQueryRestrictedPaths.Resolve(
+            exposure, rolesResolved ? resolution.Roles : null, rolesResolved, maskingEnabled);
+        return (restricted.Count == 0 ? schemaContext : schemaContext.WithRestrictedPaths(restricted), !rolesResolved);
+    }
+
+    /// <summary>True when the list request carries a filter, sort, groupBy or aggregation.</summary>
+    private static bool HasQueryPart(GetInstanceListInput input) =>
+        !string.IsNullOrWhiteSpace(input.Filter) || !string.IsNullOrWhiteSpace(input.Sort) ||
+        !string.IsNullOrWhiteSpace(input.GroupBy) || !string.IsNullOrWhiteSpace(input.Aggregations);
 
     /// <summary>
     /// The master-schema filter / exposure metadata of <paramref name="flowResult"/>'s flow, with the ready

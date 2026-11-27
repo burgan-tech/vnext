@@ -466,6 +466,56 @@ public sealed class TransitionAuthorizationManager(
     }
 
     /// <summary>
+    /// Decides a grant set for a SET of rows — a filter, sort, groupBy or aggregation over many instances —
+    /// where there is no single instance to resolve a leaf against.
+    /// </summary>
+    /// <remarks>
+    /// Not <see cref="EvaluateRolesStatic(IReadOnlyCollection{string}, IReadOnlyCollection{RoleGrant}, bool)"/>:
+    /// that one reads an instance-dependent leaf as <see cref="GrantMatch.No"/>, which is right for "this caller
+    /// against no instance" and wrong for "this caller against every row" — a <c>deny</c> on
+    /// <c>$InstanceStarter</c> would never fire and the field would be served for the rows the caller started.
+    /// Here every leaf whose answer depends on the row — a predefined role, <c>$user.</c> /
+    /// <c>$userBehalfOf.</c> and <c>$role.</c> references — is <see cref="GrantMatch.Unknown"/>, and
+    /// <see cref="RoleGrantMatcher.Decide"/> turns that into a refusal on either side: an unknown deny refuses,
+    /// an unknown allow does not admit. <c>$Everyone</c> and static roles are decided as usual.
+    /// </remarks>
+    /// <param name="roles">The caller's whole role set.</param>
+    /// <param name="roleGrants">The grant set to evaluate against.</param>
+    /// <param name="defaultAllowWhenNoAllowGrant">
+    /// When true (default), a grant set with no ALLOW grant admits a caller no deny refused.
+    /// </param>
+    /// <returns>True only when the grant set admits the caller for every row.</returns>
+    public static bool EvaluateRolesForRowSet(
+        IReadOnlyCollection<string>? roles,
+        IReadOnlyCollection<RoleGrant> roleGrants,
+        bool defaultAllowWhenNoAllowGrant = true)
+    {
+        if (roleGrants.Count == 0)
+            return true;
+
+        var normalized = new List<string>(roles?.Count ?? 0);
+        foreach (var role in roles ?? [])
+        {
+            if (!string.IsNullOrWhiteSpace(role))
+                normalized.Add(role.Trim());
+        }
+
+        return RoleGrantMatcher.Decide(
+            roleGrants, leafRole => MatchRowSetLeaf(leafRole, normalized), defaultAllowWhenNoAllowGrant);
+    }
+
+    private static GrantMatch MatchRowSetLeaf(string leafRole, List<string> normalized)
+    {
+        if (PredefinedInstanceRoles.IsEveryone(leafRole))
+            return GrantMatch.Yes;
+        if (!IsRoleBound(leafRole) || DynamicRoleGrant.TryParse(leafRole) is not null)
+            return GrantMatch.Unknown; // depends on the row
+        if (normalized.Count == 0)
+            return GrantMatch.Unknown;
+        return MatchesAnyStatic(leafRole, normalized) ? GrantMatch.Yes : GrantMatch.No;
+    }
+
+    /// <summary>
     /// A role-bound grant (static role or <c>$role.</c>, see <see cref="IsRoleBound"/>) that a caller with no
     /// roles cannot prove — whatever its kind. Used where an ALLOW match grants something (the x-masking/x-encryption
     /// exemption lists): the role-less caller is evaluated with an empty role name, and a <c>$role.</c> value that

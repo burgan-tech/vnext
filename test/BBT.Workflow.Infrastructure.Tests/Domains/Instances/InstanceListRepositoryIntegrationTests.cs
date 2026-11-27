@@ -13,6 +13,7 @@ using BBT.Workflow.Data;
 using BBT.Workflow.DataSink;
 using BBT.Workflow.Definitions.GraphQL;
 using BBT.Workflow.Definitions.Schemas;
+using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Security;
@@ -37,6 +38,7 @@ public sealed class InstanceListRepositoryIntegrationTests(AttributeIndexPostgre
     private string _connection = null!;
     private readonly ServiceProvider _services = new ServiceCollection().BuildServiceProvider();
     private static readonly DateTime CreatedAt = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+    private static readonly string[] BothCategories = ["A", "B"];
 
     public async Task InitializeAsync()
     {
@@ -127,6 +129,147 @@ public sealed class InstanceListRepositoryIntegrationTests(AttributeIndexPostgre
         Assert.False(result.PagedList.HasNext);
         Assert.Null(result.Groups);
         Assert.Empty(db.ChangeTracker.Entries());
+    }
+
+    /// <summary>
+    /// vnext#1262 on the real SQL path. With a context that is not bound to a caller the stored value of
+    /// <c>category</c> comes back as group keys and through <c>max</c> — the measured leak, since the grouped
+    /// response never reaches the per-instance exposure pass. Bound to a caller that may not read
+    /// <c>category</c>, every query part that names it is refused before any SQL runs, on both repository routes,
+    /// and a query that does not name it is untouched.
+    /// </summary>
+    [Fact]
+    public async Task RestrictedPath_IsRefusedInFilterSortGroupByAndAggregation_AndUnrestrictedQueriesStillRun()
+    {
+        await using var db = CreateContext();
+        var repository = CreateRepository(db);
+        var open = new SchemaFilterContext(new Dictionary<string, SchemaFieldMetadata>()) { EnforceFiltering = false };
+        var bound = open.WithRestrictedPaths(new HashSet<string> { "category" });
+        const string groupByCategory = """{"field":"attributes.category"}""";
+        const string maxCategoryByAmount = """{"field":"attributes.amount","aggregations":{"max":"attributes.category"}}""";
+        const string filterCategory = """{"attributes":{"category":{"eq":"A"}}}""";
+        const string sortCategory = """{"field":"attributes.category","direction":"asc"}""";
+
+        // Unbound: the stored values are handed out.
+        var leakedKeys = await repository.GetPagedResultsWithGroupsAsync(1, 10, null, groupByCategory, null, null, open);
+        Assert.Equal(BothCategories, leakedKeys.Groups!.Select(group => group.Keys["attributes.category"]));
+        var leakedMax = await repository.GetPagedResultsWithGroupsAsync(1, 10, null, maxCategoryByAmount, null, null, open);
+        Assert.Contains(leakedMax.Groups!, group => Equals(group.Max, "B"));
+
+        // Bound to the caller: refused, string route.
+        await Assert.ThrowsAsync<SchemaFilterValidationException>(() =>
+            repository.GetPagedResultsWithGroupsAsync(1, 10, null, groupByCategory, null, null, bound));
+        await Assert.ThrowsAsync<SchemaFilterValidationException>(() =>
+            repository.GetPagedResultsWithGroupsAsync(1, 10, null, maxCategoryByAmount, null, null, bound));
+        await Assert.ThrowsAsync<SchemaFilterValidationException>(() =>
+            repository.GetPagedResultsWithGroupsAsync(1, 10, filterCategory, null, null, null, bound));
+        await Assert.ThrowsAsync<SchemaFilterValidationException>(() =>
+            repository.GetPagedResultsWithGroupsAsync(1, 10, null, null, null, sortCategory, bound));
+
+        // Bound to the caller: refused, parsed-request route.
+        await Assert.ThrowsAsync<SchemaFilterValidationException>(() =>
+            repository.GetPagedResultsWithGroupsAsync(1, 10, new GraphQLFilterRequest
+            {
+                GroupBy = new GroupByRequest { Field = "attributes.category" },
+                SchemaContext = bound
+            }));
+        await Assert.ThrowsAsync<SchemaFilterValidationException>(() =>
+            repository.GetPagedResultsWithGroupsAsync(1, 10, new GraphQLFilterRequest
+            {
+                Filter = GraphQLFilterParser.ParseFilter(filterCategory),
+                SchemaContext = bound
+            }));
+
+        // A query that does not name the restricted path is unaffected, and so is the plain list.
+        var free = await repository.GetPagedResultsWithGroupsAsync(1, 10, null,
+            """{"field":"attributes.amount","aggregations":{"count":true}}""", null, null, bound);
+        Assert.NotEmpty(free.Groups!);
+        var page = await repository.GetPagedResultsWithGroupsAsync(1, 10, null, null, null, null, bound);
+        Assert.Equal(6, page.PagedList.Items.Count);
+    }
+
+    /// <summary>
+    /// The routes the first test does not walk, each of which reaches SQL through its own path: the legacy
+    /// filter format (converted before compilation), <c>aggregations</c> without groupBy, <c>includes</c>
+    /// containment, sort and aggregation on the parsed-request route, the row-security overload, and the
+    /// non-identity paging route. On every one a caller-supplied field on the restricted path is refused; a
+    /// row-security leaf on that same path (policy, not caller input) still runs.
+    /// </summary>
+    [Fact]
+    public async Task RestrictedPath_IsRefusedOnEveryRemainingRoute_AndARowSecurityLeafStillRuns()
+    {
+        await using var db = CreateContext();
+        var open = new SchemaFilterContext(new Dictionary<string, SchemaFieldMetadata>()) { EnforceFiltering = false };
+        var bound = open.WithRestrictedPaths(new HashSet<string> { "category" });
+        const string legacyFilter = "attributes=category=eq:A";
+        const string includesFilter = """{"attributes":{"category":{"includes":{"code":"A"}}}}""";
+        const string maxCategory = """{"max":"attributes.category"}""";
+        const string filterCategory = """{"attributes":{"category":{"eq":"A"}}}""";
+        const string sortCategory = """{"field":"attributes.category","direction":"asc"}""";
+        var rowRule = new GraphQLFilterNode
+        {
+            Attributes = new() { ["category"] = new FieldCondition { Eq = "A" } },
+            PolicyExempt = true
+        };
+
+        foreach (var route in new[]
+                 {
+                     new InstanceQueryOptions { IdentityPaging = true },
+                     new InstanceQueryOptions { IdentityPaging = false }
+                 })
+        {
+            var repository = CreateRepository(db, monitor: new QueryMonitor(route));
+
+            // The legacy filter really is a filter on the restricted path: unbound it selects the 'A' rows.
+            var legacyOpen = await repository.GetPagedResultsWithGroupsAsync(1, 10, legacyFilter, null, null, null, open);
+            Assert.InRange(legacyOpen.PagedList.Items.Count, 1, 5);
+
+            await Assert.ThrowsAsync<SchemaFilterValidationException>(() =>
+                repository.GetPagedResultsWithGroupsAsync(1, 10, legacyFilter, null, null, null, bound));
+            await Assert.ThrowsAsync<SchemaFilterValidationException>(() =>
+                repository.GetPagedResultsWithGroupsAsync(1, 10, includesFilter, null, null, null, bound));
+            await Assert.ThrowsAsync<SchemaFilterValidationException>(() =>
+                repository.GetPagedResultsWithGroupsAsync(1, 10, null, null, maxCategory, null, bound));
+            await Assert.ThrowsAsync<SchemaFilterValidationException>(() =>
+                repository.GetPagedResultsWithGroupsAsync(1, 10, filterCategory, null, null, null, bound));
+            await Assert.ThrowsAsync<SchemaFilterValidationException>(() =>
+                repository.GetPagedResultsWithGroupsAsync(1, 10, null, null, null, sortCategory, bound));
+
+            // Parsed-request route: sort and aggregation (filter and groupBy are covered above).
+            await Assert.ThrowsAsync<SchemaFilterValidationException>(() =>
+                repository.GetPagedResultsWithGroupsAsync(1, 10, new GraphQLFilterRequest
+                {
+                    OrderBy = GraphQLFilterParser.ParseOrderBy(sortCategory),
+                    SchemaContext = bound
+                }));
+            // An aggregation is compiled in two places only: nested in the groupBy, or alone without one.
+            await Assert.ThrowsAsync<SchemaFilterValidationException>(() =>
+                repository.GetPagedResultsWithGroupsAsync(1, 10, new GraphQLFilterRequest
+                {
+                    GroupBy = new GroupByRequest
+                    {
+                        Field = "attributes.amount",
+                        Aggregations = new AggregationRequest { Max = "attributes.category" }
+                    },
+                    SchemaContext = bound
+                }));
+            await Assert.ThrowsAsync<SchemaFilterValidationException>(() =>
+                repository.GetPagedResultsWithGroupsAsync(1, 10, new GraphQLFilterRequest
+                {
+                    Aggregations = new AggregationRequest { Max = "attributes.category" },
+                    SchemaContext = bound
+                }));
+
+            // Row-security overload: the caller's own leaf is refused beside the planned one ...
+            await Assert.ThrowsAsync<SchemaFilterValidationException>(() =>
+                repository.GetPagedResultsWithGroupsAsync(1, 10, filterCategory, null, null, null, bound, rowRule));
+            await Assert.ThrowsAsync<SchemaFilterValidationException>(() =>
+                repository.GetPagedResultsWithGroupsAsync(1, 10, null, null, null, sortCategory, bound, rowRule));
+
+            // ... and the planned leaf alone runs on the restricted path, selecting what the legacy filter selected.
+            var ruled = await repository.GetPagedResultsWithGroupsAsync(1, 10, null, null, null, null, bound, rowRule);
+            Assert.Equal(legacyOpen.PagedList.Items.Count, ruled.PagedList.Items.Count);
+        }
     }
 
     [Fact]

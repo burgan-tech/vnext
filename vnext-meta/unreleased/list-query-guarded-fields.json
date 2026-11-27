@@ -1,0 +1,47 @@
+{
+  "releaseNote": {
+    "summary": "Instance list filter, sort, groupBy and aggregations are refused (400) on a field the caller cannot read, as guarded by the flow's default-version master schema.",
+    "breaking": true,
+    "docs": []
+  },
+  "migrations": [
+    {
+      "id": "list-query-refused-on-guarded-fields",
+      "type": "behavior",
+      "component": "query",
+      "path": "instances?filter= / sort / groupBy / aggregations; GetInstancesTask",
+      "since": "next",
+      "severity": "warning",
+      "title": "A list query on a field the caller cannot read is refused with 400",
+      "description": "The instance list (and the GetInstances task, which reads as its header set) now refuses a filter, sort, groupBy or aggregation that names a master-schema path the caller may not read as stored: a path whose x-roles grants do not admit the caller, or an x-masking path the caller is not exempt from. The same holds for a path under such a field and for a parent object that contains it. The answer is 400 Validation:900010, whatever EnforceMasterSchemaFiltering says. Before, the query ran on the stored value: a group key or a min/max returned the hidden value outright, and a filter or a sort order could be used to probe it. The guards are read from the master schema of the flow's DEFAULT version; see known issue list-query-guards-follow-default-version. The decision is taken once for the whole result set, so a grant that depends on the instance ($InstanceStarter, $PreviousUser, $user.<path>, $userBehalfOf.<path>, $role.<path>) does not open a path for these queries even though the plain list shows the field on the rows it matches; only static roles and $Everyone do. An x-masking rule without roles exempts nobody, so that field cannot be queried by any caller. A caller with no roles is refused with the same 400 on every request; that includes a GetInstances task that reads with no credential (a timer or an automatic hop). When the role provider could not answer, every guarded path is restricted and a query that names one answers the retryable 503 Authorization:110006 instead of the 400, while a query on open fields is still served; on a flow that declares rowSecurity the 503 is not reached, because row security decides first and answers an empty page. Every master-schema refusal of the list (this one and the existing not-filterable, operator and encrypted-path ones) is now returned as a validation error, so a same-domain GetInstances task receives a 400-class failure where it used to see a 500. Row-security rules are not affected. A caller that can read the field sees no difference.",
+      "action": "Query only fields the caller's role can read: send the role that may read the field (for a GetInstances task, in the task's headers), or drop the field from the filter, sort, groupBy or aggregation. For a masked field, name the roles that may query it in x-masking.roles; a mask without roles cannot be opened by sending a role. To restrict which rows a role sees by a guarded field, use attributes.rowSecurity instead of a caller-supplied filter. Treat 503 Authorization:110006 as retryable and the 400 as permanent. Review every GetInstances task that filters on a guarded field: an errorBoundary rule or retry keyed on 500 no longer matches the refusal; acceptedStatusCodes that admit 400 or 4xx turn it into a success with no rows; and with no errorBoundary the failure faults the transition (migration unbounded-task-failure-faults-transition, same release). See docs/domain/field-masking.md#queries."
+    }
+  ],
+  "knownIssues": [
+    {
+      "id": "list-query-guards-follow-default-version",
+      "affectedVersions": ">=next",
+      "severity": "warning",
+      "component": "query",
+      "path": "instances?filter= / sort / groupBy / aggregations; GetInstancesTask",
+      "title": "The list's per-caller query guard reads the default flow version's master schema only. A path guarded by x-roles or x-masking only in another version's schema (a pilot version published above the default pointer, or a field that gained a guard in a later version) is pruned from the rows of that version but can still be filtered, sorted, grouped and aggregated.",
+      "workaround": "Add the x-roles / x-masking guard to the default version's master schema before, or together with, the version that introduces it. Do not rely on the query guard for a field that is guarded only in a non-default flow version.",
+      "fixedIn": null
+    },
+    {
+      "id": "list-query-unguarded-without-schema-context",
+      "affectedVersions": ">=next",
+      "severity": "warning",
+      "component": "query",
+      "path": "instances (plain list and filter / sort / groupBy / aggregations); GetInstancesTask",
+      "title": "When the master schema of the flow's default version cannot be read (its reference has no published version yet, or the lookup fails), the list applies no schema policy: a filter, sort, groupBy or aggregation runs without the per-caller restriction and without the encrypt-path refusal, and the plain list serves the rows as stored. Neither path fails closed. x-roles declared under array items is not parsed either, so such a field is never restricted.",
+      "workaround": "Publish a master schema before the flow version that references it, and keep the default version's schema reference resolvable. Do not declare x-roles under array items; guard the array field itself.",
+      "fixedIn": null
+    }
+  ],
+  "fixes": {
+    "knownIssues": [
+      "list-filter-probes-guarded-fields"
+    ]
+  }
+}

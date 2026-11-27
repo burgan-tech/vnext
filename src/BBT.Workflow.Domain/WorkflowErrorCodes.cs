@@ -337,8 +337,9 @@ public static class WorkflowErrorCodes
 
     /// <summary>
     /// A decision that reads the caller's roles could not be made because the caller-role provider could
-    /// not answer: a rule-based selection (schema or view), an automatic rule, a timer script, and the
-    /// sub-endpoint gate for a caller without a runtime-caller token. Never an admit.
+    /// not answer: a rule-based selection (schema or view), an automatic rule, a timer script, the
+    /// sub-endpoint gate for a caller without a runtime-caller token, and a list query on a field guarded by
+    /// <c>x-roles</c> / <c>x-masking</c>. Never an admit.
     /// Transient: the request can be retried. Maps to HTTP 503.
     /// </summary>
     public const string CallerRolesUnavailable = "Authorization:110006";

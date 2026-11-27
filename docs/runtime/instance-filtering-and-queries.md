@@ -326,6 +326,15 @@ and `GetAbsenceEntryFilterSpecMapping.csx` / `GetRezervationsFilterSpecMapping.c
 - Event `Selector` filters are automatically scoped to the target workflow (`flow` condition added
   by the runtime).
 - Column names are whitelisted; a typo throws instead of silently matching nothing.
+- A filter, sort, groupBy or aggregation on a field the caller cannot read — `x-roles` not granted for
+  every row, or `x-masking` without an exemption — is refused with 400 `Validation:900010`, as is its
+  parent object and anything under it. A `GetInstances` task is judged by its header set; an
+  instance-dependent grant (`$InstanceStarter`, `$user.…`) never opens a field for these queries. When
+  the role provider could not answer, the same query gets the retryable 503 `Authorization:110006`
+  (not on a `rowSecurity` flow, which answers an empty page). A `GetInstances` task sees every
+  master-schema refusal as a validation error (400-class), not a 500; one that reads with no role is
+  refused on every run. The guards are the default flow version's; without a schema context the refusal
+  does not apply. See [field-masking § Queries](../domain/field-masking.md#queries).
 - Filter scalar values are limited to 1000 characters (`string.Length` after JSON decoding).
   The limit applies to attributes and instance columns in GraphQL and legacy filters, including
   nested/logical conditions and aggregation envelopes. `in`, `nin`, and `between` check each

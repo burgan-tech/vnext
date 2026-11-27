@@ -152,6 +152,12 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 - `InstanceData.Data` is the column as stored (tokens included). Decrypt only via
   `IInstanceDataProtector.UnprotectAsync` / `context.Instance.DecryptAsync`; never reintroduce a plaintext
   member; never write `InstancesData."Data"` outside `InstanceDataWriteService`. Prefix-driven, never schema-driven.
+- Set queries (list filter / sort / groupBy / aggregations) never see the exposure pass: the caller's unreadable
+  `x-roles` / `x-masking` paths go in `SchemaFilterContext.RestrictedPaths` (`SchemaQueryRestrictedPaths`) and are
+  refused. Decide with `EvaluateRolesForRowSet`, never `EvaluateRolesStatic`; `policyExempt` leaves stay exempt.
+  The list RETURNS the refusal as a Validation error (thrown, a task reads 500); roles unknown
+  (`ResolveRoleSetAsync` → `Failed`) → 503 `110006`. Guards = the DEFAULT flow version's schema; no schema
+  context ⇒ no guard (both are known issues, pinned by tests — do not "fix" one silently).
 - Per-instance key + salt in `InstanceSecrets`, created only by the write funnel, L1 cache, **never Redis**.
   A sub item hands its parent PLAINTEXT (`ISubItemEventDataResolver`).
 - Full guide: `docs/domain/field-masking.md`.
