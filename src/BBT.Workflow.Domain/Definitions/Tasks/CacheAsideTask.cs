@@ -65,6 +65,19 @@ public sealed class CacheAsideTask : WorkflowTask
     public ScriptCode? SourceMapping { get; private set; }
 
     /// <summary>
+    /// Declarative input block of the source task (JSON <c>sourceInput</c>): the same <c>select</c> / <c>into</c> /
+    /// <c>set</c> block a task binding's <c>input</c> carries, writing into the source task's config before it runs.
+    /// Ignored when <see cref="SourceMapping"/> has code (the script keeps its legacy meaning); publish rejects both.
+    /// </summary>
+    public MappingBlock? SourceInput { get; private set; }
+
+    /// <summary>
+    /// Declarative output block of the source task (JSON <c>sourceOutput</c>): shapes the source result like a binding's
+    /// <c>output</c>; what it produces is what is cached. Ignored when <see cref="SourceMapping"/> has code.
+    /// </summary>
+    public MappingBlock? SourceOutput { get; private set; }
+
+    /// <summary>
     /// Key script — the object form of <c>key</c>. Any <see cref="ScriptCode"/> kind:
     /// <c>location = "dynamicExpresso"</c> is a Dynamic Expresso expression, anything else a Roslyn
     /// <c>ICacheKeyMapping</c>; NAT, B64 and REF encodings are all accepted. Evaluated in the executor's
@@ -96,6 +109,8 @@ public sealed class CacheAsideTask : WorkflowTask
     internal void SetConsistencyInternal(string? consistency) => Consistency = consistency;
     internal void SetSourceTaskInternal(Reference sourceTask) => SourceTask = sourceTask;
     internal void SetSourceMappingInternal(ScriptCode? sourceMapping) => SourceMapping = sourceMapping;
+    internal void SetSourceInputInternal(MappingBlock? sourceInput) => SourceInput = sourceInput;
+    internal void SetSourceOutputInternal(MappingBlock? sourceOutput) => SourceOutput = sourceOutput;
     internal void SetKeyScriptInternal(ScriptCode? keyScript) => KeyScript = keyScript;
     internal void SetBypassOnCacheErrorInternal(bool bypassOnCacheError) => BypassOnCacheError = bypassOnCacheError;
     internal void SetForceRefreshInternal(bool forceRefresh) => ForceRefresh = forceRefresh;
@@ -132,6 +147,14 @@ public sealed class CacheAsideTask : WorkflowTask
         if (config.TryGetProperty("sourceMapping", out var sourceMapping) &&
             sourceMapping.ValueKind == JsonValueKind.Object)
             SourceMapping = sourceMapping.Deserialize<ScriptCode>(JsonSerializerConstants.JsonOptions);
+
+        if (config.TryGetProperty("sourceInput", out var sourceInput) &&
+            sourceInput.ValueKind == JsonValueKind.Object)
+            SourceInput = sourceInput.Deserialize<MappingBlock>(JsonSerializerConstants.JsonOptions);
+
+        if (config.TryGetProperty("sourceOutput", out var sourceOutput) &&
+            sourceOutput.ValueKind == JsonValueKind.Object)
+            SourceOutput = sourceOutput.Deserialize<MappingBlock>(JsonSerializerConstants.JsonOptions);
 
         if (config.TryGetProperty("bypassOnCacheError", out var bypass) &&
             (bypass.ValueKind == JsonValueKind.True || bypass.ValueKind == JsonValueKind.False))
@@ -179,6 +202,8 @@ public sealed class CacheAsideTask : WorkflowTask
         cloned.Consistency = Consistency;
         cloned.SourceTask = SourceTask;
         cloned.SourceMapping = SourceMapping;
+        cloned.SourceInput = SourceInput;
+        cloned.SourceOutput = SourceOutput;
         cloned.KeyScript = KeyScript;
         cloned.BypassOnCacheError = BypassOnCacheError;
         cloned.ForceRefresh = ForceRefresh;
@@ -199,6 +224,8 @@ public sealed class CacheAsideTask : WorkflowTask
         SetConsistencyInternal(source.Consistency);
         SetSourceTaskInternal(source.SourceTask);
         SetSourceMappingInternal(source.SourceMapping);
+        SetSourceInputInternal(source.SourceInput);
+        SetSourceOutputInternal(source.SourceOutput);
         SetKeyScriptInternal(source.KeyScript);
         SetBypassOnCacheErrorInternal(source.BypassOnCacheError);
         SetForceRefreshInternal(source.ForceRefresh);
@@ -216,6 +243,8 @@ public sealed class CacheAsideTask : WorkflowTask
         Consistency = null;
         SourceTask = null!;
         SourceMapping = null;
+        SourceInput = null;
+        SourceOutput = null;
         KeyScript = null;
         BypassOnCacheError = true;
         ForceRefresh = false;

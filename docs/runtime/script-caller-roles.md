@@ -54,7 +54,16 @@ mapping — added by a Chair override of the council's narrower proposal).
 | Timer script (`ITimerMapping`) | Yes, when the state is entered by a caller | the caller who drove the hop that **entered** the state — timers are computed at arming, not at firing | the step fails (`Authorization:110006`) |
 | SubFlow output mapping (completion) | Yes, when the child's settling request carried headers | the **child settler** — the caller whose request completed the child, from the headers carried on `instance.sub.completed` and re-filtered by the carried-header policy; not the parent's starter | transient: the completion is rolled back and redelivered (relay / Inbox), the parent is **not** faulted; roles are resolved before the terminal lock |
 | SubFlow output mapping on the fault path | as above | as above | logged as a failed mapping (existing fault-path behaviour); settlement continues |
-| Task mappings (OnEntry, OnExit, OnExecute, function tasks), transition `mapping`, extensions, resource lock, event mappings | No | — | — |
+| Declarative task mappings (`input`/`output` blocks; the `user` variable) on state OnEntry / OnExit and transition OnExecute | Yes, on caller-driven (User) hops | the caller who drove the hop; fail-closed (`user.available` false on System hops, a roles read there fails the mapping as a non-transient `TaskExecution` failure telling the author to guard with `user.available`) — [Declarative Task Mappings](declarative-task-mappings.md) | the mapping fails (`Authorization:110006`), error boundary applies |
+| Script task mappings (`.csx`), function tasks and extensions (`user.available` false), transition `mapping`, resource lock, event mappings | No | — | — |
+
+Dynamic Expresso rules and keys (`location: "dynamicExpresso"`) read the same accessor through the `user` variable
+(`user.available`, `user.roles`, `user.hasRole("x")`): a condition `rule` on any surface above sees the caller that
+surface gives a C# rule, with the same provider-failure outcome (the evaluator returns `Authorization:110006` and the
+accessor stays failed); CacheAside `key`, function cache `keyExpression` / `generationKeyExpression` and
+`resourceLock.keyExpression` have no caller (`user.available` false, a roles read fails the key). On a surface without
+a caller a roles read makes the rule not select — fail-closed, never an empty set. Slot list and variables:
+[Declarative Task Mappings § Dynamic Expresso outside task mappings](declarative-task-mappings.md#dynamic-expresso-outside-task-mappings).
 
 "No caller" means `IsAvailable` is false and a read throws — never an empty set:
 
@@ -74,7 +83,7 @@ mapping — added by a Chair override of the council's narrower proposal).
 - A **child settled by a timer** carries no headers, so its parent's output mapping has no caller.
 
 The automatic-rule context is shared with the hop's task mappings; the accessor is exposed for the rule being
-evaluated only and closed afterwards, so a task mapping never sees it. On the function execute path the accessor
+evaluated only and closed afterwards, so a script task mapping never sees it (a declarative mapping gets its own hop accessor). On the function execute path the accessor
 is closed after input-schema selection, before the cache key expression and the tasks (the response cache does
 not vary by role).
 

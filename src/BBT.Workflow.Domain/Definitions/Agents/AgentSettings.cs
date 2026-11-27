@@ -112,6 +112,16 @@ public sealed record AgentToolBinding
     /// <summary>Kind 1: optional input/output mapping (<c>IMapping</c>); without it the arguments become the body.</summary>
     public ScriptCode? Mapping { get; init; }
 
+    /// <summary>
+    /// Kind 1: declarative input block (JSON <c>binding.input</c>), the same <c>select</c> / <c>into</c> / <c>set</c>
+    /// block a task binding's <c>input</c> carries. Exclusive with <see cref="Mapping"/> (publish rejects both; at run time
+    /// a mapping with code wins).
+    /// </summary>
+    public MappingBlock? Input { get; init; }
+
+    /// <summary>Kind 1: declarative output block (JSON <c>binding.output</c>); exclusive with <see cref="Mapping"/>.</summary>
+    public MappingBlock? Output { get; init; }
+
     /// <summary>Kind 2: the script.</summary>
     public ScriptCode? Code { get; init; }
 

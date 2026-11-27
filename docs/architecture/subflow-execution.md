@@ -177,6 +177,8 @@ commands still keep their explicit contract value.
 
 **Completion window.** If subflow is in terminal status (`Completed`/`Faulted`/`Passive`) while parent correlation is still open, State function shows **parent** main-flow transitions instead of subflow terminal view.
 
+A SubFlow state can shape its start request and file the child's result with declarative `input` / `output` blocks instead of a `mapping` script (`S` only, `output` on completion and fault): [Blocks outside task bindings](../runtime/declarative-task-mappings.md#blocks-outside-task-bindings).
+
 ## Carried Headers from the Child
 
 The child's terminal event carries the headers of the request that settled it; the contract, deny

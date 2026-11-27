@@ -89,13 +89,24 @@ public static class ExpressoRuleContextMapper
         };
     }
 
-    private static ExpressoInstanceView? MapInstance(Instance? instance)
+    /// <summary>
+    /// Builds the read-only instance view (identity, state, status, latest data). Also the <c>instance</c>
+    /// variable of an expression scope, which passes <paramref name="borrowData"/> so the latest data is
+    /// wrapped with <see cref="RuleJsonDynamic.Borrow"/> instead of cloned.
+    /// </summary>
+    internal static ExpressoInstanceView? MapInstance(Instance? instance, bool borrowData = false)
     {
         if (instance == null)
             return null;
 
-        var dataElement = instance.LatestData?.Data.JsonElement
-                          ?? System.Text.Json.JsonDocument.Parse("{}").RootElement;
+        var latest = instance.LatestData;
+        RuleJsonDynamic data;
+        if (latest == null)
+            data = RuleJsonDynamic.Empty; // the same empty object the former undisposed Parse("{}") produced
+        else
+            data = borrowData
+                ? RuleJsonDynamic.Borrow(latest.Data.JsonElement)
+                : RuleJsonDynamic.FromJsonElement(latest.Data.JsonElement);
 
         return new ExpressoInstanceView
         {
@@ -109,7 +120,7 @@ public static class ExpressoRuleContextMapper
             EffectiveStateSubType = instance.EffectiveStateSubType?.ToString(),
             EffectiveStatus = instance.GetEffectiveStatus.Code,
             Type = instance.Type.Code,
-            Data = RuleJsonDynamic.FromJsonElement(dataElement)
+            Data = data
         };
     }
 }

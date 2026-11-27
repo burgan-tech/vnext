@@ -598,42 +598,84 @@ public static class HttpTaskInvocation
                 new HttpMethod(binding.Method),
                 binding.Url);
 
-            // Add headers. Content-Type is a content header in .NET, not a request header, so it is
-            // captured here and applied to request.Content below instead of request.Headers.
-            string? headerContentType = null;
-            if (!string.IsNullOrEmpty(binding.Headers))
-            {
-                var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(binding.Headers);
-                if (headers != null)
-                {
-                    foreach (var header in headers)
-                    {
-                        if (string.Equals(header.Key, "Content-Type", StringComparison.OrdinalIgnoreCase))
-                        {
-                            headerContentType = header.Value;
-                            continue;
-                        }
-
-                        if (IsReservedTraceHeader(header.Key))
-                            continue;
-
-                        request.Headers.TryAddWithoutValidation(header.Key, header.Value);
-                    }
-                }
-            }
+            var headerContentType = ApplyHeaders(request, binding.Headers);
 
             ApplyTrustedCorrelationHeaders(request, traceContext);
 
-            // Add body for non-GET requests. Resolution: explicit ContentType → Content-Type header → json.
-            if (request.Method != HttpMethod.Get && !string.IsNullOrEmpty(binding.Body))
-            {
-                var contentType = HttpContentType.Resolve(binding.ContentType, headerContentType);
-                request.Content = new StringContent(binding.Body, Encoding.UTF8);
-                request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(contentType);
-            }
+            if (request.Method != HttpMethod.Get)
+                request.Content = BuildRequestContent(binding, headerContentType);
 
             return (httpClient, request);
         }
+    }
+
+    /// <summary>
+    /// Copies the binding's headers onto the request and returns its Content-Type header, if any. Content-Type is
+    /// a content header in .NET, not a request header, so it is returned for the body instead of being added here;
+    /// reserved trace headers are skipped.
+    /// </summary>
+    private static string? ApplyHeaders(HttpRequestMessage request, string? headersJson)
+    {
+        if (string.IsNullOrEmpty(headersJson))
+            return null;
+
+        var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(headersJson);
+        if (headers == null)
+            return null;
+
+        string? headerContentType = null;
+        foreach (var header in headers)
+        {
+            if (string.Equals(header.Key, "Content-Type", StringComparison.OrdinalIgnoreCase))
+                headerContentType = header.Value;
+            else if (!IsReservedTraceHeader(header.Key))
+                request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        }
+
+        return headerContentType;
+    }
+
+    /// <summary>
+    /// Builds the body of a non-GET request, or null when there is none. A multipart body wins and sets its own
+    /// media type (the boundary); otherwise the resolution is: explicit ContentType → Content-Type header → json.
+    /// </summary>
+    private static HttpContent? BuildRequestContent(HttpTaskBinding binding, string? headerContentType)
+    {
+        if (binding.Multipart is { Count: > 0 } parts)
+            return BuildMultipartContent(parts);
+
+        if (string.IsNullOrEmpty(binding.Body))
+            return null;
+
+        var content = new StringContent(binding.Body, Encoding.UTF8);
+        content.Headers.ContentType =
+            MediaTypeHeaderValue.Parse(HttpContentType.Resolve(binding.ContentType, headerContentType));
+        return content;
+    }
+
+    /// <summary>
+    /// Builds the <c>multipart/form-data</c> content of a request: a file part as its bytes (never through a
+    /// string, so no byte is re-encoded), a field part as UTF-8 text, in the binding's order.
+    /// </summary>
+    private static MultipartFormDataContent BuildMultipartContent(IReadOnlyList<HttpMultipartPartBinding> parts)
+    {
+        var form = new MultipartFormDataContent();
+        foreach (var part in parts)
+        {
+            if (part.Content is not null)
+            {
+                var file = new ByteArrayContent(part.Content);
+                file.Headers.ContentType = MediaTypeHeaderValue.Parse(
+                    string.IsNullOrWhiteSpace(part.ContentType) ? "application/octet-stream" : part.ContentType);
+                form.Add(file, part.Name, string.IsNullOrWhiteSpace(part.FileName) ? part.Name : part.FileName);
+            }
+            else
+            {
+                form.Add(new StringContent(part.Value ?? string.Empty, Encoding.UTF8), part.Name);
+            }
+        }
+
+        return form;
     }
 
     /// <summary>A header value that can be carried as is: present, bounded, no control characters (no header injection).</summary>

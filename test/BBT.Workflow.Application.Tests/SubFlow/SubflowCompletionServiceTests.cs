@@ -98,7 +98,8 @@ public sealed class SubflowCompletionServiceTests
         _outputMappingService
             .Setup(x => x.ApplyPreparedAsync(
                 It.IsAny<Instance>(), It.IsAny<Definitions.Workflow>(),
-                It.IsAny<SubflowOutputMappingPlan>(), It.IsAny<JsonElement?>(),
+                // The completion path always reports a completed child (result.status = "completed").
+                It.IsAny<SubflowOutputMappingPlan>(), It.IsAny<JsonElement?>(), SubflowSettlement.Completed,
                 It.IsAny<IReadOnlyDictionary<string, string?>?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Ok());
@@ -596,7 +597,7 @@ public sealed class SubflowCompletionServiceTests
                 parentInstance,
                 parentWorkflow,
                 It.IsAny<string>(),
-                It.IsAny<JsonElement?>(),
+                It.IsAny<JsonElement?>(), It.IsAny<SubflowSettlement>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Ok());
         _workflowExecutionService
@@ -637,7 +638,7 @@ public sealed class SubflowCompletionServiceTests
             .ReturnsAsync(Result<Definitions.Workflow>.Ok(parentWorkflow));
         _outputMappingService
             .Setup(x => x.ApplyAsync(parentInstance, parentWorkflow, It.IsAny<string>(),
-                It.IsAny<JsonElement?>(), It.IsAny<CancellationToken>()))
+                It.IsAny<JsonElement?>(), It.IsAny<SubflowSettlement>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Ok());
 
         WorkflowExecutionContext? captured = null;
@@ -752,7 +753,7 @@ public sealed class SubflowCompletionServiceTests
             .ReturnsAsync(Result<Definitions.Workflow>.Ok(parentWorkflow));
         _outputMappingService
             .Setup(x => x.ApplyAsync(parentInstance, parentWorkflow, It.IsAny<string>(),
-                It.IsAny<JsonElement?>(), It.IsAny<CancellationToken>()))
+                It.IsAny<JsonElement?>(), It.IsAny<SubflowSettlement>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Ok());
 
         // Resume fails hard (lock conflict) → revert path must run.
@@ -818,7 +819,7 @@ public sealed class SubflowCompletionServiceTests
             .ReturnsAsync(Result<Definitions.Workflow>.Ok(workflow));
         _outputMappingService
             .Setup(x => x.ApplyAsync(parent, workflow, It.IsAny<string>(),
-                It.IsAny<JsonElement?>(), It.IsAny<CancellationToken>()))
+                It.IsAny<JsonElement?>(), It.IsAny<SubflowSettlement>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Ok());
         _workflowExecutionService
             .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))
@@ -859,7 +860,7 @@ public sealed class SubflowCompletionServiceTests
             .ReturnsAsync(Result<Definitions.Workflow>.Ok(workflow));
         _outputMappingService
             .Setup(x => x.ApplyAsync(parent, workflow, It.IsAny<string>(),
-                It.IsAny<JsonElement?>(), It.IsAny<CancellationToken>()))
+                It.IsAny<JsonElement?>(), It.IsAny<SubflowSettlement>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Ok());
         var expected = new InvalidOperationException("original resume failure");
         _workflowExecutionService
@@ -886,7 +887,7 @@ public sealed class SubflowCompletionServiceTests
         _outputMappingService
             .Setup(x => x.ApplyPreparedAsync(
                 It.IsAny<Instance>(), It.IsAny<Definitions.Workflow>(), It.IsAny<SubflowOutputMappingPlan>(),
-                It.IsAny<JsonElement?>(), It.IsAny<IReadOnlyDictionary<string, string?>?>(),
+                It.IsAny<JsonElement?>(), It.IsAny<SubflowSettlement>(), It.IsAny<IReadOnlyDictionary<string, string?>?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Fail(WorkflowErrors.SubFlowOutputMappingFailed(
                 parent.Id, "mapping script is invalid", "at Mapping.OutputHandler()")));
@@ -910,7 +911,7 @@ public sealed class SubflowCompletionServiceTests
         _outputMappingService
             .Setup(x => x.ApplyPreparedAsync(
                 It.IsAny<Instance>(), It.IsAny<Definitions.Workflow>(), It.IsAny<SubflowOutputMappingPlan>(),
-                It.IsAny<JsonElement?>(), It.IsAny<IReadOnlyDictionary<string, string?>?>(),
+                It.IsAny<JsonElement?>(), It.IsAny<SubflowSettlement>(), It.IsAny<IReadOnlyDictionary<string, string?>?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Fail(WorkflowErrors.SubFlowOutputMappingFailed(
                 parent.Id, "mapping script is invalid", "at Mapping.OutputHandler()")));
@@ -1012,13 +1013,18 @@ public sealed class SubflowCompletionServiceTests
         var parent = CreateParentInstance(out var subInstanceId, SubFlowType.SubFlow);
         SetupCompletedCorrelationPath(parent);
         IReadOnlyDictionary<string, string?>? seen = null;
+        SubflowSettlement? settlement = null;
         _outputMappingService
             .Setup(x => x.ApplyPreparedAsync(
                 It.IsAny<Instance>(), It.IsAny<Definitions.Workflow>(), It.IsAny<SubflowOutputMappingPlan>(),
-                It.IsAny<JsonElement?>(), It.IsAny<IReadOnlyDictionary<string, string?>?>(),
+                It.IsAny<JsonElement?>(), It.IsAny<SubflowSettlement>(), It.IsAny<IReadOnlyDictionary<string, string?>?>(),
                 It.IsAny<CancellationToken>()))
-            .Callback<Instance, Definitions.Workflow, SubflowOutputMappingPlan, JsonElement?,
-                IReadOnlyDictionary<string, string?>?, CancellationToken>((_, _, _, _, h, _) => seen = h)
+            .Callback<Instance, Definitions.Workflow, SubflowOutputMappingPlan, JsonElement?, SubflowSettlement,
+                IReadOnlyDictionary<string, string?>?, CancellationToken>((_, _, _, _, st, h, _) =>
+                {
+                    settlement = st;
+                    seen = h;
+                })
             .ReturnsAsync(Result.Ok());
         var carried = new Dictionary<string, string?> { ["sub"] = "u1" };
 
@@ -1026,6 +1032,7 @@ public sealed class SubflowCompletionServiceTests
 
         seen.ShouldNotBeNull();
         seen["sub"].ShouldBe("u1");
+        settlement.ShouldBe(SubflowSettlement.Completed);
     }
 
     private static CarriedHeaderPolicy CreatePolicy(bool applyToResume) => new(
@@ -1062,7 +1069,7 @@ public sealed class SubflowCompletionServiceTests
             .ReturnsAsync(Result<Definitions.Workflow>.Ok(parentWorkflow));
         _outputMappingService
             .Setup(x => x.ApplyAsync(parent, parentWorkflow, It.IsAny<string>(),
-                It.IsAny<JsonElement?>(), It.IsAny<CancellationToken>()))
+                It.IsAny<JsonElement?>(), It.IsAny<SubflowSettlement>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Ok());
         _workflowExecutionService
             .Setup(x => x.ExecuteTransitionAsync(It.IsAny<WorkflowExecutionContext>(), It.IsAny<CancellationToken>()))

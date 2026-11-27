@@ -5,7 +5,9 @@ using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Authorization;
 using BBT.Workflow.Tasks.Coordinator;
+using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Execution.Pipeline.Steps;
@@ -23,7 +25,8 @@ public sealed class RunOnExitTasksStep(
     IInstanceRepository instanceRepository,
     IInstanceTaskRepository instanceTaskRepository,
     IRuntimeInfoProvider runtimeInfoProvider,
-    ILogger<RunOnExitTasksStep> logger) : ITransitionStep
+    ILogger<RunOnExitTasksStep> logger,
+    ICallerAccessorFactory? callerAccessorFactory = null) : ITransitionStep
 {
     /// <summary>
     /// Context key for storing failed OnExecuteTask for Error Boundary.
@@ -186,6 +189,8 @@ public sealed class RunOnExitTasksStep(
             // A freshly inserted transition record cannot have journal rows, so the engine skips
             // its per-task idempotency probe; a retry (reused record) keeps it.
             skipJournalProbe: IsFreshTransitionRecord(context),
+            // The hop's caller reaches the declarative mappings' `user` variable (script mappings never see it).
+            optionsRefiner: TaskMappingCaller.Refiner(callerAccessorFactory, context, context.Current.OnExits, cancellationToken),
             cancellationToken: cancellationToken);
     }
 

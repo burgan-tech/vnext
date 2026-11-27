@@ -1,3 +1,4 @@
+using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Contracts;
@@ -32,6 +33,7 @@ public sealed class TransitionSchemaResolver(
         Instance instance,
         Transition transition,
         IReadOnlyDictionary<string, string?>? headers,
+        JsonElement? requestBody = null,
         CancellationToken cancellationToken = default)
     {
         if (transition.SchemaSelection is not { Schemas.Count: > 0 } selection)
@@ -53,7 +55,9 @@ public sealed class TransitionSchemaResolver(
             .WithHeaders(headerCopy)
             // Rules may select by the caller's resolved roles; resolved only if a rule reads them.
             .WithCaller(callerAccessorFactory.ForRequest(headerCopy, ct))
-            .BuildAsync(ct));
+            .BuildAsync(ct)
+            // `input` is the transition request body (null on the schema read path, which has none).
+            .WithHopInputAsync(requestBody));
 
         var selected = await selector.SelectAsync(
             candidates,

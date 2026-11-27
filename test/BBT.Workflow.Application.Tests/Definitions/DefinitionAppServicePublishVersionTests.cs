@@ -69,6 +69,7 @@ public sealed class DefinitionAppServicePublishVersionTests
             new WorkflowCastProcessor([_castHandler]),
             Substitute.For<IDomainCacheContext>(),
             new RowSecurityPublishCheck(Substitute.For<IComponentCacheStore>(), NullLogger<RowSecurityPublishCheck>.Instance),
+            new MappingBlockValidator(new BBT.Workflow.Scripting.Expressions.ExpressionCompiler(16)),
             provider.GetRequiredService<IServiceScopeFactory>(),
             provider);
     }

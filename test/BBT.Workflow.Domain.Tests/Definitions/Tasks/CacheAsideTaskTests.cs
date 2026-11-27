@@ -181,4 +181,55 @@ public sealed class CacheAsideTaskTests
         task.ShouldBeOfType<CacheAsideTask>();
         ((CacheAsideTask)task!).CacheKey.ShouldBe("k1");
     }
+
+    private const string BlocksJson = """
+    {
+      "key": "k1",
+      "sourceTask": { "key": "src", "domain": "core", "version": "1.0.0" },
+      "sourceInput": { "set": { "$.url": "\"https://x/\" + data.id", "$.headers.x": "\"1\"" } },
+      "sourceOutput": { "select": "$.body.profile", "into": "$.profile", "set": { "$.profile.at": "now" } }
+    }
+    """;
+
+    [Fact]
+    public void Configure_ParsesSourceBlocks_AndCopiesThemOnCloneAndPooling()
+    {
+        var original = CacheAsideTask.Create(Json(BlocksJson));
+        original.SetReference(new Reference("cache-task", "core", "sys-tasks", "1.0.0"));
+
+        original.SourceInput.ShouldNotBeNull();
+        original.SourceInput!.Set!.Keys.ShouldBe(["$.url", "$.headers.x"]);
+        original.SourceOutput.ShouldNotBeNull();
+        original.SourceOutput!.Select.ShouldBe("$.body.profile");
+        original.SourceOutput.Into.ShouldBe("$.profile");
+        original.SourceMapping.ShouldBeNull();
+
+        var clone = original.CloneTyped();
+        clone.SourceInput.ShouldBe(original.SourceInput);
+        clone.SourceOutput.ShouldBe(original.SourceOutput);
+
+        var pooled = CacheAsideTask.CreateEmpty();
+        pooled.CopyFromInternal(original);
+        pooled.SourceInput.ShouldBe(original.SourceInput);
+        pooled.SourceOutput.ShouldBe(original.SourceOutput);
+        pooled.Reset();
+        pooled.SourceInput.ShouldBeNull();
+        pooled.SourceOutput.ShouldBeNull();
+    }
+
+    [Fact]
+    public void SourceBlocks_RoundTripThroughTheDefinitionSerializer()
+    {
+        var json = $$"""{ "type": "18", "config": {{BlocksJson}} }""";
+        var task = (CacheAsideTask)JsonSerializer.Deserialize<WorkflowTask>(json, JsonSerializerConstants.JsonOptions)!;
+
+        var written = JsonSerializer.Serialize<WorkflowTask>(task, JsonSerializerConstants.JsonOptions);
+        var back = JsonSerializer.Deserialize<WorkflowTask>(written, JsonSerializerConstants.JsonOptions);
+
+        var roundTripped = back.ShouldBeOfType<CacheAsideTask>();
+        roundTripped.SourceInput!.Set!.Keys.ShouldBe(["$.url", "$.headers.x"]);
+        roundTripped.SourceInput.Set["$.url"].ShouldBe("\"https://x/\" + data.id");
+        roundTripped.SourceOutput!.Select.ShouldBe("$.body.profile");
+        roundTripped.SourceOutput.Set!["$.profile.at"].ShouldBe("now");
+    }
 }

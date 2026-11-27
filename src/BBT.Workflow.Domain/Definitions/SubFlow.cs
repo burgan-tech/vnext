@@ -12,10 +12,14 @@ public sealed class SubFlow
     private SubFlow(
         SubFlowType type,
         Reference process,
-        ScriptCode mapping,
+        ScriptCode? mapping,
         Dictionary<string, Reference>? viewOverrides,
-        SubFlowOverrides? overrides = null)
+        SubFlowOverrides? overrides = null,
+        MappingBlock? input = null,
+        MappingBlock? output = null)
     {
+        Input = input;
+        Output = output;
         Type = type;
         Process = process;
         Mapping = mapping;
@@ -25,7 +29,23 @@ public sealed class SubFlow
 
     public SubFlowType Type { get; private set; }
     public Reference Process { get; private set; }
-    public ScriptCode Mapping { get; private set; }
+    /// <summary>
+    /// Optional C# mapping script (input handler / output handler). Mutually exclusive with <see cref="Input"/> and
+    /// <see cref="Output"/>: publish rejects both; a stored definition holding both runs the script.
+    /// </summary>
+    public ScriptCode? Mapping { get; private set; }
+
+    /// <summary>
+    /// Optional declarative block that shapes the child instance's start payload without a script. Mutually exclusive with <see cref="Mapping"/>.
+    /// </summary>
+    [JsonPropertyName("input")]
+    public MappingBlock? Input { get; private set; }
+
+    /// <summary>
+    /// Optional declarative block that files the child's result onto the parent without a script. Mutually exclusive with <see cref="Mapping"/>.
+    /// </summary>
+    [JsonPropertyName("output")]
+    public MappingBlock? Output { get; private set; }
 
     /// <summary>
     /// Legacy view overrides. Kept for backward compatibility.
@@ -67,9 +87,9 @@ public sealed class SubFlow
     [JsonIgnore]
     public bool HasTimeoutOverride => Overrides?.Timeout != null;
 
-    public static SubFlow Create(string type, IReference reference, ScriptCode mapping, Dictionary<string, Reference>? viewOverrides,
-        SubFlowOverrides? overrides = null)
+    public static SubFlow Create(string type, IReference reference, ScriptCode? mapping, Dictionary<string, Reference>? viewOverrides,
+        SubFlowOverrides? overrides = null, MappingBlock? input = null, MappingBlock? output = null)
     {
-        return new SubFlow(SubFlowType.FromCode(type), reference.ToReference(), mapping, viewOverrides, overrides);
+        return new SubFlow(SubFlowType.FromCode(type), reference.ToReference(), mapping, viewOverrides, overrides, input, output);
     }
 }

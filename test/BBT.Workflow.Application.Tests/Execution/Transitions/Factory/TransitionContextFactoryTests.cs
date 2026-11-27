@@ -80,6 +80,70 @@ public class TransitionContextFactoryTests
         repository.Verify(x => x.GetActiveAsync(input.InstanceId, It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
+    // ---- HopInput: the raw request payload of THIS hop (the expression variable `input`) ----
+
+    private static (TransitionContextFactory Factory, Definitions.Workflow Workflow, Instance Instance) HopFixture()
+    {
+        var workflow = CreateWorkflow("test-workflow", "test-domain");
+        var instance = Instance.Create(Guid.NewGuid(), workflow.Key, workflow.Version);
+        instance.ChangeState(workflow.GetState("state1").Value!);
+        var factory = new TransitionContextFactory(
+            Mock.Of<IInstanceRepository>(), Mock.Of<IComponentCacheStore>(), Mock.Of<IRuntimeInfoProvider>());
+        return (factory, workflow, instance);
+    }
+
+    [Fact]
+    public void HopInput_IsTheRequestAttributes_AndSurvivesDataRebase()
+    {
+        var (factory, workflow, instance) = HopFixture();
+        var attributes = JsonDocument.Parse("""{"seat":"12A"}""").RootElement;
+        var input = new WorkflowExecutionContext
+        {
+            Domain = workflow.Domain, WorkflowKey = workflow.Key, WorkflowVersion = workflow.Version,
+            InstanceId = instance.Id.ToString(), TransitionKey = "start", Mode = ExecMode.Sync,
+            TriggerType = TriggerType.Manual,
+            Data = new TransitionDataInfo(attributes)
+        };
+
+        var context = factory.CreateFromPreloaded(input, workflow, instance).Value!;
+        context.Data = JsonDocument.Parse("""{"merged":true}""").RootElement; // what task outputs do to Data
+
+        ((JsonElement)context.HopInput!).GetProperty("seat").GetString().ShouldBe("12A");
+    }
+
+    [Fact]
+    public void HopInput_IsNull_OnTheInlineAutomaticContinuationHop()
+    {
+        var (factory, workflow, instance) = HopFixture();
+        var manual = factory.CreateFromPreloaded(new WorkflowExecutionContext
+        {
+            Domain = workflow.Domain, WorkflowKey = workflow.Key, WorkflowVersion = workflow.Version,
+            InstanceId = instance.Id.ToString(), TransitionKey = "start", Mode = ExecMode.Sync,
+            TriggerType = TriggerType.Manual,
+            Data = new TransitionDataInfo(JsonDocument.Parse("""{"seat":"12A"}""").RootElement)
+        }, workflow, instance).Value!;
+        manual.Directives.RequestNextTransition(new NextTransitionRequest("start"));
+
+        var nextInput = new BBT.Workflow.Execution.Continuations.InlineContinuationStrategy()
+            .DispatchAsync(manual, CancellationToken.None).Result.Value!;
+        var continuation = factory.CreateFromPreloaded(nextInput, workflow, instance).Value!;
+
+        nextInput.Data.ShouldBeNull();
+        continuation.HopInput.ShouldBeNull();
+    }
+
+    [Fact]
+    public void HopInput_IsNull_OnAFiredTimerHop()
+    {
+        var (factory, workflow, instance) = HopFixture();
+        // TransitionTimerJobHandler's shape: a TransitionInput with no data, trigger Scheduled.
+        var timerInput = new TransitionInput(workflow.Domain, workflow.Key) { Sync = true }
+            .ToExecutionContext(instance.Id.ToString(), workflow.Version, "start");
+        timerInput.TriggerType = TriggerType.Scheduled;
+
+        factory.CreateFromPreloaded(timerInput, workflow, instance).Value!.HopInput.ShouldBeNull();
+    }
+
     [Fact]
     public void TerminationContextHelpers_ShouldCreateAndPromoteCascadeContext()
     {

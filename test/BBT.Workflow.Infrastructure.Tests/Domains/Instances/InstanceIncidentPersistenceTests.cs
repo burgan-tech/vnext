@@ -394,7 +394,139 @@ public sealed class InstanceIncidentPersistenceTests : IAsyncLifetime
         (await verify.InstanceIncidents.CountAsync(i => i.InstanceId == instance.Id)).ShouldBe(0);
     }
 
+    [Fact]
+    public async Task AStaleCopyOfAFaultedInstance_WritesItsOldStatusOverTheFault()
+    {
+        // The hazard the next test removes (vnext#1252): the pipeline's copy carries a status change the
+        // fault did not see; the fault is written on a reload in another unit of work; the copy's own
+        // commit then writes its status back over the fault.
+        var instance = await SeedActiveAsync("stale-copy-control");
+        await using var pipeline = CreateContext();
+        var copy = await pipeline.Instances.FirstAsync(i => i.Id == instance.Id);
+        copy.Busy();
+
+        await FaultInAnotherUnitOfWorkAsync(instance.Id);
+        await pipeline.SaveChangesAsync();
+
+        (await ReadAsync(instance.Id)).Status.ShouldBe(InstanceStatus.Busy);
+    }
+
+    [Fact]
+    public async Task MirroringThePersistedFault_LeavesTheCopyNothingToWrite()
+    {
+        var instance = await SeedActiveAsync("stale-copy-mirrored");
+        await using var pipeline = CreateContext();
+        var copy = await pipeline.Instances.FirstAsync(i => i.Id == instance.Id);
+        copy.Busy();
+
+        var faulted = await FaultInAnotherUnitOfWorkAsync(instance.Id);
+        copy.MirrorPersistedFault(faulted);
+        await CreateRepository(pipeline).AcceptPersistedStatusAsync(copy);
+
+        copy.Status.ShouldBe(InstanceStatus.Faulted);
+        copy.HasActiveIncident.ShouldBeTrue();
+        pipeline.Entry(copy).State.ShouldBe(EntityState.Unchanged);
+        await pipeline.SaveChangesAsync();
+        var row = await ReadAsync(instance.Id);
+        row.Status.ShouldBe(InstanceStatus.Faulted);
+        row.CompletedAt.ShouldNotBeNull();
+        row.HasActiveIncident.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task ACancelTakeoverAlignedOnTheCopy_IsNotWrittenOverAFaultThatFollows()
+    {
+        // The reserved cancel on a Faulted instance (vnext#1252): Faulted → Busy in a transaction of its own on
+        // the pipeline's copy, then the cancel itself fails and faults the instance again. The copy's commit
+        // must not write the takeover's Busy over that second fault.
+        var instance = Instance.Create(Guid.NewGuid(), Flow, "1.0.0", "cancel-takeover");
+        instance.AddIncident(CreateIncident("first-failure"));
+        await SeedAsync(instance);
+        await using (var seed = CreateContext())
+        {
+            await seed.Instances.Where(i => i.Id == instance.Id)
+                .ExecuteUpdateAsync(s => s.SetProperty(i => i.Status, InstanceStatus.Faulted));
+        }
+
+        await using var pipeline = CreateContext();
+        var repository = CreateRepository(pipeline);
+        var copy = (await repository.GetActiveOrFaultedAsync(instance.Id.ToString())).Value!;
+        await repository.LoadActiveIncidentsAsync(copy);
+        await using (var takeover = CreateContext())
+        {
+            var takeoverRepository = CreateRepository(takeover);
+            (await takeoverRepository.TryUnfaultAsync(copy)).ShouldBeTrue();
+            (await takeoverRepository.TryMarkBusyAsync(copy)).ShouldBeTrue();
+        }
+        await repository.AcceptPersistedStatusAsync(copy);
+
+        await FaultInAnotherUnitOfWorkAsync(instance.Id);
+        await pipeline.SaveChangesAsync();
+
+        (await ReadAsync(instance.Id)).Status.ShouldBe(InstanceStatus.Faulted);
+    }
+
+    [Fact]
+    public async Task GetActiveOrFaultedAsync_AdmitsAFaultedInstance_WhichGetActiveAsyncRefuses()
+    {
+        var instance = await SeedActiveAsync("faulted-load");
+        await FaultInAnotherUnitOfWorkAsync(instance.Id);
+        await using var ctx = CreateContext();
+        var repository = CreateRepository(ctx);
+
+        var active = await repository.GetActiveAsync(instance.Id.ToString());
+        var activeOrFaulted = await repository.GetActiveOrFaultedAsync(instance.Id.ToString());
+
+        active.IsSuccess.ShouldBeFalse();
+        active.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceCompleted);
+        activeOrFaulted.IsSuccess.ShouldBeTrue();
+        activeOrFaulted.Value!.Status.ShouldBe(InstanceStatus.Faulted);
+    }
+
+    [Theory]
+    [InlineData("C")]
+    [InlineData("P")]
+    public async Task GetActiveOrFaultedAsync_StillRefusesCompletedAndPassive(string status)
+    {
+        var instance = await SeedActiveAsync($"terminal-load-{status}");
+        await using (var seed = CreateContext())
+        {
+            await seed.Instances.Where(i => i.Id == instance.Id)
+                .ExecuteUpdateAsync(s => s.SetProperty(i => i.Status, InstanceStatus.FromCode(status)));
+        }
+        await using var ctx = CreateContext();
+
+        var result = await CreateRepository(ctx).GetActiveOrFaultedAsync(instance.Id.ToString());
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceCompleted);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    private async Task<Instance> SeedActiveAsync(string key)
+    {
+        var instance = Instance.Create(Guid.NewGuid(), Flow, "1.0.0", key);
+        await SeedAsync(instance);
+        return instance;
+    }
+
+    /// <summary>What the pipeline's fault path does: reload in a unit of work of its own, add the incident, fault, save.</summary>
+    private async Task<Instance> FaultInAnotherUnitOfWorkAsync(Guid instanceId)
+    {
+        await using var ctx = CreateContext();
+        var reloaded = await ctx.Instances.FirstAsync(i => i.Id == instanceId);
+        reloaded.AddIncident(CreateIncident("pipeline-failure"));
+        reloaded.Fault("test-domain");
+        await CreateRepository(ctx).UpdateAsync(reloaded, autoSave: true);
+        return reloaded;
+    }
+
+    private async Task<Instance> ReadAsync(Guid instanceId)
+    {
+        await using var ctx = CreateContext();
+        return await ctx.Instances.AsNoTracking().SingleAsync(i => i.Id == instanceId);
+    }
 
     private static InstanceIncident CreateIncident(string errorCode, DateTime? createdAt = null)
     {

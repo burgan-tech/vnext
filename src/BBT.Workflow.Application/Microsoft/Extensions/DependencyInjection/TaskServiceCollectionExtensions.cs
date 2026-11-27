@@ -1,3 +1,4 @@
+using BBT.Workflow.Scripting.Expressions;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.BackgroundJobs.Recovery;
 using BBT.Workflow.Execution.ErrorHandling;
@@ -16,6 +17,7 @@ using BBT.Workflow.Tasks.Executors;
 using BBT.Workflow.Tasks.Factory;
 using BBT.Workflow.Tasks.Invocation;
 using BBT.Workflow.Tasks.Invocation.Local;
+using BBT.Workflow.Tasks.Mapping;
 using BBT.Workflow.Tasks.Persistence;
 using BBT.Workflow.Tasks.Persistence.Strategies;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -121,6 +123,12 @@ public static class TaskServiceCollectionExtensions
         // Executor registry
         services.TryAddScoped<ITaskExecutorRegistry, TaskExecutorRegistry>();
 
+        // Binding mapping runners: executors run their input/output mapping through ITaskMappingRunner, which routes
+        // each phase to the Roslyn script runner or the declarative set/into/select runner (no Roslyn compile).
+        services.TryAddScoped<ScriptTaskMappingRunner>();
+        services.TryAddSingleton<DeclarativeTaskMappingRunner>();
+        services.TryAddScoped<ITaskMappingRunner, RoutingTaskMappingRunner>();
+
         // Script executor (no remote - inline execution)
         services.AddTaskExecutor<ScriptTaskExecutor>();
 
@@ -224,6 +232,16 @@ public static class TaskServiceCollectionExtensions
         services.AddScoped<DynamicExpressoConditionEvaluator>();
         services.AddScoped<IConditionEvaluator, RoutingConditionEvaluator>();
         services.AddScoped<ITimerEvaluator, ScriptTimerEvaluator>();
+
+        // One bounded compiler for every Dynamic Expresso slot (Workflow:Expressions:CacheCapacity).
+        services.AddOptions<ExpressionCompilerOptions>()
+            .BindConfiguration(ExpressionCompilerOptions.SectionName)
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+        services.TryAddSingleton<IExpressionCompiler, ExpressionCompiler>();
+
+        // Value slots honouring location "dynamicExpresso" (timer, timeout, timeout override, agent prompt / decision).
+        services.TryAddSingleton<ValueSlotExpressionEvaluator>();
 
         // Dynamic Expresso string evaluator (e.g. CacheAside key expressions).
         services.AddScoped<IDynamicExpressoValueEvaluator, DynamicExpressoValueEvaluator>();

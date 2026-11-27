@@ -46,8 +46,9 @@ public sealed class SubProcessTaskExecutor : TriggerTaskExecutorBase<SubProcessT
         IConfiguration configuration,
         IDomainDiscoveryResolver endpointResolver,
         ICurrentUser currentUser,
-        ILogger<SubProcessTaskExecutor> logger)
-        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
+        ILogger<SubProcessTaskExecutor> logger,
+        ITaskMappingRunner? mappingRunner = null)
+        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger, mappingRunner)
     {
         _instanceCommandGateway = instanceCommandGateway;
         _instanceRepository = instanceRepository;

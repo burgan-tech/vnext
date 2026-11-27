@@ -61,7 +61,7 @@ public sealed class SubflowOutputMappingServiceTests
             .Throws(new FileLoadException("Assembly with same name is already loaded"));
 
         var result = await CreateService().ApplyAsync(
-            parentInstance, parentWorkflow, "waiting-child", CreateChildData(), CancellationToken.None);
+            parentInstance, parentWorkflow, "waiting-child", CreateChildData(), SubflowSettlement.Completed, CancellationToken.None);
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.SubflowOutputMappingFailed);
@@ -77,7 +77,7 @@ public sealed class SubflowOutputMappingServiceTests
             .Throws(new BadImageFormatException("invalid assembly image"));
 
         var result = await CreateService().ApplyAsync(
-            parentInstance, parentWorkflow, "waiting-child", CreateChildData(), CancellationToken.None);
+            parentInstance, parentWorkflow, "waiting-child", CreateChildData(), SubflowSettlement.Completed, CancellationToken.None);
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.SubflowOutputMappingFailed);
@@ -93,7 +93,7 @@ public sealed class SubflowOutputMappingServiceTests
             .Throws(new NotSupportedException("mapping script is invalid"));
 
         var result = await CreateService().ApplyAsync(
-            parentInstance, parentWorkflow, "waiting-child", CreateChildData(), CancellationToken.None);
+            parentInstance, parentWorkflow, "waiting-child", CreateChildData(), SubflowSettlement.Completed, CancellationToken.None);
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.SubflowOutputMappingFailed);
@@ -122,7 +122,7 @@ public sealed class SubflowOutputMappingServiceTests
             .ThrowsAsync(new FileLoadException("Assembly with same name is already loaded"));
 
         var result = await CreateService().ApplyAsync(
-            parentInstance, parentWorkflow, "waiting-child", CreateChildData(), CancellationToken.None);
+            parentInstance, parentWorkflow, "waiting-child", CreateChildData(), SubflowSettlement.Completed, CancellationToken.None);
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.SubflowOutputMappingFailed);
@@ -145,7 +145,7 @@ public sealed class SubflowOutputMappingServiceTests
             .Throws(new TaskCanceledException("downstream call timed out"));
 
         var result = await CreateService().ApplyAsync(
-            parentInstance, parentWorkflow, "waiting-child", CreateChildData(), CancellationToken.None);
+            parentInstance, parentWorkflow, "waiting-child", CreateChildData(), SubflowSettlement.Completed, CancellationToken.None);
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.SubflowOutputMappingFailed);
@@ -200,7 +200,7 @@ public sealed class SubflowOutputMappingServiceTests
         var plan = (await service.PrepareAsync(parentInstance.Id, parentWorkflow, "waiting-child")).Value!;
 
         var result = await service.ApplyPreparedAsync(
-            parentInstance, parentWorkflow, plan, CreateChildData(),
+            parentInstance, parentWorkflow, plan, CreateChildData(), SubflowSettlement.Completed,
             new Dictionary<string, string?> { ["sub"] = "u1", ["authorization"] = "Bearer forged" },
             CancellationToken.None);
 
@@ -241,7 +241,7 @@ public sealed class SubflowOutputMappingServiceTests
             NullLogger<CarriedHeaderPolicy>.Instance);
 
         var result = await CreateService(policy).ApplyAsync(
-            parentInstance, parentWorkflow, "waiting-child", CreateChildData(),
+            parentInstance, parentWorkflow, "waiting-child", CreateChildData(), SubflowSettlement.Completed,
             CancellationToken.None,
             new Dictionary<string, string?> { ["sub"] = "u1" });
 
@@ -287,7 +287,7 @@ public sealed class SubflowOutputMappingServiceTests
         var plan = new SubflowOutputMappingPlan(CallerReadingState(), new RoleReadingMapping());
 
         await Should.ThrowAsync<CallerRolesUnavailableTransientException>(service.ApplyPreparedAsync(
-            parent, CreateParentWorkflowWithMapping(), plan, CreateChildData(), IdentityHeaders(), CancellationToken.None));
+            parent, CreateParentWorkflowWithMapping(), plan, CreateChildData(), SubflowSettlement.Completed, IdentityHeaders(), CancellationToken.None));
 
         _instanceDataWriteService.Verify(x => x.AppendAsync(
             It.IsAny<Instance>(), It.IsAny<JsonData>(), It.IsAny<VersionStrategy>(), It.IsAny<CancellationToken>(),
@@ -305,7 +305,7 @@ public sealed class SubflowOutputMappingServiceTests
 
         var result = await CreateCallerService(resolver).ApplyPreparedAsync(
             CreateParentInstance(), CreateParentWorkflowWithMapping(),
-            new SubflowOutputMappingPlan(CallerReadingState(), mapping), CreateChildData(), IdentityHeaders(),
+            new SubflowOutputMappingPlan(CallerReadingState(), mapping), CreateChildData(), SubflowSettlement.Completed, IdentityHeaders(),
             CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();

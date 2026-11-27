@@ -20,56 +20,36 @@ public sealed class DaprBindingTaskExecutor : TaskExecutorBase<DaprBindingTask>
 {
     private readonly IRemoteInvokerService _remoteInvoker;
     private readonly ITaskInvocationDispatcher _dispatcher;
-    private readonly IScriptEngine _scriptEngine;
 
     /// <summary>
     /// Initializes a new instance of DaprBindingTaskExecutor.
     /// </summary>
+    /// <param name="mappingRunner">
+    /// The binding mapping runner (DI); null runs mappings through <see cref="RoutingTaskMappingRunner.CreateDefault"/>
+    /// over the script engine.
+    /// </param>
     public DaprBindingTaskExecutor(
         IRemoteInvokerService remoteInvoker,
         ITaskInvocationDispatcher dispatcher,
         IScriptEngine scriptEngine,
-        ILogger<DaprBindingTaskExecutor> logger)
-        : base(logger)
+        ILogger<DaprBindingTaskExecutor> logger,
+        ITaskMappingRunner? mappingRunner = null)
+        : base(logger, mappingRunner ?? RoutingTaskMappingRunner.CreateDefault(scriptEngine))
     {
         _remoteInvoker = remoteInvoker;
         _dispatcher = dispatcher;
-        _scriptEngine = scriptEngine;
     }
 
     /// <inheritdoc />
     public override TaskType TaskType => TaskType.DaprBinding;
 
     /// <inheritdoc />
-    protected override async Task<Result<ScriptResponse?>> PrepareInputAsync(
-        DaprBindingTask task,
-        TaskExecutorContext context,
-        CancellationToken cancellationToken)
-    {
-        var mapping = context.OnExecuteTask.Mapping;
-        if (mapping is null || !mapping.HasMappingCode)
-        {
-            return Result<ScriptResponse?>.Ok(null);
-        }
-
-        var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
-        {
-            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
-
-            return await scriptRunner.InputHandler(task, context.ScriptContext);
-        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "DaprBinding task input handler failed"));
-
-        if (!result.IsSuccess)
-        {
-            Logger.TaskInputHandlerFailed(
-                task.Key,
-                TaskType.ToString(),
-                context.ScriptContext.Instance?.Id ?? Guid.Empty,
-                result.Error.Message ?? "Unknown error");
-        }
-
-        return result;
-    }
+    /// <remarks>
+    /// Without an output mapping a binding task contributes no instance data, as before the binding's answer
+    /// was returned: an unmapped create/notify task must not start merging the binding's response (an S3
+    /// location, an HTTP body) into the instance. Only an output mapping reads the answer.
+    /// </remarks>
+    protected override object? UnmappedOutput(TaskInvocationResult invocationResult) => null;
 
     /// <inheritdoc />
     protected override async Task<Result<TaskInvocationResult>> InvokeAsync(
@@ -104,43 +84,4 @@ public sealed class DaprBindingTaskExecutor : TaskExecutorBase<DaprBindingTask>
 
         return result;
     }
-
-    /// <inheritdoc />
-    protected override async Task<Result<object?>> ProcessOutputAsync(
-        DaprBindingTask task,
-        TaskInvocationResult invocationResult,
-        TaskExecutorContext context,
-        CancellationToken cancellationToken)
-    {
-        var mapping = context.OnExecuteTask.Mapping;
-        if (mapping is null || !mapping.HasMappingCode)
-        {
-            // Without an output mapping a binding task contributes no instance data, as before the binding's answer
-            // was returned: an unmapped create/notify task must not start merging the binding's response (an S3
-            // location, an HTTP body) into the instance. Only an output mapping reads the answer.
-            return Result<object?>.Ok(null);
-        }
-
-        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext, context.ResponseVariableKey);
-
-        var result = await ResultExtensions.TryAsync<object?>(async ct =>
-        {
-            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
-
-            var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
-            return outputResponse.Data;
-        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "DaprBinding task output handler failed"));
-
-        if (!result.IsSuccess)
-        {
-            Logger.TaskOutputHandlerFailed(
-                task.Key,
-                TaskType.ToString(),
-                context.ScriptContext.Instance?.Id ?? Guid.Empty,
-                result.Error.Message ?? "Unknown error");
-        }
-
-        return result;
-    }
 }
-

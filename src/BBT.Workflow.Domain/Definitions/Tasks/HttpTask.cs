@@ -60,6 +60,14 @@ public class HttpTask : WorkflowTask
     public string? RawBody { get; private set; }
 
     /// <summary>
+    /// The parts of a <c>multipart/form-data</c> body, in the order they were added. When it holds a part,
+    /// the request is sent as multipart and takes precedence over <see cref="RawBody"/> and <see cref="Body"/>;
+    /// <see cref="ContentType"/> and a "Content-Type" header are then ignored, because the media type carries
+    /// the boundary the runtime generates. Built by a mapping script; a task definition cannot declare it.
+    /// </summary>
+    public IReadOnlyList<HttpMultipartPart>? Multipart { get; private set; }
+
+    /// <summary>
     /// Timeout seconds
     /// </summary>
     public int TimeoutSeconds { get; private set; } = 30;
@@ -108,7 +116,59 @@ public class HttpTask : WorkflowTask
     {
         RawBody = raw;
     }
-    
+
+    /// <summary>
+    /// Appends a text field to the <c>multipart/form-data</c> body (see <see cref="Multipart"/>).
+    /// </summary>
+    /// <param name="name">The form field name. Must not be null or whitespace.</param>
+    /// <param name="value">The field's text; null is sent as an empty value.</param>
+    public void AddMultipartField(string name, string? value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        AppendMultipart(new HttpMultipartPart { Name = name, Value = value ?? string.Empty });
+    }
+
+    /// <summary>
+    /// Appends a file to the <c>multipart/form-data</c> body (see <see cref="Multipart"/>). The bytes are sent
+    /// unchanged — a script that holds base64 decodes it first (<c>Convert.FromBase64String</c>), and one that
+    /// holds an <c>x-storage</c> handle reads the bytes with <c>GetFileAsync</c>.
+    /// </summary>
+    /// <param name="name">The form field name, e.g. <c>file</c>. Must not be null or whitespace.</param>
+    /// <param name="content">The file's bytes. Must not be null.</param>
+    /// <param name="fileName">The file name the receiver sees; defaults to <paramref name="name"/>.</param>
+    /// <param name="contentType">The file's media type; defaults to <c>application/octet-stream</c>.</param>
+    public void AddMultipartFile(string name, byte[] content, string? fileName = null, string? contentType = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(content);
+        // Refused here, in the script that wrote it, rather than as an anonymous send failure later.
+        if (!string.IsNullOrWhiteSpace(contentType) &&
+            !System.Net.Http.Headers.MediaTypeHeaderValue.TryParse(contentType, out _))
+            throw new ArgumentException($"'{contentType}' is not a media type.", nameof(contentType));
+        AppendMultipart(new HttpMultipartPart
+        {
+            Name = name,
+            Content = content,
+            FileName = string.IsNullOrWhiteSpace(fileName) ? name : fileName,
+            ContentType = string.IsNullOrWhiteSpace(contentType) ? "application/octet-stream" : contentType
+        });
+    }
+
+    /// <summary>
+    /// Removes every multipart part, so the request falls back to <see cref="RawBody"/> / <see cref="Body"/>.
+    /// </summary>
+    public void ClearMultipart()
+    {
+        Multipart = null;
+    }
+
+    private void AppendMultipart(HttpMultipartPart part)
+    {
+        var parts = Multipart is null ? new List<HttpMultipartPart>() : new List<HttpMultipartPart>(Multipart);
+        parts.Add(part);
+        Multipart = parts;
+    }
+
     public void SetHeaders(Dictionary<string, string?> headers)
     {
         Headers = JsonSerializer.SerializeToElement(headers);
@@ -146,6 +206,7 @@ public class HttpTask : WorkflowTask
     internal void SetBodyInternal(JsonElement? body) => Body = body;
     internal void SetContentTypeInternal(string? contentType) => ContentType = contentType;
     internal void SetRawBodyInternal(string? raw) => RawBody = raw;
+    internal void SetMultipartInternal(IReadOnlyList<HttpMultipartPart>? parts) => Multipart = parts;
     internal void SetTimeoutSecondsInternal(int timeoutSeconds) => TimeoutSeconds = timeoutSeconds;
     internal void SetValidateSSLInternal(bool validateSSL) => ValidateSSL = validateSSL;
     internal void SetAcceptedStatusCodesInternal(IReadOnlyList<string>? codes) => AcceptedStatusCodes = codes;
@@ -231,6 +292,7 @@ public class HttpTask : WorkflowTask
         cloned.Body = Body;
         cloned.ContentType = ContentType;
         cloned.RawBody = RawBody;
+        cloned.Multipart = Multipart;
         cloned.TimeoutSeconds = TimeoutSeconds;
         cloned.ValidateSSL = ValidateSSL;
         cloned.AcceptedStatusCodes = AcceptedStatusCodes;
@@ -251,6 +313,7 @@ public class HttpTask : WorkflowTask
         SetBodyInternal(source.Body);
         SetContentTypeInternal(source.ContentType);
         SetRawBodyInternal(source.RawBody);
+        SetMultipartInternal(source.Multipart);
         SetTimeoutSecondsInternal(source.TimeoutSeconds);
         SetValidateSSLInternal(source.ValidateSSL);
         SetAcceptedStatusCodesInternal(source.AcceptedStatusCodes);
@@ -268,6 +331,7 @@ public class HttpTask : WorkflowTask
         Body = null;
         ContentType = null;
         RawBody = null;
+        Multipart = null;
         TimeoutSeconds = 30;
         ValidateSSL = true;
         AcceptedStatusCodes = null;
