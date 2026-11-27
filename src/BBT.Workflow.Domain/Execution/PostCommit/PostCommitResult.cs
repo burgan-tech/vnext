@@ -12,7 +12,18 @@ namespace BBT.Workflow.Execution.PostCommit;
 /// Optional exception stack trace (sourced from the originating error's detail) so the
 /// pipeline can record it on the instance incident.
 /// </param>
-public sealed record PostCommitFaultRequest(string ErrorCode, string? ErrorMessage, string? StackTrace = null);
+/// <param name="StartedSubflowCorrelationId">
+/// The SubFlow correlation whose start failed, when the fault compensates a failed SubFlow start.
+/// A child that was created and then faulted reports that fault to the parent itself; when this
+/// correlation is found closed with outcome Faulted, the parent's error boundary owns the parent and
+/// the fault is not applied (vnext#1256). In every other case — still open, missing, closed by a
+/// completion or cancel — the fault applies. Null for every other post-commit fault.
+/// </param>
+public sealed record PostCommitFaultRequest(
+    string ErrorCode,
+    string? ErrorMessage,
+    string? StackTrace = null,
+    Guid? StartedSubflowCorrelationId = null);
 
 /// <summary>
 /// Result of post-commit job execution.

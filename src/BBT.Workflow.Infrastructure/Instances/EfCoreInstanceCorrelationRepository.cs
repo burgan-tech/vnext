@@ -126,6 +126,16 @@ public sealed class EfCoreInstanceCorrelationRepository(
     }
 
     /// <inheritdoc />
+    public async Task<InstanceCorrelation?> FindByIdAsReadOnlyAsync(
+        Guid correlationId,
+        CancellationToken cancellationToken = default)
+    {
+        return await (await GetDbSetAsync())
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c => c.Id == correlationId, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<bool> TryPinSubFlowVersionAsync(
         Guid correlationId,
         string resolvedVersion,

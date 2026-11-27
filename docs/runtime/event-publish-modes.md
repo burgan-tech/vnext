@@ -29,7 +29,7 @@ outbox; it no longer knows about hooks, `EventHookMode`, or per-event dispatch.
 
 | Event | Mode |
 |---|---|
-| `InstanceSubCompletedEvent`, `InstanceSubFaultedEvent`, `InstanceSubCanceledEvent` | Outbox + PostCommitRelay (the three share terminal-settlement semantics; each has its own relay class over a common base) |
+| `InstanceSubCompletedEvent`, `InstanceSubFaultedEvent`, `InstanceSubCanceledEvent` | Outbox + PostCommitRelay (the three share terminal-settlement semantics; each has its own relay class over a common base). The fault relay serves a parent in **another domain** only; a parent hosted here keeps the Inbox delivery — see [below](#a-fault-is-relayed-to-a-parent-in-another-domain-by-the-code-that-commits-it). The Inbox backup exists only for a parent this runtime hosts: **across domains none of the three has a durable backup** ([Failure semantics](#relay-semantics)) |
 | `InstanceSubStateChangedEvent` | Outbox + PostCommitRelay (receiver guard = the per-sub-item lock plus the monotonic `SubFlowStateChangedAt` stamp in `SubflowStateService`) |
 | `InstanceCanceledEvent`, `InstanceCompletedCleanupEvent`, `InstanceFaultedCleanupEvent`, `ChildSubflow*`, `TransitionContinuationRequested` | Pure Outbox |
 
@@ -42,6 +42,15 @@ terminal relays read their route and span tags from — implementing it opts not
 Registration alone is not sufficient grounds. Per the standing Chair precedent, each relayed event
 also needs a durable backup, an idempotent order-safe receiver guard, measured latency evidence and
 a council row; the default for a new event stays Outbox-only.
+
+**Open deviation from that precedent: the cross-domain leg.** A terminal event relayed to a parent in
+another domain has no durable backup, because the child domain's Inbox drops an event whose parent it
+does not host. For the completion relay this is the recorded gap C3 of
+[Sub-Endpoint Gate § Failure modes](sub-endpoint-gate.md#failure-modes) (council condition C-5: a
+durable cross-domain retry is a separate issue). The fault relay added for vnext#1256 serves *only* that
+leg, so it has no backup at all; its council (`2026-11-23-sub-fault-relay-1256`) left this to the Chair
+as an explicit acceptance (condition M-3) until the durable cross-domain backup exists (vnext#1357). Until that
+acceptance is recorded, the fault relay does not meet the precedent — it is not a model for a new relay.
 
 ## Relay semantics
 
@@ -76,13 +85,125 @@ a council row; the default for a new event stays Outbox-only.
   domain and a child domain's Inbox drops a terminal event whose parent is hosted elsewhere (the
   handlers' domain guard), so a failed **cross-domain** relay has no durable backup: the parent stays
   parked until the completion is re-driven ([Sub-Endpoint Gate § Failure modes](sub-endpoint-gate.md#failure-modes)).
-  Relay calls are bounded by the gateway's existing invocation timeouts.
+  The same holds for a fault; there the Inbox drop is logged as a warning
+  (`SubFlowFaultIgnoredDomainMismatch`, 40111), and a terminal relay that failed on a remote route
+  logs `PostCommitTerminalRelayLost` (40142, Error). Relay calls are bounded by the gateway's existing
+  invocation timeouts.
 - Observability: each relay attempt opens a `PostCommit.EventRelay` activity (see
   [Observability contract](#observability-contract) below) and logs
   `PostCommitEventRelayed` (EventId 40124) on success, `PostCommitEventRelayFailed` (40125,
   exception path), `PostCommitEventRelayRejected` (40126, failed-`Result` path),
   `PostCommitEventRelayTimedOut` (40133) or `PostCommitEventRelayDepthExceeded` (40134). The three
   EventIds carried over from the terminal-only predecessor so existing dashboards keep resolving.
+
+### A fault is relayed to a parent in another domain by the code that commits it
+
+The runner relays `coreOutput.DeferredEvents`, and a fault's events are never in that list. A fault is
+written in a unit of work of its own, on a freshly reloaded aggregate, so `Instance.Fault` raises the
+upward `InstanceSubFaultedEvent` where no runner sees it. A client-facing failure (for example
+`ResourceLockConflict`) also returns from the runner before its relay line.
+
+Until vnext#1256 that event therefore travelled the outbox alone. Within one domain the Inbox backup
+delivered it after the broker round trip, and still does. Across domains nothing delivered it: the
+child domain's Inbox drops a terminal event whose parent is hosted elsewhere, and the parent stayed
+Busy with no incident.
+
+**Which parents are relayed to.** `InstanceSubFaultedRelay.Describe` declines (`SkipReason`
+`parent_hosted_here`, log 40138) a parent this runtime hosts (`IRuntimeInfoProvider.IsDomainMatch`), so
+only a parent in **another** domain gets the immediate relay. A parent hosted here keeps master's
+path exactly: Inbox → `sub/fault`, `Sync = false`, a fresh run budget. Relaying it in-process would run
+the parent's whole error-boundary chain inside the child's request, on whatever is left of the
+child's run budget (15 s on the compensation paths), partly on the child's still-open unit of work —
+the council session `2026-11-23-sub-fault-relay-1256` rejected that for this fix. The cost is that
+fault delivery depends on topology: under `APP_DOMAINS` a co-hosted parent is "hosted here" and goes
+through the Inbox. Completion and cancel are not affected; their relays still serve a local parent.
+
+Each place that commits a direct fault hands the fault's events to `IPostCommitRelayDispatcher`
+itself, the same way `SubflowStateService` does for the state channel:
+
+| Call site | When it faults the instance |
+|---|---|
+| `TransitionPipeline.MarkInstanceFaultedAsync` | A pipeline step failed and no error boundary rerouted it; a `history: none` stage that cannot continue or rests in a non-Finish state. |
+| `PostCommitParentMutationService.FaultAsync` | Post-commit coordination failed (for example a SubFlow start the callee refused). |
+| `JobTimeoutRecoveryService.FaultInstanceAsync` | A transition job timed out or was cancelled. |
+| `SubflowFaultService` (no-boundary branch) | A parent faults while settling its own child's fault because no rule of its error boundary matched (Unhandled → Abort with no transition) — the default for a parent without an `errorBoundary`. Its own upward fault goes to the grandparent. |
+
+Rules every one of them follows:
+
+- **Snapshot before the save.** The `SaveChanges` sink drains and clears the aggregate's events, so
+  the list is copied first (`instance.GetDomainEvents().ToList()`). The outbox rows stay the durable
+  record; the copy only feeds the relay. The unit tests pin this with a save that drains the aggregate.
+- **Relay after the commit, outside the lock.** The call runs once the fault's unit of work and the
+  lock are released (for `SubflowFaultService`, also after the child's settlement marker). A fault
+  that did not commit relays nothing.
+- **Token.** The pipeline relays under the caller's token while it is live, and under a fresh
+  `CompensationCancellation` budget (15 s) when the run faulted *because* that token was cancelled.
+  `PostCommitParentMutationService.FaultAsync` relays under the token its caller passes: the run token
+  for a policy fault (`TransitionRunner`), the compensation token for a start compensation, and
+  `CancellationToken.None` from a failed retry restart (`InstanceRetryAppService`). The job-timeout
+  recovery relays under a fresh compensation budget (its own token is `None` on purpose).
+  `SubflowFaultService` relays under the token of the delivery that settled the child. Since only a
+  remote parent is relayed to, the token bounds the call to the other domain; the parent settles there
+  on its own run budget.
+- **Only registered events move.** The whole snapshot is handed over; `InstanceFaultedCleanupEvent`
+  and `ChildSubflowFaultRequestedEvent` have no relay and keep travelling the outbox alone.
+
+The receiver is unchanged: `SubflowFaultService` takes the per-sub-item lock and
+`ISubItemTerminalGuard` absorbs a second delivery.
+
+**A child's fault wins over its parent's start compensation — once that fault's settlement has
+finished.** A child that faults in its own start chain with a client-facing code relays its fault to a
+parent this runtime does not host (the parent's error boundary runs) and then answers the parent's start
+call with a failure. The parent's start compensation then reaches
+`PostCommitParentMutationService.FaultAsync`, whose only guard used to be `IsCompleted`: a parent its
+boundary had routed to a non-terminal state was faulted there with a second incident. The fault request
+now names the correlation of the failed **SubFlow** start
+(`PostCommitFaultRequest.StartedSubflowCorrelationId`, set by `TransitionRunner` for a single
+HandoffToChild `StartSubflowJob` and by a failed retry restart). The compensation steps aside (log 10268)
+only when that correlation is read by id and found **closed, of type `S`, with outcome `Faulted`, on this
+parent, and marked settled (`SettledAt`)**. The marker is what proves the boundary ran:
+`SubflowFaultService` commits the correlation closed *before* the parent's boundary transition runs and
+writes `SettledAt` only after that transition succeeded (a failed one reverts the correlation) — the same
+proof `ISubItemTerminalGuard` asks for. Every other case faults the parent exactly as before: a
+correlation still open (the child never came to exist or has not reported), a missing one
+(`SubFlowCorrelationNotFound`), one closed by a completion or a cancel, a SubProcess start (its inline
+continuation can fail after a successful start), and one closed but not yet marked settled. That last case
+is a settlement still running, or one whose best-effort marker write was lost: the compensation then
+faults a parent its boundary had already routed — visible and retryable, and what master did every time.
+The settlement reload stays open-correlations-only; the closed row is a separate, untracked read by id
+(`IInstanceCorrelationRepository.FindByIdAsReadOnlyAsync`), so it is never attached to the tracked parent.
+
+**When one runtime hosts both parent and child, the compensation normally wins, as on master.** The
+child's fault is not relayed to a parent hosted here (the same domain, or one co-hosted through
+`APP_DOMAINS`); it goes through the Inbox and usually arrives after the start compensation has already
+faulted the parent, where it stops at `parent_already_terminal`. That order is a race, not a guarantee:
+the compensation holds the parent's status lock and the settlement the per-sub-item lock, so an Inbox
+delivery that finishes first makes the compensation step aside by the same rule. This ownership rule
+therefore depends on topology and on timing: the same pair of flows can behave differently deployed apart
+and co-hosted. The race exists on master; the guard narrows it.
+
+**Failure has no backup across domains.** A cross-domain relay is attempted once. If it fails or times
+out, the parent stays Busy: log 40125/40126/40133 (with the sub and parent ids and the route) and,
+for a terminal event on a remote route, **`PostCommitTerminalRelayLost` (40142, Error)** — the alert
+signal for a stuck cross-domain parent. The child domain's Inbox logs 40111 for every such fault,
+whether or not the relay succeeded; a 40111 with no 40124 for the same sub id is a lost delivery (also
+after a process death between the fault commit and the relay, which logs nothing on the relay side).
+Recovery is manual: re-post the fault from the child domain's outbox row to the parent's
+`POST {domain}/workflows/{flow}/instances/{parentId}/sub/fault` endpoint; the receiver is idempotent
+(a second re-post is a no-op). The row is in the child domain's `sys_queues."OutboxMessages"`
+(`"EventName" = 'instance.sub.faulted'`, `"EventData"` is the CloudEvent as UTF-8 bytes). Its `data`
+object is the request body with two differences, the same mapping the Inbox handler applies: the
+three fields `terminationOrigin`, `initiatorInstanceId` and `cascadeId` move into one
+`termination: { origin, initiatorInstanceId, cascadeId }` object, and `sync` is set to `false`. A
+durable cross-domain backup is a follow-up (vnext#1357). Note also that the child's own sync request waits for the
+relay: a parent domain that does not answer holds it until the gateway's invocation timeout (60 s
+measured in the lab).
+
+**Not covered.** Three fault sites still publish their upward `InstanceSubFaultedEvent` to the outbox
+only: `SubflowFaultService` when the parent's definition cannot be loaded, and
+`SubflowCompletionService` when the parent's definition cannot be loaded or its output mapping fails.
+In a chain whose upper two levels live in different domains, that grandparent is not told. They commit
+and return inside the per-sub-item lock and need their own restructuring.
 
 ### `sub:state-changed` is emitted once per activation episode
 
@@ -409,7 +530,12 @@ keep it from polluting a transition's trace:
   same reading applies to `SubFlowStateChangeOutOfOrder` (40131): a backup delivery that lands
   out-of-order is the guard absorbing the duplicate, which is the expected case.
 - **WorkflowLogs** (`src/BBT.Workflow.Domain/Logging/WorkflowLogs.cs`, 40xxx range):
-  `PostCommitEventRelayed` (40124, Information), `PostCommitEventRelayFailed` (40125, Warning),
+  `SubFlowFaultIgnoredDomainMismatch` (40111, Warning — the Inbox dropped a fault whose parent is
+  hosted in another domain; it was Debug before vnext#1256),
+  `PostCommitEventRelayed` (40124, Information), `PostCommitEventRelayFailed` (40125, Warning; 40125,
+  40126 and 40133 carry the sub and parent ids, and say the Inbox backup delivers on a local route
+  only), `PostCommitTerminalRelayLost` (40142, Error — a terminal event not delivered to a parent in
+  another domain), `PostCommitStartFaultSupersededByChildSettlement` (10268, Information),
   `PostCommitEventRelayRejected` (40126, Warning), `SubflowTerminalRearmed` (40127, Warning),
   `SubflowTerminalRearmExhausted` (40128, Error), `SubFlowStateChangeParentNotFound` (40129, Warning),
   `SubFlowStateChangeCorrelationNotFound` (40130, Warning), `SubFlowStateChangeOutOfOrder` (40131,
@@ -546,6 +672,40 @@ production-scale broker delay, multi-replica contention, and cross-region hops.
 - **Caveat**: all numbers above come from a single local run on one M-series dev machine with every
   service running locally (no container image, no broker latency, no replica contention).
   Production-grade histograms under real broker delay and replica contention remain future work.
+
+### Fault relay (vnext#1256)
+
+**Unit level.** `TransitionPipelineTests` (region *Fault relay to the parent*),
+`PostCommitParentMutationServiceTests`, `JobTimeoutRecoveryFaultRelayTests`, `SubflowFaultServiceTests`,
+`PostCommitRelayDispatcherTests`, `TransitionRunnerPostCommitTests`, `InstanceSubFaultedEventHandlerTests`
+and `FaultRelayRegistrationTests` pin: the hosted-parent skip; commit → lock release → relay; the token
+rule; no relay without a commit; the snapshot taken before a save that drains the aggregate; the
+start-compensation guard in both orders; the relay-failure logs; the DI wiring.
+
+**Cross-domain lab, 2026-11-23 — this version** (vnext-example `labs/cross-domain`, four domains,
+provider `dapr`, images built from the working tree, scenario `child-fault-xd` 1.0.1):
+
+| Case | Result |
+|---|---|
+| CF-01..04: child faults on a direct partner request, on a request proxied by the parent (sync and async), in its own start chain | 4/4 green: parent Active in its boundary target, one incident, correlation closed |
+| CF-06: core parent → partner middle (no error boundary) → partner leaf; the leaf faults | Green. Leaf → middle is in one domain: no relay, the partner Inbox delivered it. The middle faulted on the default path and its own upward fault was relayed to core (this is the `SubflowFaultService` call site) |
+| CF-07: core paused while the partner child faults | Parent stays Busy; partner logs 40125 (`route remote`, both ids) and 40142 at Error, the Inbox 40111. The child's sync request waited 60 s. After unpausing, a re-post of the outbox row (mapping above) settled the parent; a second re-post changed nothing |
+| Whole `CrossDomainLab` suite | 51 passed, 4 failed, 2 skipped. The 4 failures are `FileOffloadCrossDomainTests` (the lab's partner sidecar has no `vnext-blob-local` binding, 503 — the same on master) |
+
+Logs of the CF-01..06 run: five `PostCommitEventRelayed` for `InstanceSubFaultedEvent`, all to a core
+parent; none for the leaf → middle fault; one Inbox `SubFlowFaultReceived` for the middle.
+
+**First version, 2026-11-20** (relay to every parent, no start-compensation guard, no
+`SubflowFaultService` site): CF-01..04 4/4 green; images built from master `e4faefa8` 4/4 red (parent
+Busy after 30 s, correlation open, no incident). Measured on four traces: lock release → relay
+0.5–10.4 ms; relay call 39.7–178.1 ms (first call cold); parent settlement 34.8–141.4 ms. One machine,
+four samples: order of magnitude only.
+
+**Not run:** the client-facing child start failure (start-compensation guard) end to end — no lab flow
+produces a `ResourceLockConflict` in a child's start chain; it is pinned at unit level only. The
+same-domain smoke on **local binaries** (`SubFlowFaultChainTests`, `SubflowStartFailureLab`,
+`SubflowCarriedHeadersLab`); the same-domain path was exercised only inside the lab images (CF-06,
+leaf → middle). No master baseline for CF-06 and CF-07.
 
 ## Related
 

@@ -546,6 +546,104 @@ public sealed class TransitionRunnerPostCommitTests
             Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// vnext#1256: the start compensation names the correlation of the failed start, so the fault
+    /// can step aside when the child it created has already faulted and settled this parent itself.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenStartSubflowCoordinationFails_TheFaultNamesTheStartedCorrelation()
+    {
+        var harness = new RunnerHarness(new StagePlan(
+            "stage-0",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild,
+            PostCommitJob: PostCommitJobKind.StartSubflow))
+        {
+            PostCommitResult = PostCommitResult.Fail(
+                Error.Conflict(WorkflowErrorCodes.ResourceLockConflict, "child start refused"))
+        };
+
+        await harness.Runner.RunAsync(harness.CreateInput("go"));
+
+        await harness.ParentMutationService.Received(1).FaultAsync(
+            Arg.Any<PostCommitParentSnapshot>(),
+            Arg.Is<PostCommitFaultRequest>(r => r.StartedSubflowCorrelationId == harness.StartSubflowCorrelationId),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_PolicyFaultRequestAfterAStartSubflowJob_NamesTheStartedCorrelation()
+    {
+        var harness = new RunnerHarness(new StagePlan(
+            "stage-0",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild,
+            PostCommitJob: PostCommitJobKind.StartSubflow))
+        {
+            PostCommitResult = PostCommitResult.Fail(
+                Error.Failure("PostCommit:Failed", "remote child timed out"),
+                new PostCommitFaultRequest("PostCommit:Failed", "remote child timed out"))
+        };
+        harness.ParentMutationService.FaultAsync(
+                Arg.Any<PostCommitParentSnapshot>(), Arg.Any<PostCommitFaultRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput { Status = InstanceStatus.Faulted }));
+
+        await harness.Runner.RunAsync(harness.CreateInput("go"));
+
+        await harness.ParentMutationService.Received(1).FaultAsync(
+            Arg.Any<PostCommitParentSnapshot>(),
+            Arg.Is<PostCommitFaultRequest>(r =>
+                r.ErrorCode == "PostCommit:Failed" && r.StartedSubflowCorrelationId == harness.StartSubflowCorrelationId),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenASubProcessStartCoordinationFails_TheFaultNamesNoCorrelation()
+    {
+        // A SubProcess start (ContinueParent) runs the parent's inline continuation after a successful
+        // start; a failure there is not the child's, so the fault must not step aside for it.
+        var harness = new RunnerHarness(new StagePlan(
+            "stage-0",
+            PostCommitBehavior: PostCommitContinuationBehavior.ContinueParent,
+            PostCommitJob: PostCommitJobKind.StartSubflow))
+        {
+            PostCommitResult = PostCommitResult.Fail(
+                Error.Failure("PostCommit:Failed", "continuation failed"),
+                new PostCommitFaultRequest("PostCommit:Failed", "continuation failed"))
+        };
+        harness.ParentMutationService.FaultAsync(
+                Arg.Any<PostCommitParentSnapshot>(), Arg.Any<PostCommitFaultRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput { Status = InstanceStatus.Faulted }));
+
+        await harness.Runner.RunAsync(harness.CreateInput("go"));
+
+        await harness.ParentMutationService.Received(1).FaultAsync(
+            Arg.Any<PostCommitParentSnapshot>(),
+            Arg.Is<PostCommitFaultRequest>(r => r.StartedSubflowCorrelationId == null),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_PolicyFaultRequestWithoutAStartSubflowJob_NamesNoCorrelation()
+    {
+        var harness = new RunnerHarness(new StagePlan(
+            "pipeline",
+            PostCommitBehavior: PostCommitContinuationBehavior.HandoffToChild))
+        {
+            PostCommitResult = PostCommitResult.Fail(
+                Error.Failure("PostCommit:Failed", "failed"),
+                new PostCommitFaultRequest("PostCommit:Failed", "failed"))
+        };
+        harness.ParentMutationService.FaultAsync(
+                Arg.Any<PostCommitParentSnapshot>(), Arg.Any<PostCommitFaultRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput { Status = InstanceStatus.Faulted }));
+
+        await harness.Runner.RunAsync(harness.CreateInput("first"));
+
+        await harness.ParentMutationService.Received(1).FaultAsync(
+            Arg.Any<PostCommitParentSnapshot>(),
+            Arg.Is<PostCommitFaultRequest>(r => r.StartedSubflowCorrelationId == null),
+            Arg.Any<CancellationToken>());
+    }
+
     [Fact]
     public async Task RunAsync_WhenStartSubflowCoordinationFailsAfterTokenCancelled_StillFaultsParent()
     {
@@ -702,6 +800,9 @@ public sealed class TransitionRunnerPostCommitTests
         public TaskCompletionSource PostCommitStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource? PostCommitGate { get; init; }
+
+        /// <summary>The correlation id every queued <see cref="StartSubflowJob"/> carries.</summary>
+        public Guid StartSubflowCorrelationId { get; } = Guid.NewGuid();
         public PostCommitResult PostCommitResult { get; init; } = PostCommitResult.Ok();
 
         /// <summary>Runs inside the post-commit executor, before it answers (e.g. to cancel the caller's token).</summary>
@@ -939,9 +1040,10 @@ public sealed class TransitionRunnerPostCommitTests
                 {
                     IPostCommitJob job = plan.PostCommitJob switch
                     {
-                        // Placeholder identity values are fine — the runner only reads the type.
+                        // The runner reads the type, and the correlation id it hands to the
+                        // start-compensation fault (vnext#1256).
                         PostCommitJobKind.StartSubflow => new StartSubflowJob(
-                            Guid.NewGuid(), "state", behavior),
+                            owner.StartSubflowCorrelationId, "state", behavior),
                         PostCommitJobKind.ForwardToSubflow => new ForwardToSubflowJob(
                             Guid.NewGuid(),
                             owner.InstanceId,

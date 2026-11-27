@@ -16,6 +16,7 @@ using BBT.Workflow.Runtime;
 using BBT.Workflow.SubFlow;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Shouldly;
@@ -44,6 +45,14 @@ public sealed class PostCommitRelayDispatcherTests : IDisposable
     private static DomainEventEnvelope Envelope(IDistributedEvent evt) =>
         new(evt, new EventMetadata(evt.GetType(), "test.event", 1, "pubsub", "topic", "source"));
 
+    /// <summary>A runtime that hosts no parent domain: every relay target is remote.</summary>
+    private static IRuntimeInfoProvider RemoteRuntime()
+    {
+        var runtime = Substitute.For<IRuntimeInfoProvider>();
+        runtime.IsDomainMatch(Arg.Any<string?>()).Returns(false);
+        return runtime;
+    }
+
     private static IRuntimeInfoProvider MatchingRuntime()
     {
         var runtime = Substitute.For<IRuntimeInfoProvider>();
@@ -57,10 +66,13 @@ public sealed class PostCommitRelayDispatcherTests : IDisposable
     /// </summary>
     private static ServiceProvider Registrations(
         IInstanceCommandGateway gateway,
-        Action<IServiceCollection>? extra = null)
+        Action<IServiceCollection>? extra = null,
+        IRuntimeInfoProvider? runtime = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton(gateway);
+        // Production registers ONE provider: the relays and the dispatcher read the same one.
+        services.AddSingleton(runtime ?? MatchingRuntime());
         services.AddScoped<IPostCommitEventRelay<InstanceSubCompletedEvent>, InstanceSubCompletedRelay>();
         services.AddScoped<IPostCommitEventRelay<InstanceSubFaultedEvent>, InstanceSubFaultedRelay>();
         services.AddScoped<IPostCommitEventRelay<InstanceSubCanceledEvent>, InstanceSubCanceledRelay>();
@@ -69,8 +81,9 @@ public sealed class PostCommitRelayDispatcherTests : IDisposable
         return services.BuildServiceProvider();
     }
 
-    private static PostCommitRelayDispatcher Dispatcher(IServiceProvider provider, IRuntimeInfoProvider runtime) =>
-        new(provider, runtime, NullLogger<PostCommitRelayDispatcher>.Instance);
+    private static PostCommitRelayDispatcher Dispatcher(
+        IServiceProvider provider, IRuntimeInfoProvider runtime, ILogger<PostCommitRelayDispatcher>? logger = null) =>
+        new(provider, runtime, logger ?? NullLogger<PostCommitRelayDispatcher>.Instance);
 
     private static InstanceSubCompletedEvent CompletedEvent(bool sync = false, Dictionary<string, string?>? carriedHeaders = null) => new()
     {
@@ -123,7 +136,9 @@ public sealed class PostCommitRelayDispatcherTests : IDisposable
             .Returns(Result.Ok());
         gateway.CancelAsync(Arg.Any<SubItemCanceledInput>(), Arg.Any<CancellationToken>())
             .Returns(Result.Ok());
-        var sut = Dispatcher(Registrations(gateway), MatchingRuntime());
+        // A fault is relayed only to a parent hosted in another domain (vnext#1256).
+        var runtime = RemoteRuntime();
+        var sut = Dispatcher(Registrations(gateway, runtime: runtime), runtime);
 
         var faulted = new InstanceSubFaultedEvent
         {
@@ -167,7 +182,9 @@ public sealed class PostCommitRelayDispatcherTests : IDisposable
         gateway.CompleteAsync(Arg.Any<FlowCompletedInput>(), Arg.Any<CancellationToken>()).Returns(Result.Ok());
         gateway.FaultAsync(Arg.Any<SubFlowFaultedInput>(), Arg.Any<CancellationToken>()).Returns(Result.Ok());
         gateway.CancelAsync(Arg.Any<SubItemCanceledInput>(), Arg.Any<CancellationToken>()).Returns(Result.Ok());
-        var sut = Dispatcher(Registrations(gateway), MatchingRuntime());
+        // Remote parents: a fault to a hosted parent is skipped (vnext#1256).
+        var runtime = RemoteRuntime();
+        var sut = Dispatcher(Registrations(gateway, runtime: runtime), runtime);
 
         var headers = new Dictionary<string, string?> { ["x-a"] = "1", ["x-b"] = null };
         var completed = CompletedEvent(carriedHeaders: headers);
@@ -375,6 +392,142 @@ public sealed class PostCommitRelayDispatcherTests : IDisposable
             .GetTagItem(TelemetryConstants.TagNames.RelayOutcome)
             .ShouldBe(PostCommitRelayOutcomes.Timeout);
     }
+
+    /// <summary>
+    /// vnext#1256: a fault is relayed only to a parent hosted in ANOTHER domain, whose fault the child
+    /// domain's Inbox drops. A parent hosted here keeps its Inbox delivery: relaying it in-process
+    /// would run the parent's error-boundary chain inside the child's request, on the child's budget.
+    /// </summary>
+    [Fact]
+    public async Task SubFaulted_To_A_Parent_Hosted_Here_Is_Skipped_And_Left_To_The_Inbox()
+    {
+        var gateway = Substitute.For<IInstanceCommandGateway>();
+        var runtime = MatchingRuntime();
+        var sut = Dispatcher(Registrations(gateway, runtime: runtime), runtime);
+
+        await sut.RelayAsync([Envelope(FaultedEvent())], CancellationToken.None);
+
+        await gateway.DidNotReceiveWithAnyArgs().FaultAsync(default!, default);
+        var span = _spans.Spans.Single(a => a.DisplayName == "PostCommit.EventRelay");
+        span.GetTagItem(TelemetryConstants.TagNames.RelayOutcome).ShouldBe(PostCommitRelayOutcomes.Skipped);
+        span.GetTagItem(TelemetryConstants.TagNames.RelayRoute).ShouldBe("local");
+    }
+
+    [Fact]
+    public async Task SubFaulted_To_A_Parent_In_Another_Domain_Is_Relayed()
+    {
+        var gateway = Substitute.For<IInstanceCommandGateway>();
+        gateway.FaultAsync(Arg.Any<SubFlowFaultedInput>(), Arg.Any<CancellationToken>()).Returns(Result.Ok());
+        var runtime = RemoteRuntime();
+        var sut = Dispatcher(Registrations(gateway, runtime: runtime), runtime);
+        var evt = FaultedEvent();
+
+        await sut.RelayAsync([Envelope(evt)], CancellationToken.None);
+
+        await gateway.Received(1).FaultAsync(
+            Arg.Is<SubFlowFaultedInput>(i => i.SubInstanceId == evt.SubInstanceId && i.InstanceId == evt.InstanceId),
+            Arg.Any<CancellationToken>());
+        _spans.Spans.Single(a => a.DisplayName == "PostCommit.EventRelay")
+            .GetTagItem(TelemetryConstants.TagNames.RelayOutcome).ShouldBe(PostCommitRelayOutcomes.Relayed);
+    }
+
+    /// <summary>The skip is the fault relay's own decision: completion and cancel still relay to a hosted parent.</summary>
+    [Fact]
+    public async Task The_Hosted_Parent_Skip_Applies_To_Faults_Only()
+    {
+        var gateway = Substitute.For<IInstanceCommandGateway>();
+        gateway.CompleteAsync(Arg.Any<FlowCompletedInput>(), Arg.Any<CancellationToken>()).Returns(Result.Ok());
+        var runtime = MatchingRuntime();
+        var sut = Dispatcher(Registrations(gateway, runtime: runtime), runtime);
+
+        await sut.RelayAsync([Envelope(CompletedEvent())], CancellationToken.None);
+
+        await gateway.Received(1).CompleteAsync(Arg.Any<FlowCompletedInput>(), Arg.Any<CancellationToken>());
+    }
+
+    // vnext#1256 — a terminal event that could not reach a parent in another domain has no backup:
+    // that is the alert signal for a stuck cross-domain parent (40142, Error). The relay-failure
+    // warnings now carry the ids and the route.
+
+    [Fact]
+    public async Task A_Failed_Remote_Terminal_Relay_Logs_The_Lost_Delivery_As_An_Error_With_Its_Ids()
+    {
+        var gateway = Substitute.For<IInstanceCommandGateway>();
+        gateway.FaultAsync(Arg.Any<SubFlowFaultedInput>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Fail(Error.Failure("Remote:Unavailable", "parent domain unreachable")));
+        var runtime = RemoteRuntime();
+        var logger = new RecordingLogger();
+        var evt = FaultedEvent();
+
+        await Dispatcher(Registrations(gateway, runtime: runtime), runtime, logger)
+            .RelayAsync([Envelope(evt)], CancellationToken.None);
+
+        var rejected = logger.Entries.Single(e => e.EventId == 40126);
+        rejected.Level.ShouldBe(LogLevel.Warning);
+        rejected.Message.ShouldContain(evt.SubInstanceId.ToString());
+        rejected.Message.ShouldContain("route remote");
+        var lost = logger.Entries.Single(e => e.EventId == 40142);
+        lost.Level.ShouldBe(LogLevel.Error);
+        lost.Message.ShouldContain(evt.InstanceId.ToString());
+        lost.Message.ShouldContain("orders");
+    }
+
+    [Fact]
+    public async Task A_Failed_Local_Terminal_Relay_Has_A_Backup_And_Logs_No_Lost_Delivery()
+    {
+        var gateway = Substitute.For<IInstanceCommandGateway>();
+        gateway.CompleteAsync(Arg.Any<FlowCompletedInput>(), Arg.Any<CancellationToken>())
+            .Returns<Task<Result>>(_ => throw new InvalidOperationException("boom"));
+        var runtime = MatchingRuntime();
+        var logger = new RecordingLogger();
+
+        await Dispatcher(Registrations(gateway, runtime: runtime), runtime, logger)
+            .RelayAsync([Envelope(CompletedEvent())], CancellationToken.None);
+
+        logger.Entries.Single(e => e.EventId == 40125).Message.ShouldContain("route local");
+        logger.Entries.ShouldNotContain(e => e.EventId == 40142);
+    }
+
+    [Fact]
+    public async Task A_Failed_Remote_State_Change_Is_Not_A_Lost_Terminal_Delivery()
+    {
+        // The next state change corrects a missed one; only terminal events strand a parent.
+        var gateway = Substitute.For<IInstanceCommandGateway>();
+        gateway.UpdateSubFlowStateAsync(Arg.Any<SubFlowStateChangedInput>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Fail(Error.Failure("Remote:Unavailable", "down")));
+        var runtime = RemoteRuntime();
+        var logger = new RecordingLogger();
+
+        await Dispatcher(Registrations(gateway, runtime: runtime), runtime, logger)
+            .RelayAsync([Envelope(StateChangedEvent())], CancellationToken.None);
+
+        logger.Entries.ShouldContain(e => e.EventId == 40126);
+        logger.Entries.ShouldNotContain(e => e.EventId == 40142);
+    }
+
+    private sealed class RecordingLogger : ILogger<PostCommitRelayDispatcher>
+    {
+        public List<(LogLevel Level, int EventId, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => Entries.Add((logLevel, eventId.Id, formatter(state, exception)));
+    }
+
+    private static InstanceSubFaultedEvent FaultedEvent() => new()
+    {
+        InstanceId = Guid.NewGuid(),
+        Domain = "orders",
+        Flow = "order-flow",
+        Version = "1.0.0",
+        SubInstanceId = Guid.NewGuid(),
+        FaultedState = "error",
+        FaultedAt = DateTime.UtcNow
+    };
 
     /// <summary>An event nothing registers a relay for.</summary>
     private sealed class UnregisteredEvent : IDistributedEvent;

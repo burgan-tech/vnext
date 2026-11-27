@@ -34,6 +34,8 @@
       pinned with a real ActivityListener instead of relying solely on Faz C's OpenObserve
       acceptance checks. The Forwarding pair is included for the same reason: the Inbox's runtime-caller
       signing and its gate-refusal redelivery (vnext#1265) are pinned against a stub HttpClient.
+      The sub-fault handler is included for its domain guard: a fault whose parent lives in another
+      domain has no backup delivery, and the drop must be a warning (vnext#1256).
     -->
     <ItemGroup>
         <Compile Include="../Shared/LegacyAttributeIndexFixture.cs" Link="Fixtures/LegacyAttributeIndexFixture.cs"/>
@@ -43,6 +45,7 @@
         <Compile Include="..\..\workers\BBT.Workflow.Workers.Inbox\Forwarding\IOrchestrationForwarder.cs" Link="Forwarding\IOrchestrationForwarder.cs"/>
         <Compile Include="..\..\workers\BBT.Workflow.Workers.Inbox\Forwarding\DaprOrchestrationForwarder.cs" Link="Forwarding\DaprOrchestrationForwarder.cs"/>
         <Compile Include="..\..\workers\BBT.Workflow.Workers.Inbox\Forwarding\GatedOrchestrationRoutes.cs" Link="Forwarding\GatedOrchestrationRoutes.cs"/>
+        <Compile Include="..\..\workers\BBT.Workflow.Workers.Inbox\Handlers\Instances\InstanceSubFaultedEventHandler.cs" Link="Handlers\InstanceSubFaultedEventHandler.cs"/>
     </ItemGroup>
 
 </Project>

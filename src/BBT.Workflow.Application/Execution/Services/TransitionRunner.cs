@@ -74,6 +74,9 @@ public sealed class TransitionRunner(
                 //                          parent already moved with no child to show for it.
                 //                          Fault, which is visible and retryable; releasing would
                 //                          advertise a healthy instance that never started a child.
+                //                          Unless the child DID come to exist and already settled
+                //                          its own fault on this parent: the fault then steps aside
+                //                          (PostCommitFaultRequest.StartedSubflowCorrelationId).
                 //
                 // Busy has no recovery API (retry requires Faulted), so doing nothing strands every
                 // level until a human intervenes. The original error surfaces unchanged either way.
@@ -88,10 +91,11 @@ public sealed class TransitionRunner(
             var decision = coordinationResult.Value!;
             if (decision.FaultRequest is not null)
             {
+                var faultRequest = WithStartedSubflowCorrelation(decision.FaultRequest, coreOutput);
                 return await MutateParentAsync(
                     "PostCommit.Fault",
                     parentSnapshot,
-                    (service, ct) => service.FaultAsync(parentSnapshot, decision.FaultRequest, ct),
+                    (service, ct) => service.FaultAsync(parentSnapshot, faultRequest, ct),
                     cancellationToken);
             }
 
@@ -266,13 +270,13 @@ public sealed class TransitionRunner(
                 return;
 
             logger.SubflowStartCoordinationFaulted(snapshot.InstanceId, snapshot.TransitionKey, error.Code);
+            var faultRequest = WithStartedSubflowCorrelation(
+                new PostCommitFaultRequest(error.Code, error.Message ?? "Post-commit coordination failed"),
+                coreOutput);
             var faultResult = await MutateParentAsync(
                 "PostCommit.Fault",
                 snapshot,
-                (service, ct) => service.FaultAsync(
-                    snapshot,
-                    new PostCommitFaultRequest(error.Code, error.Message ?? "Post-commit coordination failed"),
-                    ct),
+                (service, ct) => service.FaultAsync(snapshot, faultRequest, ct),
                 cancellationToken);
             if (!faultResult.IsSuccess)
                 logger.PostCommitJobFailed(snapshot.InstanceId, "PostCommit.Fault", faultResult.Error.Message ?? faultResult.Error.Code);
@@ -289,6 +293,29 @@ public sealed class TransitionRunner(
         // Busy of this run's own to release on this path.
         await ReleaseChainReserveAsync(
             snapshot, coreOutput.ExecutionContext.SubflowChainReserved, error, cancellationToken);
+    }
+
+    /// <summary>
+    /// Names the SubFlow correlation a failed start was for, so the fault can step aside when the
+    /// child it created has already faulted and settled this parent itself (vnext#1256).
+    /// <para>
+    /// Only for a SubFlow start (<see cref="PostCommitContinuationBehavior.HandoffToChild"/>): it is the
+    /// hop's only post-commit job (the coordinator refuses mixed ownership) and the coordinator returns
+    /// right after it, so the failure that reaches here IS that start. A SubProcess start
+    /// (<see cref="PostCommitContinuationBehavior.ContinueParent"/>) runs the parent's inline
+    /// continuation after a successful start, and that continuation's failure must not be mistaken for
+    /// the child's. With none, several or a SubProcess start the request is returned unchanged and the
+    /// fault applies as before.
+    /// </para>
+    /// </summary>
+    private static PostCommitFaultRequest WithStartedSubflowCorrelation(
+        PostCommitFaultRequest request,
+        TransitionCoreOutput coreOutput)
+    {
+        var startJobs = coreOutput.Continuations.PostCommitJobs.OfType<StartSubflowJob>().ToList();
+        return startJobs is [{ ContinuationBehavior: PostCommitContinuationBehavior.HandoffToChild } startJob]
+            ? request with { StartedSubflowCorrelationId = startJob.CorrelationId }
+            : request;
     }
 
     /// <summary>

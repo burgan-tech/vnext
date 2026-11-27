@@ -8,6 +8,7 @@ using BBT.Workflow.ExceptionHandling;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Execution.ErrorHandling;
 using BBT.Workflow.Execution.Pipeline;
+using BBT.Workflow.Execution.PostCommit.Relay;
 using BBT.Workflow.Execution.Services;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Instances.Events;
@@ -20,7 +21,10 @@ using Microsoft.Extensions.Options;
 namespace BBT.Workflow.SubFlow;
 
 /// <inheritdoc cref="ISubflowFaultService" />
-/// <remarks>Carried headers: the optional policy re-filters the headers carried from the child's settlement for output mapping and the resume context; null disables header carry, production DI always supplies it.</remarks>
+/// <remarks>
+/// Carried headers: the optional policy re-filters the headers carried from the child's settlement for output mapping and the resume context; null disables header carry, production DI always supplies it.
+/// Relay: the optional dispatcher hands the upward fault of a parent that faults here (no matching error boundary) to its own parent right after the commit; null leaves it to the outbox alone, production DI always supplies it (vnext#1256).
+/// </remarks>
 public sealed class SubflowFaultService(
     IUnitOfWorkManager uowManager,
     IComponentCacheStore componentCacheStore,
@@ -35,7 +39,8 @@ public sealed class SubflowFaultService(
     IOptions<WorkflowExecutionOptions> executionOptions,
     ILogger<SubflowFaultService> logger,
     ISubItemEventDataResolver? subItemDataResolver = null,
-    ICarriedHeaderPolicy? carriedHeaderPolicy = null)
+    ICarriedHeaderPolicy? carriedHeaderPolicy = null,
+    IPostCommitRelayDispatcher? relayDispatcher = null)
     : ISubflowFaultService
 {
     /// <summary>
@@ -91,6 +96,10 @@ public sealed class SubflowFaultService(
                 Definitions.Workflow? parentWorkflow = null;
                 InstanceCorrelation? correlation;
                 ActionExecutionResult? actionResult = null;
+
+                // Set only when this settlement faults the parent itself and has committed it: the
+                // parent's own upward fault, for the relay after the lock is released.
+                IReadOnlyList<DomainEventEnvelope> parentFaultEvents = [];
 
                 // Per-subInstance terminal lock, independent of the main-flow lock and reserved keys:
                 // a long-held chain lease never blocks the signal, parallel SubProcess terminal-closes
@@ -269,6 +278,9 @@ public sealed class SubflowFaultService(
                         actionResult.ExecutedAction,
                         actionResult.ResolvedAtLevel);
 
+                    // No matching boundary resolves to Abort with no transition, so this is the
+                    // DEFAULT path of every parent without an error boundary, not an edge case.
+                    var parentFaultedHere = false;
                     if (actionResult.ShouldContinue)
                     {
                         incident.Resolve();
@@ -278,6 +290,7 @@ public sealed class SubflowFaultService(
                         parentInstance.Fault(input.Domain, input.Sync,
                             subItemData: await subItemDataResolver.ResolveOrStoredAsync(parentInstance, cancellationToken),
                             carriedHeaders: carriedHeaderPolicy?.Capture(input.CarriedHeaders));
+                        parentFaultedHere = true;
                     }
 
                     // On the FAULT path a failed output mapping is logged and settlement proceeds (existing
@@ -298,8 +311,17 @@ public sealed class SubflowFaultService(
                             parentInstance.Id);
                     }
 
+                    // Snapshot BEFORE the save: the SaveChanges sink drains and clears the
+                    // aggregate's events. The outbox rows stay the durable record.
+                    var raisedEvents = parentFaultedHere
+                        ? parentInstance.GetDomainEvents().ToList()
+                        : null;
+
                     await instanceRepository.UpdateAsync(parentInstance, true, cancellationToken);
                     await uow.CommitAsync(cancellationToken);
+
+                    if (raisedEvents is not null)
+                        parentFaultEvents = raisedEvents;
                 }
 
                 if (!string.IsNullOrWhiteSpace(actionResult?.TransitionKey))
@@ -326,6 +348,15 @@ public sealed class SubflowFaultService(
                     input.SubInstanceId,
                     input.FaultedAt,
                     cancellationToken);
+
+                // The parent faulted here and is itself a sub item: its upward fault was raised in
+                // this settlement's own unit of work, which no runner relays from. Outside the
+                // per-sub-item lock, after the commit and after this child's settlement is marked,
+                // hand it to the dispatcher — the relay reaches a grandparent in another domain,
+                // whose fault the Inbox here would drop; a grandparent hosted here is skipped by the
+                // relay and keeps its Inbox delivery (vnext#1256). The dispatcher never throws.
+                if (relayDispatcher is not null && parentFaultEvents.Count > 0)
+                    await relayDispatcher.RelayAsync(parentFaultEvents, cancellationToken);
 
                 logger.SubFlowFaultPropagatedToParent(input.SubInstanceId, input.InstanceId);
                 SubFlowActivityHelper.SetSuccess(activity);

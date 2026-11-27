@@ -18,7 +18,7 @@ public abstract class SubflowTerminalRelayBase<TEvent> : IPostCommitEventRelay<T
     where TEvent : class, ISubflowTerminalEvent
 {
     /// <inheritdoc />
-    public PostCommitRelayTarget Describe(TEvent @event)
+    public virtual PostCommitRelayTarget Describe(TEvent @event)
         => new(@event.Domain, @event.InstanceId, @event.SubInstanceId, @event.Sync);
 
     /// <inheritdoc />

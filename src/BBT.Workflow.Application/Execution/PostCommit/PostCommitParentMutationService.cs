@@ -1,9 +1,11 @@
 using System.Diagnostics;
+using BBT.Aether.Events;
 using BBT.Aether.Results;
 using BBT.Aether.Uow;
 using BBT.Workflow.BackgroundJobs;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution.Pipeline;
+using BBT.Workflow.Execution.PostCommit.Relay;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.SubFlow.Headers;
@@ -16,6 +18,8 @@ namespace BBT.Workflow.Execution.PostCommit;
 /// Applies post-handoff settlement and failure recovery to freshly reloaded parent state.
 /// </summary>
 /// <param name="carriedHeaderPolicy">Filters the request headers that ride the terminal event to the parent; null disables header capture, production DI always supplies it.</param>
+/// <param name="relayDispatcher">Relays the events a fault commit raised to their receiver right after that commit; null leaves them to the outbox alone, production DI always supplies it.</param>
+/// <param name="correlationRepository">Reads the correlation of a failed child start by id, so a start compensation can step aside for a child that already settled its own fault; null never steps aside (the parent is faulted as before), production DI always supplies it.</param>
 public sealed class PostCommitParentMutationService(
     IUnitOfWorkManager uowManager,
     IInstanceRepository instanceRepository,
@@ -23,7 +27,9 @@ public sealed class PostCommitParentMutationService(
     IStateNotificationScheduler stateNotificationScheduler,
     ILogger<PostCommitParentMutationService> logger,
     ISubItemEventDataResolver? subItemDataResolver = null,
-    ICarriedHeaderPolicy? carriedHeaderPolicy = null) : IPostCommitParentMutationService
+    ICarriedHeaderPolicy? carriedHeaderPolicy = null,
+    IPostCommitRelayDispatcher? relayDispatcher = null,
+    IInstanceCorrelationRepository? correlationRepository = null) : IPostCommitParentMutationService
 {
     public async Task<Result<TransitionOutput>> SettleAsync(
         PostCommitParentSnapshot source,
@@ -65,12 +71,30 @@ public sealed class PostCommitParentMutationService(
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(request);
 
-        return await MutateFreshAsync(source, includeLatestData: true, async (instance, ct) =>
+        IReadOnlyList<DomainEventEnvelope> faultEvents = [];
+
+        var result = await MutateFreshAsync(source, includeLatestData: true, async (instance, ct) =>
         {
             // A synchronous callback may already have completed or faulted the parent. Its
             // authoritative terminal result wins over a later outer post-commit failure.
             if (instance.IsCompleted)
                 return null;
+
+            // The failed start created a child that then faulted and reported it here: its
+            // settlement closed the correlation and ran this parent's error boundary, which may have
+            // routed the parent to a recovery state that is not terminal. A settlement that has
+            // FINISHED wins over the start compensation (vnext#1256). The usual case is a child
+            // hosted by another runtime: its fault is relayed while this parent's start call is
+            // still in flight. A child hosted by this runtime reports through the Inbox, normally
+            // after the compensation has run; when that delivery wins the race instead, it is
+            // treated the same way.
+            if (request.StartedSubflowCorrelationId is { } startedCorrelationId &&
+                await IsSettledByTheChildsFaultAsync(instance, startedCorrelationId, ct))
+            {
+                logger.PostCommitStartFaultSupersededByChildSettlement(
+                    instance.Id, startedCorrelationId, request.ErrorCode);
+                return null;
+            }
 
             // Fault() projects the active incident into the upward event; load it when one exists.
             await instanceRepository.LoadActiveIncidentsAsync(instance, ct);
@@ -91,10 +115,67 @@ public sealed class PostCommitParentMutationService(
             instance.Fault(source.Domain, source.CallerMode == ExecMode.Sync,
                 subItemData: await subItemDataResolver.ResolveOrStoredAsync(instance, cancellationToken),
                 carriedHeaders: carriedHeaderPolicy?.Capture(source.Headers));
+
+            // Snapshot BEFORE the save: the SaveChanges sink drains and clears the aggregate's events.
+            faultEvents = instance.GetDomainEvents().ToList();
+
             await instanceRepository.UpdateAsync(instance, true, ct);
             return new ActivationVerdict(
                 TelemetryConstants.ActivationOutcomes.Faulted, CasFlipped: false, instance.GetCurrentState);
         }, cancellationToken);
+
+        // After the commit, with the status lock and the unit of work released: when this instance
+        // is a sub item, the fault above raised its parent's InstanceSubFaultedEvent in a unit of
+        // work no runner relays from. Handing it to the dispatcher here is what reaches a parent in
+        // another domain, whose fault the child domain's Inbox would drop (vnext#1256). A fault
+        // that did not commit returns a failed result or throws, and relays nothing.
+        if (result.IsSuccess && relayDispatcher is not null && faultEvents.Count > 0)
+            await relayDispatcher.RelayAsync(faultEvents, cancellationToken);
+
+        return result;
+    }
+
+    /// <summary>
+    /// Whether the started SubFlow's correlation was closed by that child's own FAULT and that
+    /// settlement has FINISHED. Only then does the start compensation step aside; every other case
+    /// faults the parent as before (fail-safe): a correlation that is still open (the child never
+    /// came to exist or never reported), one that does not exist, one that belongs to another parent,
+    /// a SubProcess correlation, one closed by a completion or a cancel, and one that is closed but
+    /// not yet marked settled.
+    /// <para>
+    /// The settled marker is what proves the boundary ran: <c>SubflowFaultService</c> commits the
+    /// correlation closed with outcome Faulted BEFORE the parent's boundary transition runs, and
+    /// writes <see cref="InstanceCorrelation.SettledAt"/> only after it succeeded (a failed one
+    /// reverts the correlation). Stepping aside on "closed" alone would leave the parent Busy with
+    /// no owner when that boundary then fails and its revert does not land. This is the same proof
+    /// <c>SubItemTerminalGuard</c> asks for. The cost: when the best-effort marker write is lost, the
+    /// compensation faults a parent its boundary had already routed — visible and retryable, and
+    /// what master did in every case.
+    /// </para>
+    /// <para>
+    /// The settlement reload carries open correlations only, so a closed one is read by id here
+    /// rather than by widening that include, and without tracking so that it is not attached to the
+    /// tracked parent's open-only correlation list.
+    /// </para>
+    /// </summary>
+    private async Task<bool> IsSettledByTheChildsFaultAsync(
+        Instance instance,
+        Guid correlationId,
+        CancellationToken cancellationToken)
+    {
+        if (correlationRepository is null ||
+            instance.ChildCorrelations.Any(c => c.Id == correlationId && !c.IsCompleted))
+            return false;
+
+        var correlation = await correlationRepository.FindByIdAsReadOnlyAsync(correlationId, cancellationToken);
+        return correlation is
+               {
+                   IsCompleted: true,
+                   TerminalOutcome: SubItemTerminalOutcome.Faulted,
+                   SettledAt: not null
+               } &&
+               correlation.ParentInstanceId == instance.Id &&
+               correlation.SubFlowType.Equals(SubFlowType.SubFlow);
     }
 
     /// <summary>
