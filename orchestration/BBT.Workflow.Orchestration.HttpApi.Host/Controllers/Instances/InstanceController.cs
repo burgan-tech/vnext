@@ -25,6 +25,7 @@ using BBT.Workflow.Shared;
 using BBT.Workflow.SubFlow;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Middlewares;
@@ -527,6 +528,8 @@ public sealed class InstanceController(
     /// <summary>
     /// Cancels scheduled jobs when an instance is canceled/completed/faulted.
     /// Internal endpoint the Inbox forwards canceled/completed-cleanup/faulted-cleanup events to.
+    /// A faulted-cleanup carries the fault's <c>faultedAt</c> and cleans up only while the instance still rests
+    /// in that fault (vnext#1252); a body without it (the other two events, an older Inbox) cleans up as before.
     /// </summary>
     [ApiExplorerSettings(IgnoreApi = true)]
     [HttpPost("{domain}/workflows/{workflow}/instances/{instance}/cancel-cleanup")]
@@ -534,9 +537,12 @@ public sealed class InstanceController(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromRoute] Guid instance,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] InstanceCleanupInput? input = null,
         CancellationToken cancellationToken = default)
     {
-        var result = await cancellationService.ProcessCancellationAsync(instance, cancellationToken);
+        var result = input?.FaultedAt is { } faultedAt
+            ? await cancellationService.ProcessFaultCleanupAsync(instance, faultedAt, cancellationToken)
+            : await cancellationService.ProcessCancellationAsync(instance, cancellationToken);
         return FromResult(result);
     }
 

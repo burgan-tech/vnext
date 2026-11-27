@@ -862,7 +862,7 @@ public static partial class WorkflowLogs
     /// cache key — with its stack trace, the same detail the incident keeps (vnext#1268).
     /// </summary>
     [LoggerMessage(
-        EventId = 10268,
+        EventId = 10273,
         Level = LogLevel.Error,
         Message = "Task script failed. TaskKey={TaskKey}, TaskType={TaskType}, InstanceId={InstanceId}")]
     public static partial void TaskScriptFailed(
@@ -904,6 +904,36 @@ public static partial class WorkflowLogs
         Exception exception);
 
     /// <summary>
+    /// Logs that a hop failed inside <c>CreateTransitionRecordStep</c> — its mapping, its data write or the
+    /// master-schema check — before its transition record was saved, and that the record was saved
+    /// unfinished so retry can re-run the hop (vnext#1252).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10271,
+        Level = LogLevel.Information,
+        Message = "Transition {TransitionKey} failed before its record was saved; record {TransitionRecordId} kept open for retry. InstanceId={InstanceId}")]
+    public static partial void FailedTransitionRecorded(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        Guid transitionRecordId);
+
+    /// <summary>
+    /// Logs that the open record of a hop that failed inside <c>CreateTransitionRecordStep</c> could not be
+    /// saved. The hop still faults the instance; retry then finds no open record (<c>Instance:100028</c>) and
+    /// the reserved cancel is the way out (vnext#1252).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10272,
+        Level = LogLevel.Warning,
+        Message = "The record of failed transition {TransitionKey} could not be saved; retry will not find it. InstanceId={InstanceId}")]
+    public static partial void FailedTransitionRecordNotSaved(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        Exception exception);
+
+    /// <summary>
     /// Logs when task input mapping/handler fails.
     /// </summary>
     [LoggerMessage(
@@ -937,7 +967,7 @@ public static partial class WorkflowLogs
     /// resolved for <c>user</c>. The task fails through the same error-boundary path as a failed script mapping.
     /// </summary>
     [LoggerMessage(
-        EventId = 10271,
+        EventId = 10281,
         Level = LogLevel.Error,
         Message = "Task declarative mapping failed. TaskKey={TaskKey}, TaskType={TaskType}, Phase={Phase}, InstanceId={InstanceId}, Error={ErrorMessage}")]
     public static partial void TaskDeclarativeMappingFailed(
@@ -1028,7 +1058,7 @@ public static partial class WorkflowLogs
     /// <c>set</c> key, never the value. The mapping continues; nothing is written for that entry.
     /// </summary>
     [LoggerMessage(
-        EventId = 10272,
+        EventId = 10282,
         Level = LogLevel.Debug,
         Message = "Task declarative mapping entry skipped: missing source. TaskKey={TaskKey}, Phase={Phase}, Path={Path}, Reason={Reason}")]
     public static partial void TaskDeclarativeMappingEntrySkipped(
@@ -1044,7 +1074,7 @@ public static partial class WorkflowLogs
     /// script with a file location, or rewrite it as an expression.
     /// </summary>
     [LoggerMessage(
-        EventId = 10273,
+        EventId = 10283,
         Level = LogLevel.Warning,
         Message = "Resource lock key labelled dynamicExpresso ran as a C# script. TransitionKey={TransitionKey}, ExpressionError={ExpressionError}")]
     public static partial void ResourceLockKeyExpressionRanAsScript(
@@ -4651,6 +4681,34 @@ public static partial class WorkflowLogs
         string instance,
         Guid subFlowInstanceId,
         string? error);
+
+    /// <summary>
+    /// Logs that the reserved cancel took over a Faulted instance: unfaulted it into Busy, resolved its open
+    /// incidents and closed the failed hop's open records, in one transaction (vnext#1252).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20522,
+        Level = LogLevel.Information,
+        Message = "Faulted instance {InstanceId} taken over by cancel; {ResolvedIncidents} incident(s) resolved, {ClosedTransitions} open transition record(s) closed")]
+    public static partial void FaultedInstanceTakenOverForCancel(
+        this ILogger logger,
+        Guid instanceId,
+        int resolvedIncidents,
+        int closedTransitions);
+
+    /// <summary>
+    /// Logs that a fault's cleanup arrived after the instance had left that fault — a retry or the reserved
+    /// cancel took it over, or it faulted again — so its jobs and resource locks were left alone (vnext#1252).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20523,
+        Level = LogLevel.Information,
+        Message = "Cleanup of the fault at {FaultedAt:O} skipped for instance {InstanceId}: it is no longer in that fault (status {Status})")]
+    public static partial void StaleFaultCleanupSkipped(
+        this ILogger logger,
+        Guid instanceId,
+        DateTime faultedAt,
+        string status);
 
     #endregion
 

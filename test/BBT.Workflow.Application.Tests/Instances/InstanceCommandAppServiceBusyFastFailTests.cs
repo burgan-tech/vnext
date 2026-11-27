@@ -324,6 +324,91 @@ public class InstanceCommandAppServiceBusyFastFailTests : IDisposable
             .ExecuteTransitionAsync(default!, default);
     }
 
+    [Theory]
+    [InlineData("cancel")]
+    [InlineData("CANCEL")]
+    public async Task TransitionAsync_ReservedCancelOnAFaultedInstance_IsDispatched(string transitionKey)
+    {
+        // vnext#1252: the one way to close an instance a failed hop left Faulted when retrying it is not wanted.
+        var instanceId = Guid.NewGuid();
+        SetupSnapshot(instanceId, InstanceStatus.Faulted, hasActiveSubFlow: false);
+
+        await _service.TransitionAsync(instanceId.ToString(), transitionKey, CreateInput(), CancellationToken.None);
+
+        await _executionService.Received(1)
+            .ExecuteTransitionAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task TransitionAsync_ReservedCancelOnAFaultedInstance_RunsInlineEvenWhenAsyncWasAsked()
+    {
+        // Queued, the cancel would be a job on a still-Faulted instance, and the fault's own late cleanup cancels
+        // every active job of a Faulted instance — the caller got 202 and the instance stayed Faulted (vnext#1252).
+        var instanceId = Guid.NewGuid();
+        SetupSnapshot(instanceId, InstanceStatus.Faulted, hasActiveSubFlow: false);
+        var asyncInput = new TransitionInput(Domain, Flow, new TransitionDataInput(null), sync: false)
+        {
+            Headers = new Dictionary<string, string?>(),
+            RouteValues = new Dictionary<string, string?>()
+        };
+
+        await _service.TransitionAsync(instanceId.ToString(), "cancel", asyncInput, CancellationToken.None);
+
+        await _executionService.Received(1).ExecuteTransitionAsync(
+            Arg.Is<WorkflowExecutionContext>(c => c.Mode == ExecMode.Sync && c.CallerMode == ExecMode.Async),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task TransitionAsync_AsyncCancelOnAnActiveInstance_StaysAsync()
+    {
+        var instanceId = Guid.NewGuid();
+        SetupSnapshot(instanceId, InstanceStatus.Active, hasActiveSubFlow: false);
+        var asyncInput = new TransitionInput(Domain, Flow, new TransitionDataInput(null), sync: false)
+        {
+            Headers = new Dictionary<string, string?>(),
+            RouteValues = new Dictionary<string, string?>()
+        };
+
+        await _service.TransitionAsync(instanceId.ToString(), "cancel", asyncInput, CancellationToken.None);
+
+        await _executionService.Received(1).ExecuteTransitionAsync(
+            Arg.Is<WorkflowExecutionContext>(c => c.Mode == ExecMode.Async),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData("C")]
+    [InlineData("P")]
+    public async Task TransitionAsync_ReservedCancelOnACompletedOrPassiveInstance_IsStillRejected(string statusCode)
+    {
+        var instanceId = Guid.NewGuid();
+        SetupSnapshot(instanceId, InstanceStatus.FromCode(statusCode), hasActiveSubFlow: false);
+
+        var result = await _service.TransitionAsync(
+            instanceId.ToString(), "cancel", CreateInput(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceCompleted);
+        await _executionService.DidNotReceiveWithAnyArgs()
+            .ExecuteTransitionAsync(default!, default);
+    }
+
+    [Theory]
+    [InlineData("exit")]
+    [InlineData("update-parent-data")]
+    public async Task TransitionAsync_OtherReservedKeysOnAFaultedInstance_AreStillRejected(string transitionKey)
+    {
+        var instanceId = Guid.NewGuid();
+        SetupSnapshot(instanceId, InstanceStatus.Faulted, hasActiveSubFlow: false);
+
+        var result = await _service.TransitionAsync(
+            instanceId.ToString(), transitionKey, CreateInput(), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.InstanceCompleted);
+    }
+
     [Fact]
     public async Task TransitionAsync_ProxiedAsync_ReturnsParentIdentityWithoutRunningTheParent()
     {
