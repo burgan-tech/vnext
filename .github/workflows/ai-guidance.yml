@@ -1,0 +1,42 @@
+name: AI Guidance
+
+# Runs scripts/check-ai-guidance.sh when the AI guidance changes: frontmatter, links, Cursor pointers,
+# the capability catalog, the council verdict vocabulary and the context budgets
+# (docs/agent-onboarding.md § Editing the AI guidance). Read-only; not a required check.
+on:
+  pull_request:
+    paths:
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
+      - '.claude/**'
+      - '.cursor/rules/**'
+      - '.github/ai/**'
+      - 'docs/agent-council/**'
+      - 'docs/agent-onboarding.md'
+      - 'docs/ai-capabilities.md'
+      - 'docs/code-review/**'
+      - 'scripts/ai/lib/council.mjs'
+      - 'scripts/check-ai-guidance.sh'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-guidance-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PyYAML
+        run: python -m pip install --quiet pyyaml
+
+      - name: Check the AI guidance
+        run: scripts/check-ai-guidance.sh

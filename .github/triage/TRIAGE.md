@@ -77,7 +77,7 @@ schema/contract change, or several services). `null` when you cannot tell.
 production and has a narrow fix. A maintainer decides; you only flag it.
 
 **integrationTestRequired**: `true` when the fix touches a core process — pipeline, transitions,
-subflows, locking, instance data, error boundary, state function (see AGENTS.md § Testing).
+subflows, locking, instance data, error boundary, state function (see AGENTS.md § Build, run, test).
 
 ## Output schema (your answer)
 

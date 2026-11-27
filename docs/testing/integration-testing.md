@@ -6,7 +6,7 @@ that live in sibling repositories. This page is the **contract**; the runnable p
 agent (Codex, Cursor, Copilot, Gemini) reads this page directly.
 
 Related: [Platform repositories](../../AGENTS.md#platform-repositories) (who owns what),
-[Runbook: bring up domain X](../../AGENTS.md#runbook-bring-up-domain-x-for-agents),
+[Runbook: bring up domain X](../runtime/local-environment.md),
 [Correlation and tracing](../runtime/correlation-and-tracing.md),
 [Elastic queries for the trace tree](../runtime/trace-elastic-queries.md).
 
@@ -77,7 +77,7 @@ infrastructure, sidecars, DbMigrator and the four hosts as local binaries, waits
 writes `ai-docs/local-environments/<domain>.md` — which contains the base URL, database, app-ids and
 the exact `VNEXT_BASE_URL=...` line for the tests. Read that record instead of recomputing ports. The
 full procedure, offsets and `wf` registration are in the
-[runbook](../../AGENTS.md#runbook-bring-up-domain-x-for-agents).
+[runbook](../runtime/local-environment.md).
 A cross-domain scenario can run its domains co-hosted on one host set (`up <primary> --with <other>`,
 [multi-domain hosting](../runtime/multi-domain-hosting.md)); calls between them then stay in-process, so a
 test that must cross a Dapr hop needs separate domains (`--offset`).

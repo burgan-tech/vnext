@@ -27,17 +27,16 @@ phrase against the skill's frontmatter `description`. Cursor reads the same `.cl
 ## 2. Decision — Agent Council
 
 **`agent-council`** — [skill](../.claude/skills/agent-council/SKILL.md) ·
-[rule](../.claude/rules/agent-council-plan-mode.md) · [process](agent-council/PROCESS.md)
+[rule](../.claude/rules/agent-council-plan-mode.md) · [contract](agent-council/README.md)
 
-- **Does:** an evidence-based decision: task record → smallest sufficient council (roles by risk) →
-  independent proposals → at most two objection rounds → decision with dissent, rollback and
-  verification plan. Outcome: `APPROVED` / `EXPERIMENT_REQUIRED` / `CLARIFICATION_REQUIRED` /
-  `BLOCKED` / `REJECTED`.
-- **When:** "council", "karar verelim", "eklemeli miyim", "mimari karar" — and, with no phrase, any
-  question whose honest answer is a recommendation (new component, service boundary, technology,
-  data model, auth boundary, performance claim, deployment change). Every such answer must open by
-  stating whether the council ran.
-- **Run:** *"council: should we add a post-commit relay for event X?"*
+- **Does:** an evidence-based decision. **Lite** (default): three independent role agents, one
+  objection round, one `DECISION.md`. **Full** (Critical risk or on request): risk-sized council, two
+  rounds, scored matrix. **Chair queue**: collects the open `Awaiting Chair` rulings in one pass.
+  Verdicts, condition classes and risk: [contract](agent-council/README.md).
+- **When:** the trigger phrases and question shape in the [rule](../.claude/rules/agent-council-plan-mode.md);
+  every such answer opens by stating whether the council ran.
+- **Run:** *"council: should we add a post-commit relay for event X?"* · *"full council: …"* ·
+  *"chair queue"*
 - **Produces / boundary:** a session folder under `ai-docs/agent-council/sessions/<id>/` (git-ignored)
   and one row in [the committed log](agent-council/sessions/README.md). Planning only — it never writes
   code and its output is not implementation approval.
@@ -122,7 +121,7 @@ session start. Rule: a green test run is not evidence — quote the measured num
 
 **Local environment** — `etc/docker/run-docker.sh status | up <domain> [--offset N] [--with <d1,d2=db>] | plan | down`,
 records in `ai-docs/local-environments/<domain>.md`; full runbook in
-[AGENTS.md](../AGENTS.md#runbook-bring-up-domain-x-for-agents).
+[local-environment runbook](runtime/local-environment.md).
 
 ## 5. Domain package / flow checks
 
@@ -247,11 +246,11 @@ Not part of this repository — they are installed per user and may be missing o
 | [Graphify first](../.claude/rules/graphify-navigation.md) | Query the graph before reading broadly |
 | [Workflow card](../.claude/rules/vnext-workflow-developer.md) and [.NET standards](../.claude/rules/dotnet-coding-standards.md) | Path-scoped: load once code under `src/`, the hosts, `workers/`, `modules/`, `test/` or `vnext-meta/` is open |
 | [`check-mcp-infra.sh`](../.claude/hooks/check-mcp-infra.sh) | SessionStart: lists unreachable MCP backends; starts nothing |
-| [`scripts/check-ai-guidance.sh`](../scripts/check-ai-guidance.sh) | Run after editing AI guidance: frontmatter, links, Cursor pointers, duplicate headings, size budget, catalog coverage |
+| [`scripts/check-ai-guidance.sh`](../scripts/check-ai-guidance.sh) | Run after editing AI guidance (CI runs it too: `ai-guidance.yml`): frontmatter, links, Cursor pointers, duplicate headings, catalog coverage, council verdict vocabulary, always-loaded / path-scoped / council-run budgets |
 
 ## 10. Adding a new capability
 
-- A skill goes in `.claude/skills/<name>/SKILL.md` with a quoted `description` of ≤ ~300 characters
+- A skill goes in `.claude/skills/<name>/SKILL.md` with a quoted `description` of ≤ 350 characters
   carrying its trigger phrases; long detail goes in a sibling file read on demand.
 - A new rule needs a pointer in `.cursor/rules/` with the same scope
   ([editing the AI guidance](agent-onboarding.md#editing-the-ai-guidance)).

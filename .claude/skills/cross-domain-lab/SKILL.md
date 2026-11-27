@@ -14,7 +14,7 @@ into vnext — they go into vnext-example (integration-test policy:
 General facts this skill does not repeat — where things live, wiring tests to a local runtime,
 debugging a red test, scenario documentation — are in
 [`docs/testing/integration-testing.md`](../../../docs/testing/integration-testing.md) §2, §4, §5, §6
-and §7. Port offsets and the domain runbook are in `AGENTS.md` § *Runbook: "bring up domain X"*.
+and §7. Port offsets and the domain runbook are in `docs/runtime/local-environment.md`.
 
 ## When
 
