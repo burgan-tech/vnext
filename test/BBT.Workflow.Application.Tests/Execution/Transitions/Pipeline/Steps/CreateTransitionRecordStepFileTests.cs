@@ -18,6 +18,7 @@ using BBT.Workflow.Files;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
+using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Shouldly;
@@ -45,8 +46,9 @@ public class CreateTransitionRecordStepFileTests
     {
         _dataMapper.MapTransitionDataAsync(
                 Arg.Any<object?>(), Arg.Any<Transition?>(), Arg.Any<Definitions.Workflow>(),
-                Arg.Any<Instance>(), Arg.Any<IRuntimeInfoProvider>(),
-                Arg.Any<Dictionary<string, string?>>(), Arg.Any<CancellationToken>())
+                Arg.Any<Instance>(),
+                Arg.Any<Dictionary<string, string?>>(), Arg.Any<Action<Exception>?>(), Arg.Any<ExecutionActor?>(),
+                Arg.Any<CancellationToken>())
             .Returns(Result<object?>.Ok(JsonDocument.Parse(Mapped).RootElement.Clone()));
         _offload.GetFieldsAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<CancellationToken>())
             .Returns(Result<IReadOnlyList<FileStorageField>>.Ok([new FileStorageField(["passport"], "vnext-blob-local")]));
@@ -57,7 +59,6 @@ public class CreateTransitionRecordStepFileTests
             _dataWriteService,
             Substitute.For<IGuidGenerator>(),
             _dataMapper,
-            Substitute.For<IRuntimeInfoProvider>(),
             _offload,
             Substitute.For<ILogger<CreateTransitionRecordStep>>());
     }
@@ -190,8 +191,9 @@ public class CreateTransitionRecordStepFileTests
     private void MapTo(string json)
         => _dataMapper.MapTransitionDataAsync(
                 Arg.Any<object?>(), Arg.Any<Transition?>(), Arg.Any<Definitions.Workflow>(),
-                Arg.Any<Instance>(), Arg.Any<IRuntimeInfoProvider>(),
-                Arg.Any<Dictionary<string, string?>>(), Arg.Any<CancellationToken>())
+                Arg.Any<Instance>(),
+                Arg.Any<Dictionary<string, string?>>(), Arg.Any<Action<Exception>?>(), Arg.Any<ExecutionActor?>(),
+                Arg.Any<CancellationToken>())
             .Returns(Result<object?>.Ok(JsonDocument.Parse(json).RootElement.Clone()));
 
     private static ActivityListener Listen(List<Activity> spans)
@@ -230,7 +232,43 @@ public class CreateTransitionRecordStepFileTests
             Arg.Any<VersionStrategy?>(), Arg.Any<CancellationToken>(), Arg.Any<Definitions.Workflow?>());
     }
 
-    private static TransitionExecutionContext CreateContext(bool withMapping)
+    [Fact]
+    public async Task OutputBlock_OffloadsMappedFiles()
+    {
+        _offload.OffloadAsync(Arg.Any<FileOffloadRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Result<FileOffloadResult>.Ok(new FileOffloadResult(JsonDocument.Parse(Handled).RootElement.Clone(), true)));
+        var context = CreateContext(withMapping: false, withOutputBlock: true);
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _offload.Received(1).OffloadAsync(
+            Arg.Is<FileOffloadRequest>(r => r.Mode == FileOffloadMode.Trusted), Arg.Any<CancellationToken>());
+        var record = (InstanceTransition)context.Items[WellKnownItems.InstanceTransition]!;
+        record.Body!.Json.ShouldContain("f-1", customMessage: "the block's delta replaces the record body, as a script's result does");
+    }
+
+    [Fact]
+    public async Task EmptyDelta_NoVersion_BodyUnchanged()
+    {
+        _dataMapper.MapTransitionDataAsync(
+                Arg.Any<object?>(), Arg.Any<Transition?>(), Arg.Any<Definitions.Workflow>(),
+                Arg.Any<Instance>(),
+                Arg.Any<Dictionary<string, string?>>(), Arg.Any<Action<Exception>?>(), Arg.Any<ExecutionActor?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(Result<object?>.Ok(null));
+        var context = CreateContext(withMapping: false, withOutputBlock: true);
+        context.Data = JsonDocument.Parse("""{"request":1}""").RootElement.Clone();
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _dataWriteService.DidNotReceiveWithAnyArgs().AppendAsync(default!, default!, default, default, default);
+        var record = (InstanceTransition)context.Items[WellKnownItems.InstanceTransition]!;
+        record.Body!.Json.ShouldContain("request");
+    }
+
+    private static TransitionExecutionContext CreateContext(bool withMapping, bool withOutputBlock = false)
     {
         var workflow = CreateWorkflow();
         var instance = Instance.Create(Guid.NewGuid(), "test-workflow", "1.0.0");
@@ -238,6 +276,10 @@ public class CreateTransitionRecordStepFileTests
         instance.ChangeState(state);
         if (withMapping)
             workflow.ResolveTransition("test-transition", state)!.SetMapping(ScriptCode.FromNative("mapping"));
+        if (withOutputBlock)
+            BBT.Workflow.Application.Tests.Execution.Transitions.TransitionDataMapperDeclarativeTests.SetOutput(
+                workflow.ResolveTransition("test-transition", state)!,
+                BBT.Workflow.Application.Tests.Execution.Transitions.TransitionDataMapperDeclarativeTests.Block(select: "$.input"));
 
         return new TransitionExecutionContext
         {

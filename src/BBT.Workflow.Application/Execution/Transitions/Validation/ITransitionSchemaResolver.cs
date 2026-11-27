@@ -1,3 +1,4 @@
+using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Instances;
@@ -19,12 +20,15 @@ public interface ITransitionSchemaResolver
     /// <param name="workflow">The workflow definition.</param>
     /// <param name="instance">The instance; rules see its latest data (or <c>{}</c> when it has none yet).</param>
     /// <param name="transition">The transition being executed or described.</param>
-    /// <param name="headers">Request headers exposed to rules. No query parameters, no request body.</param>
+    /// <param name="headers">Request headers exposed to rules. No query parameters.</param>
+    /// <param name="requestBody">The transition request body, exposed to rules as <c>input</c>; <c>null</c> when
+    /// there is none (the schema read path describes a transition without a request).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<Result<Reference?>> ResolveAsync(
         Definitions.Workflow workflow,
         Instance instance,
         Transition transition,
         IReadOnlyDictionary<string, string?>? headers,
+        JsonElement? requestBody = null,
         CancellationToken cancellationToken = default);
 }

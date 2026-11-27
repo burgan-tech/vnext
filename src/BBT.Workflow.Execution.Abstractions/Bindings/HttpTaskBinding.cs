@@ -30,7 +30,13 @@ public sealed class HttpTaskBinding
     /// When null, the "Content-Type" header is used, falling back to "application/json".
     /// </summary>
     public string? ContentType { get; init; }
-    
+
+    /// <summary>
+    /// The parts of a <c>multipart/form-data</c> body. When it holds a part, the request is sent as multipart
+    /// and <see cref="Body"/>, <see cref="ContentType"/> and a "Content-Type" header are ignored.
+    /// </summary>
+    public IReadOnlyList<HttpMultipartPartBinding>? Multipart { get; init; }
+
     /// <summary>
     /// Request timeout in seconds.
     /// </summary>

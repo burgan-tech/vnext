@@ -739,6 +739,146 @@ public class TransitionPipelineTests
             .TakeOverAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_CancelOnAFaultedInstance_TakesItOverBeforeTheChainRuns(bool preReserved)
+    {
+        // vnext#1252: the context factory admits the reserved cancel to a Faulted instance, and the
+        // takeover (Faulted → Busy, incidents resolved, open records closed) happens here — for a job
+        // re-entry too, because the async accept's CAS is Active → Busy and could not flip it.
+        var context = CreateTransitionExecutionContext("cancel");
+        context.Instance.Fault("test-domain");
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        workflowContext.IsPreReserved = preReserved;
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.BypassBusyCheck);
+        _mockBusyMarker.TryUnfaultIntoBusyAsync(context.Instance, Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        context.TookOverFaultedInstance.ShouldBeTrue();
+        Received.InOrder(() =>
+        {
+            _mockBusyMarker.TryUnfaultIntoBusyAsync(context.Instance, Arg.Any<CancellationToken>());
+            _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+        });
+        await _mockAdmissionService.DidNotReceive()
+            .TakeOverAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_CancelOnAFaultedInstanceRefusedByValidation_LeavesItFaultedAndUntouched()
+    {
+        // The takeover resolves the incidents and closes the failed hop's record, so it must come after every
+        // check that can still refuse the cancel (availableIn, schema): a refused cancel changes nothing.
+        var context = CreateTransitionExecutionContext("cancel");
+        context.Instance.Fault("test-domain");
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.BypassBusyCheck);
+        var refused = Error.Validation(WorkflowErrorCodes.WellKnownTransitionNotAvailableInState, "cancel is not available here");
+        _mockValidationService.ValidateAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Fail(refused));
+        _mockValidationService.ValidatePolicyAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result.Fail(refused));
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(refused.Code);
+        context.Instance.Status.ShouldBe(InstanceStatus.Faulted);
+        await _mockBusyMarker.DidNotReceive()
+            .TryUnfaultIntoBusyAsync(Arg.Any<Instance>(), Arg.Any<CancellationToken>());
+        await _mockSteps[0].DidNotReceive()
+            .ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_CancelThatTookAFaultedInstanceOver_IsFaultedAgainByARefusalThatNormallyReleases()
+    {
+        // ResourceLockRejected normally hands the Busy back untouched. After the takeover the instance is no
+        // longer the Faulted one it was — incidents resolved, the failed hop's record closed — so releasing it
+        // would leave it Active with nothing to show for the failure.
+        var context = CreateTransitionExecutionContext("cancel");
+        context.Instance.Fault("test-domain");
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.BypassBusyCheck);
+        _mockBusyMarker.TryUnfaultIntoBusyAsync(context.Instance, Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                call.Arg<Instance>().Unfault();
+                return true;
+            });
+        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<StepOutcome>.Fail(
+                Error.Conflict(WorkflowErrorCodes.ResourceLockRejected, "Resource is already locked"))));
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ResourceLockRejected);
+        await _mockAdmissionService.DidNotReceive()
+            .ReleaseReservationAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+        await _mockInstanceRepository.Received(1)
+            .UpdateAsync(
+                Arg.Is<Instance>(x => x.Status.Equals(InstanceStatus.Faulted)),
+                true,
+                Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_CancelOnAFaultedInstanceThatSomeoneElseTookFirst_FailsWithARetryableConflict()
+    {
+        var context = CreateTransitionExecutionContext("cancel");
+        context.Instance.Fault("test-domain");
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.BypassBusyCheck);
+        _mockBusyMarker.TryUnfaultIntoBusyAsync(context.Instance, Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        // The transition job retries ConflictWorkflow; the next attempt reloads what the winner left.
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ConflictWorkflow);
+        await _mockSteps[0].DidNotReceive()
+            .ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+        await _mockInstanceRepository.DidNotReceive()
+            .AcceptPersistedStatusAsync(Arg.Any<Instance>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_BypassKindOnAnInstanceThatIsNotFaulted_DoesNotUnfault()
+    {
+        var context = CreateTransitionExecutionContext("cancel");
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        SetupStepsToContinue();
+        _mockAdmissionService.Classify(Arg.Any<TransitionExecutionContext>())
+            .Returns(AdmissionKind.BypassBusyCheck);
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _mockBusyMarker.DidNotReceive()
+            .TryUnfaultIntoBusyAsync(Arg.Any<Instance>(), Arg.Any<CancellationToken>());
+        await _mockAdmissionService.Received(1)
+            .TakeOverAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>());
+    }
+
     [Fact]
     public async Task RunAsync_BusyParentWithActiveSubflow_ShouldRunWithoutReserve()
     {
@@ -1628,6 +1768,118 @@ public class TransitionPipelineTests
             .ShouldBe(new Dictionary<string, string?> { ["sub"] = "u1", ["x-custom"] = "v" });
     }
 
+    /// <summary>
+    /// vnext#1268: a step that throws (an agent script, say) faults the hop, and the fault incident
+    /// keeps the exception's full rendering — type, message, inner exception and frames.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenAStepThrows_TheFaultIncidentKeepsTheStackTrace()
+    {
+        var context = CreateTransitionExecutionContext();
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        var thrown = new InvalidOperationException("agent script failed", new FormatException("bad hint"));
+        _mockSteps[1].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns<Task<Result<StepOutcome>>>(_ => throw thrown);
+
+        await _pipeline.RunAsync(CreateWorkflowExecutionContext(context), CancellationToken.None);
+
+        var incident = context.Instance.GetLoadedIncidents().ShouldHaveSingleItem();
+        incident.ErrorCode.ShouldBe(nameof(InvalidOperationException));
+        var trace = incident.StackTrace.ShouldNotBeNull();
+        trace.ShouldBe(thrown.ToString());
+        trace.ShouldContain(nameof(FormatException));
+    }
+
+    /// <summary>
+    /// vnext#1268: a step that reports a script failure as an error (transition mapping, resource-lock
+    /// key, timer) leaves the exception on the context; the fault incident takes its stack trace from
+    /// there, while its code and message stay the step's own error.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenAStepRecordsAFailureCause_TheFaultIncidentKeepsItsStackTrace()
+    {
+        var context = CreateTransitionExecutionContext();
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        var cause = new ArgumentException("the transition mapping found no customer");
+        _mockSteps[1].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                call.Arg<TransitionExecutionContext>().FailureCause = cause;
+                return Task.FromResult(Result<StepOutcome>.Fail(
+                    Error.Failure("Execution:200002", "Failed to execute transition mapping: " + cause.Message)));
+            });
+
+        await _pipeline.RunAsync(CreateWorkflowExecutionContext(context), CancellationToken.None);
+
+        var incident = context.Instance.GetLoadedIncidents().ShouldHaveSingleItem();
+        incident.ErrorCode.ShouldBe("Execution:200002");
+        incident.Message.ShouldBe("Failed to execute transition mapping: " + cause.Message);
+        incident.StackTrace.ShouldBe(cause.ToString());
+    }
+
+    /// <summary>
+    /// vnext#1268: an exception outside any step — here a step's directive mutation, which runs in the
+    /// executor's own loop — is caught by the executor's outer catch and kept the same way.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenTheExecutorLoopThrows_TheFaultIncidentKeepsTheStackTrace()
+    {
+        var context = CreateTransitionExecutionContext();
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        var thrown = new InvalidOperationException("directive mutation failed");
+        _mockSteps[1].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.With(_ => throw thrown))));
+
+        await _pipeline.RunAsync(CreateWorkflowExecutionContext(context), CancellationToken.None);
+
+        var incident = context.Instance.GetLoadedIncidents().ShouldHaveSingleItem();
+        incident.ErrorCode.ShouldBe("PipelineException");
+        incident.StackTrace.ShouldBe(thrown.ToString());
+    }
+
+    /// <summary>vnext#1268: the fault's log line carries the same exception the incident keeps.</summary>
+    [Fact]
+    public async Task RunAsync_WhenAStepRecordsAFailureCause_TheFaultLogCarriesTheException()
+    {
+        var context = CreateTransitionExecutionContext();
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        _mockLogger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
+        var cause = new ArgumentException("the transition mapping found no customer");
+        _mockSteps[1].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                call.Arg<TransitionExecutionContext>().FailureCause = cause;
+                return Task.FromResult(Result<StepOutcome>.Fail(Error.Failure("Execution:200002", "mapping failed")));
+            });
+
+        await _pipeline.RunAsync(CreateWorkflowExecutionContext(context), CancellationToken.None);
+
+        _mockLogger.Received(1).Log(
+            LogLevel.Warning,
+            Arg.Is<EventId>(e => e.Id == 10130),
+            Arg.Any<Arg.AnyType>(),
+            cause,
+            Arg.Any<Func<Arg.AnyType, Exception?, string>>());
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenAStepFailsWithoutAnException_TheFaultIncidentHasNoStackTrace()
+    {
+        var context = CreateTransitionExecutionContext();
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        _mockSteps[1].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<StepOutcome>.Fail(Error.Failure("step.failed", "boom"))));
+
+        await _pipeline.RunAsync(CreateWorkflowExecutionContext(context), CancellationToken.None);
+
+        context.Instance.GetLoadedIncidents().ShouldHaveSingleItem().StackTrace.ShouldBeNull();
+    }
+
     [Fact]
     public async Task RunAsync_WhenStepFails_ShouldMarkInstanceFaultedWithSuccessResult()
     {
@@ -1673,6 +1925,56 @@ public class TransitionPipelineTests
                 Arg.Is<Instance>(x => x.Status.Equals(InstanceStatus.Faulted)),
                 true,
                 Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenAHopFaults_TheRunsOwnInstanceSaysFaulted_AndItsCommitWritesNoStatus()
+    {
+        // vnext#1252: the fault is written on a reload in a unit of work of its own. The aggregate the run
+        // returns — the sync response is built from it — said Active for an updateData or a cancel, and its
+        // own commit could write that stale status over the fault. The persisted fault is mirrored onto it
+        // and its change-tracker baseline aligned.
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        var reloaded = Instance.Create(context.InstanceId, context.WorkflowKey, "1.0.0");
+        var eventsBefore = context.Instance.GetDomainEvents().Count;
+        SetupContextFactory(context);
+        _mockInstanceRepository
+            .FindWithAllCorrelationsAndDataAsync(context.InstanceId, Arg.Any<CancellationToken>())
+            .Returns(reloaded);
+        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<StepOutcome>.Fail(Error.Failure("step.failed", "Step execution failed")));
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value!.Instance.ShouldBeSameAs(context.Instance);
+        context.Instance.Status.ShouldBe(InstanceStatus.Faulted);
+        context.Instance.CompletedAt.ShouldBe(reloaded.CompletedAt);
+        context.Instance.HasActiveIncident.ShouldBeTrue();
+        context.Instance.GetDomainEvents().Count.ShouldBe(eventsBefore, "the fault's events belong to the reload alone");
+        Received.InOrder(() =>
+        {
+            _mockInstanceRepository.UpdateAsync(reloaded, true, Arg.Any<CancellationToken>());
+            _mockInstanceRepository.AcceptPersistedStatusAsync(context.Instance, Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenTheFaultReloadFindsNothing_TheFaultedRunInstanceIsNotMirroredOntoItself()
+    {
+        var context = CreateTransitionExecutionContext();
+        var workflowContext = CreateWorkflowExecutionContext(context);
+        SetupContextFactory(context);
+        _mockSteps[0].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<StepOutcome>.Fail(Error.Failure("step.failed", "Step execution failed")));
+
+        var result = await _pipeline.RunAsync(workflowContext, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        context.Instance.Status.ShouldBe(InstanceStatus.Faulted);
+        await _mockInstanceRepository.DidNotReceive()
+            .AcceptPersistedStatusAsync(Arg.Any<Instance>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]

@@ -39,8 +39,8 @@ public class CreateTransitionRecordStepModifiedAtTests
         var dataMapper = Substitute.For<ITransitionDataMapper>();
         dataMapper.MapTransitionDataAsync(
                 Arg.Any<object?>(), Arg.Any<Transition?>(), Arg.Any<Definitions.Workflow>(),
-                Arg.Any<Instance>(), Arg.Any<IRuntimeInfoProvider>(),
-                Arg.Any<Dictionary<string, string?>>(), Arg.Any<CancellationToken>())
+                Arg.Any<Instance>(),
+                Arg.Any<Dictionary<string, string?>>(), Arg.Any<Action<Exception>?>(), Arg.Any<BBT.Workflow.Shared.ExecutionActor?>(), Arg.Any<CancellationToken>())
             .Returns(Result<object?>.Ok(JsonDocument.Parse("""{"amount":1}""").RootElement.Clone()));
 
         _step = new CreateTransitionRecordStep(
@@ -49,7 +49,6 @@ public class CreateTransitionRecordStepModifiedAtTests
             _dataWriteService,
             Substitute.For<IGuidGenerator>(),
             dataMapper,
-            Substitute.For<IRuntimeInfoProvider>(),
             BBT.Workflow.Application.Files.FileTestDoubles.PassThroughOffload(),
             Substitute.For<ILogger<CreateTransitionRecordStep>>());
     }

@@ -93,6 +93,14 @@ public class TransitionPipeline
         => error.Code is not null && NonFaultingErrorCodes.Contains(error.Code);
 
     /// <summary>
+    /// <see cref="IsNonFaultingError"/> for a hop of the chain. A cancel that took a Faulted instance over has
+    /// already changed it — incidents resolved, the failed hop's record closed — so even a refusal of this kind
+    /// faults it again rather than handing back a Busy that would settle Active (vnext#1252).
+    /// </summary>
+    private static bool LeavesTheInstanceUntouched(TransitionExecutionContext context, Error error)
+        => IsNonFaultingError(error) && !context.TookOverFaultedInstance;
+
+    /// <summary>
     /// Pipeline-step failures a workflow may REROUTE through its own <c>errorBoundary</c> instead of
     /// faulting. Deliberately narrow: a code belongs here only when the step failed BEFORE changing
     /// anything, so sending the instance down another transition from the state it never left is sound.
@@ -238,19 +246,9 @@ public class TransitionPipeline
 
             case AdmissionKind.BypassBusyCheck:
             {
-                // cancel / exit / timeout: exempt from the Busy 409, but the status flip still
-                // goes through the same short distributed lock — admission marks Busy under it.
-                //
-                // Unless the accept already did it: an async accept flips Busy under its own
-                // status lock before answering the caller, and the job re-enters pre-reserved.
-                // Taking the lock again here would only re-acquire it to re-confirm a flag we
-                // already own, putting this path back on two locks per request.
-                if (!context.IsPreReserved)
-                {
-                    var takeover = await _admissionService.TakeOverAsync(context, cancellationToken);
-                    if (!takeover.IsSuccess)
-                        return Result<TransitionExecutionContext>.Fail(takeover.Error);
-                }
+                var takeover = await TakeOverBypassingBusyAsync(context, cancellationToken);
+                if (!takeover.IsSuccess)
+                    return Result<TransitionExecutionContext>.Fail(takeover.Error);
 
                 context.OwnsStatus = true;
                 return await RunChainAsync(context, cancellationToken);
@@ -316,6 +314,46 @@ public class TransitionPipeline
     }
 
     /// <summary>
+    /// The status flip of a cancel / exit / timeout: exempt from the Busy 409, but the flip still goes
+    /// through the same short distributed lock — admission marks Busy under it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Unless the accept already did it: an async accept flips Busy under its own status lock before
+    /// answering the caller, and the job re-enters pre-reserved. Taking the lock again here would only
+    /// re-acquire it to re-confirm a flag we already own, putting this path back on two locks per request.
+    /// </para>
+    /// <para>
+    /// A Faulted instance gets here only for the reserved cancel — the context factory admits no other
+    /// request to a terminal instance (vnext#1252) — and the intake runs that cancel inline. A job that still
+    /// carries one (queued before that rule, or by an entry point that bypasses the intake) is taken over here
+    /// too, because the async accept's CAS (Active → Busy) cannot flip a Faulted row: Faulted → Busy,
+    /// incidents resolved, the failed hop's open record closed, in one transaction. Before that nothing has
+    /// changed, so a cancel refused earlier (validation, availability) leaves the instance Faulted and retryable.
+    /// </para>
+    /// </remarks>
+    private async Task<Result> TakeOverBypassingBusyAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        if (context.Instance.Status.Equals(InstanceStatus.Faulted))
+        {
+            // Lost race: a retry or another cancel took the instance first. It is no longer Faulted, so a
+            // second attempt — the caller's, or the transition job's own lock-conflict retry — reloads it and
+            // cancels whatever that left (or is refused, if it completed).
+            if (!await _busyMarker.TryUnfaultIntoBusyAsync(context.Instance, cancellationToken))
+                return Result.Fail(WorkflowErrors.InstanceLockConflict(context.InstanceId));
+
+            context.TookOverFaultedInstance = true;
+            return Result.Ok();
+        }
+
+        return context.IsPreReserved
+            ? Result.Ok()
+            : await _admissionService.TakeOverAsync(context, cancellationToken);
+    }
+
+    /// <summary>
     /// Runs the full transition chain (first + auto-chained) with no held lock: admission has
     /// already reserved the instance (or the request kind is exempt), so the Busy flag carries
     /// mutual exclusion across every hop with zero per-hop overhead.
@@ -365,7 +403,7 @@ public class TransitionPipeline
                 // onConflict: Reject — adım işe hiç başlamadı, instance olduğu gibi duruyor.
                 // Fault etmek sağlam bir süreci, çağıranın tekrar deneyebileceği bir durum uğruna
                 // öldürmek olurdu. Fail dönüyoruz; admission katmanı Busy flip'ini telafi ediyor.
-                if (IsNonFaultingError(pipelineResult.Error))
+                if (LeavesTheInstanceUntouched(context, pipelineResult.Error))
                 {
                     _logger.TransitionRejectedWithoutFaulting(
                         context.InstanceId, context.TransitionKey, pipelineResult.Error.Code);
@@ -862,8 +900,7 @@ public class TransitionPipeline
     /// Writes and commits the fault, and returns the events it raised. The fault flip is serialized
     /// under the short status lock (best effort — on acquisition failure it proceeds unguarded,
     /// because leaving a failed pipeline invisible is worse than a narrow double-write window).
-    /// Uses a RequiresNew UoW scope so that any dirty state left on the current
-    /// DbContext by the failed pipeline step does not block SaveChanges.
+    /// The fault itself is written by <see cref="PersistFaultAsync"/>.
     /// </summary>
     private async Task<IReadOnlyList<DomainEventEnvelope>> CommitInstanceFaultAsync(
         TransitionExecutionContext context,
@@ -875,7 +912,7 @@ public class TransitionPipeline
         using var compensation = CompensationCancellation.Create();
         var cancellationToken = compensation.Token;
 
-        _logger.InstanceFaultedDueToPipelineError(context.InstanceId, error.Code, error.Message);
+        _logger.InstanceFaultedDueToPipelineError(context.InstanceId, error.Code, error.Message, context.FailureCause);
 
         // The failure path's own rest point: a status lock, a fresh unit of work, a reload and a
         // commit that used to run unnamed after the failing step's span had already closed.
@@ -888,6 +925,46 @@ public class TransitionPipeline
         // history: none — write the buffered data before the reload below picks up the instance.
         await FlushBufferedDataBestEffortAsync(context, cancellationToken);
 
+        var (instance, commitContext, faultEvents) = await PersistFaultAsync(context, error, cancellationToken);
+
+        // The aggregate the pipeline ran on still says what it said before the failure — Busy, or Active
+        // for an updateData or a cancel, neither of which flips it in memory. The sync response is built
+        // from it, so it answered Active for a Faulted instance (vnext#1252), and this unit of work's
+        // commit could write its stale status over the fault. Only after PersistFaultAsync: its unit of
+        // work has to be closed, or the alignment lands on that one's change tracker instead of ours.
+        if (!ReferenceEquals(instance, context.Instance))
+        {
+            context.Instance.MirrorPersistedFault(instance);
+            await _instanceRepository.AcceptPersistedStatusAsync(context.Instance, cancellationToken);
+        }
+
+        // Faulted is a rest point the client observes, so the activation episode closes here —
+        // after the commit, like every other rest point. Regardless of OwnsStatus: whatever this
+        // execution owned, the instance now rests Faulted because of it.
+        ActivationActivity.Emit(
+            PipelineStepActivityHelper.ActivitySource,
+            TelemetryConstants.ActivationOutcomes.Faulted,
+            context.InstanceId,
+            context.Domain,
+            context.WorkflowKey,
+            context.TransitionKey,
+            instance.GetCurrentState,
+            settlingCommit: commitContext);
+
+        _logger.InstanceFaultedSuccessfully(context.InstanceId);
+        return faultEvents;
+    }
+
+    /// <summary>
+    /// Writes the fault in a unit of work of its own and returns the copy it faulted with the commit's
+    /// span context and the events the fault raised. Uses a RequiresNew scope so that any dirty state left
+    /// on the current DbContext by the failed pipeline step does not block SaveChanges.
+    /// </summary>
+    private async Task<(Instance Faulted, ActivityContext Commit, IReadOnlyList<DomainEventEnvelope> Events)> PersistFaultAsync(
+        TransitionExecutionContext context,
+        Error error,
+        CancellationToken cancellationToken)
+    {
         await using var faultUow = _uowManager.Begin(
             new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew });
 
@@ -918,6 +995,7 @@ public class TransitionPipeline
                 message: error.Message ?? "Unhandled pipeline error",
                 errorCode: error.Code ?? "Pipeline:Unhandled",
                 errorLayer: "Pipeline",
+                stackTrace: context.FailureCause?.ToString(),
                 traceId: context.TraceId);
 
             instance.AddIncident(incident);
@@ -933,28 +1011,20 @@ public class TransitionPipeline
         IReadOnlyList<DomainEventEnvelope> faultEvents = instance.GetDomainEvents().ToList();
 
         await _instanceRepository.UpdateAsync(instance, true, cancellationToken);
-        ActivityContext commitContext;
-        using (var commitActivity = PipelineStepActivityHelper.StartTransitionActivity(
-                   "Uow.Commit", context.TransitionKey))
-        {
-            await faultUow.CommitAsync(cancellationToken);
-            commitContext = commitActivity?.Context ?? default;
-        }
+        return (instance, await CommitFaultAsync(faultUow, context.TransitionKey, cancellationToken), faultEvents);
+    }
 
-        // Faulted is a rest point the client observes, so the activation episode closes here —
-        // after the commit, like every other rest point. Regardless of OwnsStatus: whatever this
-        // execution owned, the instance now rests Faulted because of it.
-        ActivationActivity.Emit(
-            PipelineStepActivityHelper.ActivitySource,
-            TelemetryConstants.ActivationOutcomes.Faulted,
-            context.InstanceId,
-            context.Domain,
-            context.WorkflowKey,
-            context.TransitionKey,
-            instance.GetCurrentState,
-            settlingCommit: commitContext);
-
-        _logger.InstanceFaultedSuccessfully(context.InstanceId);
-        return faultEvents;
+    /// <summary>
+    /// Commits the fault under its own span and returns that span's context, which the activation episode
+    /// names as its settling commit.
+    /// </summary>
+    private static async Task<ActivityContext> CommitFaultAsync(
+        IUnitOfWork faultUow,
+        string transitionKey,
+        CancellationToken cancellationToken)
+    {
+        using var commitActivity = PipelineStepActivityHelper.StartTransitionActivity("Uow.Commit", transitionKey);
+        await faultUow.CommitAsync(cancellationToken);
+        return commitActivity?.Context ?? default;
     }
 }

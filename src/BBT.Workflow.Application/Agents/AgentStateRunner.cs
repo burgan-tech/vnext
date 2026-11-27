@@ -13,6 +13,8 @@ using BBT.Workflow.Instances.Agents;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Scripting.Expressions;
+using BBT.Workflow.Scripting.Rules;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -38,8 +40,11 @@ public sealed class AgentStateRunner(
     IInstanceDataWriteService dataWriteService,
     ICallerRoleResolver callerRoleResolver,
     IScriptEngine scriptEngine,
-    ILogger<AgentStateRunner> logger)
+    ILogger<AgentStateRunner> logger,
+    ValueSlotExpressionEvaluator? expressions = null)
 {
+    private readonly ValueSlotExpressionEvaluator _expressions = expressions ?? ValueSlotExpressionEvaluator.Shared;
+
     private const string AgentSummaryProperty = "$agent";
 
     /// <summary>Runs the agent and returns the in-hop decision, or a failure for the error boundary.</summary>
@@ -124,11 +129,19 @@ public sealed class AgentStateRunner(
         var mode = decisionSpec.EffectiveMode;
 
         // 4. Prompt and output schema.
-        var userPrompt = binding.Prompt!.IsScript
-            ? await (await scriptEngine.CompileToInstanceAsync<IAgentPromptMapping>(
-                    binding.Prompt.ToScriptCode(), flowScripts: context.Workflow.Scripts, cancellationToken: cancellationToken))
-                .Handler(scriptContext)
-            : AgentTemplateRenderer.Render(binding.Prompt.Template ?? string.Empty, templateScope);
+        string userPrompt;
+        if (binding.Prompt!.IsScript)
+        {
+            var prompt = await BuildScriptPromptAsync(binding.Prompt.ToScriptCode(), context, scriptContext, cancellationToken);
+            if (!prompt.IsSuccess)
+                return Result<AgentHopDecision>.Fail(prompt.Error);
+            userPrompt = prompt.Value!;
+        }
+        else
+        {
+            userPrompt = AgentTemplateRenderer.Render(binding.Prompt.Template ?? string.Empty, templateScope);
+        }
+
         if (mode == AgentDecisionMode.Model)
             userPrompt += AgentDecisionSupport.DescribeCandidates(candidates);
 
@@ -218,11 +231,12 @@ public sealed class AgentStateRunner(
                 }
                 case AgentDecisionMode.Script:
                 {
-                    var mapper = await scriptEngine.CompileToInstanceAsync<IAgentDecisionMapping>(
-                        decisionSpec.Mapping!, flowScripts: context.Workflow.Scripts, cancellationToken: cancellationToken);
                     var outcome = new AgentRunOutcome(true, result.Output,
                         AgentDecisionSupport.ReadString(result.Output, AgentDecisionSupport.DecisionProperty), reasonText, null);
-                    var chosen = await mapper.Handler(outcome, candidates, scriptContext);
+                    var decided = await DecideByScriptAsync(decisionSpec.Mapping!, outcome, candidates, context, scriptContext, cancellationToken);
+                    if (!decided.IsSuccess)
+                        return Result<AgentHopDecision>.Fail(decided.Error);
+                    var chosen = decided.Value;
                     (selected, source, reasonText) = candidates.Any(c => c.Key == chosen)
                         ? (chosen, AgentDecisionSource.Script, reasonText)
                         : (fallback, AgentDecisionSource.Fallback, $"decision script returned '{chosen ?? "nothing"}', not a candidate");
@@ -269,6 +283,48 @@ public sealed class AgentStateRunner(
         return slot is null
             ? AgentRunResult.Failed(AgentRunStatus.Failed, $"capacity: AiAgent:MaxConcurrentRuns ({options.Value.MaxConcurrentRuns}) reached")
             : await runtime.RunAsync(request, cancellationToken);
+    }
+
+    /// <summary>
+    /// The prompt of a script prompt: a <c>dynamicExpresso</c>-labelled one is a Dynamic Expresso expression returning
+    /// the text (falling back to its pre-label C# meaning with a warning); any other location runs
+    /// <see cref="IAgentPromptMapping"/>, whose exceptions propagate as before.
+    /// </summary>
+    private async Task<Result<string>> BuildScriptPromptAsync(
+        ScriptCode script, TransitionExecutionContext context, ScriptContext scriptContext, CancellationToken cancellationToken)
+    {
+        async Task<string> RunScriptAsync() =>
+            await (await scriptEngine.CompileToInstanceAsync<IAgentPromptMapping>(
+                    script, flowScripts: context.Workflow.Scripts, cancellationToken: cancellationToken))
+                .Handler(scriptContext);
+
+        if (!ConditionScriptLocations.IsDynamicExpresso(script.Location))
+            return Result<string>.Ok(await RunScriptAsync());
+
+        return await ValueSlotExpressionEvaluator.WithScriptFallbackAsync(
+            () => _expressions.EvaluatePromptAsync(script, scriptContext), RunScriptAsync, "agent prompt", logger, cancellationToken);
+    }
+
+    /// <summary>
+    /// The transition key a mode-<c>script</c> decision picks (null = no decision): a <c>dynamicExpresso</c>-labelled
+    /// mapping is a Dynamic Expresso expression over the value-slot scope plus <c>outcome</c> and <c>candidates</c>
+    /// (falling back to its pre-label C# meaning with a warning); any other location runs <see cref="IAgentDecisionMapping"/>.
+    /// </summary>
+    private async Task<Result<string?>> DecideByScriptAsync(
+        ScriptCode script, AgentRunOutcome outcome, IReadOnlyList<AgentCandidate> candidates,
+        TransitionExecutionContext context, ScriptContext scriptContext, CancellationToken cancellationToken)
+    {
+        async Task<string?> RunScriptAsync() =>
+            await (await scriptEngine.CompileToInstanceAsync<IAgentDecisionMapping>(
+                    script, flowScripts: context.Workflow.Scripts, cancellationToken: cancellationToken))
+                .Handler(outcome, candidates, scriptContext);
+
+        if (!ConditionScriptLocations.IsDynamicExpresso(script.Location))
+            return Result<string?>.Ok(await RunScriptAsync());
+
+        return await ValueSlotExpressionEvaluator.WithScriptFallbackAsync(
+            () => _expressions.EvaluateDecisionAsync(script, scriptContext, outcome, candidates),
+            RunScriptAsync, "agent decision", logger, cancellationToken);
     }
 
     private async Task<Result<AgentHopDecision>> FinishAsync(

@@ -52,6 +52,123 @@ public class ResourceLockStepTests
             _runtimeInfoProvider);
     }
 
+    /// <summary>A step wired with the real Dynamic Expresso value evaluator (the cache-key evaluator).</summary>
+    private ResourceLockStep StepWithExpressions() => new(
+        _scriptEngine,
+        _scriptContextFactory,
+        _instanceRepository,
+        _resourceLockService,
+        _runtimeInfoProvider,
+        expressionEvaluator: new BBT.Workflow.Tasks.Evaluators.DynamicExpressoValueEvaluator(
+            Substitute.For<ILogger<BBT.Workflow.Tasks.Evaluators.DynamicExpressoValueEvaluator>>()));
+
+    private static TransitionExecutionContext ExpressionKeyContext(string code) =>
+        CreateContext(new ResourceLockDefinition(
+            ScriptCode.FromNative(code, location: "dynamicExpresso"),
+            ResourceLockAction.Acquire,
+            DefaultTtl));
+
+    [Fact]
+    public async Task ExecuteAsync_DynamicExpressoKey_IsEvaluatedAsAnExpression_WithoutTheScriptEngine()
+    {
+        SetupScriptContextFactory();
+        _resourceLockService
+            .AcquireAsync(TestResourceKey, Arg.Any<string>(), DefaultTtl, Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var result = await StepWithExpressions().ExecuteAsync(
+            ExpressionKeyContext("\"seat:\" + \"concert1\" + \":A1\""), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _resourceLockService.Received(1)
+            .AcquireAsync(TestResourceKey, Arg.Any<string>(), DefaultTtl, Arg.Any<CancellationToken>());
+        await _scriptEngine.DidNotReceiveWithAnyArgs().CompileToInstanceAsync<ITransitionMapping>(default(ScriptCode)!);
+    }
+
+    /// <summary>
+    /// `input` in a lock key is the hop's request payload (TransitionExecutionContext.HopInput), although the lock step
+    /// (order 25) builds the hop's shared context before any task step attaches the transition record.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_DynamicExpressoKey_ReadsInput_FromTheHopRequestPayload()
+    {
+        SetupScriptContextFactory();
+        _resourceLockService
+            .AcquireAsync(TestResourceKey, Arg.Any<string>(), DefaultTtl, Arg.Any<CancellationToken>())
+            .Returns(true);
+        var context = ExpressionKeyContext("\"seat:concert1:\" + input.seat");
+        context.HopInput = System.Text.Json.JsonDocument.Parse("""{"seat":"A1"}""").RootElement;
+
+        var result = await StepWithExpressions().ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        await _resourceLockService.Received(1)
+            .AcquireAsync(TestResourceKey, Arg.Any<string>(), DefaultTtl, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DynamicExpressoKey_InputIsNull_OnAHopWithoutRequestPayload()
+    {
+        SetupScriptContextFactory();
+        _resourceLockService
+            .AcquireAsync("seat:none", Arg.Any<string>(), DefaultTtl, Arg.Any<CancellationToken>())
+            .Returns(true);
+        var context = ExpressionKeyContext("input == null ? \"seat:none\" : \"seat:some\"");
+        context.Data = new Dictionary<string, object> { ["seat"] = "from-data" }; // never stands in for input
+
+        var result = await StepWithExpressions().ExecuteAsync(context, CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        await _resourceLockService.Received(1)
+            .AcquireAsync("seat:none", Arg.Any<string>(), DefaultTtl, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DynamicExpressoKey_EmptyResult_FailsWithKeyEmpty()
+    {
+        SetupScriptContextFactory();
+
+        var result = await StepWithExpressions().ExecuteAsync(ExpressionKeyContext("\"  \""), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ResourceLockKeyEmpty);
+    }
+
+    /// <summary>
+    /// Compatibility: before the label was honoured a dynamicExpresso-labelled key ran as a C# script. One that does
+    /// not evaluate as an expression still runs as a script.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_DynamicExpressoLabelledCSharpKey_StillRunsAsAScript()
+    {
+        SetupScriptEngine(TestResourceKey);
+        _resourceLockService
+            .AcquireAsync(TestResourceKey, Arg.Any<string>(), DefaultTtl, Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var result = await StepWithExpressions().ExecuteAsync(
+            ExpressionKeyContext("return \"seat:concert1:A1\";"), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue();
+        await _scriptEngine.ReceivedWithAnyArgs(1).CompileToInstanceAsync<ITransitionMapping>(default(ScriptCode)!);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DynamicExpressoKey_FailingAsBoth_ReportsTheExpressionError()
+    {
+        SetupScriptContextFactory();
+        _scriptEngine
+            .CompileToInstanceAsync<ITransitionMapping>(Arg.Any<ScriptCode>())
+            .ReturnsForAnyArgs<Task<ITransitionMapping>>(_ => throw new InvalidOperationException("CS1002: ; expected"));
+
+        var result = await StepWithExpressions().ExecuteAsync(
+            ExpressionKeyContext("context.Body[\"seat\"]."), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeFalse();
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ResourceLockKeyResolutionFailed);
+        result.Error.Message.ShouldNotContain("CS1002");
+    }
+
     [Fact]
     public void Order_ShouldBeResourceLock()
     {
@@ -207,9 +324,10 @@ public class ResourceLockStepTests
     {
         var context = CreateContext(ResourceLockAction.Acquire);
 
+        var thrown = new InvalidOperationException("script error");
         var mapping = Substitute.For<ITransitionMapping>();
         mapping.Handler(Arg.Any<ScriptContext>())
-            .ReturnsForAnyArgs<Task<dynamic>>(_ => throw new InvalidOperationException("script error"));
+            .ReturnsForAnyArgs<Task<dynamic>>(_ => throw thrown);
 
         _scriptEngine
             .CompileToInstanceAsync<ITransitionMapping>(Arg.Any<ScriptCode>())
@@ -221,6 +339,8 @@ public class ResourceLockStepTests
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.ResourceLockKeyResolutionFailed);
+        // vnext#1268: the exception stays with the hop, for the fault incident's stack trace.
+        context.FailureCause.ShouldBeSameAs(thrown);
     }
 
     #region Helpers
@@ -281,7 +401,7 @@ public class ResourceLockStepTests
                 "key": "tr1", "from": "state1", "target": "state2",
                 "triggerType": "Manual", "versionStrategy": "Patch",
                 "resourceLock": {
-                  "keyExpression": { "location": "inline", "code": "dummy", "type": "L", "encoding": "NAT" },
+                  "keyExpression": { "location": {{System.Text.Json.JsonSerializer.Serialize(resourceLock.KeyExpression.Location)}}, "code": {{System.Text.Json.JsonSerializer.Serialize(resourceLock.KeyExpression.DecodedCode)}}, "type": "L", "encoding": "NAT" },
                   "action": "{{resourceLock.Action}}",
                   "ttlSeconds": {{resourceLock.TtlSeconds}},
                   "onConflict": "{{resourceLock.OnConflict}}"
@@ -336,4 +456,22 @@ public class ResourceLockStepTests
     }
 
     #endregion
+
+    [Fact]
+    public async Task ExecuteAsync_WhenKeyExpressionIsCancelled_FailsAsBefore_ButLeavesNoCause()
+    {
+        var context = CreateContext(ResourceLockAction.Acquire);
+        var mapping = Substitute.For<ITransitionMapping>();
+        mapping.Handler(Arg.Any<ScriptContext>())
+            .ReturnsForAnyArgs<Task<dynamic>>(_ => throw new OperationCanceledException());
+        _scriptEngine
+            .CompileToInstanceAsync<ITransitionMapping>(Arg.Any<ScriptCode>())
+            .ReturnsForAnyArgs(Task.FromResult(mapping));
+        SetupScriptContextFactory();
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ResourceLockKeyResolutionFailed);
+        context.FailureCause.ShouldBeNull("vnext#1268: a cancellation the script sees is not its failure");
+    }
 }

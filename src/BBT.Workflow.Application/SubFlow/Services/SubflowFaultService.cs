@@ -704,7 +704,8 @@ public sealed class SubflowFaultService(
         try
         {
             return await outputMappingService.ApplyAsync(
-                parentInstance, parentWorkflow, parentState, input.InstanceData, cancellationToken, input.CarriedHeaders);
+                parentInstance, parentWorkflow, parentState, input.InstanceData, SubflowSettlement.Faulted,
+                cancellationToken, input.CarriedHeaders);
         }
         catch (CallerRolesUnavailableTransientException ex)
         {

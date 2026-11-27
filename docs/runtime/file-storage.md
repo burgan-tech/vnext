@@ -109,8 +109,11 @@ Applied per `x-storage` node of an incoming payload:
   rejected request therefore writes nothing to the store.
 - A store failure is `503` `FileStoreUnavailable`, synchronous, **before** any `202`. A failing `start`
   creates no instance (the swap runs before the instance row, so a retry with the same key is not turned
-  into an idempotent no-op). Inside a pipeline hop (funnel, mapping step) the failure takes the normal error
-  path.
+  into an idempotent no-op). The same holds for a start that fails after the swap (its start mapping): the
+  start transaction is rolled back. What the swap already did outside the database stays done: blobs it
+  wrote are not deleted, and the tickets of streamed uploads it claimed are not returned, so a retry that
+  references those uploads is refused (`400` `Instance:100048`) until they are uploaded again. Inside a
+  pipeline hop (funnel, mapping step) the failure takes the normal error path.
 - **Master schema unavailable.** When the flow names a master schema that cannot be loaded, the runtime does
   not know the `x-storage` paths. If any object in the payload carries a `content` or `file` member, the write
   is refused with `503` `FileSchemaUnavailable` (start and transition: synchronously, before any instance row,
@@ -191,6 +194,12 @@ After schema validation, before anything is persisted or enqueued:
   `cancel` and `exit` are never forwarded: the preflight step short-circuits them to the parent's own record,
   so the parent swaps them (`SubflowForwardRule.WillForward`).
   A relay from an older parent that still carries `ChainReserved=true` is swapped at the leaf as well.
+- **Expressions.** A Dynamic Expresso `input` (the hop's request payload) sees the swapped handle at every
+  pipeline site. The transition and start `schemas[]` rule is the exception: it picks the schema that validates the
+  request, so it runs before the swap and sees the request as sent — inline `content` with the client's
+  `name`/`mimeType`/`size`, a streamed upload's `{ file }`, or an echo. Select by a member the client sends next to the
+  file (`documentType`), not by file metadata
+  ([Declarative task mappings § input per trigger](declarative-task-mappings.md#input-per-trigger)).
 - **No file member, no schema load.** The offload acts only on `content` and `file` members, so start,
   admission and the mapping step first check whether any object in the payload carries one (raw-byte scan,
   exact walk only when the text has a backslash or one of the literals). If none does, the master schema is not
@@ -308,6 +317,9 @@ return new ScriptResponse { Data = new { convertedDocument = converted } };   //
 - `FileObjectKey(file)` answers the object key of a stored file (`FileStorage:KeyPrefix` + file id; a non-GUID is
   refused) for a `DaprBinding` task that reads, lists or deletes it (see [Deleting and listing](#deleting-and-listing-objects)).
 - An object a script writes but no output keeps is an orphan, like any unreferenced object.
+- To **send** a stored file to an external service that takes an upload, an HTTP task's input handler passes the
+  bytes to `HttpTask.AddMultipartFile(name, source.Content, source.Name, source.MimeType)` — never through the body
+  string ([Task Executors § multipart](task-executors-and-invokers.md#http-task-body-multipartform-data)).
 
 ## Deleting and listing objects
 
@@ -387,7 +399,7 @@ options, in order of preference:
 
 | Limitation | Effect / guidance |
 |---|---|
-| Orphans on rollback | The blob is written before the unit of work commits; a rollback after `create` leaves an unreferenced object |
+| Orphans on rollback | The blob is written before the unit of work commits; a rollback after `create` leaves an unreferenced object. A streamed upload's ticket taken by the swap is not returned either: a retry must upload the file again |
 | Orphans on `409` after store | The swap runs before reserve/accept; a `409` (Busy, completion window) after the store leaves the objects behind |
 | No delete, replace or retention | Clearing or replacing a field never deletes the old object; there is no lifecycle or garbage collection (use the store's own lifecycle rules) |
 | Task records hold what a mapping puts there | `InstanceTask.Request/Response` are not protected: a mapping that puts bytes into a task request stores them there |

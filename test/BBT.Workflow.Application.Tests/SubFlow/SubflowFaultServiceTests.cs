@@ -70,7 +70,7 @@ public sealed class SubflowFaultServiceTests
                 It.IsAny<Instance>(),
                 It.IsAny<Definitions.Workflow>(),
                 It.IsAny<string>(),
-                It.IsAny<JsonElement?>(),
+                It.IsAny<JsonElement?>(), It.IsAny<SubflowSettlement>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Ok());
         _lockScope.SetupGet(x => x.IsAcquired).Returns(true);
@@ -134,6 +134,7 @@ public sealed class SubflowFaultServiceTests
                 parentWorkflow,
                 "waiting-child",
                 It.Is<JsonElement?>(body => body.HasValue && body.Value.GetProperty("childStatus").GetString() == "Faulted"),
+                SubflowSettlement.Faulted,
                 CancellationToken.None),
             Times.Once);
         _workflowExecutionService.Verify(
@@ -215,7 +216,7 @@ public sealed class SubflowFaultServiceTests
                 It.IsAny<Instance>(),
                 It.IsAny<Definitions.Workflow>(),
                 It.IsAny<string>(),
-                It.IsAny<JsonElement?>(),
+                It.IsAny<JsonElement?>(), It.IsAny<SubflowSettlement>(),
                 It.IsAny<CancellationToken>()))
             .Callback(() => incidentVisibleToMapping = parentInstance.HasActiveIncident)
             .ReturnsAsync(Result.Ok());
@@ -633,7 +634,7 @@ public sealed class SubflowFaultServiceTests
                 parent,
                 workflow,
                 "waiting-child",
-                It.IsAny<JsonElement?>(),
+                It.IsAny<JsonElement?>(), It.IsAny<SubflowSettlement>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -732,14 +733,14 @@ public sealed class SubflowFaultServiceTests
         _outputMappingService
             .Setup(x => x.ApplyAsync(
                 It.IsAny<Instance>(), It.IsAny<Definitions.Workflow>(), It.IsAny<string>(),
-                It.IsAny<JsonElement?>(), It.IsAny<CancellationToken>(),
+                It.IsAny<JsonElement?>(), It.IsAny<SubflowSettlement>(), It.IsAny<CancellationToken>(),
                 It.IsAny<IReadOnlyDictionary<string, string?>?>()))
             .ReturnsAsync(Result.Ok());
 
         await CreateService(CreatePolicy(applyToResume: false)).FaultAsync(input, CancellationToken.None);
 
         _outputMappingService.Verify(x => x.ApplyAsync(
-            parentInstance, parentWorkflow, It.IsAny<string>(), It.IsAny<JsonElement?>(),
+            parentInstance, parentWorkflow, It.IsAny<string>(), It.IsAny<JsonElement?>(), It.IsAny<SubflowSettlement>(),
             It.IsAny<CancellationToken>(), carried), Times.Once);
     }
 

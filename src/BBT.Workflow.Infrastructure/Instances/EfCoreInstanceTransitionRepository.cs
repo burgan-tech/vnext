@@ -57,6 +57,42 @@ public class EfCoreInstanceTransitionRepository(
         return result;
     }
 
+    /// <inheritdoc />
+    public async Task<int> FailOpenAsync(Guid instanceId, CancellationToken cancellationToken = default)
+    {
+        // What InstanceTransition.Failed() writes — a finish time and its duration, no target state — without
+        // loading the rows: a record carries the request's body and headers, and only the start time is needed.
+        // Normally there is exactly one open record, the hop the instance faulted in.
+        var context = await GetDbContextAsync();
+        var open = await context.InstanceTransitions
+            .AsNoTracking()
+            .Where(p => p.InstanceId == instanceId && p.FinishedAt == null)
+            .Select(p => new { p.Id, p.StartedAt })
+            .ToListAsync(cancellationToken);
+
+        var finishedAt = DateTime.UtcNow;
+        foreach (var record in open)
+        {
+            TimeSpan? duration = finishedAt - record.StartedAt;
+            await context.InstanceTransitions
+                .Where(p => p.Id == record.Id && p.FinishedAt == null)
+                .ExecuteUpdateAsync(sp => sp
+                        .SetProperty(p => p.FinishedAt, (DateTime?)finishedAt)
+                        .SetProperty(p => p.Duration, duration),
+                    cancellationToken);
+        }
+
+        return open.Count;
+    }
+
+    /// <inheritdoc />
+    public async Task ForgetAsync(InstanceTransition transition)
+    {
+        var context = await GetDbContextAsync();
+        context.Entry(transition).State = EntityState.Detached;
+    }
+
+    /// <inheritdoc />
     public async Task UpdateCompletedAsync(InstanceTransition transition, CancellationToken cancellationToken)
     {
         // Writes EVERY column InstanceTransition.Completed() mutates, so the statement is

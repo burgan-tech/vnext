@@ -192,9 +192,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         return await ResultExtensions.TryAsync<IFanOutMapping?>(
             async ct => await GetOrCompileMappingAsync<IFanOutMapping>(_scriptEngine, context, ct),
             cancellationToken,
-            ex => Error.Failure(
-                WorkflowErrorCodes.TaskExecution,
-                $"FanOut task mapping compilation failed: {ScriptDiagnostics.Explain(ex)}"));
+            ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "FanOut task mapping compilation failed"));
     }
 
     /// <summary>
@@ -221,9 +219,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
             : await ResultExtensions.TryAsync<IEnumerable<dynamic>?>(
                 async _ => await mapping.ItemSelector(context.ScriptContext),
                 cancellationToken,
-                ex => Error.Failure(
-                    WorkflowErrorCodes.TaskExecution,
-                    $"FanOut task item selector failed: {ScriptDiagnostics.Explain(ex)}"));
+                ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "FanOut task item selector failed"));
 
         if (!selectorResult.IsSuccess)
         {
@@ -263,9 +259,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
         // sequence whose enumeration is where the script's work — and its exceptions — actually happen.
         return ResultExtensions.Try<IReadOnlyList<FanOutItem>>(
             () => FanOutItemsResolver.Project(selected),
-            ex => Error.Failure(
-                WorkflowErrorCodes.TaskExecution,
-                $"FanOut task item selector failed: {ScriptDiagnostics.Explain(ex)}"));
+            ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "FanOut task item selector failed"));
     }
 
     /// <summary>
@@ -756,9 +750,7 @@ public sealed class FanOutTaskExecutor : TaskExecutorBase<FanOutTask>
             : await ResultExtensions.TryAsync<ScriptResponse?>(
                 async _ => await mapping.OutputHandler(context.ScriptContext, result),
                 cancellationToken,
-                ex => Error.Failure(
-                    WorkflowErrorCodes.TaskExecution,
-                    $"FanOut task output handler failed: {ScriptDiagnostics.Explain(ex)}"));
+                ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "FanOut task output handler failed"));
 
         if (!handled.IsSuccess)
         {

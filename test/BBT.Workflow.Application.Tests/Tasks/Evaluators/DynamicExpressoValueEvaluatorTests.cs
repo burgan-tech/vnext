@@ -45,19 +45,19 @@ public sealed class DynamicExpressoValueEvaluatorTests : IDisposable
         new(NullLogger<DynamicExpressoValueEvaluator>.Instance);
 
     [Fact]
-    public void Evaluate_LiteralExpression_ReturnsString()
+    public async Task Evaluate_LiteralExpression_ReturnsString()
     {
         var script = ScriptCode.FromNative("\"health:status\"", ConditionScriptLocations.DynamicExpresso);
         var context = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance).Build();
 
-        var result = CreateEvaluator().Evaluate(script, context);
+        var result = await CreateEvaluator().EvaluateAsync(script, context);
 
         result.IsSuccess.ShouldBeTrue();
         result.Value.ShouldBe("health:status");
     }
 
     [Fact]
-    public void Evaluate_ComputesKeyFromContext()
+    public async Task Evaluate_ComputesKeyFromContext()
     {
         var script = ScriptCode.FromNative(
             "\"customer:\" + context.Body[\"customerId\"].ToString() + \":profile\"",
@@ -66,19 +66,19 @@ public sealed class DynamicExpressoValueEvaluatorTests : IDisposable
             .SetBody(new Dictionary<string, object> { ["customerId"] = "42" })
             .Build();
 
-        var result = CreateEvaluator().Evaluate(script, context);
+        var result = await CreateEvaluator().EvaluateAsync(script, context);
 
         result.IsSuccess.ShouldBeTrue();
         result.Value.ShouldBe("customer:42:profile");
     }
 
     [Fact]
-    public void Evaluate_Sha256Helper_ProducesDeterministicHash()
+    public async Task Evaluate_Sha256Helper_ProducesDeterministicHash()
     {
         var script = ScriptCode.FromNative("\"k:\" + sha256(\"abc\")", ConditionScriptLocations.DynamicExpresso);
         var context = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance).Build();
 
-        var result = CreateEvaluator().Evaluate(script, context);
+        var result = await CreateEvaluator().EvaluateAsync(script, context);
 
         result.IsSuccess.ShouldBeTrue();
         // Known SHA-256 of "abc".
@@ -86,7 +86,7 @@ public sealed class DynamicExpressoValueEvaluatorTests : IDisposable
     }
 
     [Fact]
-    public void Evaluate_ExposesInstanceVersion()
+    public async Task Evaluate_ExposesInstanceVersion()
     {
         var instance = Instance.Create(Guid.NewGuid(), "flow", "2.0.0", "k");
         var script = ScriptCode.FromNative("\"v:\" + context.Instance.Version", ConditionScriptLocations.DynamicExpresso);
@@ -94,14 +94,14 @@ public sealed class DynamicExpressoValueEvaluatorTests : IDisposable
             .SetInstance(instance)
             .Build();
 
-        var result = CreateEvaluator().Evaluate(script, context);
+        var result = await CreateEvaluator().EvaluateAsync(script, context);
 
         result.IsSuccess.ShouldBeTrue();
         result.Value.ShouldBe("v:2.0.0");
     }
 
     [Fact]
-    public void VaryKey_UsesConfigHeadersAndPrefixes_Canonicalized_WithVersion()
+    public async Task VaryKey_UsesConfigHeadersAndPrefixes_Canonicalized_WithVersion()
     {
         var script = ScriptCode.FromNative("varyKey(context)", ConditionScriptLocations.DynamicExpresso);
         var context = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
@@ -114,7 +114,7 @@ public sealed class DynamicExpressoValueEvaluatorTests : IDisposable
             })
             .Build();
 
-        var result = CreateEvaluator().Evaluate(script, context);
+        var result = await CreateEvaluator().EvaluateAsync(script, context);
 
         result.IsSuccess.ShouldBeTrue();
         // sorted names, x-other excluded, version prepended.
@@ -122,7 +122,7 @@ public sealed class DynamicExpressoValueEvaluatorTests : IDisposable
     }
 
     [Fact]
-    public void VaryKey_InstanceVaryBy_OverridesConfig_AndIgnoresOtherHeaders()
+    public async Task VaryKey_InstanceVaryBy_OverridesConfig_AndIgnoresOtherHeaders()
     {
         var instance = Instance.Create(Guid.NewGuid(), "flow", "1.0", "k");
         instance.SeedData(Guid.NewGuid(), new JsonData("""{ "varyBy": ["x-param-userroles"] }"""));
@@ -137,7 +137,7 @@ public sealed class DynamicExpressoValueEvaluatorTests : IDisposable
             })
             .Build();
 
-        var result = CreateEvaluator().Evaluate(script, context);
+        var result = await CreateEvaluator().EvaluateAsync(script, context);
 
         result.IsSuccess.ShouldBeTrue();
         // instance varyBy wins over config prefixes → only userroles; customertype excluded; default version.
@@ -145,37 +145,37 @@ public sealed class DynamicExpressoValueEvaluatorTests : IDisposable
     }
 
     [Fact]
-    public void VaryKey_NoVaryByOrConfig_FallsBackToAllHeaders()
+    public async Task VaryKey_NoVaryByOrConfig_FallsBackToAllHeaders()
     {
         var script = ScriptCode.FromNative("varyKey(context)", ConditionScriptLocations.DynamicExpresso);
         var context = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
             .SetHeaders(new Dictionary<string, string> { ["b"] = "2", ["a"] = "1" })
             .Build();
 
-        var result = CreateEvaluator().Evaluate(script, context);
+        var result = await CreateEvaluator().EvaluateAsync(script, context);
 
         result.IsSuccess.ShouldBeTrue();
         result.Value.ShouldBe("v=latest|a=1|b=2");
     }
 
     [Fact]
-    public void Evaluate_WhenNotDynamicExpressoLocation_Fails()
+    public async Task Evaluate_WhenNotDynamicExpressoLocation_Fails()
     {
         var script = ScriptCode.FromNative("\"x\"");  // default location "inline"
         var context = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance).Build();
 
-        var result = CreateEvaluator().Evaluate(script, context);
+        var result = await CreateEvaluator().EvaluateAsync(script, context);
 
         result.IsSuccess.ShouldBeFalse();
     }
 
     [Fact]
-    public void Evaluate_WhenExpressionInvalid_Fails()
+    public async Task Evaluate_WhenExpressionInvalid_Fails()
     {
         var script = ScriptCode.FromNative("this is not valid", ConditionScriptLocations.DynamicExpresso);
         var context = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance).Build();
 
-        var result = CreateEvaluator().Evaluate(script, context);
+        var result = await CreateEvaluator().EvaluateAsync(script, context);
 
         result.IsSuccess.ShouldBeFalse();
     }

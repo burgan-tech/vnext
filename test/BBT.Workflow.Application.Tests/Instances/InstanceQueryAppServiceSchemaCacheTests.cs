@@ -90,7 +90,7 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
         // Default: behave like the real resolver for a single-`schema` transition (its schema, no script).
         _transitionSchemaResolver
             .ResolveAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<Instance>(), Arg.Any<Transition>(),
-                Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<CancellationToken>())
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<System.Text.Json.JsonElement?>(), Arg.Any<CancellationToken>())
             .Returns(call => Task.FromResult(Result<Reference?>.Ok(call.ArgAt<Transition>(2).Schema)));
 
         _service = new InstanceQueryAppService(
@@ -313,7 +313,7 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
             .Returns(Result<SchemaDefinition>.Ok(SchemaFromJson()));
         _transitionSchemaResolver
             .ResolveAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<Instance>(), Arg.Any<Transition>(),
-                Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<CancellationToken>())
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<System.Text.Json.JsonElement?>(), Arg.Any<CancellationToken>())
             .Returns(Result<Reference?>.Ok(new Reference("matched-schema", TestDomain, "sys-schemas", TestVersion)));
 
         var result = await _service.GetSchemaAsync(CreateInput(instance.Id.ToString()), TestTransition, CancellationToken.None);
@@ -336,7 +336,7 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
         SetupFullPathMocks(instance, workflow);
         _transitionSchemaResolver
             .ResolveAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<Instance>(), Arg.Any<Transition>(),
-                Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<CancellationToken>())
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<System.Text.Json.JsonElement?>(), Arg.Any<CancellationToken>())
             .Returns(Result<Reference?>.Fail(Error.Validation(WorkflowErrorCodes.TransitionSchemaNotMatched, "no schema entry matched")));
 
         var result = await _service.GetSchemaAsync(CreateInput(instance.Id.ToString()), TestTransition, CancellationToken.None);
@@ -355,7 +355,7 @@ public class InstanceQueryAppServiceSchemaCacheTests : IDisposable
         var failure = Error.Failure("Script:1", "rule script blew up");
         _transitionSchemaResolver
             .ResolveAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<Instance>(), Arg.Any<Transition>(),
-                Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<CancellationToken>())
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<System.Text.Json.JsonElement?>(), Arg.Any<CancellationToken>())
             .Returns(Result<Reference?>.Fail(failure));
 
         var result = await _service.GetSchemaAsync(CreateInput(instance.Id.ToString()), TestTransition, CancellationToken.None);

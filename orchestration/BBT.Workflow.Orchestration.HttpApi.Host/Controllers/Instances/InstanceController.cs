@@ -25,8 +25,10 @@ using BBT.Workflow.Shared;
 using BBT.Workflow.SubFlow;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using BBT.Workflow.Authorization;
 using BBT.Workflow.Logging;
+using BBT.Workflow.Middlewares;
 using BBT.Workflow.Schedule;
 
 using BBT.Workflow.Instances.HumanTask;
@@ -526,6 +528,8 @@ public sealed class InstanceController(
     /// <summary>
     /// Cancels scheduled jobs when an instance is canceled/completed/faulted.
     /// Internal endpoint the Inbox forwards canceled/completed-cleanup/faulted-cleanup events to.
+    /// A faulted-cleanup carries the fault's <c>faultedAt</c> and cleans up only while the instance still rests
+    /// in that fault (vnext#1252); a body without it (the other two events, an older Inbox) cleans up as before.
     /// </summary>
     [ApiExplorerSettings(IgnoreApi = true)]
     [HttpPost("{domain}/workflows/{workflow}/instances/{instance}/cancel-cleanup")]
@@ -533,9 +537,12 @@ public sealed class InstanceController(
         [FromRoute] string domain,
         [FromRoute] string workflow,
         [FromRoute] Guid instance,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] InstanceCleanupInput? input = null,
         CancellationToken cancellationToken = default)
     {
-        var result = await cancellationService.ProcessCancellationAsync(instance, cancellationToken);
+        var result = input?.FaultedAt is { } faultedAt
+            ? await cancellationService.ProcessFaultCleanupAsync(instance, faultedAt, cancellationToken)
+            : await cancellationService.ProcessCancellationAsync(instance, cancellationToken);
         return FromResult(result);
     }
 
@@ -994,6 +1001,7 @@ public sealed class InstanceController(
     /// <response code="500">Transient failure — the broker should redeliver.</response>
     [ApiExplorerSettings(IgnoreApi = true)]
     [HttpPost("{domain}/workflows/{workflow}/instances/events")]
+    [DaprLocalDeliveryOnly]
     [ProducesResponseType(typeof(EventDeliveryResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> HandleEventAsync(
@@ -1008,8 +1016,9 @@ public sealed class InstanceController(
         // is a permanent defect: retrying it can never succeed, so drop instead of wedging the topic.
         if (!Enum.TryParse<EventAction>(action, ignoreCase: true, out var eventAction))
             return EventDeliveryResultMapper.Drop(
+                "InvalidEventAction",
                 $"InvalidEventAction: action must be 'start' or 'transition'. Received: '{action}'.",
-                domain, workflow, transitionKey, "InvalidEventAction", Logger);
+                domain, workflow, transitionKey, Logger);
 
         JsonElement payload;
         try
@@ -1019,8 +1028,9 @@ public sealed class InstanceController(
         catch (JsonException exception)
         {
             return EventDeliveryResultMapper.Drop(
+                "InvalidEventPayload",
                 $"InvalidEventPayload: the request body could not be parsed as JSON: {exception.Message}",
-                domain, workflow, transitionKey, "InvalidEventPayload", Logger);
+                domain, workflow, transitionKey, Logger);
         }
 
         var input = new EventInput
@@ -1094,6 +1104,7 @@ public sealed class InstanceController(
     /// <response code="500">Transient failure.</response>
     [ApiExplorerSettings(IgnoreApi = true)]
     [HttpPost("{domain}/workflows/{workflow}/instances/schedule")]
+    [DaprLocalDeliveryOnly]
     [ProducesResponseType(typeof(EventDeliveryResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status500InternalServerError)]
     public async Task<IActionResult> ScheduleStartAsync(

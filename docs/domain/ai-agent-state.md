@@ -49,7 +49,7 @@ Code is the source of truth; start at `RunAgentStep`, `AgentStateRunner` and `Au
 
 | Tool `kind` | Runs | Notes |
 |---|---|---|
-| `1` task | A `sys-tasks` component through the task engine, on its own DI scope and a parallel branch of the script context | `SuppressDataApply`: a tool never writes instance data. The arguments become the branch body (merged); an optional `IMapping` reshapes them. Each call writes an `InstanceTasks` journal row whose `ExecutionKey` is the task engine's hash of `agent:{runId}:{tool}:{callId}` (not the literal text). A FanOut task cannot be a tool. A SubProcess task (`sync: true`) is how a tool starts a child flow |
+| `1` task | A `sys-tasks` component through the task engine, on its own DI scope and a parallel branch of the script context | `SuppressDataApply`: a tool never writes instance data. The arguments become the branch body (merged); an optional `IMapping` (`binding.mapping`) or declarative `binding.input` / `binding.output` blocks (exclusive with the mapping) reshape them — [declarative task mappings](../runtime/declarative-task-mappings.md#declarative-blocks-of-a-nested-task). Each call writes an `InstanceTasks` journal row whose `ExecutionKey` is the task engine's hash of `agent:{runId}:{tool}:{callId}` (not the literal text). A FanOut task cannot be a tool. A SubProcess task (`sync: true`) is how a tool starts a child flow |
 | `2` script | `dynamicExpresso` expression with `args`, `data` (read-only latest data) and `now`; or a C# `IToolHandler` | Return value is serialized for the model |
 | `3` mcp | An Mcp task: the runtime lists the server's tools (memoized `discoveryCacheMinutes`, default 10) and calls them through the task engine | Only names in `allow` are exposed, prefixed by `prefix`. Name collisions are skipped and logged (`30010`) |
 
@@ -66,7 +66,7 @@ resolved at publish; an unresolvable task fails the tool call.
   "key": "classifying", "stateType": 6, "subType": 5,
   "agent": {
     "agent": { "key": "triage-agent", "domain": "core", "flow": "sys-agents", "version": "1.0.0" },
-    "prompt": { "template": "<message>{{ data.message }}</message>" },   // or a C# IAgentPromptMapping (location + code)
+    "prompt": { "template": "<message>{{ data.message }}</message>" },   // or a C# IAgentPromptMapping (location + code), or location "dynamicExpresso" + encoding "NAT": a string expression
     "output": { "path": "$.triage" },
     "memory": { "mode": "flow" },                // overrides the component
     "tools": { "exclude": ["days_since"] },
@@ -103,7 +103,7 @@ transitions are not candidates: they never run as automatic transitions.
 | `mode` | Who decides | How |
 |---|---|---|
 | `model` (default) | The model | The output schema gains a required `decision` enum of candidate keys and a `reason` |
-| `script` | `IAgentDecisionMapping` | Returns a candidate key |
+| `script` | `decision.mapping`: a C# `IAgentDecisionMapping`, or a Dynamic Expresso expression (`location: "dynamicExpresso"`) over `data`, `input`, `instance`, `now`, `user`, `context`, `outcome`, `candidates` | Returns a candidate key (`null` = no decision, the fallback runs) |
 | `rules` | The transitions' rules | Every candidate must carry a rule (validator); the agent only produces data |
 
 The fallback is taken when the run fails, times out, exceeds a budget, returns a decision that is not a
@@ -111,6 +111,11 @@ candidate, or finds no free slot in the bulkhead. There is no silent default.
 `policy.onProviderError: fault` instead fails the transition, so the error boundary decides.
 `policy.maxEntries` + `decision.onExhausted` leave the state without a provider call once the state
 was entered more often than allowed.
+
+Expression variables of the prompt and the decision, the `outcome` / `candidates` members and the C# compatibility
+fallback (a C# script labelled `dynamicExpresso` still runs, with warning 10274):
+[Dynamic Expresso outside task mappings](../runtime/declarative-task-mappings.md#dynamic-expresso-outside-task-mappings).
+`hintsMapping` stays C# only.
 
 ### How the decision reaches the transition
 

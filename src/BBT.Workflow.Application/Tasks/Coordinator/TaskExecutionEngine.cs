@@ -24,6 +24,9 @@ namespace BBT.Workflow.Tasks.Coordinator;
 /// </remarks>
 public sealed class TaskExecutionEngine : ITaskExecutionEngine
 {
+    // The task type an error is attributed to when the failure happened before, or outside, a typed run.
+    private const string UnknownTaskType = "Unknown";
+
     private readonly ITaskExecutorRegistry _executorRegistry;
     private readonly ITaskFactory _taskFactory;
     private readonly ITaskPersistenceStrategyFactory _persistenceStrategyFactory;
@@ -171,7 +174,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 if (executionError == null)
                 {
                     executionError = _errorFactory.CreateFromError(
-                        result.Error, taskKey, "Unknown", (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds);
+                        result.Error, taskKey, UnknownTaskType, (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds);
                 }
 
                 var retryPolicy = GetRetryPolicyForError(boundaryChain, executionError.NormalizedError);
@@ -203,6 +206,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 boundaryChain,
                 (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds,
                 attempt,
+                options,
                 cancellationToken);
         }
         catch (Exception ex)
@@ -211,9 +215,29 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
 
             Activity.Current?.RecordExceptionWithStatus(ex, $"Task {taskKey} threw unhandled exception");
 
-            var taskError = _errorFactory.CreateFromException(ex, taskKey, "Unknown", (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds);
-            return Result<TasksExecutionResult>.Fail(taskError.ToError());
+            var durationMs = (long)Stopwatch.GetElapsedTime(totalStartTimestamp).TotalMilliseconds;
+            var taskError = _errorFactory.CreateFromException(ex, taskKey, UnknownTaskType, durationMs);
+            return UnhandledFailure(onExecuteTask, taskError, durationMs, options);
         }
+    }
+
+    /// <summary>
+    /// Reports a failure no boundary handles. By default a failed <see cref="Result{T}"/>. A caller
+    /// that asked for an outcome (<see cref="TaskEngineExecutionOptions.ReportUnhandledFailureAsOutcome"/>)
+    /// gets the error re-derived from <see cref="ExecutionError.ToError"/> exactly as the coordinator
+    /// re-derives a failed <see cref="Result{T}"/>, so the incident's code and message stay what they
+    /// were, and the stack trace — which an <see cref="Error"/> cannot carry — is kept (vnext#1268).
+    /// </summary>
+    private Result<TasksExecutionResult> UnhandledFailure(
+        OnExecuteTask onExecuteTask, ExecutionError error, long durationMs, TaskEngineExecutionOptions options)
+    {
+        if (!options.ReportUnhandledFailureAsOutcome)
+            return Result<TasksExecutionResult>.Fail(error.ToError());
+
+        var rederived = _errorFactory.CreateFromError(error.ToError(), onExecuteTask.Task.Key, UnknownTaskType, durationMs)
+            with { StackTrace = error.StackTrace };
+        return Result<TasksExecutionResult>.Ok(
+            TasksExecutionResult.Failure(onExecuteTask, rederived, totalDurationMs: durationMs));
     }
 
     /// <summary>
@@ -226,6 +250,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     /// <param name="boundaryChain">The compiled boundary chain for resolution.</param>
     /// <param name="totalDurationMs">Total execution duration including retries.</param>
     /// <param name="attemptsMade">Number of retry attempts actually performed (0 when no Retry rule matched).</param>
+    /// <param name="options">Per-call execution options; decide how an unhandled failure is reported.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The execution result with appropriate boundary action.</returns>
     private async Task<Result<TasksExecutionResult>> HandlePostRetryFailureAsync(
@@ -234,6 +259,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         CompiledBoundaryChain boundaryChain,
         long totalDurationMs,
         int attemptsMade,
+        TaskEngineExecutionOptions options,
         CancellationToken cancellationToken)
     {
         var taskKey = onExecuteTask.Task.Key;
@@ -244,7 +270,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         {
             // Infrastructure error - create from Result.Error
             executionError = _errorFactory.CreateFromError(
-                failedResult.Error, taskKey, "Unknown", totalDurationMs);
+                failedResult.Error, taskKey, UnknownTaskType, totalDurationMs);
         }
 
         if (attemptsMade > 0)
@@ -277,7 +303,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             TaskExecutionActivityHelper.AddFailedEvent(Activity.Current, executionError?.ErrorMessage, executionError?.TaskType, executionError?.StatusCode);
 
             // Return failure without boundary action - pipeline will fault
-            return Result<TasksExecutionResult>.Fail(executionError!.ToError());
+            return UnhandledFailure(onExecuteTask, executionError!, totalDurationMs, options);
         }
 
         // Execute matched action (Abort, Notify, Rollback, Log, Ignore)
@@ -579,7 +605,7 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 var error = _errorFactory.CreateFromException(
                     new InvalidOperationException(taskResult.Error.Message ?? "Failed to create task"),
                     onExecuteTask.Task.Key,
-                    "Unknown",
+                    UnknownTaskType,
                     (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
 
                 TaskExecutionActivityHelper.AddFailedEvent(Activity.Current, error.ErrorMessage, "TaskFactoryError");
@@ -655,34 +681,18 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
             task, onExecuteTask, context, instanceTransitionId, taskTrigger, origin)
         {
             ResponseVariableKey = options.ResponseVariableKey,
-            CapturesJournalPayloads = capturesJournal
+            CapturesJournalPayloads = capturesJournal,
+            Caller = options.Caller ?? BBT.Workflow.Scripting.Caller.NullCallerAccessor.Instance
         };
 
         // 8. Execute task
-        var executeResult = await executorResult.Value!.ExecuteAsync(executorContext, cancellationToken);
+        var (executeResult, failureTrace) = await ExecuteTakingFailureCauseAsync(
+            executorResult.Value!, executorContext, task.Key, taskTypeStr, cancellationToken);
 
-        // B8: task TANIMI (mapping ScriptCode dahil) transition record'a kopyalanmaz — tanım zaten
-        // component store'dadır; referans yeterli. Monitor tarafı Request'i JsonElement passthrough
-        // gösterir (alan-parse etmez — keşifle doğrulandı), "Task" anahtarı korunur.
         // Journal payloads are built only when a journal row is persisted: without a persistence
         // strategy (history: none, or an origin with no journal) instanceTask never leaves this method.
         if (capturesJournal)
-        {
-            var requestPayload = new
-            {
-                Task = new { task.Key, task.Version, task.Domain, task.Flow, Type = task.GetTaskType().ToString() },
-                executorContext.InputResponse
-            };
-            var requestJson = new JsonData(JsonSerializer.Serialize(
-                requestPayload,
-                JsonSerializerConstants.JsonOptions));
-            instanceTask.SetRequest(requestJson);
-
-            if (executorContext.RawInvocationResult is { } rawInvocationResult)
-            {
-                instanceTask.SetInvocationResult(rawInvocationResult);
-            }
-        }
+            CaptureJournalRequest(instanceTask, task, executorContext);
 
 
         // 9. Handle infrastructure error - return without boundary resolution (not retriable)
@@ -692,7 +702,8 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
                 executeResult.Error.Message ?? "Unknown infrastructure error", cancellationToken);
 
             var infraError = _errorFactory.CreateFromError(
-                executeResult.Error, task.Key, taskTypeStr, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
+                executeResult.Error, task.Key, taskTypeStr, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds)
+                with { StackTrace = failureTrace };
 
             TaskExecutionActivityHelper.AddFailedEvent(Activity.Current, infraError.ErrorMessage, taskTypeStr);
 
@@ -733,7 +744,8 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         if (!response.IsSuccess)
         {
             var executionError = _errorFactory.CreateFromResponse(
-                response, task.Key, taskTypeStr, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds);
+                response, task.Key, taskTypeStr, (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds)
+                with { StackTrace = failureTrace };
 
             // One shape with or without a boundary: TaskError set, no BoundaryAction yet. With a
             // boundary the engine's retry loop resolves it; without one the loop returns it as an
@@ -771,5 +783,60 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         }
 
         return Result<TasksExecutionResult>.Ok(executionResult);
+    }
+
+    /// <summary>
+    /// Fills the journal row's request — the task reference and the input handler's response — and
+    /// the raw invocation result, when the executor captured one.
+    /// </summary>
+    private static void CaptureJournalRequest(InstanceTask instanceTask, WorkflowTask task, TaskExecutorContext executorContext)
+    {
+        // B8: task TANIMI (mapping ScriptCode dahil) transition record'a kopyalanmaz — tanım zaten
+        // component store'dadır; referans yeterli. Monitor tarafı Request'i JsonElement passthrough
+        // gösterir (alan-parse etmez — keşifle doğrulandı), "Task" anahtarı korunur.
+        var requestPayload = new
+        {
+            Task = new { task.Key, task.Version, task.Domain, task.Flow, Type = task.GetTaskType().ToString() },
+            executorContext.InputResponse
+        };
+        var requestJson = new JsonData(JsonSerializer.Serialize(
+            requestPayload,
+            JsonSerializerConstants.JsonOptions));
+        instanceTask.SetRequest(requestJson);
+
+        if (executorContext.RawInvocationResult is { } rawInvocationResult)
+        {
+            instanceTask.SetInvocationResult(rawInvocationResult);
+        }
+    }
+
+    /// <summary>
+    /// Runs the executor and takes the exception a failing script left on the script context
+    /// (vnext#1268): it is logged here and returned rendered, for the task error's stack trace.
+    /// </summary>
+    private async Task<(Result<StandardTaskResponse> Result, string? FailureTrace)> ExecuteTakingFailureCauseAsync(
+        ITaskExecutor executor,
+        TaskExecutorContext executorContext,
+        string taskKey,
+        string taskType,
+        CancellationToken cancellationToken)
+    {
+        var scriptContext = executorContext.ScriptContext;
+        try
+        {
+            var result = await executor.ExecuteAsync(executorContext, cancellationToken);
+            var cause = scriptContext.TakeFailureCause();
+            if (cause is null)
+                return (result, null);
+
+            _logger.TaskScriptFailed(taskKey, taskType, scriptContext.Instance?.Id ?? Guid.Empty, cause);
+            return (result, cause.ToString());
+        }
+        finally
+        {
+            // Also when the executor threw (the catch-all records that exception): a cause belongs to
+            // this run alone and must never reach the next task on a shared context.
+            scriptContext.FailureCause = null;
+        }
     }
 }

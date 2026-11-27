@@ -14,7 +14,7 @@ namespace BBT.Workflow.Tasks.Executors;
 /// the user-defined URL is invoked directly by the Orchestrator process instead of being
 /// routed through the Execution service's <c>/execution/invoke/{type}/{key}</c> hop.
 /// <para>
-/// The lifecycle is identical to <see cref="HttpTaskExecutor"/> — input mapping runs locally,
+/// The lifecycle is identical to <see cref="HttpTaskExecutor"/> — input mapping runs locally (base template),
 /// the task is flattened through the same <see cref="TaskBindingMapper"/> into the same
 /// <see cref="HttpTaskBinding"/> the remote path would put on the wire, and output mapping runs
 /// locally against the same result shape. Only the transport differs: the binding is handed to
@@ -29,21 +29,24 @@ namespace BBT.Workflow.Tasks.Executors;
 public sealed class ExternalHttpTaskExecutor : TaskExecutorBase<HttpTask>
 {
     private readonly IExternalHttpTaskInvoker _localInvoker;
-    private readonly IScriptEngine _scriptEngine;
     private readonly IRemoteInvokerService _remoteInvoker;
 
     /// <summary>
     /// Initializes a new instance of ExternalHttpTaskExecutor.
     /// </summary>
+    /// <param name="mappingRunner">
+    /// The binding mapping runner (DI); null runs mappings through <see cref="RoutingTaskMappingRunner.CreateDefault"/>
+    /// over the script engine.
+    /// </param>
     public ExternalHttpTaskExecutor(
         IExternalHttpTaskInvoker localInvoker,
         IScriptEngine scriptEngine,
         IRemoteInvokerService remoteInvoker,
-        ILogger<ExternalHttpTaskExecutor> logger)
-        : base(logger)
+        ILogger<ExternalHttpTaskExecutor> logger,
+        ITaskMappingRunner? mappingRunner = null)
+        : base(logger, mappingRunner ?? RoutingTaskMappingRunner.CreateDefault(scriptEngine))
     {
         _localInvoker = localInvoker;
-        _scriptEngine = scriptEngine;
         _remoteInvoker = remoteInvoker;
     }
 
@@ -51,40 +54,21 @@ public sealed class ExternalHttpTaskExecutor : TaskExecutorBase<HttpTask>
     public override TaskType TaskType => TaskType.ExternalHttp;
 
     /// <inheritdoc />
-    protected override async Task<Result<ScriptResponse?>> PrepareInputAsync(
-        HttpTask task,
-        TaskExecutorContext context,
-        CancellationToken cancellationToken)
-    {
-        var mapping = context.OnExecuteTask.Mapping;
-        if (mapping is null || !mapping.HasMappingCode)
-        {
-            return Result<ScriptResponse?>.Ok(null);
-        }
+    protected override string InputMappingFailurePrefix => "External HTTP task input handler failed: ";
 
-        var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
-        {
-            var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IMapping>(
-                mapping,
-                flowScripts: context.ScriptContext.Workflow?.Scripts,
-                cancellationToken: ct);
+    /// <inheritdoc />
+    protected override string OutputMappingFailurePrefix => "External HTTP task output handler failed: ";
 
-            return await scriptRunner.InputHandler(task, context.ScriptContext);
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"External HTTP task input handler failed: {ScriptDiagnostics.Explain(ex)}"));
+    /// <inheritdoc />
+    /// <remarks>
+    /// Kept from the former mapping block, which compiled through the engine's <c>CompileToInstanceAsync</c> once per
+    /// phase instead of the per-execution memo. Switching it to the memo would drop the second phase's engine call
+    /// (and its compile span); that is not proven neutral for this type, so the legacy compile path is preserved.
+    /// </remarks>
+    protected override bool MemoizesScriptMappingCompile => false;
 
-        if (!result.IsSuccess)
-        {
-            Logger.TaskInputHandlerFailed(
-                task.Key,
-                TaskType.ToString(),
-                context.ScriptContext.Instance?.Id ?? Guid.Empty,
-                result.Error.Message ?? "Unknown error");
-        }
-
-        return result;
-    }
+    /// <inheritdoc />
+    protected override bool FilesResponseWithoutOutputMapping => true;
 
     /// <inheritdoc />
     protected override async Task<Result<TaskInvocationResult>> InvokeAsync(
@@ -132,45 +116,5 @@ public sealed class ExternalHttpTaskExecutor : TaskExecutorBase<HttpTask>
         }
 
         return Result<TaskInvocationResult>.Ok(result);
-    }
-
-    /// <inheritdoc />
-    protected override async Task<Result<object?>> ProcessOutputAsync(
-        HttpTask task,
-        TaskInvocationResult invocationResult,
-        TaskExecutorContext context,
-        CancellationToken cancellationToken)
-    {
-        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext, context.ResponseVariableKey);
-
-        var mapping = context.OnExecuteTask.Mapping;
-        if (mapping is null || !mapping.HasMappingCode)
-        {
-            return Result<object?>.Ok(invocationResult.Data);
-        }
-
-        var result = await ResultExtensions.TryAsync<object?>(async ct =>
-        {
-            var scriptRunner = await _scriptEngine.CompileToInstanceAsync<IMapping>(
-                mapping,
-                flowScripts: context.ScriptContext.Workflow?.Scripts,
-                cancellationToken: ct);
-
-            var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
-            return outputResponse.Data;
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"External HTTP task output handler failed: {ScriptDiagnostics.Explain(ex)}"));
-
-        if (!result.IsSuccess)
-        {
-            Logger.TaskOutputHandlerFailed(
-                task.Key,
-                TaskType.ToString(),
-                context.ScriptContext.Instance?.Id ?? Guid.Empty,
-                result.Error.Message ?? "Unknown error");
-        }
-
-        return result;
     }
 }

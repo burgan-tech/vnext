@@ -353,6 +353,41 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         result.IsSuccess.ShouldBeTrue();
     }
 
+    /// <summary>
+    /// `input` in a function's contract rule and cache key expressions is the function request body
+    /// (ScriptContext.HopInput on the one context the request builds), and null on a body-less call.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"amount":5}""")]
+    [InlineData(null)]
+    public async Task ByKey_ScriptContext_BindsTheRequestBody_AsInput(string? json)
+    {
+        SetupFunction(TaskScope.Domain);
+        ScriptContext? seen = null;
+        _functionRequestValidationService
+            .ValidateRequestAsync(
+                Arg.Any<Function>(),
+                Arg.Any<JsonElement?>(),
+                Arg.Any<LazyScriptContext>(),
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(async ci =>
+            {
+                seen = (await ci.Arg<LazyScriptContext>().GetAsync(CancellationToken.None)).Value;
+                return Result.Ok();
+            });
+        JsonElement? body = json is null ? null : JsonDocument.Parse(json).RootElement;
+
+        await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain, body: body, httpMethod: "POST");
+
+        seen.ShouldNotBeNull();
+        seen.HasHopInput.ShouldBeTrue();
+        if (json is null)
+            seen.HopInput.ShouldBeNull();
+        else
+            ((JsonElement)seen.HopInput!).GetProperty("amount").GetInt32().ShouldBe(5);
+    }
+
     [Fact]
     public async Task ByKey_InputSchemaValidationFailure_ShortCircuitsBeforeTasks()
     {
@@ -534,7 +569,7 @@ public sealed class FunctionAppServiceScopeTests : IDisposable
         SetupCachedFunction(keyExpressionCode: "varyKey(context)");
         // A failing key expression must NOT 500 the endpoint — it bypasses the cache and runs the function.
         _keyEvaluator
-            .Evaluate(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>())
+            .EvaluateAsync(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>())
             .Returns(Result<string>.Fail(Error.Failure("expr.fail", "boom")));
 
         var result = await _service.GetFunctionByKeyAsync(FunctionKey, TestDomain);

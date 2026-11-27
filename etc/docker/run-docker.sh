@@ -74,6 +74,55 @@ die()  { printf '\033[1;31m✗\033[0m %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "'$1' is required but not installed"; }
 
 compose() { docker compose -f "$COMPOSE_FILE" "$@"; }
+
+# Local file store (Dapr binding `vnext-blob-local`, bindings.localstorage, rootPath /blobs). The orchestration sidecar
+# mounts ./data/blobs and daprd runs as non-root uid 65532. If the directory does not exist, the Docker daemon creates it
+# owned by root; on Linux (CI runners) the sidecar then cannot write, every x-storage write answers 503 "File store is
+# unavailable". Docker Desktop / OrbStack remap ownership, which is why it only fails on Linux. Create it up front,
+# writable for the sidecar user; the directory is git-ignored local scratch.
+ensure_blob_dir() {
+  local dir="$HERE/data/blobs"
+  mkdir -p "$dir" || die "cannot create $dir"
+  chmod 0777 "$dir" || die "cannot make $dir writable for the Dapr sidecar (uid 65532)"
+}
+
+# Per-checkout Dapr app API token (Dapr local-delivery guard). daprd adds it as `dapr-api-token` to every call
+# it makes to the orchestration app (the sidecar takes it as env APP_API_TOKEN); the app reads the expected value
+# ONLY from the file named by Workflow:RuntimeCaller:AppApiTokenFile. A pre-set VNEXT_APP_API_TOKEN wins; otherwise
+# one random token is generated once and kept in a git-ignored file (.vnext-local/app-api-token; delete it to
+# rotate) so a sidecar reused across runs (compose --no-recreate) still matches the app.
+# The file is ALWAYS rewritten with the effective value. Mode 0644: the stage image runs as non-root `workflowuser`,
+# which could not read a 0600 bind-mounted file owned by the host user; acceptable for a local-dev-only secret in
+# a git-ignored directory. The value is exported (VNEXT_APP_API_TOKEN for the sidecar, VNEXT_APP_API_TOKEN_FILE,
+# an absolute path, for the app mount) and is never printed.
+ensure_app_api_token() {
+  local file
+  mkdir -p "$STATE"
+  file="$(cd "$STATE" && pwd)/app-api-token"
+  if [[ -z "${VNEXT_APP_API_TOKEN:-}" ]]; then
+    if [[ -s "$file" ]]; then
+      VNEXT_APP_API_TOKEN="$(cat "$file" 2>/dev/null)" || die "cannot read $file (delete it to generate a new Dapr app API token)"
+    else
+      need openssl
+      VNEXT_APP_API_TOKEN="$(openssl rand -hex 32)"
+    fi
+  fi
+  rm -f "$file"   # always create fresh so a leftover file cannot keep an old mode or value
+  ( umask 022; printf '%s' "$VNEXT_APP_API_TOKEN" > "$file" ) || die "cannot write $file"
+  export VNEXT_APP_API_TOKEN
+  export VNEXT_APP_API_TOKEN_FILE="$file"
+}
+
+# A running orchestration sidecar keeps the APP_API_TOKEN it was created with (compose --no-recreate).
+# Recreate it when that differs from the token this run gives the app. Compares silently.
+sync_sidecar_token() {   # <container> <compose service> <compose -f file>
+  local container="$1" service="$2" compose_file="$3" cur
+  cur="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$container" 2>/dev/null | grep '^APP_API_TOKEN=' || true)"
+  [[ "$cur" = "APP_API_TOKEN=$VNEXT_APP_API_TOKEN" ]] && return 0
+  log "recreating $container (Dapr app API token changed)"
+  docker compose -f "$compose_file" up -d --force-recreate --no-deps --quiet-pull "$service" >> "$DDIR/logs/infra.log" 2>&1 \
+    || { tail -n 20 "$DDIR/logs/infra.log" >&2; die "could not recreate $container — see $DDIR/logs/infra.log"; }
+}
 f() { printf '%s' "$1" | cut -d'|' -f"$2"; }          # f <row> <field>
 
 selected_hosts() { printf '%s\n' "$HOSTS"; }
@@ -184,6 +233,8 @@ load_env() {
   ENVS=()
   while IFS= read -r line; do [ -n "$line" ] && ENVS+=("$line"); done < <(profile_env "$project" "$profile")
   ENVS+=("APP_DOMAIN=$domain")
+  # Dapr local-delivery guard: the orchestration app expects the token its own sidecar presents (never printed)
+  [[ "$(f "$row" 1)" = orchestration && -n "${VNEXT_APP_API_TOKEN_FILE:-}" ]] && ENVS+=("Workflow__RuntimeCaller__AppApiTokenFile=$VNEXT_APP_API_TOKEN_FILE")
   [ -n "$(cohosted "$domain")" ] && ENVS+=("APP_DOMAINS=$(cohosted_names "$domain")")
   # d=db → that co-hosted domain's own database (ConnectionStrings:Domains:<d>), for every host with a database
   if [ "$(f "$row" 5)" = 1 ]; then
@@ -258,7 +309,7 @@ wait_sidecar() {   # wait_sidecar <container name> <http port>
 # writes the per-domain sidecar compose (JSON) derived from the base file's sidecar definitions
 write_sidecars_json() {   # <domain> <offset> <out file>
   local domain="$1" offset="$2" out="$3" h spec=""
-  compose config --format json > "$out.base.json" 2>/dev/null || die "docker compose config failed for $COMPOSE_FILE"
+  VNEXT_APP_API_TOKEN="" compose config --format json > "$out.base.json" 2>/dev/null || die "docker compose config failed for $COMPOSE_FILE"
   # one line per sidecar: base service|new container|new app-id|app port ('' = none)|dapr http|dapr grpc
   while IFS= read -r h; do
     spec="$spec$(f "$h" 6)|$(sidecar_name "$(f "$h" 6)" "$domain" "$offset")|$(app_id "$(f "$h" 8)" "$domain" "$offset")|$([ "$(f "$h" 10)" = 1 ] && app_port "$(f "$h" 4)" "$offset")|$(dapr_http "$h" "$offset")|$(dapr_grpc "$h" "$offset")
@@ -287,6 +338,11 @@ for line in spec.strip().splitlines():
     setarg("--app-id", app_id); setarg("--dapr-http-port", http); setarg("--dapr-grpc-port", grpc)
     if app_port: setarg("--app-port", app_port)
     s["container_name"] = cname
+    # the token never lands in the generated file: compose interpolates it when the file is used
+    env = s.setdefault("environment", {})
+    env.pop("APP_API_TOKEN", None)
+    if svc == "vnext-orchestration-dapr":
+        env["APP_API_TOKEN"] = "${VNEXT_APP_API_TOKEN:-}"
     s["ports"] = [{"target": int(http), "published": http, "protocol": "tcp"},
                   {"target": int(grpc), "published": grpc, "protocol": "tcp"}]
     s["networks"] = {"bbt-development": {"aliases": [f"{app_id}-dapr"]}}
@@ -321,6 +377,9 @@ ensure_infra() {   # <domain> <offset>
     write_sidecars_json "$domain" "$offset" "$DDIR/sidecars.json"
     docker compose -f "$DDIR/sidecars.json" up -d --no-recreate --quiet-pull >> "$DDIR/logs/infra.log" 2>&1 \
       || { tail -n 20 "$DDIR/logs/infra.log" >&2; die "sidecar compose up failed — see $DDIR/logs/infra.log"; }
+    sync_sidecar_token "$(sidecar_name vnext-orchestration-dapr "$domain" "$offset")" "$(sidecar_name vnext-orchestration-dapr "$domain" "$offset")" "$DDIR/sidecars.json"
+  else
+    sync_sidecar_token vnext-orchestration-dapr vnext-orchestration-dapr "$COMPOSE_FILE"
   fi
   while IFS= read -r h; do wait_sidecar "$(sidecar_name "$(f "$h" 6)" "$domain" "$offset")" "$(dapr_http "$h" "$offset")"; done < <(selected_hosts)
   [ "${SKIP_MIGRATE:-0}" = "1" ] || wait_sidecar "$(sidecar_name "$(f "$MIGRATOR" 6)" "$domain" "$offset")" "$(dapr_http "$MIGRATOR" "$offset")"
@@ -452,6 +511,7 @@ write_record() {   # <domain> <running|stopped>
 | Database | \`$db\` on localhost:5432 (postgres/postgres) |
 | Base URL | http://localhost:$(app_port 4201 "$offset") |
 | Init (package publisher) | http://localhost:$(init_port "$offset") (\`$(init_name "$domain" "$offset")\`) |
+| Dapr app API token | set (stable per checkout in \`.vnext-local/app-api-token\`, value not recorded; delete the file to rotate) |
 | Runtime source | \`$branch\` @ \`$rev\` |
 | Sidecar compose | $([ "$offset" = 0 ] && echo "\`etc/docker/docker-compose.yml\` (core owns the default sidecars)" || echo "\`$ddir/sidecars.json\` (project \`vnext-$domain\`)") |
 
@@ -542,6 +602,8 @@ cmd_up() {
   local domain offset db h
   domain="$(resolve_domain "${1:-}")"; offset="$(resolve_offset "$domain" "${OFFSET_ARG:-}")"; db="$(db_for_domain "$domain")"
   DDIR="$(dom_dir "$domain")"; mkdir -p "$DDIR/logs" "$DDIR/pids" "$STATE"
+  ensure_app_api_token
+  ensure_blob_dir
   print_plan "$domain" "$offset" "$db"
   if domain_running "$domain"; then log "stopping running $domain hosts"; stop_domain "$domain"; fi
   printf '%s' "$offset" > "$DDIR/offset"; printf '%s' "$db" > "$DDIR/db"; printf '%s' "$(cohosted "$domain")" > "$DDIR/cohosted"
@@ -601,6 +663,8 @@ cmd_stack() {
   need docker
   docker network create bbt-development >/dev/null 2>&1 || true
   local mode="$1" domain db
+  ensure_app_api_token
+  ensure_blob_dir
   if [ "$mode" = dev ] || [ "$mode" = stage ]; then
     domain="$(resolve_domain "${2:-}")"; db="$(db_for_domain "$domain")"
     mkdir -p "$STATE"; printf '%s' "$domain" > "$STATE/last"
@@ -610,7 +674,9 @@ cmd_stack() {
   case "$mode" in
     stage) exec docker compose -f "$HERE/docker-compose.stage.yml" up --build ;;
     dev)   exec docker compose -f "$HERE/docker-compose.dev.yml" up --build ;;
-    *)     log "infrastructure only"; exec docker compose -f "$COMPOSE_FILE" up --build ;;
+    *)     log "infrastructure only"
+           log "a hand-run orchestration host needs Workflow__RuntimeCaller__AppApiTokenFile=$STATE/app-api-token (the sidecar already has the token)"
+           exec docker compose -f "$COMPOSE_FILE" up --build ;;
   esac
 }
 

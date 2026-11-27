@@ -6,9 +6,14 @@ services:
             dockerfile: orchestration/BBT.Workflow.Orchestration.HttpApi.Host/Dockerfile.dev
         env_file:
             - .env.orchestration.dev
+        environment:
+            # Dapr local-delivery guard: the app reads the token daprd presents from this mounted file.
+            # Conditional here: run-docker.sh never starts dev.light, so unset means not configured (LogOnly).
+            Workflow__RuntimeCaller__AppApiTokenFile: ${VNEXT_APP_API_TOKEN_FILE:+/run/secrets/vnext/app-api-token}
         ports:
             - '4201:5000'
         volumes:
+            - '${VNEXT_APP_API_TOKEN_FILE:-/dev/null}:/run/secrets/vnext/app-api-token:ro'
             - ../..:/app
             - /app/orchestration/BBT.Workflow.Orchestration.HttpApi.Host/obj/
             - /app/orchestration/BBT.Workflow.Orchestration.HttpApi.Host/bin/
@@ -131,6 +136,8 @@ services:
                 '--scheduler-host-address',
                 'dapr-scheduler:50007',
             ]
+        environment:
+            APP_API_TOKEN: ${VNEXT_APP_API_TOKEN:-}
         volumes:
             - '../../etc/orchestration/dapr/components:/components'
             - './data/blobs:/blobs'

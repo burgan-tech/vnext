@@ -32,6 +32,7 @@ public static class TaskBindingCredentials
             Headers = merged,
             Body = binding.Body,
             ContentType = binding.ContentType,
+            Multipart = binding.Multipart,
             TimeoutSeconds = binding.TimeoutSeconds,
             ValidateSSL = binding.ValidateSSL,
             AcceptedStatusCodes = binding.AcceptedStatusCodes

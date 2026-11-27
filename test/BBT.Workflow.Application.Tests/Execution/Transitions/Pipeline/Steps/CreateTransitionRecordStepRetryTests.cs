@@ -42,9 +42,9 @@ public class CreateTransitionRecordStepRetryTests
     {
         _dataMapper.MapTransitionDataAsync(
                 Arg.Any<object?>(), Arg.Any<Transition?>(), Arg.Any<Definitions.Workflow>(),
-                Arg.Any<Instance>(), Arg.Any<IRuntimeInfoProvider>(),
+                Arg.Any<Instance>(),
                 Arg.Any<System.Collections.Generic.Dictionary<string, string?>>(),
-                Arg.Any<CancellationToken>())
+                Arg.Any<Action<Exception>?>(), Arg.Any<BBT.Workflow.Shared.ExecutionActor?>(), Arg.Any<CancellationToken>())
             .Returns(Result<object?>.Ok(null));
 
         _step = new CreateTransitionRecordStep(
@@ -53,7 +53,6 @@ public class CreateTransitionRecordStepRetryTests
             _dataWriteService,
             Substitute.For<IGuidGenerator>(),
             _dataMapper,
-            Substitute.For<IRuntimeInfoProvider>(),
             BBT.Workflow.Application.Files.FileTestDoubles.PassThroughOffload(),
             Substitute.For<ILogger<CreateTransitionRecordStep>>());
     }

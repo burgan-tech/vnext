@@ -12,28 +12,31 @@ namespace BBT.Workflow.Tasks.Executors;
 
 /// <summary>
 /// Executor for HTTP tasks.
-/// Handles input mapping locally, then dispatches through <see cref="ITaskInvocationDispatcher"/>,
-/// which runs the prepared binding locally or via the Execution service per
+/// Input and output mapping run in the base template (<see cref="ITaskMappingRunner"/>); the executor dispatches
+/// through <see cref="ITaskInvocationDispatcher"/>, which runs the prepared binding locally or via the Execution service per
 /// <see cref="BBT.Workflow.Tasks.Invocation.ITaskInvocationRouter"/>.
 /// </summary>
 public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
 {
     private readonly IRemoteInvokerService _remoteInvoker;
-    private readonly IScriptEngine _scriptEngine;
     private readonly ITaskInvocationDispatcher _dispatcher;
 
     /// <summary>
     /// Initializes a new instance of HttpTaskExecutor.
     /// </summary>
+    /// <param name="mappingRunner">
+    /// The binding mapping runner (DI). Null — an executor built by hand — runs mappings through
+    /// <see cref="RoutingTaskMappingRunner.CreateDefault"/> over <paramref name="scriptEngine"/>.
+    /// </param>
     public HttpTaskExecutor(
         IRemoteInvokerService remoteInvoker,
         IScriptEngine scriptEngine,
         ITaskInvocationDispatcher dispatcher,
-        ILogger<HttpTaskExecutor> logger)
-        : base(logger)
+        ILogger<HttpTaskExecutor> logger,
+        ITaskMappingRunner? mappingRunner = null)
+        : base(logger, mappingRunner ?? RoutingTaskMappingRunner.CreateDefault(scriptEngine))
     {
         _remoteInvoker = remoteInvoker;
-        _scriptEngine = scriptEngine;
         _dispatcher = dispatcher;
     }
 
@@ -41,37 +44,8 @@ public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
     public override TaskType TaskType => TaskType.Http;
 
     /// <inheritdoc />
-    protected override async Task<Result<ScriptResponse?>> PrepareInputAsync(
-        HttpTask task,
-        TaskExecutorContext context,
-        CancellationToken cancellationToken)
-    {
-        var mapping = context.OnExecuteTask.Mapping;
-        if (mapping is null || !mapping.HasMappingCode)
-        {
-            return Result<ScriptResponse?>.Ok(null);
-        }
-
-        var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
-        {
-            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
-
-            return await scriptRunner.InputHandler(task, context.ScriptContext);
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Http task input handler failed: {ScriptDiagnostics.Explain(ex)}"));
-
-        if (!result.IsSuccess)
-        {
-            Logger.TaskInputHandlerFailed(
-                task.Key,
-                TaskType.ToString(),
-                context.ScriptContext.Instance?.Id ?? Guid.Empty,
-                result.Error.Message ?? "Unknown error");
-        }
-
-        return result;
-    }
+    /// <remarks>An HTTP task files its response on the script context whether or not its binding maps the output.</remarks>
+    protected override bool FilesResponseWithoutOutputMapping => true;
 
     /// <inheritdoc />
     protected override async Task<Result<TaskInvocationResult>> InvokeAsync(
@@ -108,43 +82,6 @@ public sealed class HttpTaskExecutor : TaskExecutorBase<HttpTask>
         if (!result.IsSuccess)
         {
             Logger.TaskInvocationFailed(
-                task.Key,
-                TaskType.ToString(),
-                context.ScriptContext.Instance?.Id ?? Guid.Empty,
-                result.Error.Message ?? "Unknown error");
-        }
-
-        return result;
-    }
-
-    /// <inheritdoc />
-    protected override async Task<Result<object?>> ProcessOutputAsync(
-        HttpTask task,
-        TaskInvocationResult invocationResult,
-        TaskExecutorContext context,
-        CancellationToken cancellationToken)
-    {
-        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext, context.ResponseVariableKey);
-
-        var mapping = context.OnExecuteTask.Mapping;
-        if (mapping is null || !mapping.HasMappingCode)
-        {
-            return Result<object?>.Ok(invocationResult.Data);
-        }
-
-        var result = await ResultExtensions.TryAsync<object?>(async ct =>
-        {
-            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
-
-            var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
-            return outputResponse.Data;
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Http task output handler failed: {ScriptDiagnostics.Explain(ex)}"));
-
-        if (!result.IsSuccess)
-        {
-            Logger.TaskOutputHandlerFailed(
                 task.Key,
                 TaskType.ToString(),
                 context.ScriptContext.Instance?.Id ?? Guid.Empty,

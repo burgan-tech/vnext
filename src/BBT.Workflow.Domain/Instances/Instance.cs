@@ -787,6 +787,8 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         ResyncEffectiveStatus();
 
         var rootId = this.GetRootInstanceId();
+        // FaultedAt must stay the CompletedAt written above: cancel-cleanup compares the two to skip a cleanup that
+        // arrives after a retry or the reserved cancel took the instance out of this fault (vnext#1252).
         AddDistributedEvent(new InstanceFaultedCleanupEvent
         {
             InstanceId = Id,
@@ -883,6 +885,25 @@ public sealed class Instance : AggregateRoot<Guid>, ICreationAuditedObject, IMod
         ResyncEffectiveStatus();
         ResolveOpenIncidents();
         return true;
+    }
+
+    /// <summary>
+    /// Copies a fault that another unit of work persisted onto this copy of the same instance, without
+    /// raising its events a second time. The pipeline faults a fresh reload in a unit of work of its own,
+    /// so the aggregate it ran on still says what it said before the failure — Busy, or Active for an
+    /// updateData or a cancel — and the sync response is built from that aggregate.
+    /// </summary>
+    /// <param name="persisted">The reloaded instance <see cref="Fault"/> was applied to and saved.</param>
+    public void MirrorPersistedFault(Instance persisted)
+    {
+        ArgumentNullException.ThrowIfNull(persisted);
+
+        Status = persisted.Status;
+        EffectiveStatus = persisted.EffectiveStatus;
+        CompletedAt = persisted.CompletedAt;
+        Duration = persisted.Duration;
+        ModifiedAt = persisted.ModifiedAt;
+        HasActiveIncident = persisted.HasActiveIncident;
     }
 
     /// <summary>

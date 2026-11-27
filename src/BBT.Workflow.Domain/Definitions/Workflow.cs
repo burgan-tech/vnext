@@ -1,5 +1,4 @@
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 using BBT.Aether;
 using BBT.Aether.Auditing;
 using BBT.Aether.Results;
@@ -119,7 +118,7 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     /// Semantic version
     /// </summary>
     public string SemanticVersion =>
-        Version.Contains('+') ? Regex.Match(Version, @"^([^+]+)").Groups[1].Value : Version;
+        Version.IndexOf('+') is var plus and >= 0 ? Version[..plus] : Version;
 
     public static string ComponentTypeKey => RuntimeSysSchemaInfo.Flows;
     public string ComponentKey => ComponentTypeKey;
@@ -500,6 +499,16 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
             || UpdateData?.Key.Equals(key, StringComparison.OrdinalIgnoreCase) == true);
 
     /// <summary>
+    /// True when the key is this workflow's cancel transition, by reserved alias or by configured key
+    /// (OrdinalIgnoreCase). The one key a Faulted instance still admits — see
+    /// <c>docs/domain/well-known-transitions.md</c>.
+    /// </summary>
+    public bool IsCancelKey(string? key) =>
+        key is not null
+        && (key.Equals(WellKnownTransitionKeys.Cancel, StringComparison.OrdinalIgnoreCase)
+            || Cancel?.Key.Equals(key, StringComparison.OrdinalIgnoreCase) == true);
+
+    /// <summary>
     /// True when the key names a well-known workflow-level transition, whether by reserved alias or by
     /// configured key — including when that transition is not configured on this workflow, so callers
     /// that must exclude reserved keys from state-machine rules still do so.
@@ -574,6 +583,23 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     {
         return FindTransition(key)
                ?? States.SelectMany(s => s.Transitions).FirstOrDefault(p => p.Key == key);
+    }
+
+    /// <summary>
+    /// Resolves a key the way a caller sitting in <paramref name="stateKey"/> sees it: the transition
+    /// that state declares wins, and only when it declares none does the state-blind
+    /// <see cref="FindTransitionInContext"/> answer.
+    /// <para>
+    /// A key may legally be declared on several states with different grants. The state-blind lookup
+    /// returns the first one in definition order, so role evaluation used another state's grants and
+    /// refused a caller the current state admits (#1334). A null or unknown state falls back to it,
+    /// which keeps workflow-scoped lookups unchanged.
+    /// </para>
+    /// </summary>
+    public Transition? FindTransitionInState(string key, string? stateKey)
+    {
+        var declared = string.IsNullOrEmpty(stateKey) ? null : FindState(stateKey)?.FindTransition(key);
+        return declared ?? FindTransitionInContext(key);
     }
 
     public List<string> GetSharedTransitionKeys(string state)

@@ -3,6 +3,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Shared;
 
 namespace BBT.Workflow.SubFlow;
 
@@ -24,6 +25,10 @@ public interface ISubflowStarter
     /// <param name="correlation">Correlation information for tracking.</param>
     /// <param name="context">The script context containing execution data and headers.</param>
     /// <param name="mode">The original request mode, retained for compatibility. Child starts always use sync=true.</param>
+    /// <param name="actor">
+    /// The parent hop's actor: a declarative <c>input</c> block reads its caller as <c>user</c> (<see cref="ExecutionActor.User"/>);
+    /// null or <see cref="ExecutionActor.System"/> leaves <c>user</c> unavailable. Not read by a <c>mapping</c> script.
+    /// </param>
     /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
     /// <returns>
     /// Result indicating success or failure of the sub-flow initiation; on success the value is the
@@ -47,5 +52,6 @@ public interface ISubflowStarter
         InstanceCorrelation correlation,
         ScriptContext context,
         ExecMode mode,
+        ExecutionActor? actor = null,
         CancellationToken cancellationToken = default);
 }

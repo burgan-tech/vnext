@@ -43,6 +43,40 @@ public sealed class InstanceDataReadService(
         computedFields,
         page);
 
+    /// <inheritdoc />
+    public async Task<IInstanceHistoryBodyReader> CreateHistoryBodyReaderAsync(
+        Definitions.Workflow? workflow,
+        Instance instance,
+        AuthorizationRequestContext? requestContext,
+        CancellationToken cancellationToken = default)
+    {
+        if (workflow is null)
+            return new HistoryBodyReader(SchemaExposurePlan.Unreadable);
+
+        var plan = await fieldFilter.PrepareAsync(workflow, instance, requestContext, cancellationToken);
+        return new HistoryBodyReader(plan ?? SchemaExposurePlan.Unreadable);
+    }
+
+    /// <summary>
+    /// Applies one decided plan to recorded transition bodies. No stored tokens exist for a recorded body, so a non-exempt
+    /// caller gets a full mask on an <c>encrypt</c> field and an exempt one the recorded plaintext.
+    /// </summary>
+    private sealed class HistoryBodyReader(SchemaExposurePlan plan) : IInstanceHistoryBodyReader
+    {
+        public JsonElement? Expose(JsonElement? body)
+        {
+            if (body is not { } element || element.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+                return body;
+
+            return plan.Outcome switch
+            {
+                SchemaExposureOutcome.NoRules => body,
+                SchemaExposureOutcome.Ready when element.ValueKind == JsonValueKind.Object => plan.Apply(element),
+                _ => null
+            };
+        }
+    }
+
     private static readonly IReadOnlyDictionary<string, string> NoTokens = new Dictionary<string, string>(0);
 
     private static async Task<JsonElement?> ExposeRowAsync(

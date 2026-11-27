@@ -2,6 +2,7 @@ using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Definitions.Policies;
 using BBT.Workflow.Execution.Pipeline;
+using BBT.Workflow.Execution.Transitions;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
@@ -19,12 +20,13 @@ public class TransitionValidationService(
     IJsonSchemaValidator schemaValidator,
     IComponentCacheStore componentCacheStore,
     IVersionRegistryWriteGuard versionRegistryWriteGuard,
-    ITransitionSchemaResolver schemaResolver) : ITransitionValidationService
+    ITransitionSchemaResolver schemaResolver,
+    IInstanceDataWriteService? instanceDataWriteService = null) : ITransitionValidationService
 {
     /// <inheritdoc />
     /// <summary>
     /// Validates a transition execution context.
-    /// Railway chain: Schema Validation → State Machine Policy Validation
+    /// Railway chain: Transition Schema → State Machine Policy → Master Schema Preview
     /// </summary>
     public async Task<Result> ValidateAsync(
         TransitionExecutionContext context,
@@ -33,21 +35,24 @@ public class TransitionValidationService(
         using var activity = PipelineStepActivityHelper.StartTransitionActivity(
             "Transition.Validate", context.TransitionKey);
 
-        // 1. Schema Validation
-        var schemaResult = await ValidateSchemaAsync(context, cancellationToken);
-        if (!schemaResult.IsSuccess)
-        {
-            activity?.SetStatus(ActivityStatusCode.Error, schemaResult.Error.Message);
-            return schemaResult;
-        }
+        // 1. Transition schema over the body as sent
+        var result = await ValidateSchemaAsync(context, cancellationToken);
 
         // 2. State Machine Validation using Specification Pattern
         // Includes: Actor authorization, state transition rules, SubFlow bypass, etc.
-        var policyResult = await ValidatePolicyAsync(context, cancellationToken);
-        if (!policyResult.IsSuccess)
-            activity?.SetStatus(ActivityStatusCode.Error, policyResult.Error.Message);
+        if (result.IsSuccess)
+            result = await ValidatePolicyAsync(context, cancellationToken);
 
-        return policyResult;
+        // 3. Master schema over the body merged onto the stored data. After the policy on purpose:
+        // it reads the stored document and its cost grows with it, so a request the policy refuses
+        // (wrong state, unauthorized actor) never reaches it and never sees a master-schema message.
+        if (result.IsSuccess)
+            result = await PreviewMasterSchemaAsync(context, cancellationToken);
+
+        if (!result.IsSuccess)
+            activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+
+        return result;
     }
 
     /// <inheritdoc />
@@ -67,6 +72,43 @@ public class TransitionValidationService(
             activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
 
         return Task.FromResult(result);
+    }
+
+    /// <summary>
+    /// Master-schema preview (vnext#1255): the write funnel validates the merged document inside the
+    /// pipeline, where a failure faults the instance. A caller's body is checked here first, before
+    /// admission, so one field a closed master schema does not allow is a 400 and nothing is touched.
+    /// The funnel keeps its own check — it is the authority, this is only the early refusal.
+    /// </summary>
+    /// <remarks>
+    /// Scope is the caller's own body and nothing else:
+    /// <list type="bullet">
+    /// <item>Manual trigger only — a System hop's payload is not a client error to answer with 400.</item>
+    /// <item>No transition mapping (script or declarative <c>output</c> block) — the mapping's output is what gets
+    /// written, the flow author decides it, and previewing it would mean running the mapping before admission.</item>
+    /// <item>Not a request the parent relays to its active SubFlow — the leaf records the body and
+    /// previews it against its own master schema.</item>
+    /// </list>
+    /// </remarks>
+    private Task<Result> PreviewMasterSchemaAsync(
+        TransitionExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        if (instanceDataWriteService is null
+            || context.Data is null
+            || context.Trigger != TriggerType.Manual
+            || context.Workflow?.Schema is null
+            || context.Instance is null
+            || context.Transition?.HasDataMapping == true
+            || SubflowForwardRule.WillForward(context))
+            return Task.FromResult(Result.Ok());
+
+        return instanceDataWriteService.PreviewAppendAsync(
+            context.Instance,
+            new JsonData(context.Data),
+            context.Workflow,
+            ResolveCulture(context.Headers),
+            cancellationToken);
     }
 
     /// <inheritdoc />
@@ -113,7 +155,7 @@ public class TransitionValidationService(
 
         // Rule-based selection: the first matching `schemas` entry wins; none matching is a rejection.
         var resolved = await schemaResolver.ResolveAsync(
-            context.Workflow, context.Instance, context.Transition, context.Headers, cancellationToken);
+            context.Workflow, context.Instance, context.Transition, context.Headers, context.DataElement, cancellationToken);
         if (!resolved.IsSuccess)
             return Result.Fail(resolved.Error);
         if (resolved.Value is null)
@@ -210,6 +252,7 @@ public class TransitionValidationService(
             // Instance state
             Instance = instance,
             Data = data,
+            HopInput = data,
 
             // Flags
             IsReentry = false, // Start transitions are never re-entry

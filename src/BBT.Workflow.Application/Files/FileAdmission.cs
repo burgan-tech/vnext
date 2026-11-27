@@ -81,6 +81,8 @@ public sealed class FileAdmission(IFileOffloadService offloadService, IRequestRa
 
         var payload = result.Value.Payload;
         context.Data = payload;
+        // `input` sees what the pipeline sees: the handle, never the bytes.
+        context.HopInput = payload;
         if (workflowContext.Data is not null)
             workflowContext.Data.Attributes = payload;
         // Scripts read ScriptContext.RawBody: a client request must expose the handles, never the bytes.

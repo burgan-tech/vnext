@@ -83,6 +83,7 @@ public sealed class StartSubflowJobHandler(
                 correlation,
                 scriptContext,
                 context.CallerMode,
+                context.Actor,
                 cancellationToken);
 
             if (startResult.IsSuccess)
@@ -154,6 +155,9 @@ public sealed class StartSubflowJobHandler(
             .WithRuntime(runtimeInfoProvider)
             .WithBody(context.Data)
             .WithHeaders(context.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value))
-            .BuildAsync(cancellationToken);
+            .BuildAsync(cancellationToken)
+            // A SubFlow input block reads `input` as the request of the hop that entered the SubFlow state (null on an
+            // automatic chain). C# mapping scripts do not see it (they keep Body / CurrentTransition).
+            .WithHopInputAsync(context.HopInput);
     }
 }

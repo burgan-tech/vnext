@@ -97,6 +97,28 @@ Scripts can log through approved helper functions. Pipeline telemetry should ide
 transition and task/condition that triggered the script so compilation and execution
 failures can be traced back to definition content.
 
+A script that throws is diagnosable from its stack trace (vnext#1268):
+
+- **Line numbers.** `CSharpEvaluator` parses every script with UTF-8 encoding and emits an embedded
+  portable PDB, so a script's frames carry the line in the author's own source:
+  `at MyMapping.ReadAmount(String raw) in :line 29`. A script has no file name — its compile errors and
+  sandbox messages read exactly as before, and the frame's class and method name the script — while a
+  helper's frames name the helper's file (`in {key}.csx:line N`). The engine's merged using directives
+  add no lines, and the helper using prefix is followed by `#line 1`, so a helper's compile errors now
+  report the helper's own lines too. A fault the JIT raises inside optimized code (a null dereference,
+  say) can be reported on the line before; a `throw` and every call site are exact.
+- **Cost** (measured with a scratch Roslyn 5.0 benchmark outside the repo, Release, synthetic
+  119–343-line scripts): the loaded assembly is about 7.5–8.5 KB larger whatever the script's size,
+  and the one-time compile takes about +0.3 ms. Running a script is unchanged (same optimized IL);
+  rendering a thrown exception's trace costs about 6 µs instead of 5 µs.
+- **Where the trace goes.** A failed task script is reported through
+  `ScriptDiagnostics.TaskScriptError(context, exception, failure)` — for an input/output mapping by the one
+  `ScriptTaskMappingRunner` every executor shares, with the executor's label as `failure`
+  (`"Http task input handler failed"`, `"Input handler failed for DirectTrigger"`): the message stays
+  `"{failure}: {Explain(exception)}"` and the exception is kept on the script context for the
+  incident, never in the `Error`. The full table is in
+  [Instance Incident Persistence § Stack traces](instance-incident-persistence.md#stack-traces).
+
 ## Change Safety
 
 - Keep script helper surface small and explicit.

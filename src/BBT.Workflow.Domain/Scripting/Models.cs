@@ -280,6 +280,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
                 Headers = null;
                 RouteValues = null;
                 CurrentTransition = null;
+                HopInput = null;
                 Incident = null;
 
                 // Backing field, not the property: the property getter throws once disposed, and
@@ -370,6 +371,14 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     /// across different HTTP clients and frameworks.
     /// </remarks>
     public dynamic? Headers { get; private set; }
+
+    /// <summary>
+    /// The request headers as they arrived, for the runtime's own reads (the instance-call credential it forwards, the
+    /// identity it propagates to a remote task). Never exposed to scripts: <see cref="Headers"/> is the script view and
+    /// omits the <c>Workflow:HeaderExposure:Deny</c> names. The same object as <see cref="Headers"/> when nothing is
+    /// denied; <c>null</c> falls back to <see cref="Headers"/>.
+    /// </summary>
+    internal dynamic? TransportHeaders { get; private set; }
 
     /// <summary>
     /// Contains route values and URL parameters extracted from the transition request.
@@ -499,7 +508,9 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     /// Available to rule-based selection on a caller's request (transition <c>schemas</c>, function
     /// contract slots, state/transition <c>views</c>). Elsewhere — tasks, automatic rules, timers, event
     /// handlers — <see cref="ICallerAccessor.IsAvailable"/> is false and a read throws
-    /// <see cref="CallerRolesUnavailableException"/>. Never null.
+    /// <see cref="CallerRolesUnavailableException"/>. Never null. That includes script (Roslyn) task mappings; a
+    /// declarative task mapping (the binding's <c>input</c>/<c>output</c> blocks) reads the hop's caller through its own
+    /// <c>user</c> variable (<c>TaskExecutorContext.Caller</c>), never through this property.
     /// </remarks>
     public ICallerAccessor Caller { get; private set; } = NullCallerAccessor.Instance;
 
@@ -534,6 +545,23 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             (exposed as CallerAccessor)?.Close();
             owner.Caller = previous;
         }
+    }
+
+    /// <summary>
+    /// The exception of a script that failed on this context, kept for the incident's stack trace
+    /// (vnext#1268). The <c>Error</c> the failure is reported as cannot carry it: its detail is written
+    /// into HTTP error bodies. Whoever ran the script takes it with <see cref="TakeFailureCause"/>
+    /// right after the run, so it never outlives that run. Internal so a script cannot see it, and not
+    /// copied by <see cref="CreateParallelBranch"/>: each branch keeps its own.
+    /// </summary>
+    internal Exception? FailureCause { get; set; }
+
+    /// <summary>Returns <see cref="FailureCause"/> and clears it.</summary>
+    internal Exception? TakeFailureCause()
+    {
+        var cause = FailureCause;
+        FailureCause = null;
+        return cause;
     }
 
     /// <summary>
@@ -602,6 +630,29 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
     /// - Null when ScriptContext is built outside transition task steps
     /// </value>
     public ScriptTransitionRequest? CurrentTransition { get; private set; }
+
+    /// <summary>
+    /// The raw request payload that triggered the current hop — the value declarative expressions read as
+    /// <c>input</c>. Fixed for the whole hop: the pipeline binds it once (<see cref="BindHopInput"/>, through
+    /// <c>TransitionExecutionContext.GetOrBuildScriptContextAsync</c> or the builder's <c>WithHopInputAsync</c>), and
+    /// every step's expressions read the same value. <c>null</c> on hops with no request payload (timer, automatic
+    /// continuation, SubFlow resume) and on read paths. Not <see cref="Body"/>, which task responses merge into.
+    /// Internal: C# scripts keep <see cref="CurrentTransition"/> and <see cref="Body"/>; this only backs <c>input</c>.
+    /// </summary>
+    internal object? HopInput { get; private set; }
+
+    /// <summary>
+    /// True once a hop input was bound (<see cref="BindHopInput"/>), even when it is <c>null</c>. A context built
+    /// outside any hop leaves it false, and <c>input</c> then falls back to <see cref="CurrentTransition"/>'s data.
+    /// </summary>
+    internal bool HasHopInput { get; private set; }
+
+    /// <summary>Binds the hop's raw request payload (see <see cref="HopInput"/>); <c>null</c> is a valid value.</summary>
+    internal void BindHopInput(object? hopInput)
+    {
+        HopInput = hopInput;
+        HasHopInput = true;
+    }
 
     /// <summary>
     /// Contains workflow and component definitions available in the current execution context.
@@ -740,7 +791,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             var value = ToDynamic(output, JsonScriptBodyOptions);
             if (value != null)
             {
-                OutputResponse[taskKey!] = value;
+                OutputResponse[taskKey] = value;
             }
         }
     }
@@ -841,6 +892,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         ScriptContextActivity.TagInstanceShape(activity, Instance);
         activity?.SetTag("vnext.script.context.has_body", Body is not null);
 
+        var branchHeaders = CloneTransportMetadata(Headers);
         var branch = new ScriptContext(logger)
         {
             // Shared until first write — MergeToBody's EnsureBodyOwned copies it on the branch.
@@ -848,7 +900,10 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             // Headers/RouteValues/QueryParameters are transport metadata, NOT user payload — they
             // are cloned type-preservingly, deliberately not through CloneDynamic. See
             // CloneTransportMetadata for why collapsing these back into CloneDynamic breaks scripts.
-            Headers = CloneTransportMetadata(Headers),
+            Headers = branchHeaders,
+            TransportHeaders = TransportHeaders is null || ReferenceEquals(TransportHeaders, Headers)
+                ? branchHeaders
+                : CloneTransportMetadata(TransportHeaders),
             RouteValues = CloneTransportMetadata(RouteValues),
             QueryParameters = CloneTransportMetadata(QueryParameters),
             // Read-only for mappings (no writer funnel besides the Builder) — safe to share.
@@ -859,6 +914,8 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             Runtime = Runtime,
             Transition = Transition,
             CurrentTransition = CurrentTransition,
+            HopInput = HopInput,
+            HasHopInput = HasHopInput,
             CancellationToken = CancellationToken,
             // Container copies, values shared; ComparerOf keeps a non-default key comparer alive
             // (today these are plain default-comparer dictionaries — behavior unchanged).
@@ -958,7 +1015,7 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
             OutputResponse[key] = CloneDynamic(value);
 
         foreach (var (key, value) in metadataWrites)
-            MetaData[key] = CloneDynamic(value)!;
+            MetaData[key] = CloneDynamic(value);
 
         foreach (var branch in branches)
         {
@@ -1114,6 +1171,17 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         public Builder SetHeaders(object? headers)
         {
             _context.Headers = headers;
+            _context.TransportHeaders = headers;
+            return this;
+        }
+
+        /// <summary>
+        /// Sets the headers as they arrived when the script view (<see cref="SetHeaders"/>) was reduced. Call after
+        /// <see cref="SetHeaders"/>, which resets both to the same object.
+        /// </summary>
+        public Builder SetTransportHeaders(object? headers)
+        {
+            _context.TransportHeaders = headers;
             return this;
         }
 
@@ -1229,6 +1297,13 @@ public class ScriptContext(ILogger<ScriptContext> logger) : IDisposable, IAsyncD
         public Builder SetCurrentTransition(ScriptTransitionRequest? value)
         {
             _context.CurrentTransition = value;
+            return this;
+        }
+
+        /// <summary>Binds the hop's raw request payload (see <see cref="ScriptContext.HopInput"/>).</summary>
+        internal Builder SetHopInput(object? hopInput)
+        {
+            _context.BindHopInput(hopInput);
             return this;
         }
 

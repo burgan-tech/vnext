@@ -1,0 +1,32 @@
+{
+  "releaseNote": {
+    "summary": "A start whose start mapping fails after the instance row is written is now rolled back: no instance is left behind, and a retry with the same key or id starts cleanly.",
+    "breaking": false,
+    "docs": []
+  },
+  "migrations": [
+    {
+      "id": "failed-start-mapping-leaves-no-instance",
+      "type": "behavior",
+      "component": "instance",
+      "path": "POST {domain}/workflows/{workflow}/instances/start | sub/instances/start | SubFlow and SubProcess child starts",
+      "since": "next",
+      "severity": "info",
+      "title": "A start whose start mapping fails leaves no instance",
+      "description": "Creating the instance (its row, initial data version and creation-time sub:state-changed event) is now committed only when every creation step succeeded — validation, file offload, the INSERT, the start mapping and the initial data append — and rolled back otherwise. Before, a start whose start-transition mapping failed answered with the error (400 Execution:200002, unchanged) but still committed the instance without its data: a root instance stayed Active in its initial state and a retry with the same key was answered with that empty instance; a leftover no parent fault reached — a SubProcess child, or a direct sub/instances/start call — stayed Busy under its pre-assigned id; a SubFlow child started by its parent was faulted together with the parent, and the parent's retry was then handed to that child and failed, leaving the parent Active with no incident. The start transition still runs after the commit, and its own failure keeps the committed instance, as before: faulted when one of its steps fails, unstarted when it fails before its first step (a lock conflict, a failed async enqueue).",
+      "action": "None required. Instances left behind by earlier failed starts are not removed. Find them from the key or id of a start that answered 400 Execution:200002: such an instance has no data version and no transition record. Check them before any clean-up — a start without attributes, or a history: none flow, also has no data version. A streamed upload claimed by a failed start is not returned: upload it again before retrying (400 Instance:100048 otherwise)."
+    }
+  ],
+  "knownIssues": [
+    {
+      "id": "late-child-fault-can-fault-recreated-child",
+      "affectedVersions": ">=next",
+      "severity": "warning",
+      "component": "execution",
+      "path": "ChildSubflowFaultRequestedEvent → ChildSubflowFaultService (child-fault)",
+      "title": "When a SubFlow child fails to start, the parent faults and emits ChildSubflowFaultRequestedEvent for the child (Outbox → Inbox → the Orchestration host's child-fault, not relayed). A parent retry that runs before that event is processed re-creates the child under the same pre-assigned id, and the late event then faults the new child: ChildSubflowFaultService skips only a missing, Faulted or Completed child and does not compare the event's FaultedAt with the child's creation. A cascaded fault does not notify the parent, so the parent is left Busy on a Faulted child, with no incident. A failed start mapping reaches this window from this release on (its child is now rolled back instead of left behind); input-mapping and gateway start failures already did.",
+      "workaround": "Retry such a parent only after the child-fault for its child has been processed: the Orchestration host logs InstanceNotFound (20040) for the missing child, or ChildSubflowFaultApplied (40116); the Inbox logs only the receipt (40114). If a re-created child was faulted anyway, a parent retry is handed to the child's own retry, which works only while the child still has an incomplete transition; otherwise cancel or exit the parent, if the flow declares one for the parent's state.",
+      "fixedIn": null
+    }
+  ]
+}

@@ -57,8 +57,8 @@ public class CreateTransitionRecordStepTimeoutKeyTests
         var dataMapper = Substitute.For<ITransitionDataMapper>();
         dataMapper.MapTransitionDataAsync(
                 Arg.Any<object?>(), Arg.Any<Transition?>(), Arg.Any<Definitions.Workflow>(),
-                Arg.Any<Instance>(), Arg.Any<IRuntimeInfoProvider>(),
-                Arg.Any<Dictionary<string, string?>>(), Arg.Any<CancellationToken>())
+                Arg.Any<Instance>(),
+                Arg.Any<Dictionary<string, string?>>(), Arg.Any<Action<Exception>?>(), Arg.Any<BBT.Workflow.Shared.ExecutionActor?>(), Arg.Any<CancellationToken>())
             .Returns(Result<object?>.Ok(null));
 
         _step = new CreateTransitionRecordStep(
@@ -67,7 +67,6 @@ public class CreateTransitionRecordStepTimeoutKeyTests
             Substitute.For<IInstanceDataWriteService>(),
             Substitute.For<IGuidGenerator>(),
             dataMapper,
-            Substitute.For<IRuntimeInfoProvider>(),
             BBT.Workflow.Application.Files.FileTestDoubles.PassThroughOffload(),
             Substitute.For<ILogger<CreateTransitionRecordStep>>());
     }

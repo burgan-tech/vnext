@@ -122,7 +122,7 @@ public sealed class InstanceCommandAppService(
                 .ThenAsync(async output =>
                 {
                     await ScheduleWorkflowTimeoutIfConfiguredAsync(
-                        data.Workflow, data.Instance, input.Instance.ExtraProperties, cancellationToken);
+                        data.Workflow, data.Instance, input.Instance.ExtraProperties, input.Instance.Attributes, cancellationToken);
                     return Result<StartInstanceOutput>.Ok(output);
                 }))
             .OnSuccess(output =>
@@ -288,7 +288,9 @@ public sealed class InstanceCommandAppService(
     }
 
     /// <summary>
-    /// Step 3: Prepares the instance (create, configure, persist).
+    /// Step 3: Prepares the instance (create, configure, persist) in one transaction that is committed
+    /// only when every step succeeded; a failed step rolls it back and leaves no instance. The start
+    /// transition runs after this commit, so its own failure keeps the committed instance.
     /// Railway chain: Create Instance → Validate → x-storage swap → Persist → Map Data
     /// </summary>
     private async Task<Result<(Definitions.Workflow Workflow, Instance Instance)>> PrepareInstanceAsync(
@@ -323,13 +325,20 @@ public sealed class InstanceCommandAppService(
             .ThenAsync(instance => PersistInstanceAsync(workflow, instance, cancellationToken))
             .ThenAsync(data => MapAndAppendInstanceDataAsync(data, input, cancellationToken));
 
-        await uow.CommitAsync(cancellationToken);
-
-        if (result.IsSuccess)
-            activity?.SetTag(TelemetryConstants.TagNames.InstanceId, result.Value.Instance.Id.ToString());
-        else
+        // Creating the instance is all or nothing. The INSERT runs before the start mapping and the
+        // initial data version; committing a failed result kept that instance without its data. Its
+        // key or id then answered every retry with the empty instance (CheckExistingInstanceAsync), a
+        // child stayed Busy (sub-items are created Busy), and its parent's retry went to the leftover
+        // child instead of restarting the start.
+        if (!result.IsSuccess)
+        {
+            await uow.RollbackAsync(cancellationToken);
             activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+            return result;
+        }
 
+        await uow.CommitAsync(cancellationToken);
+        activity?.SetTag(TelemetryConstants.TagNames.InstanceId, result.Value.Instance.Id.ToString());
         return result;
     }
 
@@ -450,9 +459,13 @@ public sealed class InstanceCommandAppService(
                 data.Workflow.StartTransition,
                 data.Workflow,
                 data.Instance,
-                runtimeInfoProvider,
                 input.Headers,
-                cancellationToken)
+                onScriptFailure: ex => logger.StartTransitionMappingFailed(
+                    data.Workflow.Key, data.Workflow.StartTransition.Key, data.Instance.Id, ex),
+                // The start hop's actor, as ToExecutionContext leaves it for the start pipeline (User): a declarative
+                // output block's `user` is the starting caller.
+                actor: Shared.ExecutionActor.User,
+                cancellationToken: cancellationToken)
             .TapAsync(async mappedData =>
             {
                 // history: none (vnext#1006) writes no initial row: the start transition maps the same
@@ -563,6 +576,7 @@ public sealed class InstanceCommandAppService(
         Definitions.Workflow workflow,
         Instance instance,
         ExtraPropertyDictionary extraProperties,
+        JsonElement? startInput,
         CancellationToken cancellationToken)
     {
         // The SubFlow override (if any) wins over the workflow's own timeout — resolved through the
@@ -609,7 +623,7 @@ public sealed class InstanceCommandAppService(
             };
 
             var resolvedSchedule = await ResolveTimeoutScheduleAsync(
-                effectiveTimeout, workflow, instance, cancellationToken);
+                effectiveTimeout, workflow, instance, startInput, cancellationToken);
 
             // One instant feeds the scheduler arming, the timeoutAt metadata and the persisted
             // ExecuteAt — separate clock reads would make the three disagree for Duration schedules.
@@ -670,6 +684,7 @@ public sealed class InstanceCommandAppService(
         WorkflowTimeout effectiveTimeout,
         Definitions.Workflow workflow,
         Instance instance,
+        JsonElement? startInput,
         CancellationToken cancellationToken)
     {
         if (effectiveTimeout.Mapping != null)
@@ -680,7 +695,9 @@ public sealed class InstanceCommandAppService(
                 .WithRuntime(runtimeInfoProvider)
                 .WithTransition(effectiveTimeout.Key)
                 .WithBody(instance.LatestData?.Data ?? new JsonData("{}"))
-                .BuildAsync(cancellationToken);
+                .BuildAsync(cancellationToken)
+                // Armed by the start hop: `input` is the start request's attributes.
+                .WithHopInputAsync(startInput);
 
             var mappingResult = await timerEvaluator.EvaluateAsync(
                 effectiveTimeout.Mapping, scriptContext, cancellationToken);
@@ -726,7 +743,7 @@ public sealed class InstanceCommandAppService(
         // The request opened the activation episode (seeded by the request middleware from the
         // server span); name it. An entry point that already classified itself — an event
         // delivery, a relayed subflow forward — keeps its trigger, only the key is refreshed.
-        using var episode = WorkflowTraceLane.UseEpisode(TelemetryConstants.ActivationTriggers.Manual, transitionKey);
+        using var episode = WorkflowTraceLane.UseEpisode(TelemetryConstants.ActivationTriggers.Manual, transitionKey); // skipcq: CS-W1100 — the episode scope ends on dispose
 
         // 1) Light Busy check FIRST — a single-row projection (no DataList, no includes) so a
         //    Busy rejection never pays the full aggregate load. The snapshot also carries the
@@ -788,8 +805,9 @@ public sealed class InstanceCommandAppService(
         }
 
         // Terminal check the aggregate load used to perform (GetActiveAsync). IsTerminal, not
-        // IsCompleted: Faulted and Passive are terminal for admission too.
-        if (snapshot.IsTerminal)
+        // IsCompleted: Faulted and Passive are terminal for admission too — except for the reserved
+        // cancel on a Faulted instance (vnext#1252).
+        if (IsRefusedAsTerminal(snapshot, workflowDefinition!, transitionKey))
         {
             return Result<TransitionOutput>.Fail(Error.Validation(
                 WorkflowErrorCodes.InstanceCompleted,
@@ -858,6 +876,16 @@ public sealed class InstanceCommandAppService(
 
 
     /// <summary>
+    /// Whether a terminal instance refuses the transition: Completed and Passive refuse every key, Faulted
+    /// all but the reserved cancel — the one way to close an instance a failed hop left Faulted when retrying
+    /// it is not wanted, or cannot succeed (vnext#1252).
+    /// </summary>
+    private static bool IsRefusedAsTerminal(
+        InstanceExecutionSnapshot snapshot, Definitions.Workflow workflow, string transitionKey)
+        => snapshot.IsTerminal
+           && !(snapshot.Status.Equals(InstanceStatus.Faulted) && workflow.IsCancelKey(transitionKey));
+
+    /// <summary>
     /// Builds execution context for transition using instance's Flow and FlowVersion (not from request).
     /// </summary>
     private static WorkflowExecutionContext BuildTransitionContext(
@@ -872,6 +900,16 @@ public sealed class InstanceCommandAppService(
         // (SuppressResponseEnrichment: the subflow forward, the cross-domain relay, the proxy) carry
         // the mode decided one level up as the sync flag and are not re-resolved here.
         var (callerMode, effectiveMode) = TransitionRequestMode.Resolve(workflow, transitionKey, input);
+
+        // A Faulted instance reaches here only for the reserved cancel (IsRefusedAsTerminal), and that cancel
+        // always runs inline (vnext#1252). Queued, it would wait as a job on an instance that is still Faulted,
+        // and the fault's own cleanup — outbox → Inbox, often a moment later — cancels every active job of a
+        // Faulted instance, the cancel's included: the caller got 202 and the instance stayed Faulted.
+        if (snapshot.Status.Equals(InstanceStatus.Faulted))
+        {
+            effectiveMode = ExecMode.Sync;
+            TransitionRequestMode.Tag(callerMode, effectiveMode, transitionExecutionType: null, flowExecutionType: null);
+        }
 
         return new WorkflowExecutionContext
         {

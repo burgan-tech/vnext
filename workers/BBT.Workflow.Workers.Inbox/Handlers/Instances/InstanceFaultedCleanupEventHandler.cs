@@ -61,7 +61,9 @@ internal sealed class InstanceFaultedCleanupEventHandler(
                 logger.InstanceFaultedCleanupEventReceived(eventData.InstanceId, eventData.Flow);
 
                 var route = $"api/v1/{eventData.Domain}/workflows/{eventData.Flow}/instances/{eventData.InstanceId}/cancel-cleanup";
-                await forwarder.ForwardAsync(HttpMethod.Post, route, new { },
+                // FaultedAt lets the endpoint leave alone an instance a retry or cancel has already taken out of
+                // this fault (vnext#1252).
+                await forwarder.ForwardAsync(HttpMethod.Post, route, new { eventData.FaultedAt },
                     eventData.Domain, eventData.Flow, eventData.Version, eventData.InstanceId, cancellationToken);
             }
         }

@@ -3,6 +3,7 @@ using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Tasks.Executors;
@@ -19,10 +20,15 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
     /// <summary>
     /// Initializes a new instance of ScriptTaskExecutor.
     /// </summary>
+    /// <param name="mappingRunner">
+    /// The binding mapping runner (DI); null runs mappings through <see cref="RoutingTaskMappingRunner.CreateDefault"/>
+    /// over <paramref name="scriptEngine"/>.
+    /// </param>
     public ScriptTaskExecutor(
         IScriptEngine scriptEngine,
-        ILogger<ScriptTaskExecutor> logger)
-        : base(logger)
+        ILogger<ScriptTaskExecutor> logger,
+        ITaskMappingRunner? mappingRunner = null)
+        : base(logger, mappingRunner ?? RoutingTaskMappingRunner.CreateDefault(scriptEngine))
     {
         _scriptEngine = scriptEngine;
     }
@@ -31,37 +37,24 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
     public override TaskType TaskType => TaskType.Script;
 
     /// <inheritdoc />
-    protected override async Task<Result<ScriptResponse?>> PrepareInputAsync(
+    protected override string InputMappingFailurePrefix => "Script input handler failed: ";
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// A script task's script output runs inside <see cref="InvokeAsync"/> (its <c>OutputHandler</c> IS the task), so
+    /// this phase passes the invocation's data through, as before. Only a declarative <c>output</c> block (a binding
+    /// without a script, so the invocation produced no data) is applied here, over that result.
+    /// </remarks>
+    protected override Task<Result<object?>> ProcessOutputAsync(
         ScriptTask task,
+        TaskInvocationResult invocationResult,
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        // Compile and run input handler
-        var mapping = context.OnExecuteTask.Mapping;
-        if (mapping is null || !mapping.HasMappingCode)
-        {
-            return Result<ScriptResponse?>.Ok(null);
-        }
-
-        var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
-        {
-            var scriptRunner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
-
-            return await scriptRunner.InputHandler(task, context.ScriptContext);
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Script input handler failed: {ScriptDiagnostics.Explain(ex)}"));
-
-        if (!result.IsSuccess)
-        {
-            Logger.TaskInputHandlerFailed(
-                task.Key,
-                TaskType.ToString(),
-                context.ScriptContext.Instance?.Id ?? Guid.Empty,
-                result.Error.Message ?? "Unknown error");
-        }
-
-        return result;
+        return MappingRunner is not null
+               && TaskMappingRouter.OutputKind(context.OnExecuteTask) == TaskMappingKind.Declarative
+            ? MappingRunner.ProcessOutputAsync(task, invocationResult, context, cancellationToken, MappingSite)
+            : Task.FromResult(Result<object?>.Ok(invocationResult.Data));
     }
 
     /// <inheritdoc />
@@ -88,9 +81,7 @@ public sealed class ScriptTaskExecutor : TaskExecutorBase<ScriptTask>
             return TaskInvocationResult.Success(
                 data: outputResponse.Data,
                 taskType: TaskType.ToString());
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Script output handler failed: {ScriptDiagnostics.Explain(ex)}"));
+        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "Script output handler failed"));
 
         if (!result.IsSuccess)
         {

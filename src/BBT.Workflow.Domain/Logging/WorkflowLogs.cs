@@ -397,6 +397,20 @@ public static partial class WorkflowLogs
         string? error);
 
     /// <summary>
+    /// Logs when the master-schema preview at transition intake (vnext#1255) could not evaluate a
+    /// request and accepted it, leaving the verdict to the write funnel.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10276,
+        Level = LogLevel.Warning,
+        Message = "Master-schema intake preview skipped for instance {InstanceId} (schema {SchemaKey}); the write funnel validates instead")]
+    public static partial void IntakeMasterSchemaPreviewSkipped(
+        this ILogger logger,
+        Exception exception,
+        Guid instanceId,
+        string? schemaKey);
+
+    /// <summary>
     /// Logs when the write funnel demoted a stale latest row (written by a concurrent
     /// transaction) under the FOR UPDATE lock before inserting the new head.
     /// </summary>
@@ -786,7 +800,8 @@ public static partial class WorkflowLogs
         this ILogger logger,
         Guid instanceId,
         string? errorCode,
-        string? errorMessage);
+        string? errorMessage,
+        Exception? cause);
 
     /// <summary>
     /// Logs when an instance has been successfully persisted as faulted.
@@ -843,6 +858,82 @@ public static partial class WorkflowLogs
         Guid instanceId);
 
     /// <summary>
+    /// Logs the exception of a task script that threw — an input/output mapping, a script task, a
+    /// cache key — with its stack trace, the same detail the incident keeps (vnext#1268).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10273,
+        Level = LogLevel.Error,
+        Message = "Task script failed. TaskKey={TaskKey}, TaskType={TaskType}, InstanceId={InstanceId}")]
+    public static partial void TaskScriptFailed(
+        this ILogger logger,
+        string taskKey,
+        string taskType,
+        Guid instanceId,
+        Exception exception);
+
+    /// <summary>
+    /// Logs the exception of a transition mapping that threw while an instance was being started:
+    /// the start answers with the error and records no incident, so the log is where its stack trace
+    /// goes (vnext#1268).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10269,
+        Level = LogLevel.Error,
+        Message = "Start transition mapping failed. Workflow={WorkflowKey}, TransitionKey={TransitionKey}, InstanceId={InstanceId}")]
+    public static partial void StartTransitionMappingFailed(
+        this ILogger logger,
+        string workflowKey,
+        string transitionKey,
+        Guid instanceId,
+        Exception exception);
+
+    /// <summary>
+    /// Logs the exception of a condition script that threw. An automatic-transition rule that fails
+    /// counts as not satisfied and records no incident, so the log is where its stack trace goes
+    /// (vnext#1268).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10270,
+        Level = LogLevel.Error,
+        Message = "Condition script failed. InstanceId={InstanceId}, TransitionKey={TransitionKey}")]
+    public static partial void ConditionScriptFailed(
+        this ILogger logger,
+        Guid instanceId,
+        string? transitionKey,
+        Exception exception);
+
+    /// <summary>
+    /// Logs that a hop failed inside <c>CreateTransitionRecordStep</c> — its mapping, its data write or the
+    /// master-schema check — before its transition record was saved, and that the record was saved
+    /// unfinished so retry can re-run the hop (vnext#1252).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10271,
+        Level = LogLevel.Information,
+        Message = "Transition {TransitionKey} failed before its record was saved; record {TransitionRecordId} kept open for retry. InstanceId={InstanceId}")]
+    public static partial void FailedTransitionRecorded(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        Guid transitionRecordId);
+
+    /// <summary>
+    /// Logs that the open record of a hop that failed inside <c>CreateTransitionRecordStep</c> could not be
+    /// saved. The hop still faults the instance; retry then finds no open record (<c>Instance:100028</c>) and
+    /// the reserved cancel is the way out (vnext#1252).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10272,
+        Level = LogLevel.Warning,
+        Message = "The record of failed transition {TransitionKey} could not be saved; retry will not find it. InstanceId={InstanceId}")]
+    public static partial void FailedTransitionRecordNotSaved(
+        this ILogger logger,
+        Guid instanceId,
+        string transitionKey,
+        Exception exception);
+
+    /// <summary>
     /// Logs when task input mapping/handler fails.
     /// </summary>
     [LoggerMessage(
@@ -869,6 +960,138 @@ public static partial class WorkflowLogs
         string taskType,
         Guid instanceId,
         string errorMessage);
+
+    /// <summary>
+    /// Logs when a declarative task mapping (the binding's <c>input</c> or <c>output</c> block) fails: a path that
+    /// cannot be written, an expression that throws, an unsupported input surface, or caller roles that could not be
+    /// resolved for <c>user</c>. The task fails through the same error-boundary path as a failed script mapping.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10281,
+        Level = LogLevel.Error,
+        Message = "Task declarative mapping failed. TaskKey={TaskKey}, TaskType={TaskType}, Phase={Phase}, InstanceId={InstanceId}, Error={ErrorMessage}")]
+    public static partial void TaskDeclarativeMappingFailed(
+        this ILogger logger,
+        string taskKey,
+        string taskType,
+        string phase,
+        Guid instanceId,
+        string errorMessage);
+
+    /// <summary>
+    /// Logs when a transition's declarative <c>output</c> block fails (an expression that throws, a path that cannot be
+    /// written, a block that does not build, caller roles that could not be resolved for <c>user</c>). The transition
+    /// fails with the same error a failing <c>transitions[].mapping</c> script returns; a block has no exception, so
+    /// this line is its counterpart of the script's stack trace (incident <c>FailureCause</c> /
+    /// <c>StartTransitionMappingFailed</c>).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10277,
+        Level = LogLevel.Error,
+        Message = "Transition declarative output mapping failed. Workflow={WorkflowKey}, TransitionKey={TransitionKey}, InstanceId={InstanceId}, Error={ErrorMessage}")]
+    public static partial void TransitionDeclarativeOutputFailed(
+        this ILogger logger,
+        string workflowKey,
+        string transitionKey,
+        Guid instanceId,
+        string errorMessage);
+
+    /// <summary>
+    /// Logs when a SubFlow state's declarative <c>input</c> block fails (an expression that throws, a path that cannot be
+    /// written, a block that does not build, <c>tags</c> that is not an array of strings, caller roles that could not be
+    /// resolved for <c>user</c>). The SubFlow start fails before any child is created, with the same error a failing
+    /// <c>subFlow.mapping</c> InputHandler returns; a block has no exception, so this line is its counterpart of the
+    /// script's stack trace.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10278,
+        Level = LogLevel.Error,
+        Message = "SubFlow declarative input mapping failed. Workflow={WorkflowKey}, StateKey={StateKey}, SubFlowKey={SubFlowKey}, InstanceId={InstanceId}, Error={ErrorMessage}")]
+    public static partial void SubFlowDeclarativeInputFailed(
+        this ILogger logger,
+        string workflowKey,
+        string stateKey,
+        string subFlowKey,
+        Guid instanceId,
+        string errorMessage);
+
+    /// <summary>
+    /// Logs when a SubFlow state's declarative <c>output</c> block fails (an expression that throws, a path that cannot
+    /// be written, a block that does not build, a select without <c>into</c> that is not an object, <c>user</c> roles
+    /// read with no child settler). The result is the error a failing <c>subFlow.mapping</c> OutputHandler returns
+    /// (<c>SubFlowOutputMappingFailed</c>): the completion path faults the parent, the fault path logs and settles. A
+    /// block has no exception, so this line is its counterpart of the script's stack trace. A caller-role provider
+    /// failure is not logged here: it is transient (redelivered on completion).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10279,
+        Level = LogLevel.Error,
+        Message = "SubFlow declarative output mapping failed. Workflow={WorkflowKey}, StateKey={StateKey}, SubFlowKey={SubFlowKey}, InstanceId={InstanceId}, Error={ErrorMessage}")]
+    public static partial void SubFlowDeclarativeOutputFailed(
+        this ILogger logger,
+        string workflowKey,
+        string stateKey,
+        string subFlowKey,
+        Guid instanceId,
+        string errorMessage);
+
+    /// <summary>
+    /// Logs when a declarative task mapping skips an entry because its source is missing (RF-1): a <c>select</c> path
+    /// that reads nothing, or a <c>set</c> expression that reads through a missing intermediate. Carries the path or
+    /// <c>set</c> key, never the value. The mapping continues; nothing is written for that entry.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10282,
+        Level = LogLevel.Debug,
+        Message = "Task declarative mapping entry skipped: missing source. TaskKey={TaskKey}, Phase={Phase}, Path={Path}, Reason={Reason}")]
+    public static partial void TaskDeclarativeMappingEntrySkipped(
+        this ILogger logger,
+        string taskKey,
+        string phase,
+        string path,
+        string reason);
+
+    /// <summary>
+    /// Logs when a resource-lock key labelled <c>dynamicExpresso</c> did not evaluate as an expression but ran as a
+    /// C# script — the meaning such a key had before the label was honoured. Kept for compatibility; relabel the
+    /// script with a file location, or rewrite it as an expression.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10283,
+        Level = LogLevel.Warning,
+        Message = "Resource lock key labelled dynamicExpresso ran as a C# script. TransitionKey={TransitionKey}, ExpressionError={ExpressionError}")]
+    public static partial void ResourceLockKeyExpressionRanAsScript(
+        this ILogger logger,
+        string transitionKey,
+        string expressionError);
+
+    /// <summary>
+    /// Logs when a value slot (transition timer, workflow timeout, SubFlow timeout override, agent prompt, agent
+    /// decision) labelled <c>dynamicExpresso</c> did not evaluate as an expression but ran as a C# script — the meaning
+    /// such a script had before the label was honoured. Kept for compatibility; relabel the script with a file
+    /// location, or rewrite it as an expression.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10274,
+        Level = LogLevel.Warning,
+        Message = "Script labelled dynamicExpresso ran as a C# script. Slot={Slot}, ExpressionError={ExpressionError}")]
+    public static partial void ScriptLabelledDynamicExpressoRanAsScript(
+        this ILogger logger,
+        string slot,
+        string expressionError);
+
+    /// <summary>
+    /// Logs when a Dynamic Expresso key expression (CacheAside <c>key</c>, function cache <c>keyExpression</c> /
+    /// <c>generationKeyExpression</c>, resource-lock <c>keyExpression</c>) fails to compile or evaluate, or cannot read the
+    /// caller's roles. The key's site decides what the failure means.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 10275,
+        Level = LogLevel.Warning,
+        Message = "Dynamic Expresso value evaluation failed: {Reason}")]
+    public static partial void DynamicExpressoValueEvaluationFailed(
+        this ILogger logger,
+        string reason);
 
     /// <summary>
     /// Logs when task envelope creation fails.
@@ -3845,6 +4068,43 @@ public static partial class WorkflowLogs
         string? errorCode,
         string? reason);
 
+    /// <summary>
+    /// Logs a Dapr-triggered endpoint delivery that did not come from this domain's own sidecar.
+    /// Under LogOnly the request is still served, so the entry reads "would reject".
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40996,
+        Level = LogLevel.Warning,
+        Message = "Dapr local delivery check failed (mode {Mode}; Enforce rejects, LogOnly would reject and still serves). Verdict: {Verdict}, Path: {Path}, RemoteAddress: {RemoteAddress}, CallerAppId: {CallerAppId}")]
+    public static partial void DaprLocalDeliveryRejected(
+        this ILogger logger,
+        string mode,
+        string verdict,
+        string? path,
+        string? remoteAddress,
+        string? callerAppId);
+
+    /// <summary>
+    /// Logs, per guarded request, that a configuration reload put the Dapr local-delivery guard into
+    /// Enforce mode without an app API token file, so the request is rejected. At startup the same
+    /// combination fails validation instead.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40997,
+        Level = LogLevel.Error,
+        Message = "Dapr local delivery guard is in Enforce mode but no app API token is configured (Workflow:RuntimeCaller:AppApiTokenFile); every Dapr-triggered delivery will be rejected")]
+    public static partial void DaprLocalDeliveryEnforcedWithoutToken(this ILogger logger);
+
+    /// <summary>
+    /// Logs once at startup that the Dapr local-delivery guard runs in LogOnly mode without an app API
+    /// token, so per-request checks are not reported until a token is configured.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 40998,
+        Level = LogLevel.Information,
+        Message = "Dapr local delivery guard runs in LogOnly mode without a configured app API token (Workflow:RuntimeCaller:AppApiTokenFile); per-request checks are not reported until a token is set")]
+    public static partial void DaprLocalDeliveryLogOnlyWithoutToken(this ILogger logger);
+
     #endregion
 
     #region Authorization (authorize / permissions)
@@ -3929,14 +4189,15 @@ public static partial class WorkflowLogs
     public static partial void RuntimeCallerIdentityNotConfigured(this ILogger logger);
 
     /// <summary>
-    /// Logs at every start of a host that runs flow scripts and holds a runtime-caller key ring with
-    /// the script sandbox off, under the explicit <c>AllowWithoutScriptSandbox</c> bypass: any flow
-    /// script on this host can read the key and mint runtime calls for every domain sharing it.
+    /// Logs at every start of a host that runs flow scripts and holds a runtime-caller key ring or a
+    /// Dapr app API token file with the script sandbox off, under the explicit
+    /// <c>AllowWithoutScriptSandbox</c> bypass: any flow script on this host can read the file (the key
+    /// ring mints runtime calls for every domain sharing it).
     /// </summary>
     [LoggerMessage(
         EventId = 50049,
         Level = LogLevel.Critical,
-        Message = "Runtime-caller key ring loaded with the script sandbox disabled (AllowWithoutScriptSandbox); flow scripts on this host can read the key")]
+        Message = "A runtime-caller key ring or Dapr app API token file is loaded on a host that runs flow scripts with the script sandbox disabled (Workflow:RuntimeCaller:AllowWithoutScriptSandbox=true); an unsandboxed script can read these files")]
     public static partial void RuntimeCallerKeyRingWithoutScriptSandbox(this ILogger logger);
 
     /// <summary>
@@ -4452,6 +4713,34 @@ public static partial class WorkflowLogs
         string instance,
         Guid subFlowInstanceId,
         string? error);
+
+    /// <summary>
+    /// Logs that the reserved cancel took over a Faulted instance: unfaulted it into Busy, resolved its open
+    /// incidents and closed the failed hop's open records, in one transaction (vnext#1252).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20522,
+        Level = LogLevel.Information,
+        Message = "Faulted instance {InstanceId} taken over by cancel; {ResolvedIncidents} incident(s) resolved, {ClosedTransitions} open transition record(s) closed")]
+    public static partial void FaultedInstanceTakenOverForCancel(
+        this ILogger logger,
+        Guid instanceId,
+        int resolvedIncidents,
+        int closedTransitions);
+
+    /// <summary>
+    /// Logs that a fault's cleanup arrived after the instance had left that fault — a retry or the reserved
+    /// cancel took it over, or it faulted again — so its jobs and resource locks were left alone (vnext#1252).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 20523,
+        Level = LogLevel.Information,
+        Message = "Cleanup of the fault at {FaultedAt:O} skipped for instance {InstanceId}: it is no longer in that fault (status {Status})")]
+    public static partial void StaleFaultCleanupSkipped(
+        this ILogger logger,
+        Guid instanceId,
+        DateTime faultedAt,
+        string status);
 
     #endregion
 
