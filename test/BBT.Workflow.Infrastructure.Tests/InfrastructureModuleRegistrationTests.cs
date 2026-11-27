@@ -5,6 +5,7 @@ using BBT.Aether.DistributedCache;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions.Schemas;
 using BBT.Workflow.Files;
+using BBT.Workflow.Instances;
 using BBT.Workflow.Schemas;
 using BBT.Workflow.Scripting.Functions;
 using Microsoft.Extensions.Configuration;
@@ -103,6 +104,19 @@ public sealed class InfrastructureModuleRegistrationTests
 
         runtime.Single(descriptor => descriptor.ServiceType == typeof(IScriptFileWriter))
             .ImplementationType.ShouldBe(typeof(ScriptFileWriter));
+    }
+
+    /// <summary>
+    /// <c>PostCommitParentMutationService</c> takes the correlation repository as an OPTIONAL
+    /// parameter, so a missing registration would not fail anything: the start compensation would
+    /// silently stop stepping aside for a child that already settled its own fault (vnext#1256).
+    /// </summary>
+    [Fact]
+    public void Core_module_registers_the_correlation_repository_the_start_compensation_guard_reads()
+    {
+        BuildCoreModule()
+            .Single(descriptor => descriptor.ServiceType == typeof(IInstanceCorrelationRepository))
+            .ImplementationType.ShouldBe(typeof(EfCoreInstanceCorrelationRepository));
     }
 
     private static bool RequiresApplicationOnlyService(Type? type)

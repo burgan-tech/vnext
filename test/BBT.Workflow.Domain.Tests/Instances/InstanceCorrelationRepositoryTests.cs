@@ -208,6 +208,45 @@ public abstract class InstanceCorrelationRepositoryTests<TEntry> : DomainTestBas
     }
 
     /// <summary>
+    /// The untracked by-id read finds a correlation whether it is open or closed, and carries the
+    /// terminal outcome and the settled marker the start-compensation guard decides on (vnext#1256).
+    /// </summary>
+    [Fact]
+    public async Task FindByIdAsReadOnlyAsync_ShouldReturnAClosedCorrelationWithItsOutcomeAndSettledMarker()
+    {
+        // Arrange
+        var parentInstance = await CreateTestInstanceAsync("parent");
+        var subInstance = await CreateTestInstanceAsync("sub");
+
+        var correlation = InstanceCorrelation.Create(
+            Guid.NewGuid(),
+            parentInstance.Id,
+            "TestState",
+            subInstance.Id,
+            SubFlowType.SubFlow.Code,
+            "test",
+            "test-workflow",
+            "1.0"
+        );
+        correlation.ApplyTerminalOutcome(SubItemTerminalOutcome.Faulted, DateTime.UtcNow);
+        correlation.MarkSettled(DateTime.UtcNow);
+
+        await Repository.InsertAsync(correlation, true);
+
+        // Act
+        var result = await Repository.FindByIdAsReadOnlyAsync(correlation.Id);
+        var missing = await Repository.FindByIdAsReadOnlyAsync(Guid.NewGuid());
+
+        // Assert
+        result.ShouldNotBeNull();
+        result.ParentInstanceId.ShouldBe(parentInstance.Id);
+        result.IsCompleted.ShouldBeTrue();
+        result.TerminalOutcome.ShouldBe(SubItemTerminalOutcome.Faulted);
+        result.SettledAt.ShouldNotBeNull();
+        missing.ShouldBeNull();
+    }
+
+    /// <summary>
     /// Tests that FindBySubInstanceIdAsync returns the correlation for a SubFlow instance.
     /// </summary>
     [Fact]

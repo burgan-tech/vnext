@@ -29,7 +29,7 @@ outbox; it no longer knows about hooks, `EventHookMode`, or per-event dispatch.
 
 | Event | Mode |
 |---|---|
-| `InstanceSubCompletedEvent`, `InstanceSubFaultedEvent`, `InstanceSubCanceledEvent` | Outbox + PostCommitRelay (the three share terminal-settlement semantics; each has its own relay class over a common base). The fault relay serves a parent in **another domain** only; a parent hosted here keeps the Inbox delivery — see [below](#a-fault-is-relayed-to-a-parent-in-another-domain-by-the-code-that-commits-it) |
+| `InstanceSubCompletedEvent`, `InstanceSubFaultedEvent`, `InstanceSubCanceledEvent` | Outbox + PostCommitRelay (the three share terminal-settlement semantics; each has its own relay class over a common base). The fault relay serves a parent in **another domain** only; a parent hosted here keeps the Inbox delivery — see [below](#a-fault-is-relayed-to-a-parent-in-another-domain-by-the-code-that-commits-it). The Inbox backup exists only for a parent this runtime hosts: **across domains none of the three has a durable backup** ([Failure semantics](#relay-semantics)) |
 | `InstanceSubStateChangedEvent` | Outbox + PostCommitRelay (receiver guard = the per-sub-item lock plus the monotonic `SubFlowStateChangedAt` stamp in `SubflowStateService`) |
 | `InstanceCanceledEvent`, `InstanceCompletedCleanupEvent`, `InstanceFaultedCleanupEvent`, `ChildSubflow*`, `TransitionContinuationRequested` | Pure Outbox |
 
@@ -42,6 +42,15 @@ terminal relays read their route and span tags from — implementing it opts not
 Registration alone is not sufficient grounds. Per the standing Chair precedent, each relayed event
 also needs a durable backup, an idempotent order-safe receiver guard, measured latency evidence and
 a council row; the default for a new event stays Outbox-only.
+
+**Open deviation from that precedent: the cross-domain leg.** A terminal event relayed to a parent in
+another domain has no durable backup, because the child domain's Inbox drops an event whose parent it
+does not host. For the completion relay this is the recorded gap C3 of
+[Sub-Endpoint Gate § Failure modes](sub-endpoint-gate.md#failure-modes) (council condition C-5: a
+durable cross-domain retry is a separate issue). The fault relay added for vnext#1256 serves *only* that
+leg, so it has no backup at all; its council (`2026-11-23-sub-fault-relay-1256`) left this to the Chair
+as an explicit acceptance (condition M-3) until the durable cross-domain backup exists (vnext#1357). Until that
+acceptance is recorded, the fault relay does not meet the precedent — it is not a model for a new relay.
 
 ## Relay semantics
 
@@ -142,27 +151,36 @@ Rules every one of them follows:
 The receiver is unchanged: `SubflowFaultService` takes the per-sub-item lock and
 `ISubItemTerminalGuard` absorbs a second delivery.
 
-**A child's fault wins over its parent's start compensation — for a parent in another domain.** A
-child that faults in its own start chain with a client-facing code relays its fault (the parent's error
-boundary runs) and then answers the parent's start call with a failure. The parent's start compensation
-then reaches `PostCommitParentMutationService.FaultAsync`, whose only guard used to be `IsCompleted`: a
-parent its boundary had routed to a non-terminal state was faulted there with a second incident. The fault
-request now names the correlation of the failed **SubFlow** start
+**A child's fault wins over its parent's start compensation — once that fault's settlement has
+finished.** A child that faults in its own start chain with a client-facing code relays its fault to a
+parent this runtime does not host (the parent's error boundary runs) and then answers the parent's start
+call with a failure. The parent's start compensation then reaches
+`PostCommitParentMutationService.FaultAsync`, whose only guard used to be `IsCompleted`: a parent its
+boundary had routed to a non-terminal state was faulted there with a second incident. The fault request
+now names the correlation of the failed **SubFlow** start
 (`PostCommitFaultRequest.StartedSubflowCorrelationId`, set by `TransitionRunner` for a single
 HandoffToChild `StartSubflowJob` and by a failed retry restart). The compensation steps aside (log 10268)
 only when that correlation is read by id and found **closed, of type `S`, with outcome `Faulted`, on this
-parent** — the child's own settlement has then decided where the parent rests. Every other case faults the
-parent exactly as before: a correlation still open (the child never came to exist or has not reported), a
-missing one (`SubFlowCorrelationNotFound`), one closed by a completion or a cancel, a SubProcess start (its
-inline continuation can fail after a successful start). The settlement reload stays open-correlations-only;
-the closed row is a separate read by id.
+parent, and marked settled (`SettledAt`)**. The marker is what proves the boundary ran:
+`SubflowFaultService` commits the correlation closed *before* the parent's boundary transition runs and
+writes `SettledAt` only after that transition succeeded (a failed one reverts the correlation) — the same
+proof `ISubItemTerminalGuard` asks for. Every other case faults the parent exactly as before: a
+correlation still open (the child never came to exist or has not reported), a missing one
+(`SubFlowCorrelationNotFound`), one closed by a completion or a cancel, a SubProcess start (its inline
+continuation can fail after a successful start), and one closed but not yet marked settled. That last case
+is a settlement still running, or one whose best-effort marker write was lost: the compensation then
+faults a parent its boundary had already routed — visible and retryable, and what master did every time.
+The settlement reload stays open-correlations-only; the closed row is a separate, untracked read by id
+(`IInstanceCorrelationRepository.FindByIdAsReadOnlyAsync`), so it is never attached to the tracked parent.
 
-**Within one domain the compensation still wins, as on master.** The child's fault is not relayed to a
-parent hosted here; it arrives through the Inbox after the start compensation has already faulted the
-parent, and stops at `parent_already_terminal`. So this ownership rule depends on topology too: the same
-pair of flows behaves differently deployed apart and co-hosted. The guard is not atomic with an Inbox
-delivery (the compensation holds the parent's status lock, the settlement the per-sub-item lock); that race
-exists on master and the guard narrows it.
+**When one runtime hosts both parent and child, the compensation normally wins, as on master.** The
+child's fault is not relayed to a parent hosted here (the same domain, or one co-hosted through
+`APP_DOMAINS`); it goes through the Inbox and usually arrives after the start compensation has already
+faulted the parent, where it stops at `parent_already_terminal`. That order is a race, not a guarantee:
+the compensation holds the parent's status lock and the settlement the per-sub-item lock, so an Inbox
+delivery that finishes first makes the compensation step aside by the same rule. This ownership rule
+therefore depends on topology and on timing: the same pair of flows can behave differently deployed apart
+and co-hosted. The race exists on master; the guard narrows it.
 
 **Failure has no backup across domains.** A cross-domain relay is attempted once. If it fails or times
 out, the parent stays Busy: log 40125/40126/40133 (with the sub and parent ids and the route) and,
@@ -177,7 +195,7 @@ Recovery is manual: re-post the fault from the child domain's outbox row to the 
 object is the request body with two differences, the same mapping the Inbox handler applies: the
 three fields `terminationOrigin`, `initiatorInstanceId` and `cascadeId` move into one
 `termination: { origin, initiatorInstanceId, cascadeId }` object, and `sync` is set to `false`. A
-durable cross-domain backup is a follow-up. Note also that the child's own sync request waits for the
+durable cross-domain backup is a follow-up (vnext#1357). Note also that the child's own sync request waits for the
 relay: a parent domain that does not answer holds it until the gateway's invocation timeout (60 s
 measured in the lab).
 

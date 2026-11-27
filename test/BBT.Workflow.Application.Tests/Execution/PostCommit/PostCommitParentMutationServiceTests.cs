@@ -442,7 +442,45 @@ public sealed class PostCommitParentMutationServiceTests
         await fixture.Repository.DidNotReceiveWithAnyArgs().UpdateAsync(default!, default, default);
     }
 
-    // Every case but "closed by the child's own fault" faults the parent, as on master (fail-safe).
+    // Every case but "closed by the child's own fault, and settled" faults the parent, as on master
+    // (fail-safe).
+
+    [Fact]
+    public async Task FaultAsync_WhenTheChildsFaultClosedTheCorrelationButHasNotSettledYet_FaultsTheParent()
+    {
+        // SubflowFaultService commits the correlation closed + Faulted BEFORE the parent's boundary
+        // transition runs; SettledAt is written only after that transition succeeded. Stepping aside
+        // in between would leave the parent Busy with no owner if the boundary then fails.
+        var authoritative = CreateBusyInstance();
+        var correlation = ClosedCorrelation(
+            authoritative.Id, SubFlowType.SubFlow, SubItemTerminalOutcome.Faulted, settled: false);
+        correlation.SettledAt.ShouldBeNull();
+        var fixture = CreateFixture(authoritative, correlationRepository: CorrelationsReturning(correlation));
+
+        var result = await FaultForStartedCorrelationAsync(fixture, authoritative, correlation.Id);
+
+        result.IsSuccess.ShouldBeTrue();
+        authoritative.Status.ShouldBe(InstanceStatus.Faulted);
+        authoritative.GetLoadedIncidents().Single().ErrorCode.ShouldBe(WorkflowErrorCodes.ResourceLockConflict);
+    }
+
+    [Fact]
+    public async Task FaultAsync_ReadsTheStartedCorrelationByItsOwnId_WithoutTracking()
+    {
+        // The stub answers only for the named correlation id: a guard that asked for any other id
+        // (the sub instance id, the parent id) would read null and fault the parent.
+        var authoritative = Instance.Create(Guid.NewGuid(), WorkflowKey, WorkflowVersion, "instance-key");
+        var correlation = ClosedCorrelation(authoritative.Id, SubFlowType.SubFlow, SubItemTerminalOutcome.Faulted);
+        var repository = CorrelationsReturning(correlation);
+        var fixture = CreateFixture(authoritative, correlationRepository: repository);
+
+        await FaultForStartedCorrelationAsync(fixture, authoritative, correlation.Id);
+
+        await repository.Received(1).FindByIdAsReadOnlyAsync(correlation.Id, Arg.Any<CancellationToken>());
+        // The tracked finder would attach the closed row to the tracked parent's open-only list.
+        await repository.DidNotReceive().FindAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        authoritative.ChildCorrelations.ShouldBeEmpty();
+    }
 
     [Fact]
     public async Task FaultAsync_WhenTheStartedCorrelationDoesNotExist_FaultsTheParent()
@@ -514,21 +552,38 @@ public sealed class PostCommitParentMutationServiceTests
                 StartedSubflowCorrelationId: correlationId),
             CancellationToken.None);
 
-    /// <summary>A correlation of <paramref name="parentId"/> closed with <paramref name="outcome"/>.</summary>
-    private static InstanceCorrelation ClosedCorrelation(Guid parentId, SubFlowType type, SubItemTerminalOutcome outcome)
+    /// <summary>
+    /// A correlation of <paramref name="parentId"/> closed with <paramref name="outcome"/>, and —
+    /// unless <paramref name="settled"/> is false — carrying the marker its settlement writes last.
+    /// </summary>
+    private static InstanceCorrelation ClosedCorrelation(
+        Guid parentId, SubFlowType type, SubItemTerminalOutcome outcome, bool settled = true)
     {
         var owner = Instance.Create(parentId, WorkflowKey, WorkflowVersion, "owner");
         var subInstanceId = Guid.NewGuid();
         owner.AddCorrelation(InstanceCorrelation.Create(
             Guid.NewGuid(), parentId, "state", subInstanceId, type.Code, "partner", "child-flow", "1.0.0"));
-        return owner.CompleteCorrelation(subInstanceId, outcome)!;
+        var correlation = owner.CompleteCorrelation(subInstanceId, outcome)!;
+        if (settled)
+            correlation.MarkSettled(DateTime.UtcNow);
+        return correlation;
     }
 
+    /// <summary>
+    /// A repository whose untracked by-id read answers <paramref name="correlation"/> for THAT
+    /// correlation's id and null for every other id (and for every id when it is null).
+    /// </summary>
     private static IInstanceCorrelationRepository CorrelationsReturning(InstanceCorrelation? correlation)
     {
         var repository = Substitute.For<IInstanceCorrelationRepository>();
-        repository.FindAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(correlation));
+        repository.FindByIdAsReadOnlyAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<InstanceCorrelation?>(null));
+        if (correlation is not null)
+        {
+            repository.FindByIdAsReadOnlyAsync(correlation.Id, Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult<InstanceCorrelation?>(correlation));
+        }
+
         return repository;
     }
 
@@ -542,7 +597,8 @@ public sealed class PostCommitParentMutationServiceTests
         authoritative.AddCorrelation(InstanceCorrelation.Create(
             correlationId, authoritative.Id, "state", Guid.NewGuid(), SubFlowType.SubFlow.Code,
             "partner", "child-flow", "1.0.0"));
-        var fixture = CreateFixture(authoritative);
+        var repository = CorrelationsReturning(null);
+        var fixture = CreateFixture(authoritative, correlationRepository: repository);
 
         var result = await fixture.Service.FaultAsync(
             CreateSnapshot(authoritative.Id),
@@ -554,6 +610,8 @@ public sealed class PostCommitParentMutationServiceTests
         result.IsSuccess.ShouldBeTrue();
         authoritative.Status.ShouldBe(InstanceStatus.Faulted);
         authoritative.GetLoadedIncidents().Single().ErrorCode.ShouldBe(WorkflowErrorCodes.ResourceLockConflict);
+        // The reload already shows the correlation open: the answer is known without a read.
+        await repository.DidNotReceiveWithAnyArgs().FindByIdAsReadOnlyAsync(default, default);
     }
 
     [Fact]

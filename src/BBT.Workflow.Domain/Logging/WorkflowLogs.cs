@@ -3210,7 +3210,7 @@ public static partial class WorkflowLogs
     [LoggerMessage(
         EventId = 10268,
         Level = LogLevel.Information,
-        Message = "Start compensation for instance {InstanceId} skipped: SubFlow correlation {CorrelationId} is already closed with outcome Faulted, so the parent's error boundary has decided where it rests ({ErrorCode})")]
+        Message = "Start compensation for instance {InstanceId} skipped: SubFlow correlation {CorrelationId} is already closed with outcome Faulted and marked settled, so the child's fault settlement has decided where the parent rests ({ErrorCode})")]
     public static partial void PostCommitStartFaultSupersededByChildSettlement(
         this ILogger logger,
         Guid instanceId,

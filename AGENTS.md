@@ -170,11 +170,13 @@ the transactional outbox and requires:
 An event gains a second, immediate delivery path by REGISTERING a relay —
 `AddScoped<IPostCommitEventRelay<TEvent>, …>()` in `AddPipelineServices`, no marker interface, no
 central switch. Post-commit, `PostCommitRelayDispatcher` relays it as a command via
-`IInstanceCommandGateway`, and its Inbox handler becomes a durable backup. Four events are
-registered today: the three subflow terminal events (backup deduplicated by `ISubItemTerminalGuard`)
-and `InstanceSubStateChangedEvent` (guarded by the per-sub-item lock plus the monotonic
+`IInstanceCommandGateway`, and its Inbox handler becomes a durable backup — for a receiver this
+runtime hosts. Four events are registered today: the three subflow terminal events (backup deduplicated
+by `ISubItemTerminalGuard`; the fault relay serves only a parent this runtime does NOT host) and
+`InstanceSubStateChangedEvent` (guarded by the per-sub-item lock plus the monotonic
 `SubFlowStateChangedAt` stamp). Registration alone is not licence: each relayed event needs a durable
-backup, an idempotent order-safe receiver guard, measured latency evidence and a council row. See
+backup, an idempotent order-safe receiver guard, measured latency evidence and a council row. A relay
+to another domain has NO backup (the sender's Inbox drops the event) — an open gap, not a precedent. See
 `docs/runtime/event-publish-modes.md`.
 
 ---

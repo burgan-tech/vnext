@@ -82,9 +82,12 @@ public sealed class PostCommitParentMutationService(
 
             // The failed start created a child that then faulted and reported it here: its
             // settlement closed the correlation and ran this parent's error boundary, which may have
-            // routed the parent to a recovery state that is not terminal. The boundary wins over the
-            // start compensation (vnext#1256). This only happens across domains: a child in this
-            // domain reports its fault through the Inbox, after the compensation has run.
+            // routed the parent to a recovery state that is not terminal. A settlement that has
+            // FINISHED wins over the start compensation (vnext#1256). The usual case is a child
+            // hosted by another runtime: its fault is relayed while this parent's start call is
+            // still in flight. A child hosted by this runtime reports through the Inbox, normally
+            // after the compensation has run; when that delivery wins the race instead, it is
+            // treated the same way.
             if (request.StartedSubflowCorrelationId is { } startedCorrelationId &&
                 await IsSettledByTheChildsFaultAsync(instance, startedCorrelationId, ct))
             {
@@ -133,12 +136,27 @@ public sealed class PostCommitParentMutationService(
     }
 
     /// <summary>
-    /// Whether the started SubFlow's correlation was closed by that child's own FAULT. Only then does
-    /// the start compensation step aside; every other case faults the parent as before (fail-safe):
-    /// a correlation that is still open (the child never came to exist or never reported), one that
-    /// does not exist, one that belongs to another parent, a SubProcess correlation, and one closed by
-    /// a completion or a cancel. The settlement reload carries open correlations only, so a closed one
-    /// is read by id here rather than by widening that include.
+    /// Whether the started SubFlow's correlation was closed by that child's own FAULT and that
+    /// settlement has FINISHED. Only then does the start compensation step aside; every other case
+    /// faults the parent as before (fail-safe): a correlation that is still open (the child never
+    /// came to exist or never reported), one that does not exist, one that belongs to another parent,
+    /// a SubProcess correlation, one closed by a completion or a cancel, and one that is closed but
+    /// not yet marked settled.
+    /// <para>
+    /// The settled marker is what proves the boundary ran: <c>SubflowFaultService</c> commits the
+    /// correlation closed with outcome Faulted BEFORE the parent's boundary transition runs, and
+    /// writes <see cref="InstanceCorrelation.SettledAt"/> only after it succeeded (a failed one
+    /// reverts the correlation). Stepping aside on "closed" alone would leave the parent Busy with
+    /// no owner when that boundary then fails and its revert does not land. This is the same proof
+    /// <c>SubItemTerminalGuard</c> asks for. The cost: when the best-effort marker write is lost, the
+    /// compensation faults a parent its boundary had already routed — visible and retryable, and
+    /// what master did in every case.
+    /// </para>
+    /// <para>
+    /// The settlement reload carries open correlations only, so a closed one is read by id here
+    /// rather than by widening that include, and without tracking so that it is not attached to the
+    /// tracked parent's open-only correlation list.
+    /// </para>
     /// </summary>
     private async Task<bool> IsSettledByTheChildsFaultAsync(
         Instance instance,
@@ -149,8 +167,13 @@ public sealed class PostCommitParentMutationService(
             instance.ChildCorrelations.Any(c => c.Id == correlationId && !c.IsCompleted))
             return false;
 
-        var correlation = await correlationRepository.FindAsync(correlationId, false, cancellationToken);
-        return correlation is { IsCompleted: true, TerminalOutcome: SubItemTerminalOutcome.Faulted } &&
+        var correlation = await correlationRepository.FindByIdAsReadOnlyAsync(correlationId, cancellationToken);
+        return correlation is
+               {
+                   IsCompleted: true,
+                   TerminalOutcome: SubItemTerminalOutcome.Faulted,
+                   SettledAt: not null
+               } &&
                correlation.ParentInstanceId == instance.Id &&
                correlation.SubFlowType.Equals(SubFlowType.SubFlow);
     }

@@ -124,6 +124,18 @@ public interface IInstanceCorrelationRepository : IRepository<InstanceCorrelatio
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Reads one correlation by its own id without tracking it (AsNoTracking), open or closed.
+    /// For a decision taken beside a TRACKED parent: a tracked read would let the context attach a
+    /// closed correlation to that parent's <c>ChildCorrelations</c>, which carries open ones only.
+    /// </summary>
+    /// <param name="correlationId">The correlation's own identifier (not the sub instance id).</param>
+    /// <param name="cancellationToken">Token to monitor for cancellation requests.</param>
+    /// <returns>The untracked correlation, or null when there is none with that id.</returns>
+    Task<InstanceCorrelation?> FindByIdAsReadOnlyAsync(
+        Guid correlationId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Durably pins the correlation to the child's resolved flow version. A single-column write, so a
     /// child that already completed (and settled the correlation in its own scope while the start call
     /// was still running) is never overwritten by a stale tracked copy.
