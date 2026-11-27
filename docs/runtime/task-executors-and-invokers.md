@@ -81,11 +81,21 @@ http.AddMultipartField("source", "factoring");   // optional text fields, in ord
 - The bytes are **not** written to the task journal: it records the task reference and the input
   handler's response, not the binding. A script that also returns the bytes in its `ScriptResponse`
   stores them there (known issue `file-in-task-record`).
-- Size: the parts are held in memory for the call and bounded by the receiving service. On the Remote
-  path the envelope also passes the Dapr sidecar's `--max-body-size`.
+- Size: nothing in the runtime caps what a script attaches (`FileStorage:Upload:MaxBytes` bounds an
+  upload, not a part). A call holds the bytes in memory, and every path that serializes the binding (the
+  Remote envelope, the JSON local invokers) holds them again as base64 (×1.33). In practice the file came
+  in through a request body, so Kestrel's 10 MiB request cap (≈ 7.5 MiB of file as base64) is the
+  ceiling a client-supplied file meets first; on the Remote path the envelope also passes the Dapr
+  sidecar's `--max-body-size`.
+- **Rollout order.** HTTP tasks run Local (in Orchestration) by default and need nothing more. An
+  environment that routes `http` Remote must upgrade **Execution before or together with Orchestration**:
+  an older Execution host deserializes `HttpTaskBinding` without the unknown `Multipart` member and sends
+  the request with **no body**, because the mapper no longer carries one beside the parts.
 
 Pinned by `HttpTaskInvokerMultipartTests` (every byte value reaches the wire, part order, precedence,
-mapper, JSON round trip) and `HttpTaskMultipartTests` (clone, pooling, reset, validation).
+mapper, JSON round trip), `HttpTaskMultipartTests` (clone, pooling, reset, validation) and
+`SandboxHttpMultipartTests` (the base64 → `AddMultipartFile` call compiles and runs under the shipped
+sandbox baseline; `HttpClient` stays banned).
 
 ## Failure Modes
 

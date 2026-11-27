@@ -52,6 +52,7 @@ public class HttpTaskMultipartTests
         Should.Throw<ArgumentException>(() => task.AddMultipartField(" ", "x"));
         Should.Throw<ArgumentException>(() => task.AddMultipartFile("", new byte[] { 1 }));
         Should.Throw<ArgumentNullException>(() => task.AddMultipartFile("file", null!));
+        Should.Throw<ArgumentException>(() => task.AddMultipartFile("file", new byte[] { 1 }, "a.pdf", "not a type"));
         task.Multipart.ShouldBeNull();
     }
 

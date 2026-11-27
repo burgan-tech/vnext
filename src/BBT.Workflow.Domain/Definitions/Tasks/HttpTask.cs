@@ -141,6 +141,10 @@ public class HttpTask : WorkflowTask
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(content);
+        // Refused here, in the script that wrote it, rather than as an anonymous send failure later.
+        if (!string.IsNullOrWhiteSpace(contentType) &&
+            !System.Net.Http.Headers.MediaTypeHeaderValue.TryParse(contentType, out _))
+            throw new ArgumentException($"'{contentType}' is not a media type.", nameof(contentType));
         AppendMultipart(new HttpMultipartPart
         {
             Name = name,
