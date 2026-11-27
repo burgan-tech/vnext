@@ -17,7 +17,7 @@ flowchart TD
     T --> H1([Human adds ai:ready])
     H1 --> D["Director<br/>level, impact, plan"]
     D -- "major" --> B([ai:blocked<br/>AI never does it])
-    D -- "minor, high impact" --> C["Council<br/>ai:council-required"]
+    D -- "council criterion" --> C["Council<br/>ai:council-required"]
     C -- "APPROVED" --> V
     C -- "not approved" --> B
     D -- "patch / minor, low impact<br/>ai:planned" --> V["Developer<br/>branch ai/issue-N + draft PR"]
@@ -39,7 +39,7 @@ Purple boxes are AI agents; rounded boxes are a human step or a terminal label.
 |---|---|---|---|
 | issue opened | human | **Triage** (`issue-triage.yml`) | summary, area / priority labels, `ai:triaged` |
 | `ai:ready` | **human** | **Director** (`ai-director.yml`) | decides patch / minor / major, impact and risk; writes the plan |
-| `ai:council-required` | Director | **Council** (`ai-council.yml`) | debates a high-impact minor change: `ai:planned`, or `ai:blocked` |
+| `ai:council-required` | Director | **Council** (`ai-council.yml`) | debates a change that hits a council criterion (auth/security, migration, contract, distributed consistency, companion contract): `ai:planned`, or `ai:blocked` |
 | `ai:planned` | Director or Council | **Developer** (`ai-developer.yml`) | writes the change, builds and tests in a sandbox, pushes `ai/issue-N`, opens a **draft** PR, sets `ai:pr-ready` |
 | PR CI completed | GitHub | **Quality Gate** (`ai-quality-gate.yml`) | reads the CI evidence and reviews the diff: PASS, CHANGES_REQUIRED or INCONCLUSIVE |
 | `ai:changes-required` | Quality Gate | **Developer** (FIX mode) | fixes the same PR; after 3 attempts the issue goes to `ai:blocked` |
@@ -51,7 +51,7 @@ Purple boxes are AI agents; rounded boxes are a human step or a terminal label.
 
 1. An issue is opened; Triage enriches it and sets `ai:triaged`.
 2. A maintainer decides the AI should do it and adds **`ai:ready`**.
-3. The Director classifies it: patch or low-impact minor → `ai:planned`; high-impact minor → Council;
+3. The Director classifies it: no council criterion → `ai:planned`; a council criterion → Council;
    major → `ai:blocked`.
 4. The Developer implements it and opens a draft PR on `ai/issue-N`.
 5. CI runs on the PR: Unit Tests, Sonar, PR Contract and PR E2E.

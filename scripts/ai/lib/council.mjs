@@ -16,6 +16,8 @@ export const VERDICTS = Object.freeze([
 const VOTES = new Set(['approve', 'conditions', 'experiment', 'clarify', 'block', 'reject']);
 const CONFIDENCE = new Set(['low', 'medium', 'high']);
 const RESOLUTIONS = new Set(['accepted', 'countered', 'open']);
+/** Condition classes (docs/agent-council/README.md § Conditions): only `blocking` holds development back. */
+export const CONDITION_CLASSES = Object.freeze(['blocking', 'in-PR', 'follow-up']);
 const CORE_ROLES = Object.freeze(['Solution Architect', 'Pragmatic Engineer', 'Test & Evidence']);
 const MAX_TEXT = 1500;
 const MAX_ITEM = 1200;
@@ -101,7 +103,11 @@ export function validateCouncil(raw, { secrets = [] } = {}) {
     conditions: objects(raw?.conditions, (c, i) => {
       const t = text(c?.text, secrets, MAX_ITEM);
       if (!t) return null;
-      return { id: text(c?.id, secrets, 12) || `C-${i + 1}`, text: t, owner: c?.owner === 'developer' ? 'developer' : 'human' };
+      const owner = c?.owner === 'developer' ? 'developer' : 'human';
+      // Unknown class → the strictest choice for a human, `in-PR` for the Developer (it cannot block itself).
+      let cls = CONDITION_CLASSES.includes(c?.class) ? c.class : 'blocking';
+      if (owner === 'developer' && cls === 'blocking') cls = 'in-PR';
+      return { id: text(c?.id, secrets, 12) || `C-${i + 1}`, text: t, owner, class: cls };
     }),
     humanDecisions: list(raw?.humanDecisions, secrets),
     dissent: list(raw?.dissent, secrets),
@@ -111,8 +117,9 @@ export function validateCouncil(raw, { secrets = [] } = {}) {
 }
 
 /**
- * Final verdict. The agent can make it stricter, never looser: an approval with a human condition
- * or decision becomes APPROVE_WITH_CONDITIONS; a low-confidence approval, or one missing a core
+ * Final verdict. The agent can make it stricter, never looser: an approval with a human-owned
+ * `blocking` condition or a human decision becomes APPROVE_WITH_CONDITIONS (human `in-PR` and
+ * `follow-up` conditions do not hold development back; they are carried to the PR as merge checks); a low-confidence approval, or one missing a core
  * role, becomes CLARIFICATION_REQUIRED; a major (breaking) change is BLOCKED. No result at all is
  * INCONCLUSIVE (nothing changes). Returns the verdict, why it differs from the agent's, and
  * whether development may start.
@@ -135,9 +142,9 @@ export function decideCouncil(result, { labels = [], directorPlan = null } = {})
     } else if (missing.length) {
       verdict = 'CLARIFICATION_REQUIRED';
       reasons.push(`APPROVED → CLARIFICATION_REQUIRED: core role(s) missing: ${missing.join(', ')}`);
-    } else if (result.conditions.some((c) => c.owner === 'human') || result.humanDecisions.length) {
+    } else if (result.conditions.some((c) => c.owner === 'human' && c.class === 'blocking') || result.humanDecisions.length) {
       verdict = 'APPROVE_WITH_CONDITIONS';
-      reasons.push('APPROVED → APPROVE_WITH_CONDITIONS: a condition or decision needs a human');
+      reasons.push('APPROVED → APPROVE_WITH_CONDITIONS: a blocking condition or a decision needs a human first');
     }
   }
   return { verdict, reasons, develop: verdict === 'APPROVED' };
@@ -164,7 +171,7 @@ const cell = (v) => {
 
 /** The row for docs/agent-council/sessions/README.md. The session link is the council comment. */
 export function councilLogRow(result, decision, { date, issue, title, url, risk }) {
-  const conditions = result.conditions.map((c) => `${c.id} (${c.owner}) ${c.text}`).join('; ');
+  const conditions = result.conditions.map((c) => `${c.id} (${c.owner}, ${c.class}) ${c.text}`).join('; ');
   return `| ${date} | [issue-${issue}-council](${url}) | ${cell(title)} | ${cell(risk ? risk[0].toUpperCase() + risk.slice(1) : 'High')} | \`${decision.verdict}\` (CI council) | ${cell(result.recommended || result.summary)} | ${cell(conditions)} |`;
 }
 
@@ -172,10 +179,18 @@ const bullets = (items) => items.map((i) => `- ${i}`);
 const section = (title, lines) => (lines.length ? ['', `**${title}**`, ...lines] : []);
 const VERDICT_ICON = { APPROVED: '✅', APPROVE_WITH_CONDITIONS: '🟡', EXPERIMENT_REQUIRED: '🧪', CLARIFICATION_REQUIRED: '❓', BLOCKED: '⛔', REJECTED: '❌', INCONCLUSIVE: '⏳' };
 
-/** The sticky council comment. Carries the verdict and the input fingerprint for idempotency. */
+/** Human-owned `in-PR` conditions: what the reviewer must check before merging the AI's PR. */
+export const mergeChecks = (result) =>
+  (result?.conditions ?? []).filter((c) => c.owner === 'human' && c.class === 'in-PR').map((c) => `${c.id} ${c.text}`);
+
+/**
+ * The sticky council comment. Carries the verdict, the input fingerprint for idempotency and the
+ * merge checks the Developer copies into its PR body.
+ */
 export function renderCouncilComment(ctx) {
   const { issue, result, decision, labels, mode, fp, logRow, note } = ctx;
-  const data = { verdict: decision.verdict, fp };
+  const merge = mergeChecks(result);
+  const data = { verdict: decision.verdict, fp, ...(merge.length ? { merge } : {}) };
   const labelText = `${mode === 'dry-run' ? 'would ' : ''}add ${labels.add.map((l) => `\`${l}\``).join(' ') || '—'}; ${mode === 'dry-run' ? 'would ' : ''}remove ${labels.remove.map((l) => `\`${l}\``).join(' ') || '—'}`;
   const out = [
     COUNCIL_MARKER,
@@ -213,7 +228,7 @@ export function renderCouncilComment(ctx) {
     ...section('Rollout and rollback', result.rollout ? [result.rollout] : []),
     ...section('Tests', bullets(result.tests)),
     ...section('Risks', bullets(result.risks)),
-    ...section('Conditions', result.conditions.map((c) => `- [ ] **${c.id}** (${c.owner}) ${c.text}`)),
+    ...section('Conditions', result.conditions.map((c) => `- [ ] **${c.id}** (${c.owner}, ${c.class}) ${c.text}`)),
     ...section('Decisions for a human', result.humanDecisions.map((d) => `- [ ] ${d}`)),
     ...section('Dissent', bullets(result.dissent)),
   );

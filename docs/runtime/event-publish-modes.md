@@ -553,5 +553,5 @@ production-scale broker delay, multi-replica contention, and cross-region hops.
   including `PostCommit.EventRelay`'s place in the trace.
 - [Trace Lanes](trace-lanes.md) — why a relay (a synchronous command) stays in the same trace as
   its parent rather than starting a new lane.
-- `.claude/rules/dotnet-coding-standards.md` § Domain Events (Dual Processing) — the authoring
+- `.claude/rules/dotnet-coding-standards.md` § Distributed events — the authoring
   contract every distributed event must follow now that hooks no longer exist.

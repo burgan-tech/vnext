@@ -5,7 +5,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   COUNCIL_MARKER, VERDICTS, isCouncilComment, readCouncilData, councilFingerprint, preDecide, validateCouncil, decideCouncil,
-  councilLabels, councilLogRow, renderCouncilComment,
+  councilLabels, councilLogRow, renderCouncilComment, CONDITION_CLASSES, mergeChecks,
 } from '../lib/council.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -117,4 +117,31 @@ test('the no-plan comment explains what to do and changes nothing', () => {
   const body = renderCouncilComment({ issue: 7, result: null, decision, labels: councilLabels(decision.verdict, []), mode: 'apply', fp: 'f1', note: 'Add `ai:ready`.' });
   assert.match(body, /Add `ai:ready`/);
   assert.deepEqual(readCouncilData(body), { verdict: 'INCONCLUSIVE', fp: 'f1' });
+});
+
+test('condition classes: only a human-owned blocking condition holds development back', () => {
+  assert.deepEqual([...CONDITION_CLASSES], ['blocking', 'in-PR', 'follow-up']);
+  const inPr = judge(raw({ conditions: [{ id: 'C-1', text: 'owner reviews the deny list at merge', owner: 'human', class: 'in-PR' }] }));
+  assert.deepEqual([inPr.verdict, inPr.develop], ['APPROVED', true]);
+  assert.equal(judge(raw({ conditions: [{ text: 'open a retention issue', owner: 'human', class: 'follow-up' }] })).verdict, 'APPROVED');
+  assert.equal(judge(raw({ conditions: [{ text: 'owner picks the TTL', owner: 'human', class: 'blocking' }] })).verdict, 'APPROVE_WITH_CONDITIONS');
+  // A missing or unknown class is the strictest choice for a human, and never blocking for the Developer.
+  assert.equal(judge(raw({ conditions: [{ text: 'owner signs off', owner: 'human', class: 'later' }] })).verdict, 'APPROVE_WITH_CONDITIONS');
+  const dev = validateCouncil(raw({ conditions: [{ text: 'add a test', owner: 'developer', class: 'blocking' }] })).result;
+  assert.equal(dev.conditions[0].class, 'in-PR');
+  // A major change stays BLOCKED whatever the conditions say.
+  assert.equal(judge(raw({ conditions: [{ text: 'x', owner: 'human', class: 'in-PR' }] }), ['ai:council-required', 'ai:semver-major']).verdict, 'BLOCKED');
+});
+
+test('human in-PR conditions travel in the comment data line as merge checks', () => {
+  const { result } = validateCouncil(raw({ conditions: [
+    { id: 'C-1', text: 'add a test', owner: 'developer', class: 'in-PR' },
+    { id: 'C-2', text: 'owner checks the --> deny list', owner: 'human', class: 'in-PR' },
+    { id: 'C-3', text: 'retention issue', owner: 'human', class: 'follow-up' },
+  ] }));
+  assert.deepEqual(mergeChecks(result), ['C-2 owner checks the  deny list']);
+  const decision = decideCouncil(result, { labels: ['ai:council-required'], directorPlan: plan() });
+  const body = renderCouncilComment({ issue: 9, result, decision, labels: councilLabels(decision.verdict, []), mode: 'apply', fp: 'f2' });
+  assert.deepEqual(readCouncilData(body), { verdict: 'APPROVED', fp: 'f2', merge: ['C-2 owner checks the  deny list'] });
+  assert.match(body, /\*\*C-2\*\* \(human, in-PR\)/);
 });

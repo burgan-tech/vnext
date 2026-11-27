@@ -29,7 +29,7 @@ repo you can do more:
 
 1. **Confirm every "the runtime does X" claim against the code.** `.claude/rules/` and `/docs`
    describe the runtime; when they disagree with the code, the code wins. A wrong claim costs the
-   domain team real work. If the plugin's `CHECKS.md` is wrong, open an issue or PR on the plugin.
+   domain team real work. If the plugin's `CHECKS.md` is wrong, draft the issue locally and offer to open it — never write to GitHub unasked.
 2. **Compare the domain's `runtimeVersion` with the release it will run on** (`common.props`,
    `vnext-meta/version-manifest.json`) and drop advice that needs a newer runtime.
 3. **Measurement stays a rule:** the audit is static. Close the report with how to measure

@@ -14,7 +14,7 @@ paths:
 # .NET Coding Standards (path-scoped: loads with C# code)
 
 Repo-specific rules only — general C#/SOLID/DDD practice is assumed. Layout, hosts and layers:
-`AGENTS.md` § Architecture Overview.
+`AGENTS.md` § Architecture in one paragraph and [dependency-map](../../docs/architecture/dependency-map.md).
 
 ## Structure and layering
 - Clean Architecture + DDD: aggregates, entities, value objects, repositories, domain events. No
@@ -47,8 +47,8 @@ Resolve the schema through `ICurrentSchema` (headers, routes, query string, cust
 infrastructure operations in `currentSchema.Use(flow)`.
 
 ## Distributed events
-How delivery works (outbox, wake-up signal, relay opt-in by DI registration) is `AGENTS.md` § Domain
-Events and `docs/runtime/event-publish-modes.md`. EventHook is deleted — do not reintroduce
+How delivery works (outbox, wake-up signal, relay opt-in by DI registration):
+`docs/runtime/event-publish-modes.md`. EventHook is deleted — do not reintroduce
 `IEventPublishHook`, `[EventHook]` or a pre-commit path. Checklist for a new event:
 - [ ] Contract in `*.Events.Contracts/*/Events/` with `[EventName]` (no marker interface)
 - [ ] `IEventHandler<TEvent>` in `workers/BBT.Workflow.Workers.Inbox/Handlers/` with the domain guard
@@ -96,7 +96,7 @@ implementation classes also describe their lifecycle and purpose. Controllers fo
 - `test/` holds **unit tests only** (xUnit). New tests use **NSubstitute** for mocks and **Shouldly**
   for assertions; Moq remains only in existing tests — do not add it to new ones.
 - Integration tests live in the sibling vnext-example repo and run against the locally built runtime:
-  `AGENTS.md` § Testing and `docs/testing/integration-testing.md`.
+  `AGENTS.md` § Build, run, test and `docs/testing/integration-testing.md`.
 
 ## Documentation
 Implementation docs go in `/docs` (index `docs/README.md`, agent map `docs/agent-onboarding.md`); "add

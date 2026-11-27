@@ -8,7 +8,7 @@ import { PRODUCTS as TEMPLATE_PRODUCTS } from '../../governance/lib/pr-body.mjs'
 import { compileImpactRules } from '../../governance/lib/ai-record.mjs';
 import {
   PRODUCTS, DEV_MARKER, branchFor, decideMode, validateResult, checkDiff, pickMilestone, prLabels, developerLabels,
-  extractCouncilRow, insertLogRow, findSecrets, parsePatch, parseNameStatusZ, renderPrBody, updateRepairs, renderDeveloperComment, isDeveloperComment,
+  extractCouncilRow, extractMergeChecks, insertLogRow, findSecrets, parsePatch, parseNameStatusZ, renderPrBody, updateRepairs, renderDeveloperComment, isDeveloperComment,
   checkRestoreSafety, runnerWarning, testVerdict,
 } from '../lib/developer.mjs';
 
@@ -140,7 +140,9 @@ test('the PR body passes the PR contract, AI decision record included', () => {
     planUrl: 'https://github.com/o/r/issues/1192#issuecomment-1', branch: branchFor(1192),
     runner: { build: { status: 'run', detail: 'passed' }, tests: { status: 'run', detail: 'Domain passed, Application passed, Infrastructure passed' } }, repairs: 0, maxRepairs: 3,
     e2eReason: 'the e2e job (pr-e2e.yml) is not built yet; run the suites locally',
+    mergeChecks: ['C-2 owner checks the deny list'],
   });
+  assert.match(body, /- \[ \] C-2 owner checks the deny list/);
   const findings = checkPr({
     title: result.title, body, labels, milestone: { title: 'v0.0.105', state: 'open' },
     changedFiles: ['src/BBT.Workflow.Application/Caching/CacheSet.cs'], impactRules: rules, readFile: () => null,
@@ -305,4 +307,11 @@ test('writer: a clean result passes; an unfinished agent, a list mismatch or a m
   assert.match(runApply({ files: 'M\0src/A.cs\0', patch: two }), /rejected[\s\S]*the patch has 2 file\(s\), the file list 1/);
   assert.match(runApply({ mode: 'FIX', headSha: 'b'.repeat(40), files: 'M\0src/A.cs\0', patch: goodPatch }), /the PR moved while the agent worked/);
   assert.match(runApply({ files: 'M\0src/A.cs\0', patch: goodPatch, result: { title: 'did stuff' } }), /no valid Conventional Commits title/);
+});
+
+test('merge checks are read back from the council comment data line', () => {
+  const body = '<!-- ai-council:v1 -->\n<!-- ai-council-data:{"verdict":"APPROVED","fp":"f","merge":["C-2 check @team the list"]} -->\nx';
+  assert.deepEqual(extractMergeChecks(body), ['C-2 check @\u200bteam the list']);
+  assert.deepEqual(extractMergeChecks('<!-- ai-council-data:{"verdict":"APPROVED","fp":"f"} -->'), []);
+  assert.deepEqual(extractMergeChecks(null), []);
 });

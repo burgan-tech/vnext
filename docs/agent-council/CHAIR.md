@@ -7,92 +7,64 @@
 - Authority source: vNext runtime repository owner / platform team lead (standing, not delegated)
 - Delegation expiry (UTC): none — standing appointment; revisit when a backup is named
 
-The configured Chair protects architectural boundaries, risk controls, evidence quality, and long-term maintainability. The Chair need not design the solution.
+The Chair protects architectural boundaries, risk controls, evidence quality and long-term
+maintainability. The Chair need not design the solution.
 
-## Mandatory Approval
+## Mandatory approval
 
-Service boundary or data ownership changes, new infrastructure, authentication/authorization/token/secret changes, breaking cross-service contracts, production migrations, high-blast-radius changes, critical technical debt, and unresolved hard constraints.
+Service boundary or data ownership changes, new infrastructure, authentication/authorization/token/secret
+changes, breaking cross-service contracts, production migrations, high-blast-radius changes, critical
+technical debt, and unresolved hard constraints — plus every High or Critical decision
+([README § Risk](README.md#risk)).
 
-## Decisions
+The Chair rules with the council verdicts ([README § Verdicts](README.md#verdicts)); `REJECTED` is the
+veto. The ruling and any added or waived conditions are recorded as `Chair YYYY-MM-DD: <verdict>` in
+the session's `DECISION.md` and its log row.
 
-`APPROVE`, `APPROVE_WITH_CONDITIONS`, `REQUEST_REVISION`, `REQUEST_EXPERIMENT`, `VETO`.
+## Standing precedents
 
-## How this Chair decides — standing precedents
-
-Facilitators and role agents should read these before drafting `DECISION.md`. They summarize decisions
-the Chair has already made in this repository; a proposal that contradicts one must say so explicitly
-and argue why the precedent should change. It is not re-litigated silently.
+Read these before drafting a decision. A proposal that contradicts one says so explicitly and argues why
+the precedent should change; it is not re-litigated silently.
 
 ### Review and release gates
 
 - **Nothing is committed, pushed, or opened on GitHub without an explicit instruction.** Implementation
   plus build plus tests is delivered as a diff summary; the commit is the Chair's call. Issue and PR
-  drafts are produced as local markdown first; the `gh` CLI is not run proactively, not even read-only.
-- **Unit tests are not enough for a pipeline-level change.** Anything touching transition pipeline,
-  subflow lifecycle, locking, instance data, error boundary or the state function needs an integration
-  test in `vnext-example` against the **locally built** runtime, never against a container image.
-  Starting infrastructure or the four hosts is an expensive step and is approved case by case.
-- **Aether is proposed to, not edited.** A change that is better made in the SDK than as a permanent
-  vNext workaround is written up as a proposal with the trade-off; the Chair decides whether to take it
-  to Aether.
-- **Evidence before claims.** Performance, recovery and compatibility statements need a measurement or a
-  reproducible test (precedent: the layered script-perf lab, the gRPC proxy-mode E2E report, the
-  write-path perf cherry-pick report — dated design records). An unmeasured claim yields
-  `REQUEST_EXPERIMENT`, not approval.
+  drafts are produced as local markdown first. GitHub is **written** (issue, PR, comment, label, push)
+  only on an explicit instruction; **reading** it with `gh` is fine inside a skill the user invoked
+  for that purpose (`pr-review`, `create-github-pr`, `vnext-docs-generator` fallback) and never
+  done on the agent's own initiative.
+- **Unit tests are not enough for a pipeline-level change.** Integration tests in `vnext-example` against
+  the locally built runtime, per `docs/testing/integration-testing.md`. The agent starts the
+  infrastructure itself when the user asked or that policy requires the run; otherwise it offers.
+- **Aether is proposed to, not edited.** An SDK-level fix is written up as a proposal with the trade-off;
+  the Chair decides whether to take it to Aether.
+- **Evidence before claims.** An unmeasured performance, recovery or compatibility claim is
+  `EXPERIMENT_REQUIRED`, not approval.
 
 ### Architectural decisions already taken (do not reopen without new evidence)
 
-- **`transition.roles` is not enforced at `POST .../transitions/{key}`.** Roles describe what a client
-  should offer; real boundaries live in `queryRoles` or task logic. *Amended 2026-09-22 by
-  `DECISION-2026-09-22-remove-execution-authorization`:* function `roles` dropped from that list (it
-  has not been enforced at execution since `a0e2f658`), and `queryRoles` is **no longer enforced by
-  this runtime at all** — it is evaluated by `GET .../functions/authorize?queryRoles=true`, which the
-  Internal Gateway consults before forwarding. A definition can no longer assume the runtime itself
-  refuses; the boundary is the gateway, and `queryRoles` is the answer it admits on.
-- **Only `updateData` skips the state lifecycle on a `$self` target.** Every other `$self` transition runs
-  the full OnExit/OnEntry/Schedule lifecycle. No literal-target-equals-current-state comparison.
-- **The Busy flag is the mutex; one millisecond-scale status lock per hop.** No whole-chain lock, no
-  per-kind lock keys. `updateData` takes no lock and no duplicate-job guard.
-- **Auto → Schedule epilogue order.** When the auto step picks a winner, no timer is armed for that hop.
-- **Runtime-generated child calls (start, forward, descended retry) are always `sync=true`**;
-  `S`/`P` decides parent continuation, not transport mode. Responses are identity-only.
-- **A parent with an open SubFlow correlation stays Busy for the child's lifetime**; the client observes
-  the leaf via the state function.
-- **Dual delivery (outbox + post-commit relay) is granted PER EVENT TYPE by registration**, not by a
-  marker interface. Each relayed event must have a durable backup, an idempotent order-safe receiver
-  guard, measured latency evidence and a council row; the default for any new event stays
-  Outbox-only, and the EventHook infrastructure stays deleted. Amended
-  2026-09-09 by `DECISION-2026-09-08-substate-postcommit-relay`, which added
-  `InstanceSubStateChangedEvent` to the three subflow terminal events as a relayed event.
-- **Scheduled-transition job changes do not participate in the state-function ETag** (issue #864);
-  documented as a known gap, not a bug to fix.
-- **Activation episode tracing**: one backdated `Instance.Activation/{key}` span per trigger→rest-point
-  episode, emitted after commit, kind `Internal`; timers stay separate traces; the parent episode ends
-  at the subflow handoff. Every new lane carrier copies all four episode fields.
-- **AI guidance has one source.** Rules and skills live under `.claude/`; Cursor reaches them through
-  `@` pointers; `AGENTS.md` is the bootstrap for every agent. Runtime facts are linked, never copied.
-- **Decision history is recorded.** Dated specs, plans, reports and council sessions live in local
-  scratch (`ai-docs/`, git-ignored, layout in `AGENTS.md`); every council decision gets a committed row in
-  the decision log `docs/agent-council/sessions/README.md`.
+Each line names the decision; the rule itself lives in the linked source.
+
+- `transition.roles` is not enforced at execution; `queryRoles` is answered by `authorize`, enforced at
+  the gateway (amended 2026-09-22) — [workflow card § Role Grants](../../.claude/rules/vnext-workflow-developer.md#role-grants-validation--evaluation).
+- Only `updateData` skips the state lifecycle on `$self` — card § Self-target composition.
+- The Busy flag is the mutex; one status lock per hop — card § Locking.
+- Epilogue order Auto → Schedule — card § Transition Pipeline Order.
+- Runtime child calls and their `sync` mode — card § Sync vs Async.
+- A parent with an open SubFlow correlation stays Busy for the child's lifetime — card § SubFlow Lifecycle.
+- Dual delivery (outbox + post-commit relay) is granted per event type by registration; EventHook stays
+  deleted (amended 2026-09-09) — `docs/runtime/event-publish-modes.md`.
+- Scheduled-transition job changes stay outside the state-function ETag (#864) — known gap, not a bug.
+- Activation episode tracing: one backdated span per episode — card § Activation episode.
+- AI guidance has one source (`.claude/`, `AGENTS.md` as bootstrap); decision history is the committed
+  log row, session folders stay in git-ignored `ai-docs/`.
 
 ### What the Chair expects from a decision record
 
-- Verified facts separated from assumptions; code (`LifecycleOrder.cs`, `PipelineExecutionProfile.cs`,
-  `PipelineProfileResolver.cs`) cited over docs when they disagree.
+- Verified facts separated from assumptions; code cited over docs when they disagree.
 - A real dissent table. A council where nobody argued the losing side is sent back.
-- A rollback path and an integration-test plan per the policy above, or an explicit statement of why
-  the change is below that threshold.
-- For anything adding a component type: the coordination cost with the external
-  `@burgan-tech/vnext-schema` package and `vnext-meta`, and the Helm chart impact of any new
-  required configuration.
-
-## Record
-
-- Decision:
-- Rationale:
-- Mandatory conditions:
-- Condition owner:
-- Required evidence:
-- Due before (UTC):
-- Accepted risks:
-- Review date:
+- A rollback path and an integration-test plan, or an explicit statement of why the change is below
+  that threshold.
+- For a new component type: the coordination cost with `@burgan-tech/vnext-schema`, `vnext-meta` and the
+  Helm chart impact of any new required configuration.

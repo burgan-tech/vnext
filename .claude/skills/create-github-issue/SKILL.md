@@ -28,7 +28,7 @@ Accept the scope in any language; work in English throughout. Pick the label:
 | New feature / request | `enhancement` |
 | Refactor / cleanup | `refactor` |
 | Documentation | `documentation` |
-| Task / chore | `chore` |
+| Task / chore | `refactor` (there is no `chore` label; say so in the draft if neither fits) |
 | Performance | `performance` |
 
 If the user says **"projeyi tara"** or **"scan project"**, run Step 1a first.

@@ -4,7 +4,7 @@ This directory is the **single source** for what a review of this repository che
 `.claude/agents/pr-reviewer-*.md` shells and the `pr-review` skill read these files; nothing here is
 duplicated into an agent definition, a skill body or a CI workflow — the shells only name their
 checklist, the repo files they must open, and link back here for the output contract. Same model as
-[Agent Council roles](../agent-council/roles/) — the role file holds the content, the runner holds
+[Agent Council roles](../agent-council/roles.md) — the role brief holds the content, the runner holds
 the procedure.
 
 Two entry points consume it:

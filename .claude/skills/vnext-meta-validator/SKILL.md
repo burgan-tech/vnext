@@ -1,6 +1,6 @@
 ---
 name: vnext-meta-validator
-description: Validates vnext-meta package JSON files for schema compliance, version consistency, and codebase alignment. Use when the user says "validate meta", "meta check", "meta kontrol", "vnext-meta validate", or after modifying vnext-meta JSON files.
+description: "Validates vnext-meta package JSON files for schema compliance, version consistency, and codebase alignment. Use when the user says \"validate meta\", \"meta check\", \"meta kontrol\", \"vnext-meta validate\", or after modifying vnext-meta JSON files."
 ---
 
 # vNext Meta Validator

@@ -27,11 +27,11 @@ of a tasks item). Missing or non-GUID → `400` (`Instance:100039`).
 
 ## Authorization
 
-Both functions are gated by the same `queryRoles` check as the state function
-(`ITransitionAuthorizationManager.IsQueryAllowedAsync`, caller roles resolved through
-`ICallerRoleResolver` inside the handler): a caller who may poll an instance's state may read what
-ran on it. Failing the gate is `403`, so "nothing ran" stays distinguishable from "not allowed to
-know".
+Both functions behave like the state function: since the read gates were removed (2026-09-23) there
+is **no `queryRoles` gate on the read itself** — `queryRoles` is answered by
+`GET …/functions/authorize?queryRoles=true`, which the gateway consults before forwarding
+([role-grant-authorization](../domain/role-grant-authorization.md)). The handlers do not call
+`IsQueryAllowedAsync` and never answer `403`.
 
 ## Task-history response
 
@@ -103,8 +103,8 @@ cost) and is out of scope here.
   execution order (unpaged); `GET …/functions/actions?taskId={id}` returns one row's
   `InstanceActions` (400 `Instance:100039` without a valid `taskId`, 404 `Instance:100038` when the
   task isn't the instance's own). Both are `IInstanceFunctionHandler` registrations (keys in
-  `FunctionTypeConst.TaskHistory/ActionHistory`) under the same `queryRoles` gate as the state
-  function. No state-body involvement — no `ResponseShapeVersion` or fingerprint change.
+  `FunctionTypeConst.TaskHistory/ActionHistory`) with, like the state
+  function, no `queryRoles` read gate. No state-body involvement — no `ResponseShapeVersion` or fingerprint change.
 - **Metadata only, deliberately.** The journal's `Request`/`Response`/`InvocationResult` payloads
   carry mapping-built headers (auth material included) and are served by NO API since the Monitor
   host's removal (#982); the one payload-derived public field is the faulted row's `{"error": …}`
@@ -126,7 +126,7 @@ cost) and is out of scope here.
   `GetRefForInstanceAsync` (join to `InstanceTransitions` for transition context, served by
   `IX_InstanceTransitions_Instance_StartedAt`), `EfCoreInstanceActionRepository.GetByTaskIdAsync`.
 - Application: `InstanceQueryAppService.GetInstanceTasksAsync` / `GetInstanceTaskActionsAsync`,
-  following the incidents pattern (resolve instance → resolve flow → `queryRoles` gate → read → DTO).
+  following the incidents pattern (resolve instance → resolve flow → read → DTO).
 - No state-function involvement: the state body carries no task links, so `ResponseShapeVersion`
   is untouched and nothing new participates in the fingerprint ETag.
 - No gateway/remote plumbing and no subflow descent: like the incident history, the functions

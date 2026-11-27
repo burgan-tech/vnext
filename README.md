@@ -97,7 +97,7 @@ dotnet run --project workers/BBT.Workflow.Workers.Outbox
 Tests:
 
 ```bash
-dotnet test                                        # everything
+dotnet test test/BBT.Workflow.Domain.Tests -c Release   # run projects one at a time, not the solution
 dotnet test test/BBT.Workflow.Application.Tests    # one project
 dotnet test --filter "FullyQualifiedName~MyTest"   # one test
 ```
@@ -109,7 +109,7 @@ dotnet test --filter "FullyQualifiedName~MyTest"   # one test
 - `workers/`: Inbox, Outbox and DbMigrator workers
 - `src/`: Domain, Application, Infrastructure, Events.Contracts, Execution (+ Abstractions), Tasks.Abstractions, HttpApi.Shared
 - `modules/`: Roslyn-based C# scripting module
-- `test/`: unit/integration test projects, shared `TestBase`, benchmarks
+- `test/`: unit test projects, shared `TestBase`, benchmarks (integration tests live in the sibling `vnext-example` repo)
 - `tools/`: `vnext-runtime` MCP server (agents read components, live runtime data and `vnext-meta` over one endpoint)
 - `init/`: Node.js init service that downloads component npm packages and publishes them to the runtime
 - `samples/`: sample projects (e.g. custom script helpers demo)
@@ -125,14 +125,14 @@ dotnet test --filter "FullyQualifiedName~MyTest"   # one test
 - [Workflow Execution Pipeline](docs/architecture/workflow-execution-pipeline.md) — ordered steps, admission, inline auto-chain and post-commit boundaries
 - [Subflow Execution](docs/architecture/subflow-execution.md) — child start/forward/retry, `S`/`P` semantics and terminal resume
 - [AGENTS.md](AGENTS.md) — single bootstrap for coding agents (architecture, domain concepts, AI guidance layout); `CLAUDE.md` imports it
-- [.claude/rules/](.claude/rules/) — always-on coding standards and the workflow developer reference; `.cursor/rules/` holds `@` pointers to the same files
+- [.claude/rules/](.claude/rules/) — the rules (three always-on, the coding standards and the workflow developer reference load with code); `.cursor/rules/` holds `@` pointers to the same files
 - [vnext-meta/README.md](vnext-meta/README.md) — the runtime metadata package
 
 ### Working with AI coding agents
 
 Guidance is tool-neutral and lives in one place; every agent (Claude Code, Cursor, Codex, Copilot) reads the same files:
 
-- [AGENTS.md](AGENTS.md) is the bootstrap, [.claude/rules/](.claude/rules/) the always-on rules, [.claude/skills/](.claude/skills/) the on-demand skills. Cursor reads the skills folder directly and reaches the rules through `@` pointers in `.cursor/rules/`; nothing is copied.
+- [AGENTS.md](AGENTS.md) is the bootstrap, [.claude/rules/](.claude/rules/) the rules (always-on or path-scoped), [.claude/skills/](.claude/skills/) the on-demand skills. Cursor reads the skills folder directly and reaches the rules through `@` pointers in `.cursor/rules/`; nothing is copied.
 - Non-trivial decisions (architecture, cross-service, data model, security, performance) go through the **Agent Council** before any code is written. Run:
 
   ```

@@ -1,6 +1,6 @@
 ---
 name: create-github-pr
-description: "Drafts an English PR title and body from the commits on the current branch versus the base, following .github/PULL_REQUEST_TEMPLATE.md, then pushes and opens it only after two separate approvals. Triggers: \"PR oluştur\", \"open PR\", \"create PR\", \"pull request\", \"gh pr\"."
+description: "Drafts an English PR title and body from the commits on the current branch versus the base, following .github/PULL_REQUEST_TEMPLATE.md, then pushes and opens it only after three separate approvals (draft, push, create). Triggers: \"PR oluştur\", \"open PR\", \"create PR\", \"pull request\", \"gh pr\"."
 ---
 
 # Create GitHub PR
@@ -145,6 +145,20 @@ BODY
 ```
 
 Output the PR URL `gh pr create` returns.
+
+## When it fails
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `origin/HEAD` not set | Remote HEAD never fetched | Use `master` and say so |
+| Current branch is the base, or no commits ahead | Nothing to PR | Switch to a feature branch / commit first |
+| Aether local-feed line found | Branch builds against unreleased Aether | Stop; revert per integration-testing §8 |
+| `pr-contract.mjs` findings | Body misses a required section or rule | Show findings with the draft; fix or get the user's explicit OK |
+| No TRX for `## E2E evidence` | Integration run not done | Ask for the reason; write `Status: not-run` + reason, never numbers by hand |
+| Push rejected (non-fast-forward) | Remote branch moved | Stop and report; never force-push |
+| `gh auth status` not authenticated | No GitHub login on this machine | Ask the user to run `gh auth login`; do not work around it |
+
+A failure not in this table that meets the `papercut` conditions (guidance or environment at fault, not your change): file it.
 
 ## Rules
 

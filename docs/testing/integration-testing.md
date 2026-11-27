@@ -3,10 +3,10 @@
 How a change to this runtime is verified end to end, using the example domain and the testing SDK
 that live in sibling repositories. This page is the **contract**; the runnable procedure is the
 `runtime-integration-test` skill (`.claude/skills/runtime-integration-test/SKILL.md`). Every other
-agent (Codex, Cursor, Copilot, Gemini) reads this page directly.
+agent (Codex, Cursor, Copilot) reads this page directly.
 
 Related: [Platform repositories](../../AGENTS.md#platform-repositories) (who owns what),
-[Runbook: bring up domain X](../../AGENTS.md#runbook-bring-up-domain-x-for-agents),
+[Runbook: bring up domain X](../runtime/local-environment.md),
 [Correlation and tracing](../runtime/correlation-and-tracing.md),
 [Elastic queries for the trace tree](../runtime/trace-elastic-queries.md).
 
@@ -48,7 +48,7 @@ Tests and example flows are written in **vnext-example**, never in this reposito
 **Sibling layout.** Every platform repo is expected as a sibling checkout: `../vnext-example`,
 `../vnext-integration-test` (an older clone may be named `vnext-integration`), `../aether`, and so
 on. This is the same convention `nuget.config` (`../aether/.local-feed`), `labs/cross-domain/lab.sh`
-(`../vnext`) and the runbook in `AGENTS.md` already rely on. Resolution rule for an agent:
+(`../vnext`) and the [local-environment runbook](../runtime/local-environment.md) already rely on. Resolution rule for an agent:
 
 1. Look for `../<repo>` relative to this checkout.
 2. If it is missing, **ask once**: clone it there (`git clone https://github.com/burgan-tech/<repo>.git ../<repo>`)
@@ -77,7 +77,7 @@ infrastructure, sidecars, DbMigrator and the four hosts as local binaries, waits
 writes `ai-docs/local-environments/<domain>.md` — which contains the base URL, database, app-ids and
 the exact `VNEXT_BASE_URL=...` line for the tests. Read that record instead of recomputing ports. The
 full procedure, offsets and `wf` registration are in the
-[runbook](../../AGENTS.md#runbook-bring-up-domain-x-for-agents).
+[runbook](../runtime/local-environment.md).
 A cross-domain scenario can run its domains co-hosted on one host set (`up <primary> --with <other>`,
 [multi-domain hosting](../runtime/multi-domain-hosting.md)); calls between them then stay in-process, so a
 test that must cross a Dapr hop needs separate domains (`--offset`).

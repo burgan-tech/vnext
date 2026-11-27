@@ -2,17 +2,18 @@
 # Checks the AI guidance files (AGENTS.md, CLAUDE.md, .claude/rules, .claude/skills, .claude/agents,
 # .cursor/rules) for the mistakes that have already happened: unparseable frontmatter, overlong
 # descriptions, broken relative links, a rule without its Cursor pointer, a heading written twice,
-# an always-loaded set that has quietly grown past its budget, and a skill or agent missing from
-# the capability catalog (docs/ai-capabilities.md).
+# an always-loaded set that has quietly grown past its budget, a skill or agent missing from
+# the capability catalog (docs/ai-capabilities.md), and a council verdict list that drifted from
+# its single source (docs/agent-council/README.md).
 #
 # Usage: scripts/check-ai-guidance.sh            (exit 1 on errors, warnings never fail)
-# Budgets (bytes) can be overridden: ALWAYS_BUDGET=45000 SCOPED_BUDGET=40000 scripts/check-ai-guidance.sh
+# Budgets (bytes) can be overridden: ALWAYS_BUDGET=30000 SCOPED_BUDGET=40000 COUNCIL_BUDGET=22000 scripts/check-ai-guidance.sh
 # Rules: docs/agent-onboarding.md § Editing the AI guidance.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-ALWAYS_BUDGET="${ALWAYS_BUDGET:-45000}" SCOPED_BUDGET="${SCOPED_BUDGET:-40000}" python3 - <<'PY'
+ALWAYS_BUDGET="${ALWAYS_BUDGET:-30000}" SCOPED_BUDGET="${SCOPED_BUDGET:-40000}" COUNCIL_BUDGET="${COUNCIL_BUDGET:-22000}" python3 - <<'PY'
 import os, re, sys, glob
 
 try:
@@ -51,6 +52,10 @@ for path in sorted(glob.glob(".claude/skills/*/SKILL.md") + glob.glob(".claude/a
     desc_bytes += len(desc.encode())
     if len(desc) > DESC_LIMIT:
         warnings.append(f"{path}: description is {len(desc)} chars (> {DESC_LIMIT})")
+    if path.endswith("SKILL.md"):
+        lines = open(path, encoding="utf-8").read().count("\n")
+        if lines > 500:
+            warnings.append(f"{path}: body is {lines} lines (> 500) — move detail into linked files")
 
 # 2. Rules: always-on vs path-scoped, Cursor pointer present and in the same mode.
 always_files = ["AGENTS.md", "CLAUDE.md"]
@@ -78,7 +83,8 @@ for mdc in glob.glob(".cursor/rules/*.mdc"):
 # 3. Relative links and duplicate headings in every guidance file.
 guidance = always_files + scoped_files + ["docs/agent-onboarding.md"] \
     + glob.glob(".claude/skills/**/*.md", recursive=True) + glob.glob(".claude/agents/*.md") \
-    + glob.glob("docs/code-review/**/*.md", recursive=True)
+    + glob.glob("docs/code-review/**/*.md", recursive=True) + glob.glob("docs/agent-council/**/*.md", recursive=True) \
+    + ["docs/ai-capabilities.md", "docs/runtime/local-environment.md", ".github/ai/council.md"]
 link_re = re.compile(r"\]\(([^)\s]+)\)")
 for path in sorted(set(guidance)):
     text = open(path, encoding="utf-8").read()
@@ -113,7 +119,24 @@ else:
         if f"`{name}`" not in catalog:
             errors.append(f"{CATALOG}: `{name}` is not in the catalog — add its row")
 
-# 5. Budgets.
+# 5. Council verdicts: one vocabulary. The contract (between the council-verdicts markers) is the source;
+#    the CI prompt's JSON enum and scripts/ai/lib/council.mjs VERDICTS must list exactly the same values.
+VERDICT_RE = re.compile(r"\b(APPROVED|APPROVE_WITH_CONDITIONS|EXPERIMENT_REQUIRED|CLARIFICATION_REQUIRED|BLOCKED|REJECTED)\b")
+def verdicts(path, pattern):
+    text = open(path, encoding="utf-8").read()
+    m = re.search(pattern, text, re.S)
+    if not m:
+        errors.append(f"{path}: council verdict list not found")
+        return None
+    return VERDICT_RE.findall(m.group(1))
+source = verdicts("docs/agent-council/README.md", r"<!-- council-verdicts:begin -->(.*?)<!-- council-verdicts:end -->")
+for path, pattern in [(".github/ai/council.md", r'"verdict":\s*"([^"]+)"'),
+                      ("scripts/ai/lib/council.mjs", r"export const VERDICTS = Object\.freeze\(\[(.*?)\]\)")]:
+    found = verdicts(path, pattern)
+    if source is not None and found is not None and found != source:
+        errors.append(f"{path}: council verdicts {found} differ from docs/agent-council/README.md {source}")
+
+# 6. Budgets.
 size = lambda files: sum(os.path.getsize(f) for f in files)
 always_total = size(always_files) + desc_bytes
 scoped_total = size(scoped_files)
@@ -128,6 +151,15 @@ if always_total > always_budget:
     warnings.append(f"always-loaded set {always_total} bytes exceeds budget {always_budget}")
 if scoped_total > scoped_budget:
     warnings.append(f"path-scoped rules {scoped_total} bytes exceed budget {scoped_budget}")
+# What the facilitator of one council run loads into the main context: the skill, the contract, the Chair
+# precedents and the decision template (role agents get roles.md sections and PROPOSAL.md in their own).
+council_files = [".claude/skills/agent-council/SKILL.md", "docs/agent-council/README.md",
+                 "docs/agent-council/CHAIR.md", "docs/agent-council/templates/DECISION.md"]
+council_total = size([f for f in council_files if os.path.exists(f)])
+council_budget = int(os.environ["COUNCIL_BUDGET"])
+print(f"council run   : {council_total:>6} bytes (budget {council_budget}) skill + contract + Chair + DECISION template")
+if council_total > council_budget:
+    warnings.append(f"council read set {council_total} bytes exceeds budget {council_budget}")
 
 for w in warnings:
     print(f"WARN  {w}")

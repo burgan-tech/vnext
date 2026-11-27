@@ -1,7 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git checkout:*)",
+      "Bash(git checkout -b:*)",
       "Bash(git diff:*)",
       "Bash(git log:*)",
       "Bash(gh pr view:*)",

@@ -42,6 +42,7 @@ key symbols. The reasons, measurements and incident history behind each rule liv
 | 80 | RunAutomaticTransitionsStep | Evaluate auto-transition conditions; set NextTransition |
 | 90 | ScheduleTransitionsStep | Schedule future transitions — skipped when auto selected a winner |
 | 100 | HandleFinishStep | Complete/cancel instance on finish states |
+| 109 | VersionRegistryInvalidationStep | `sys-version-registry` instance only: enqueue the target flow's cache-generation bump (post-commit) |
 | 110 | FinalizeTransitionStep | Complete transition record; dispose script cache |
 | 112 | ResolveAvailableStep | Resolve deferred Active status |
 
@@ -77,7 +78,7 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 ### Self-target composition — `updateData` ONLY
 
 - `PipelineExecutionProfile.ForSelfTarget(base)` is composed on top of the base (`Manual+Self`, …)
-  when `TransitionExecutionContext.SkipsStateLifecycle()` is true; it adds `CancelScheduledJobs (39)`,
+  when `TransitionExecutionContext.SkipsStateLifecycle()` is true; it adds `AgentRun (65)`, `CancelScheduledJobs (39)`,
   `OnExit (40)`, `OnEntry (60)`, `Schedule (90)` to the exclusions.
 - `SkipsStateLifecycle() = IsSelfTargetTransition() && IsUpdateDataTransition()` — only `updateData`.
   Every other `$self` transition (a `$self` **shared transition** above all) runs the FULL lifecycle.
@@ -172,7 +173,7 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 ## Task / Action History (system functions)
 
 - `functions/tasks` returns the `InstanceTasks` journal; `functions/actions?taskId=` one row's
-  `InstanceActions` (`Instance:100039` / `Instance:100038`). Same `queryRoles` gate as state.
+  `InstanceActions` (`Instance:100039` / `Instance:100038`). Like state: no `queryRoles` read gate.
 - **Metadata only.** Never serve `Request`/`Response`/`InvocationResult` payloads; keep the SQL
   projection (`InstanceTaskHistoryRow`), never materialize the entity.
 - `InstanceActions` has no writer. Full guide: `docs/runtime/instance-task-and-action-history.md`.
@@ -213,7 +214,7 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 - Every decision point takes the WHOLE role set; `ICallerRoleResolver.SingleRoleOf` is for cache scoping
   (`CallerScopeHash`) only. Never read `currentUser.Roles` directly — use `currentUser.ResolveCallerRoles(headers)`.
 - Batch: one evaluator per instance/schema; pass every surface the same `AuthorizationRequestContext`.
-- `queryRoles` is ANSWERED (by `authorize?queryRoles=true`), not enforced on read paths — do not add
+- `queryRoles` is ANSWERED (by `authorize?queryRoles=true`), not enforced on read paths (one exception: `functions/file` enforces it — keep that) — do not add
   the gate back. `authorize` decides queryRoles at the deepest active subflow leaf only (no chain AND; a parent restricts via `subFlow.overrides.states.<state>.queryRoles`); a child not created yet (`reason: instance-not-found`) makes the parent the leaf; `?ack=true` is the long-poll ack pre-flight.
 - The `queryRoles` gate reads the instance's OWN `CurrentState`, never `EffectiveState`.
 - `transition.roles` is not enforced at execution, by design — do not "fix" it. `cancel`/`exit` are
@@ -314,7 +315,7 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
   `HasActiveCorrelationForSameState` read `S` only — correct, not narrow; do not widen them to `P`.
 - `S`: completion → output mapping → `ResumePipelineAsync` from `ClearBusyOnResumeStep` (79).
   `P`: correlation complete, no parent resume. On resume failure the correlation is reverted in a new UoW.
-- Runtime child calls force `sync=true` and set `SuppressResponseEnrichment` (identity-only answer) —
+- Runtime child start and descended retry force `sync=true` (the proxy forward uses the parent's mode, § Sync vs Async); all set `SuppressResponseEnrichment` (identity-only answer) —
   never read attributes off a sub-start or forward response. A sync one still carries
   `currentState`/`effectiveState`, copied from the pipeline's instance — never a reload (`docs/runtime/execution-type.md`).
 - Completion window: child terminal while parent correlation open ⇒ state function shows parent transitions.

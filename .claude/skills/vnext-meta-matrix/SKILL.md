@@ -1,6 +1,6 @@
 ---
 name: vnext-meta-matrix
-description: Generates a comprehensive matrix report from vnext-meta JSON files. Outputs a markdown table showing features, deprecations, known issues, components, and limits by version. Use when the user says "meta matrix", "meta rapor", "feature matrix", "meta ozet", or "meta tablo".
+description: "Generates a comprehensive matrix report from vnext-meta JSON files. Outputs a markdown table showing features, deprecations, known issues, components, and limits by version. Use when the user says \"meta matrix\", \"meta rapor\", \"feature matrix\", \"meta ozet\", or \"meta tablo\"."
 ---
 
 # vnext-meta Matrix Report

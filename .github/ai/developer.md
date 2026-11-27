@@ -20,7 +20,9 @@ The working tree is the target: `master` for `NEW` / `RECOVERY`, the PR branch f
 
 ## Rules
 
-- Implement the Director plan and every council condition owned by `developer`. Do not invent
+- Implement the Director plan and every council condition owned by `developer` with class `in-PR`.
+  A `follow-up` condition is not built here — name it in `notes`. Human-owned conditions are not
+  yours: the writer copies the human `in-PR` ones into the PR body as merge checks. Do not invent
   requirements: if the plan cannot be implemented as written, stop and answer `needs-replan`.
 - Read `AGENTS.md` and the rules it names (`.claude/rules/dotnet-coding-standards.md`,
   `.claude/rules/vnext-workflow-developer.md`) before writing code. Smallest correct change; no
