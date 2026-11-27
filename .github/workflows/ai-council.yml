@@ -7,7 +7,8 @@ name: AI Council
 # `ai:council-approved` + `ai:planned` (the Developer starts); every other verdict sets `ai:blocked`.
 # The Cursor agent reads the issue snapshot and the code and prints a JSON result; it has no shell,
 # write, network or GitHub access. scripts/ai/council/apply.mjs validates it, can only make the
-# verdict stricter (never approves a breaking change, a low-confidence answer or a human condition)
+# verdict stricter (never approves a breaking change, a low-confidence answer or a human-owned
+# `blocking` condition)
 # and is the only step that writes to GitHub. An unchanged proposal is never judged twice.
 # Mode: AI_MODE = dry-run (default: comment only) | apply. Model: AI_COUNCIL_MODEL.
 # Auth: secret CURSOR_API_KEY; without it the job is a no-op.

@@ -35,8 +35,8 @@ the precedent should change; it is not re-litigated silently.
   for that purpose (`pr-review`, `create-github-pr`, `vnext-docs-generator` fallback) and never
   done on the agent's own initiative.
 - **Unit tests are not enough for a pipeline-level change.** Integration tests in `vnext-example` against
-  the locally built runtime, per `docs/testing/integration-testing.md`; starting infrastructure is
-  approved case by case.
+  the locally built runtime, per `docs/testing/integration-testing.md`. The agent starts the
+  infrastructure itself when the user asked or that policy requires the run; otherwise it offers.
 - **Aether is proposed to, not edited.** An SDK-level fix is written up as a proposal with the trade-off;
   the Chair decides whether to take it to Aether.
 - **Evidence before claims.** An unmeasured performance, recovery or compatibility claim is

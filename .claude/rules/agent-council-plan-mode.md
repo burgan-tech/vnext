@@ -35,4 +35,4 @@ source, tests, migrations, manifests, generated contracts or configuration; no i
 expensive integration runs without the user's go-ahead. A decision is not implementation approval:
 implementation is a separate task with the user's explicit direction, linked to the decision. In the CI
 pipeline an `APPROVED` verdict authorizes development, not merge
-([pipeline §3](../../docs/governance/ai-engineering-pipeline.md)).
+([pipeline §3](../../docs/governance/ai-engineering-pipeline.md#3-change-classification-and-guard-matrix)).

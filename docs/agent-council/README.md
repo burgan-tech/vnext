@@ -16,7 +16,7 @@ risk and the log format. Everything else points here.
 | CI variant (one agent, JSON verdict) | [`.github/ai/council.md`](../../.github/ai/council.md), [pipeline §3](../governance/ai-engineering-pipeline.md#3-change-classification-and-guard-matrix) |
 
 Session folders live in `ai-docs/agent-council/sessions/<YYYY-MM-DD-slug>/` (git-ignored, local to the
-machine that ran the session). Check the log first: the question may already be decided.
+machine that ran the session).
 
 ## Principles
 
@@ -32,17 +32,26 @@ machine that ran the session). Check the log first: the question may already be 
 
 | | **Lite** (default) | **Full** |
 |---|---|---|
-| When | Every council question unless Full applies | Critical risk, an explicit "full council" request, or a Lite session that closed with `ESCALATE` |
+| When | Every council question unless Full applies | Critical risk, an explicit "full council" request, two or more triggered conditional roles, or a Lite session escalated to Full |
 | Roles | Solution Architect, Pragmatic Engineer, Devil's Advocate + at most one conditional role | Smallest sufficient set from the table below (High 4–7, Critical all applicable + a human expert) |
 | Debate | One objection round | Objections, then responses (`ACCEPT`/`COUNTER`/`DEFER_TO_EXPERIMENT`/`ESCALATE`) |
 | Output | One `DECISION.md` (+ one `PROPOSAL-*.md` per role) | Same |
 
 Test & Evidence duties (claim → evidence traceability) are owned by the facilitator in Lite and by the
-Test & Evidence role in Full. The CI council runs the Lite shape with the three CI core roles.
+Test & Evidence role in Full.
+
+**Escalating Lite → Full.** Stop and rerun as Full when framing finds Critical risk, when two
+conditional roles trigger, or when a hard constraint is still contested after the objection round.
+Record `Amendment YYYY-MM-DD: escalated to Full` in the same `DECISION.md`; the session keeps its slug.
+
+**CI council.** One agent plays every role in one run with one objection round. Its core roles are
+Solution Architect, Pragmatic Engineer and Test & Evidence — the only ones the trusted script enforces
+(`CORE_ROLES` in `scripts/ai/lib/council.mjs`). The prompt (`.github/ai/council.md`) always adds
+Devil's Advocate and every triggered conditional role, with no cap; the script does not verify those.
 
 ## Roles and selection
 
-Core: Solution Architect, Pragmatic Engineer, Devil's Advocate (Lite) · plus Test & Evidence (Full, CI).
+Core: Solution Architect, Pragmatic Engineer, Devil's Advocate (Lite) · the same plus Test & Evidence (Full) · CI core: see above.
 
 | Trigger | Add |
 |---|---|
@@ -56,15 +65,17 @@ writes `DECISION.md` owns no proposal; the implementer of a change is never its 
 
 ## Risk
 
-Risk follows the impact checklist of the [AI pipeline §3](../governance/ai-engineering-pipeline.md#3-change-classification-and-guard-matrix)
-— one definition for CI and interactive sessions.
+Risk uses the impact triggers of the [AI pipeline §3](../governance/ai-engineering-pipeline.md#3-change-classification-and-guard-matrix).
+The CI **labels** are coarser than this table and must not be mapped onto it: `ai:risk-high` means any
+high-impact change, core-process-only ones included (Medium here, and CI sends them to development
+without a council), and `ai:risk-critical` means a breaking (major) change.
 
 | Risk | Holds when | Chair |
 |---|---|---|
-| Low | Local refactor, isolated fix or test | Informed through the log |
-| Medium | Touches a core process (pipeline, transitions, subflows, locking, state function) **without** any High trigger | Only for a policy exception |
+| Low | Local refactor, isolated fix or test | Only if on the [mandatory-approval list](CHAIR.md#mandatory-approval) |
+| Medium | Touches a core process (pipeline, transitions, subflows, locking, state function) **without** any High trigger | Only if on the mandatory-approval list |
 | High | Auth/secret/PII · persisted shape or migration · public API, event contract or `ResponseShapeVersion` · cross-service consistency (outbox/inbox/relays) · a companion contract change in another product | Required |
-| Critical | Production migration, security boundary or high blast radius | Required, double check |
+| Critical | A High trigger that is also irreversible in production (a migration that cannot be rolled back), crosses a trust boundary between services or tenants, or breaks a published contract | Required, double check |
 
 "It touches a core-process file" alone is Medium, not High.
 
@@ -86,8 +97,10 @@ One vocabulary, also enforced by `scripts/ai/lib/council.mjs` (`VERDICTS`) and c
 | `BLOCKED` | A hard constraint is violated | The constraint and what would unblock it |
 | `REJECTED` | The change should not be made | — |
 
-Session status, beside the verdict: `Awaiting Chair` (Chair approval required and not yet given),
-`VOID` (the premise turned out false — nothing to decide), `SUPERSEDED` (a later session replaced it).
+Session status, beside the verdict: `Decided` (closed, no Chair needed or the Chair has ruled),
+`Awaiting Chair` (Chair approval required and not yet given), `VOID` (the premise turned out false —
+nothing to decide; a VOID session has **no verdict**, its verdict cell is `— (VOID)`), `SUPERSEDED`
+(a later session replaced it).
 
 **One headline verdict.** It is the verdict of the scope that can move **now**. Other parts of the
 question go in the item table of `DECISION.md` with their own verdicts and become follow-ups; a log row
@@ -104,7 +117,7 @@ Every condition has an id, an owner and a class. **Only `blocking` conditions ho
 | Class | Meaning | Blocks |
 |---|---|---|
 | `blocking` | Must be met before implementation starts: an owner decision, a companion release, an experiment result | Start |
-| `in-PR` | Proven inside the implementation PR: tests, a measurement on the branch, docs, deprecation entry | Merge (listed in the PR body, checked in review) |
+| `in-PR` | Proven inside the implementation PR: tests, a measurement on the branch, docs, deprecation entry | Merge (listed in the PR body, checked by the human reviewer — no automated gate reads them) |
 | `follow-up` | Separate issue with owner and due date | Nothing |
 
 A `blocking` condition closes as `Satisfied` (with evidence) or `Waived` (by the Chair, or by the
@@ -125,7 +138,9 @@ reversibility, then simplicity.
 
 Identity, the mandatory-approval list and the standing precedents are in [CHAIR.md](CHAIR.md). A High or
 Critical decision, and any decision on the mandatory-approval list, closes as `Awaiting Chair` until the
-Chair answers. To keep the queue short, `DECISION.md` ends
+Chair answers. **Exception — the CI council:** its `APPROVED` authorizes development only, never merge;
+the human review of the PR is the gate, so its log rows carry no `Awaiting Chair`
+([pipeline §3](../governance/ai-engineering-pipeline.md#3-change-classification-and-guard-matrix)). To keep the queue short, `DECISION.md` ends
 with **at most five yes/no Chair questions, each with a recommended answer**, and the skill's *chair
 queue* mode collects every open one in a single pass.
 
@@ -141,8 +156,7 @@ Append the amendment to the session's `DECISION.md` and to the log row's Verdict
 
 ## Boundary
 
-The council reads anything and writes only its session folder plus one log row. It never changes
-production source, tests, migrations, deployment manifests, generated contracts, `etc/`, `vnext-meta/`
-or project configuration. Implementation is a separate task and needs the user's explicit direction.
-Decisions that add a component type record the coordination cost with `@burgan-tech/vnext-schema`,
-`vnext-meta` and the Helm chart.
+What a session may read and write, and why a decision is not implementation approval: the
+[plan-mode rule](../../.claude/rules/agent-council-plan-mode.md#plan-mode-boundary). A decision that
+adds a component type records the coordination cost with `@burgan-tech/vnext-schema`, `vnext-meta` and
+the Helm chart.

@@ -20,10 +20,12 @@ kararlar"); **Full** on "full council", Critical risk or an escalated Lite sessi
 2. **Frame it.** Create `ai-docs/agent-council/sessions/<YYYY-MM-DD-slug>/DECISION.md` from
    [`templates/DECISION.md`](../../../docs/agent-council/templates/DECISION.md); fill the question,
    acceptance, risk ([README § Risk](../../../docs/agent-council/README.md#risk)) and the requester.
+   Critical risk, or two triggered conditional roles → continue as **Full**.
 3. **Evidence pack first.** Explore agents, the graph (`graphify`), `git log`/`git show --stat` for cost
    precedents, the relevant `/docs` page, [CHAIR.md precedents](../../../docs/agent-council/CHAIR.md#standing-precedents).
    Write verified facts (`file:line`) and assumptions into `DECISION.md`. **Test the premise** — a false
-   premise ends the session as `VOID` with the finding, which is a result, not a failure.
+   premise ends the session with status `VOID` and no verdict (log cell `— (VOID)`), the finding
+   recorded; that is a result, not a failure. Skip to step 8.
 4. **Independent proposals.** One `Agent` per role — Solution Architect, Pragmatic Engineer, Devil's
    Advocate, plus at most one conditional role from the README table — **all in one message** so they
    run in parallel and never see each other. Each prompt carries: its section of
@@ -32,6 +34,7 @@ kararlar"); **Full** on "full council", Critical risk or an escalated Lite sessi
    `PROPOSAL-<nn>-<role>.md`.
 5. **One objection round.** `SendMessage` each agent the other proposals; collect evidence-backed
    objections (claim, evidence, impact, requested revision). No new evidence → no objection. Stop.
+   A hard constraint still contested → escalate to Full (README § Modes) instead of deciding.
 6. **Decide.** Fill `DECISION.md`: one headline verdict, an item table if the question has parts,
    dissent (at least the Devil's Advocate's strongest unresolved argument — no loop back), conditions
    with class (`blocking` / `in-PR` / `follow-up`), the **next action**, verification and rollback.

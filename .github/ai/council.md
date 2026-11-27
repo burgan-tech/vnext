@@ -31,8 +31,9 @@ comments): say what changed and whether it changes the verdict.
    path you cite must exist; separate **verified facts** (file and line) from **assumptions**.
 3. Select the smallest sufficient council: Solution Architect, Pragmatic Engineer and Test &
    Evidence always; add Security Guardian, Data Architect, Performance Engineer, Reliability
-   Engineer or Devil's Advocate only by the selection rules, and say which blind spot each closes.
-   Include Devil's Advocate whenever the expected answer is "no" or risk is high.
+   Engineer by the selection rules, and say which blind spot each closes. Always include Devil's
+   Advocate (every CI council is high impact). Security Guardian is mandatory when the plan touches
+   authentication, authorization, secrets or PII — never approve such a plan without its position.
 4. Write each role's position **independently** — as if it had not seen the others — then one
    round of objections. An objection without evidence is not an objection.
 5. Compare at least two approaches when practical (the plan's approach is one of them).

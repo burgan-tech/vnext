@@ -2,7 +2,7 @@
 
 One row per council session, newest at the bottom — the only committed record of council decisions.
 Read it first: the question may already be decided. Session folders (`DECISION.md`, proposals) live in
-git-ignored `ai-docs/agent-council/sessions/<task-id>/`, so the session link resolves only on the machine
+git-ignored `ai-docs/agent-council/sessions/<YYYY-MM-DD-slug>/`, so the session link resolves only on the machine
 that ran it. Contract (verdicts, statuses, amendments): [../README.md](../README.md).
 
 Row rules: one headline verdict (the scope that moves now), each free-text cell ~300 characters or less,
@@ -36,5 +36,5 @@ predate this format and are kept as written.
 | 2026-11-23 | [2026-11-23-mapped-transition-master-schema-preview](../../../ai-docs/agent-council/sessions/2026-11-23-mapped-transition-master-schema-preview/DECISION.md) | Master-schema violation on a transition with a `mapping`: exempt from the intake preview of #1255, so it still faults the instance (review finding on PR #1327) | Medium | APPROVE_WITH_CONDITIONS | Keep the exemption in PR #1327, documented as a known gap, not a contract. Running the mapping at intake is rejected (scripts are not side-effect free). A non-faulting rejection is not approved as it stands: it would lose async work silently. Conditions open: characterization scenario before merge; a separate prevention issue with owner and due date. | PR #1327; prevention issue to be opened (not #1252) |
 <!-- newest at the bottom; keep one line per session -->
 
-Verdicts and statuses: [../README.md § Verdicts](../README.md#verdicts). `Follow-up` links the
-implementation PR/issue, the superseding session, or `—`.
+Verdicts and statuses: [../README.md § Verdicts](../README.md#verdicts). The last column carries the
+open `blocking` conditions, follow-ups and the implementation PR/issue or superseding session, or `—`.
