@@ -177,6 +177,7 @@ public class TransitionPipeline
         context.EnqueueContinuations = workflowContext.EnqueueContinuations;
         context.IsPreReserved = workflowContext.IsPreReserved;
         context.SubflowChainReserved = workflowContext.SubflowChainReserved;
+        context.InitialDataPersisted = workflowContext.InitialDataPersisted;
 
         // 2) Cheap Busy pre-check (aggregate already loaded — no extra round trip). A timer firing
         //    in an interaction wait is the one Normal request that expects Busy: that state parks

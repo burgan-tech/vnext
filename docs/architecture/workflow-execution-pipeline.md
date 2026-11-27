@@ -176,6 +176,7 @@ instance anyway).
 | `WorkflowExecutionContext` | `TransitionExecutionContext` | Initial/fresh entry loads workflow and active instance; an uninterrupted inline hop reuses the previous workflow/instance. |
 | Ordered `ITransitionStep` list | Mutated instance and directives | Steps execute by `LifecycleOrder`. |
 | `PipelineDirectives` | Post-commit jobs, deferred events, next transition | Directives are consumed explicitly to avoid repeated work. |
+| `WorkflowExecutionContext.InitialDataPersisted` (start only) | Step 20 appends no data | The instance's creation already stored the start payload as its initial version and the start transition maps nothing, so the hop's own append could only dedup to no row. A mapped start, a `history: none` flow, a payload-less start and an async start's job re-entry keep the append. Transport-only, never copied onto a continuation hop. |
 
 The distributed status lock is held only around admission's status check-and-set. The pipeline body
 and automatic chain run without a distributed lock lease. The Busy status is the ownership marker;

@@ -137,6 +137,14 @@ public sealed class TransitionExecutionContext
     public bool IsPreReserved { get; set; }
 
     /// <summary>
+    /// The instance's creation already appended this hop's payload, unmapped, as its initial data
+    /// version, so <c>CreateTransitionRecordStep</c> does not append it a second time. Copied from
+    /// <see cref="WorkflowExecutionContext.InitialDataPersisted"/> for the start hop only; a continuation
+    /// hop never carries it.
+    /// </summary>
+    public bool InitialDataPersisted { get; set; }
+
+    /// <summary>
     /// Gets or sets whether the accept that produced this execution reserved the instance's whole
     /// active SubFlow chain down to the leaf. <c>ForwardToActiveSubflowStep</c> stamps it onto the
     /// forward so the leaf admits the relay as an owner re-entry instead of rejecting the Busy the
