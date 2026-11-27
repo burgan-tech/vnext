@@ -234,18 +234,45 @@ public static class TaskBindingMapper
     private static HttpTaskBinding MapHttpTask(HttpTask task)
     {
         var contentType = HttpContentType.Resolve(task.ContentType, ReadHeaderContentType(task.Headers));
+        var multipart = MapMultipart(task.Multipart);
 
         return new HttpTaskBinding
         {
             Url = task.Url,
             Method = task.Method,
             Headers = task.Headers?.GetRawText(),
-            Body = task.RawBody ?? SerializeBody(task.Body, contentType),
+            // A multipart request sends only its parts: the body is not carried beside it.
+            Body = multipart is null ? task.RawBody ?? SerializeBody(task.Body, contentType) : null,
             ContentType = task.ContentType,
+            Multipart = multipart,
             TimeoutSeconds = task.TimeoutSeconds,
             ValidateSSL = task.ValidateSSL,
             AcceptedStatusCodes = task.AcceptedStatusCodes
         };
+    }
+
+    /// <summary>
+    /// Maps the task's multipart parts to their wire form; null when the task has none.
+    /// </summary>
+    private static IReadOnlyList<HttpMultipartPartBinding>? MapMultipart(IReadOnlyList<HttpMultipartPart>? parts)
+    {
+        if (parts is not { Count: > 0 })
+            return null;
+
+        var mapped = new List<HttpMultipartPartBinding>(parts.Count);
+        foreach (var part in parts)
+        {
+            mapped.Add(new HttpMultipartPartBinding
+            {
+                Name = part.Name,
+                Value = part.Value,
+                Content = part.Content,
+                FileName = part.FileName,
+                ContentType = part.ContentType
+            });
+        }
+
+        return mapped;
     }
 
     /// <summary>

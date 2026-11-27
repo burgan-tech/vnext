@@ -1,0 +1,18 @@
+{
+  "releaseNote": {
+    "summary": "An HTTP task can send a multipart/form-data body: mapping scripts add file parts as bytes (AddMultipartFile) and text fields (AddMultipartField), so a PDF or image reaches an upload API intact.",
+    "breaking": false,
+    "docs": []
+  },
+  "features": {
+    "engine": {
+      "httpTaskMultipartBody": {
+        "since": "next",
+        "status": "stable",
+        "description": "An HTTP task (type 6, and the deprecated type 22) can send a multipart/form-data body. Its Body and RawBody are strings sent as UTF-8, which rewrites every byte above 0x7F, so before this no task type could deliver a file to an upload API (curl -F file=@scan.pdf). A mapping script's InputHandler now adds parts to the HttpTask: AddMultipartFile(name, byte[] content, fileName?, contentType?) sends the bytes unchanged (fileName defaults to name, contentType to application/octet-stream), AddMultipartField(name, value) a UTF-8 text part, ClearMultipart() drops them. With at least one part the request is MultipartFormDataContent with a runtime-generated boundary; Body, RawBody, contentType and a Content-Type header are ignored and the body is not carried beside the parts; a GET sends no body. Parts are run-time only (a task definition cannot declare them; the component schema is unchanged). They travel in HttpTaskBinding.Multipart (HttpMultipartPartBinding; file bytes as base64 in JSON on the Remote path) and are not written to the task journal, which records the task reference and the input handler's response.",
+        "schemaPath": "task.type=6|22",
+        "documentation": "docs/runtime/task-executors-and-invokers.md"
+      }
+    }
+  }
+}

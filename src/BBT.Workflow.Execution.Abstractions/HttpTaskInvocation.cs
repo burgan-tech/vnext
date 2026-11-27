@@ -624,8 +624,13 @@ public static class HttpTaskInvocation
 
             ApplyTrustedCorrelationHeaders(request, traceContext);
 
-            // Add body for non-GET requests. Resolution: explicit ContentType → Content-Type header → json.
-            if (request.Method != HttpMethod.Get && !string.IsNullOrEmpty(binding.Body))
+            // Add body for non-GET requests. A multipart body wins and sets its own media type (the boundary);
+            // otherwise the resolution is: explicit ContentType → Content-Type header → json.
+            if (request.Method != HttpMethod.Get && binding.Multipart is { Count: > 0 } parts)
+            {
+                request.Content = BuildMultipartContent(parts);
+            }
+            else if (request.Method != HttpMethod.Get && !string.IsNullOrEmpty(binding.Body))
             {
                 var contentType = HttpContentType.Resolve(binding.ContentType, headerContentType);
                 request.Content = new StringContent(binding.Body, Encoding.UTF8);
@@ -634,6 +639,31 @@ public static class HttpTaskInvocation
 
             return (httpClient, request);
         }
+    }
+
+    /// <summary>
+    /// Builds the <c>multipart/form-data</c> content of a request: a file part as its bytes (never through a
+    /// string, so no byte is re-encoded), a field part as UTF-8 text, in the binding's order.
+    /// </summary>
+    private static MultipartFormDataContent BuildMultipartContent(IReadOnlyList<HttpMultipartPartBinding> parts)
+    {
+        var form = new MultipartFormDataContent();
+        foreach (var part in parts)
+        {
+            if (part.Content is not null)
+            {
+                var file = new ByteArrayContent(part.Content);
+                file.Headers.ContentType = MediaTypeHeaderValue.Parse(
+                    string.IsNullOrWhiteSpace(part.ContentType) ? "application/octet-stream" : part.ContentType);
+                form.Add(file, part.Name, string.IsNullOrWhiteSpace(part.FileName) ? part.Name : part.FileName);
+            }
+            else
+            {
+                form.Add(new StringContent(part.Value ?? string.Empty, Encoding.UTF8), part.Name);
+            }
+        }
+
+        return form;
     }
 
     /// <summary>A header value that can be carried as is: present, bounded, no control characters (no header injection).</summary>

@@ -311,6 +311,9 @@ return new ScriptResponse { Data = new { convertedDocument = converted } };   //
 - `FileObjectKey(file)` answers the object key of a stored file (`FileStorage:KeyPrefix` + file id; a non-GUID is
   refused) for a `DaprBinding` task that reads, lists or deletes it (see [Deleting and listing](#deleting-and-listing-objects)).
 - An object a script writes but no output keeps is an orphan, like any unreferenced object.
+- To **send** a stored file to an external service that takes an upload, an HTTP task's input handler passes the
+  bytes to `HttpTask.AddMultipartFile(name, source.Content, source.Name, source.MimeType)` — never through the body
+  string ([Task Executors § multipart](task-executors-and-invokers.md#http-task-body-multipartform-data)).
 
 ## Deleting and listing objects
 

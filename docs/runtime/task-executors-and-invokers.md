@@ -54,6 +54,39 @@ config, and what the local path trades away.
 | Python | `PythonTaskExecutor` (type `23`) | No invoker and no Execution hop: the Orchestration executor calls the domain's own Python runtime container over Dapr (`Workflow:PythonRuntime:AppId`) with the v1 runtime contract ([details](python-task.md)) |
 | Human/notification | Human and notification executors | May remain application-owned depending on side effect type |
 
+### HTTP task body: `multipart/form-data`
+
+An HTTP task's `Body` / `RawBody` is a string and is sent as UTF-8 (`HttpTaskInvocation.PrepareRequest`),
+so a file's bytes cannot travel through it — every byte above `0x7F` would be re-encoded. A service that
+takes an upload (`curl -F "file=@scan.pdf"`) is reached with **multipart parts** that a mapping script
+adds in the task's `InputHandler`:
+
+```csharp
+var http = (HttpTask)task;
+http.AddMultipartFile("file", Convert.FromBase64String(base64), "scan.pdf", "application/pdf");
+http.AddMultipartField("source", "factoring");   // optional text fields, in order
+```
+
+- `AddMultipartFile(name, bytes, fileName?, contentType?)` — the bytes are sent unchanged
+  (`ByteArrayContent`); `fileName` defaults to `name`, `contentType` to `application/octet-stream`.
+  A script holding an `x-storage` handle reads the bytes with `GetFileAsync` first
+  ([File Storage](file-storage.md#processing-files-in-scripts)).
+- `AddMultipartField(name, value)` — a UTF-8 text part. `ClearMultipart()` drops every part.
+- With at least one part the request is multipart (`MultipartFormDataContent`, the runtime picks the
+  boundary): `Body`, `RawBody`, `contentType` and a `Content-Type` header are ignored, and the mapper does
+  not carry the body beside the parts. A `GET` sends no body, as before.
+- Parts exist only at run time — a task definition cannot declare them, so the component schema is
+  unchanged. They travel in `HttpTaskBinding.Multipart` (`HttpMultipartPartBinding`, file bytes as base64
+  in JSON when the call goes Remote) and are copied by `TaskBindingCredentials`.
+- The bytes are **not** written to the task journal: it records the task reference and the input
+  handler's response, not the binding. A script that also returns the bytes in its `ScriptResponse`
+  stores them there (known issue `file-in-task-record`).
+- Size: the parts are held in memory for the call and bounded by the receiving service. On the Remote
+  path the envelope also passes the Dapr sidecar's `--max-body-size`.
+
+Pinned by `HttpTaskInvokerMultipartTests` (every byte value reaches the wire, part order, precedence,
+mapper, JSON round trip) and `HttpTaskMultipartTests` (clone, pooling, reset, validation).
+
 ## Failure Modes
 
 - Unknown task type fails registry lookup.
