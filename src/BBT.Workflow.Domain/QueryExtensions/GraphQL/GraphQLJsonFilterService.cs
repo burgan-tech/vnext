@@ -351,17 +351,17 @@ public static class GraphQLJsonFilterService
 
     private static string BuildUnifiedPredicate(GraphQLFilterNode node, string column,
         List<NpgsqlParameter> parameters, ref int index, SchemaFilterContext? context, string? schema = null, bool useLatestJoin = false,
-        bool policyExempt = false)
+        bool policyExempt = false, bool underNot = false)
     {
         // Inherited from the first PolicyExempt ancestor: a planner-emitted subtree stays exempt below it.
         policyExempt |= node.PolicyExempt;
         if (node.NodeType == FilterNodeType.Not)
-            return $"NOT ({BuildUnifiedPredicate(node.Not!, column, parameters, ref index, context, schema, useLatestJoin, policyExempt)})";
+            return $"NOT ({BuildUnifiedPredicate(node.Not!, column, parameters, ref index, context, schema, useLatestJoin, policyExempt, underNot: true)})";
         var parts = new List<string>();
         if (node.NodeType is FilterNodeType.And or FilterNodeType.Or)
         {
             foreach (var child in (node.And ?? node.Or)!)
-                parts.Add(BuildUnifiedPredicate(child, column, parameters, ref index, context, schema, useLatestJoin, policyExempt));
+                parts.Add(BuildUnifiedPredicate(child, column, parameters, ref index, context, schema, useLatestJoin, policyExempt, underNot));
             return "(" + string.Join(node.NodeType == FilterNodeType.Or ? " OR " : " AND ", parts) + ")";
         }
         if (node.Attributes == null) throw new FilterCompilationException("Empty logical filter node.");
@@ -373,13 +373,26 @@ public static class GraphQLJsonFilterService
             {
                 var predicate = string.Join(" AND ", BuildFieldConditions(field, condition, column, parameters, ref index, context, policyExempt));
                 if (string.IsNullOrEmpty(predicate)) throw new FilterCompilationException("Empty attribute predicate.");
-                parts.Add(useLatestJoin ? $"(CASE WHEN _latest.\"Id\" IS NULL THEN NULL ELSE ({predicate}) END)" :
+                parts.Add(useLatestJoin ? LatestJoinGuard(predicate, underNot) :
                     schema == null ? $"({predicate})" :
                     $"(SELECT ({predicate}) FROM \"{schema}\".\"InstancesData\" WHERE \"InstanceId\" = s.\"Id\" AND \"IsLatest\" = true LIMIT 1)");
             }
         }
         return "(" + string.Join(" AND ", parts) + ")";
     }
+
+    /// <summary>
+    /// Guards an attribute predicate for an instance that has no latest data row (LEFT JOIN miss).
+    /// Outside a NOT the guard is <c>_latest."Id" IS NOT NULL AND (p)</c>: PostgreSQL can serve the
+    /// <c>"Data" @&gt; …</c> leaves from the GIN index on InstancesData (a BitmapOr across OR branches),
+    /// which a <c>CASE</c> expression hides from the planner. The result differs from the <c>CASE</c>
+    /// form only by FALSE instead of NULL on a missing row; AND/OR are monotone, so a WHERE that
+    /// has no NOT above the leaf keeps or drops exactly the same rows. Under a NOT that difference
+    /// would flip (NOT FALSE = TRUE, NOT NULL = NULL), so the NULL-preserving <c>CASE</c> stays there.
+    /// </summary>
+    private static string LatestJoinGuard(string predicate, bool underNot) => underNot
+        ? $"(CASE WHEN _latest.\"Id\" IS NULL THEN NULL ELSE ({predicate}) END)"
+        : $"(_latest.\"Id\" IS NOT NULL AND ({predicate}))";
 
     /// <summary>
     /// Build WHERE clauses recursively, separating Instance and JSON conditions
