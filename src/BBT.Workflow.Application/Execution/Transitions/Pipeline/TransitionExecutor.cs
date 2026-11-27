@@ -95,6 +95,7 @@ public sealed class TransitionExecutor
             {
                 _logger.LogError(ex, "Unhandled exception in pipeline execution for workflow {WorkflowKey}",
                     context.Workflow.Key);
+                context.FailureCause = ex;
                 return Result.Fail(Error.Failure("PipelineException", ex.Message));
             }
         }
@@ -157,6 +158,7 @@ public sealed class TransitionExecutor
         {
             PipelineStepActivityHelper.SetStepError(stepActivity, ex);
             _logger.LogError(ex, "Unhandled exception in step {StepName}", step.Name);
+            context.FailureCause = ex;
             return Result<StepOutcome>.Fail(Error.Failure(ex.GetType().Name, ex.Message));
         }
     }

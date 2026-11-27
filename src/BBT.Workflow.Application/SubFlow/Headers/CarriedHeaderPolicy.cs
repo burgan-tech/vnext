@@ -10,7 +10,8 @@ namespace BBT.Workflow.SubFlow.Headers;
 /// </summary>
 public sealed class CarriedHeaderPolicy(
     IOptions<SubFlowCarriedHeadersOptions> options,
-    ILogger<CarriedHeaderPolicy> logger) : ICarriedHeaderPolicy
+    ILogger<CarriedHeaderPolicy> logger,
+    BBT.Workflow.Headers.IHeaderExposureDenyList? headerExposureDenyList = null) : ICarriedHeaderPolicy
 {
     private static readonly string[] DeniedSubstrings = ["authorization", "cookie", "token", "secret", "session"];
 
@@ -64,7 +65,10 @@ public sealed class CarriedHeaderPolicy(
             }
 
             var lower = key.ToLowerInvariant();
-            if (IsDenied(lower, additional) || IsExcluded(lower) || (value?.Length ?? 0) > _options.MaxValueLength)
+            // Workflow:HeaderExposure:Deny names never leave the settling request either: the carried set reaches the
+            // parent's output mapping and resume request, both of which that list keeps them out of.
+            if (IsDenied(lower, additional) || IsExcluded(lower) || headerExposureDenyList?.IsDenied(key) == true
+                || (value?.Length ?? 0) > _options.MaxValueLength)
             {
                 denied++;
                 continue;
@@ -89,12 +93,9 @@ public sealed class CarriedHeaderPolicy(
 
     private static bool IsDenied(string lower, List<string> additional)
     {
-        foreach (var s in DeniedSubstrings)
+        if (DeniedSubstrings.Any(s => lower.Contains(s, StringComparison.Ordinal)))
         {
-            if (lower.Contains(s, StringComparison.Ordinal))
-            {
-                return true;
-            }
+            return true;
         }
 
         if (additional.Any(name => string.Equals(name, lower, StringComparison.OrdinalIgnoreCase)))
@@ -112,12 +113,9 @@ public sealed class CarriedHeaderPolicy(
             return true;
         }
 
-        foreach (var p in ExcludedPrefixes)
+        if (ExcludedPrefixes.Any(p => lower.StartsWith(p, StringComparison.Ordinal)))
         {
-            if (lower.StartsWith(p, StringComparison.Ordinal))
-            {
-                return true;
-            }
+            return true;
         }
 
         return false;

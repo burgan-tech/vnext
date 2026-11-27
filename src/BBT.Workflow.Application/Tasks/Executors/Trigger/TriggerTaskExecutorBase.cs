@@ -68,9 +68,7 @@ public abstract class TriggerTaskExecutorBase<TTask>(
             var scriptRunner = await GetOrCompileMappingAsync<IMapping>(ScriptEngine, context, ct);
 
             return await scriptRunner.InputHandler(task, context.ScriptContext);
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Input handler failed for {TaskType}: {ScriptDiagnostics.Explain(ex)}"));
+        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, $"Input handler failed for {TaskType}"));
 
         if (!result.IsSuccess)
         {
@@ -106,9 +104,7 @@ public abstract class TriggerTaskExecutorBase<TTask>(
 
             var outputResponse = await scriptRunner.OutputHandler(context.ScriptContext);
             return outputResponse.Data;
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"Output handler failed for {TaskType}: {ScriptDiagnostics.Explain(ex)}"));
+        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, $"Output handler failed for {TaskType}"));
 
         if (!result.IsSuccess)
         {
@@ -211,7 +207,7 @@ public abstract class TriggerTaskExecutorBase<TTask>(
     protected static Dictionary<string, string?> BuildReadCredential(JsonElement? taskHeaders, ScriptContext? scriptContext)
         => HttpTaskInvocation.BuildOutgoingHeaders(
             ConvertTaskHeadersToDictionary(taskHeaders),
-            scriptContext?.Headers is null ? null : scriptContext.GetHeadersAsDictionary());
+            scriptContext?.Headers is null ? null : scriptContext.GetTransportHeadersAsDictionary());
 
     /// <summary>
     /// The same credential as <see cref="BuildReadCredential"/> (rule:
@@ -237,7 +233,7 @@ public abstract class TriggerTaskExecutorBase<TTask>(
         }
 
         return JsonSerializer.Serialize(HttpTaskInvocation.BuildOutgoingHeaders(
-            bindingHeaders, scriptContext?.Headers is null ? null : scriptContext.GetHeadersAsDictionary()));
+            bindingHeaders, scriptContext?.Headers is null ? null : scriptContext.GetTransportHeadersAsDictionary()));
     }
 
     /// <summary>

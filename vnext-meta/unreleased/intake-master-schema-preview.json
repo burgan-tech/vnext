@@ -1,0 +1,20 @@
+{
+  "releaseNote": {
+    "summary": "A request body that breaks the flow's master schema is now refused with 400 before admission instead of faulting the instance.",
+    "breaking": false,
+    "docs": []
+  },
+  "migrations": [
+    {
+      "id": "intake-master-schema-preview",
+      "type": "behavior",
+      "component": "transition",
+      "path": "workflow.schema (master schema) | transition request body",
+      "since": "next",
+      "severity": "info",
+      "title": "A body that violates the master schema is refused at intake with 400",
+      "description": "The body of a manual transition or start request is merged onto the latest instance data in memory and the result is validated against the flow's master schema before admission (vnext#1255). A body the write would refuse, for example a field a closed master schema (additionalProperties: false) does not allow, now answers 400 with validationErrors[].members; the instance is not set Busy, no job is queued and nothing is written. Before, the request was admitted (200 / 202) and the write failed inside the pipeline, faulting the instance. Not previewed, and so unchanged: transitions with a mapping, automatic / scheduled / event hops, requests relayed to an active SubFlow, flows without a master schema, master schemas with x-encryption paths, bodies carrying an x-storage file node. The write still validates every data version.",
+      "action": "None required. A client that relied on the 200 / 202 answer for such a body must send only fields the master schema allows. WorkflowExecution:InstanceDataWrite:IntakeMasterSchemaPreview=false restores the previous behaviour."
+    }
+  ]
+}

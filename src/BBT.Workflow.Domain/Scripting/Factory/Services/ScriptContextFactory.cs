@@ -25,7 +25,8 @@ public sealed class ScriptContextFactory(
     IInstanceCorrelationRepository? correlationRepository = null,
     IOptions<RelatedAccessOptions>? relatedAccessOptions = null,
     IInstanceDataProtector? dataProtector = null,
-    BBT.Aether.MultiSchema.ICurrentSchema? currentSchema = null) : IScriptContextFactory
+    BBT.Aether.MultiSchema.ICurrentSchema? currentSchema = null,
+    Headers.IHeaderExposureDenyList? headerExposureDenyList = null) : IScriptContextFactory
 {
     /// <summary>
     /// Creates a new fluent builder for constructing ScriptContext instances.
@@ -43,6 +44,7 @@ public sealed class ScriptContextFactory(
             correlationRepository,
             relatedAccessOptions,
             dataProtector,
-            currentSchema);
+            currentSchema,
+            headerExposureDenyList);
     }
 }

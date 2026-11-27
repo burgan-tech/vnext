@@ -25,7 +25,8 @@ internal sealed class ScriptContextBuilder(
     IInstanceCorrelationRepository? correlationRepository = null,
     IOptions<RelatedAccessOptions>? relatedAccessOptions = null,
     IInstanceDataProtector? dataProtector = null,
-    BBT.Aether.MultiSchema.ICurrentSchema? currentSchema = null) : IScriptContextBuilder
+    BBT.Aether.MultiSchema.ICurrentSchema? currentSchema = null,
+    Headers.IHeaderExposureDenyList? headerExposureDenyList = null) : IScriptContextBuilder
 {
     private IRuntimeInfoProvider? _runtimeInfoProvider;
     private Definitions.Workflow? _workflow;
@@ -249,7 +250,8 @@ internal sealed class ScriptContextBuilder(
             .SetRuntime(_runtimeInfoProvider!)
             .SetBody(_body)
             .SetRawBody(_explicitRawBody ?? rawBodyProvider?.GetRawBody())
-            .SetHeaders(_headers)
+            .SetHeaders(ScriptVisibleHeaders())
+            .SetTransportHeaders(_headers)
             .SetRouteValues(_routeValues)
             .SetQueryParameters(_queryParameters)
             .SetEventPayload(_eventPayload)
@@ -274,6 +276,16 @@ internal sealed class ScriptContextBuilder(
     /// local so the factories are stable even if the builder's field were ever reassigned before the
     /// lazy value is realized.
     /// </remarks>
+    /// <summary>
+    /// The headers scripts see: the request headers without the <c>Workflow:HeaderExposure:Deny</c> names. With nothing
+    /// denied this is the very dictionary that was passed in, so behaviour is unchanged. The unreduced headers stay on the
+    /// context as transport headers for the runtime's own credential and identity reads.
+    /// </summary>
+    private Dictionary<string, string?>? ScriptVisibleHeaders() =>
+        _headers is null || headerExposureDenyList is null or { IsEmpty: true }
+            ? _headers
+            : headerExposureDenyList.Filter(_headers);
+
     private ScriptTransitionRequest? BuildScriptTransitionRequest()
     {
         var instanceTransition = _instanceTransition;

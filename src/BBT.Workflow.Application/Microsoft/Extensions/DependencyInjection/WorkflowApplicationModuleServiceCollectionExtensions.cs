@@ -155,6 +155,13 @@ public static class WorkflowApplicationModuleServiceCollectionExtensions
                 "Workflow:SubFlow:CarriedHeaders requires a non-null AdditionalDenied and positive MaxEntries and MaxValueLength.")
             .ValidateOnStart();
         services.AddSingleton<BBT.Workflow.SubFlow.Headers.ICarriedHeaderPolicy, BBT.Workflow.SubFlow.Headers.CarriedHeaderPolicy>();
+        // Header exposure deny list (Workflow:HeaderExposure:Deny): kept out of transition history and every script
+        // context; the runtime's own role/identity/credential reads still see the request as it arrived. Empty = no change.
+        services.AddOptions<BBT.Workflow.Headers.HeaderExposureOptions>()
+            .BindConfiguration(BBT.Workflow.Headers.HeaderExposureOptions.SectionName)
+            .Validate(o => o.Deny is not null, "Workflow:HeaderExposure requires a non-null Deny list.")
+            .ValidateOnStart();
+        services.AddSingleton<BBT.Workflow.Headers.IHeaderExposureDenyList, BBT.Workflow.Headers.HeaderExposureDenyList>();
         // Journal tunables (Workflow:FunctionExecutionJournal): QueueCapacity + BatchSize.
         services.AddOptions<FunctionExecutionJournalOptions>()
             .BindConfiguration(FunctionExecutionJournalOptions.SectionName);

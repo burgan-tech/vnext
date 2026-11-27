@@ -144,6 +144,31 @@ public sealed class TaskCoordinatorTests
     }
 
     /// <summary>
+    /// vnext#1268: the coordinator asks for an unhandled failure as an outcome, so the engine's
+    /// ExecutionError — the script's stack trace included — reaches the task step and its incident,
+    /// on the fresh-record path as well as the probing one.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExecuteWithDetailsAsync_AsksTheEngineForUnhandledFailuresAsOutcomes(bool skipJournalProbe)
+    {
+        var engine = Substitute.For<ITaskExecutionEngine>();
+        ArrangeOutcome(engine, "first", _ => TasksExecutionResult.Success([TaskExecutionSummary.Success("first", "Http")]));
+        ArrangeOutcome(engine, "second", _ => TasksExecutionResult.Success([TaskExecutionSummary.Success("second", "Http")]));
+
+        await CreateCoordinator(engine, new ServiceCollection().BuildServiceProvider())
+            .ExecuteWithDetailsAsync(SequentialDefinitions(), Guid.NewGuid(), TaskTrigger.OnExecute,
+                TaskExecutionOrigin.Flow, CreateContext(), [], skipJournalProbe);
+
+        await engine.Received(2).ExecuteAsync(
+            Arg.Any<OnExecuteTask>(), Arg.Any<Guid?>(), Arg.Any<TaskTrigger>(), Arg.Any<TaskExecutionOrigin>(),
+            Arg.Any<ScriptContext>(),
+            Arg.Is<TaskEngineExecutionOptions>(o => o.ReportUnhandledFailureAsOutcome && o.SkipJournalProbe == skipJournalProbe),
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
     /// vnext#1257: a failure the boundary handled with Ignore/Log does not stop the hook — the next
     /// task runs, and the hook as a whole succeeds while still reporting the failed task.
     /// </summary>

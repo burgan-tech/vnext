@@ -250,7 +250,9 @@ public sealed class TransitionAuthorizationManager(
         var candidates = new List<(string Key, Transition Transition, AvailableInEntry? StateEntry)>(transitionKeys.Count);
         foreach (var key in transitionKeys)
         {
-            var transition = workflow.FindTransitionInContext(key);
+            // The current state's own declaration first, so a key shared by several states is
+            // filtered by this state's grants and not the first state's (#1334).
+            var transition = workflow.FindTransitionInState(key, currentState.Key);
             if (transition != null)
                 candidates.Add((key, transition, transition.FindAvailableIn(currentState.Key)));
         }

@@ -207,9 +207,10 @@ public class ResourceLockStepTests
     {
         var context = CreateContext(ResourceLockAction.Acquire);
 
+        var thrown = new InvalidOperationException("script error");
         var mapping = Substitute.For<ITransitionMapping>();
         mapping.Handler(Arg.Any<ScriptContext>())
-            .ReturnsForAnyArgs<Task<dynamic>>(_ => throw new InvalidOperationException("script error"));
+            .ReturnsForAnyArgs<Task<dynamic>>(_ => throw thrown);
 
         _scriptEngine
             .CompileToInstanceAsync<ITransitionMapping>(Arg.Any<ScriptCode>())
@@ -221,6 +222,8 @@ public class ResourceLockStepTests
 
         result.IsSuccess.ShouldBeFalse();
         result.Error.Code.ShouldBe(WorkflowErrorCodes.ResourceLockKeyResolutionFailed);
+        // vnext#1268: the exception stays with the hop, for the fault incident's stack trace.
+        context.FailureCause.ShouldBeSameAs(thrown);
     }
 
     #region Helpers
@@ -336,4 +339,22 @@ public class ResourceLockStepTests
     }
 
     #endregion
+
+    [Fact]
+    public async Task ExecuteAsync_WhenKeyExpressionIsCancelled_FailsAsBefore_ButLeavesNoCause()
+    {
+        var context = CreateContext(ResourceLockAction.Acquire);
+        var mapping = Substitute.For<ITransitionMapping>();
+        mapping.Handler(Arg.Any<ScriptContext>())
+            .ReturnsForAnyArgs<Task<dynamic>>(_ => throw new OperationCanceledException());
+        _scriptEngine
+            .CompileToInstanceAsync<ITransitionMapping>(Arg.Any<ScriptCode>())
+            .ReturnsForAnyArgs(Task.FromResult(mapping));
+        SetupScriptContextFactory();
+
+        var result = await _step.ExecuteAsync(context, CancellationToken.None);
+
+        result.Error.Code.ShouldBe(WorkflowErrorCodes.ResourceLockKeyResolutionFailed);
+        context.FailureCause.ShouldBeNull("vnext#1268: a cancellation the script sees is not its failure");
+    }
 }

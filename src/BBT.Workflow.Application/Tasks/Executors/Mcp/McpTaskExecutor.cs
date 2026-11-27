@@ -43,9 +43,7 @@ public sealed class McpTaskExecutor(
         {
             var runner = await GetOrCompileMappingAsync<IMapping>(scriptEngine, context, ct);
             return await runner.InputHandler(task, context.ScriptContext);
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"MCP task input handler failed: {ScriptDiagnostics.Explain(ex)}"));
+        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "MCP task input handler failed"));
 
         if (!result.IsSuccess)
         {
@@ -155,9 +153,7 @@ public sealed class McpTaskExecutor(
             var runner = await GetOrCompileMappingAsync<IMapping>(scriptEngine, context, ct);
             var output = await runner.OutputHandler(context.ScriptContext);
             return output.Data;
-        }, cancellationToken, ex => Error.Failure(
-            WorkflowErrorCodes.TaskExecution,
-            $"MCP task output handler failed: {ScriptDiagnostics.Explain(ex)}"));
+        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "MCP task output handler failed"));
     }
 
     private static TaskInvocationResult ToInvocationResult(McpCallResult call, string? error, int statusCode, long elapsedMs)

@@ -30,8 +30,9 @@ public sealed record ExecutionError
     public string? ErrorMessage { get; init; }
 
     /// <summary>
-    /// Gets the original exception stack trace, when the error originated from a thrown exception.
-    /// Null for business-level (response/result) failures that carry no stack trace.
+    /// Gets the exception's full rendering (<see cref="Exception.ToString"/>: type, message, inner
+    /// exceptions and frames) when the error came from a thrown exception — the engine's own catch
+    /// or a script the executor ran. Null for business-level (response/result) failures.
     /// </summary>
     public string? StackTrace { get; init; }
 

@@ -171,6 +171,8 @@ public sealed class AutoConditionEvaluator(
             return WorkflowErrors.CallerRolesUnavailable();
 
         logger.TransitionRuleFailed(transition.Key, context.InstanceId, ex.Message);
+        if (ex is not OperationCanceledException)
+            context.FailureCause = ex;
 
         return ExecutionErrors.TransitionRuleEvaluationFailed(transition.Key, ex.Message, ex.ToString());
     }

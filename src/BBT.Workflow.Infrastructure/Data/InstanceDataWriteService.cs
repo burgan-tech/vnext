@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using BBT.Aether.Domain.EntityFrameworkCore;
+using BBT.Aether.Results;
 using BBT.Workflow.Aspects;
 using BBT.Workflow.BackgroundJobs.Options;
 using BBT.Workflow.Caching;
@@ -146,6 +147,86 @@ public sealed class InstanceDataWriteService(
         buffer.MarkFlushed(row);
         logger.InstanceDataBufferFlushed(instance.Id, row?.Version, row is not null);
         return row;
+    }
+
+    /// <inheritdoc />
+    public async Task<Result> PreviewAppendAsync(
+        Instance instance,
+        JsonData delta,
+        Definitions.Workflow workflow,
+        string? culture = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await PreviewAppendCoreAsync(instance, delta, workflow, culture, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The preview is an early refusal, never the authority: whatever it could not evaluate
+            // (a body it cannot parse, a schema that does not build, a cache failure) is left to the
+            // append, which validates the same content under the row lock.
+            logger.IntakeMasterSchemaPreviewSkipped(ex, instance.Id, workflow.Schema?.Key);
+            return Result.Ok();
+        }
+    }
+
+    private async Task<Result> PreviewAppendCoreAsync(
+        Instance instance,
+        JsonData delta,
+        Definitions.Workflow workflow,
+        string? culture,
+        CancellationToken cancellationToken)
+    {
+        var writeOptions = executionOptions.Value.InstanceDataWrite;
+        if (!writeOptions.IntakeMasterSchemaPreview || workflow.Schema is null)
+            return Result.Ok();
+
+        // x-storage: the request still carries `content` here (the swap runs after validation), while
+        // the master schema describes the stored handle — the append validates the swapped form.
+        if (delta.JsonElement.ValueKind != System.Text.Json.JsonValueKind.Object
+            || FileNodeWalker.AnyFileShapedNode(delta.JsonElement))
+            return Result.Ok();
+
+        // x-encryption: the stored head holds tokens and the append validates the opened, re-hashed
+        // document — neither is reproducible without the instance secret.
+        var stored = instance.LatestData;
+        if (EncryptedValueFormat.MayContainReserved(delta.Json)
+            || (stored is not null && EncryptedValueFormat.MayContainReserved(stored.Data.Json)))
+            return Result.Ok();
+
+        // A schema that cannot be loaded is not validated by the append either (logged at load).
+        var schema = (await LoadSchemaAsync(workflow, cancellationToken)).Schema;
+        if (schema is null || (protector is not null && GetProtectedPaths(schema).Any))
+            return Result.Ok();
+
+        using var activity = PipelineStepActivityHelper.StartOperationActivity("Schema.ValidateMaster");
+
+        var head = stored is null
+            ? null
+            : new InstanceDataHeadRow { Version = stored.Version, DataHash = stored.DataHash, Data = stored.Data.Json };
+        var plan = PlanAppend(
+            head,
+            StripComputedFields(schema, delta),
+            versionStrategy: null,
+            writeOptions.LegacyAppendPipeline,
+            writeOptions.PreserveNumericPrecision);
+
+        // No content change: the append returns before validating, so there is nothing to refuse.
+        if (plan.IsDuplicate)
+            return Result.Ok();
+
+        // Same evaluation as the append's check, so the verdict is the same (custom rules stay off, as
+        // there). Vocabulary details only shape the failure: the caller gets the response the
+        // transition-schema layer gives (error.validationErrors[].members), not a second format.
+        var result = jsonSchemaValidator.Validate(
+            schema.Schema,
+            plan.Content.JsonElement,
+            new SchemaValidationOptions(Culture: culture, IncludeVocabularyDetails: true));
+        if (!result.IsSuccess)
+            activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
+
+        return result;
     }
 
     /// <summary>
@@ -937,13 +1018,7 @@ public sealed class InstanceDataWriteService(
         if (protector is null)
             return (EncryptionPlan.None, head, delta);
 
-        var paths = schema is null
-            ? ProtectedPaths.None
-            : ProtectedPathMemo.GetValue(schema, static s =>
-            {
-                var exposure = Definitions.Schemas.SchemaRolesParser.ParseExposure(s.Schema);
-                return new ProtectedPaths(exposure.EncryptPaths, exposure.HashPaths);
-            });
+        var paths = schema is null ? ProtectedPaths.None : GetProtectedPaths(schema);
         var writes = paths.Any && (encryptionOptions?.Value.EncryptWrites ?? true);
         var headHasTokens = head is not null && EncryptedValueFormat.MayContainToken(head.Data);
 
@@ -969,6 +1044,14 @@ public sealed class InstanceDataWriteService(
         return (writes ? new EncryptionPlan(paths, headView, secret) : new EncryptionPlan(ProtectedPaths.None, headView, null),
                 head, delta);
     }
+
+    /// <summary>The schema's <c>x-encryption</c> paths, parsed once per resolved schema object.</summary>
+    private static ProtectedPaths GetProtectedPaths(SchemaDefinition schema) =>
+        ProtectedPathMemo.GetValue(schema, static s =>
+        {
+            var exposure = Definitions.Schemas.SchemaRolesParser.ParseExposure(s.Schema);
+            return new ProtectedPaths(exposure.EncryptPaths, exposure.HashPaths);
+        });
 
     /// <summary>The row as it is stored: the merged content with its <c>encrypt</c> paths sealed.</summary>
     private JsonData Seal(Guid instanceId, JsonData content, EncryptionPlan encryption) =>

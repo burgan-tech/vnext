@@ -1626,6 +1626,118 @@ public class TransitionPipelineTests
             .ShouldBe(new Dictionary<string, string?> { ["sub"] = "u1", ["x-custom"] = "v" });
     }
 
+    /// <summary>
+    /// vnext#1268: a step that throws (an agent script, say) faults the hop, and the fault incident
+    /// keeps the exception's full rendering — type, message, inner exception and frames.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenAStepThrows_TheFaultIncidentKeepsTheStackTrace()
+    {
+        var context = CreateTransitionExecutionContext();
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        var thrown = new InvalidOperationException("agent script failed", new FormatException("bad hint"));
+        _mockSteps[1].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns<Task<Result<StepOutcome>>>(_ => throw thrown);
+
+        await _pipeline.RunAsync(CreateWorkflowExecutionContext(context), CancellationToken.None);
+
+        var incident = context.Instance.GetLoadedIncidents().ShouldHaveSingleItem();
+        incident.ErrorCode.ShouldBe(nameof(InvalidOperationException));
+        var trace = incident.StackTrace.ShouldNotBeNull();
+        trace.ShouldBe(thrown.ToString());
+        trace.ShouldContain(nameof(FormatException));
+    }
+
+    /// <summary>
+    /// vnext#1268: a step that reports a script failure as an error (transition mapping, resource-lock
+    /// key, timer) leaves the exception on the context; the fault incident takes its stack trace from
+    /// there, while its code and message stay the step's own error.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenAStepRecordsAFailureCause_TheFaultIncidentKeepsItsStackTrace()
+    {
+        var context = CreateTransitionExecutionContext();
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        var cause = new ArgumentException("the transition mapping found no customer");
+        _mockSteps[1].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                call.Arg<TransitionExecutionContext>().FailureCause = cause;
+                return Task.FromResult(Result<StepOutcome>.Fail(
+                    Error.Failure("Execution:200002", "Failed to execute transition mapping: " + cause.Message)));
+            });
+
+        await _pipeline.RunAsync(CreateWorkflowExecutionContext(context), CancellationToken.None);
+
+        var incident = context.Instance.GetLoadedIncidents().ShouldHaveSingleItem();
+        incident.ErrorCode.ShouldBe("Execution:200002");
+        incident.Message.ShouldBe("Failed to execute transition mapping: " + cause.Message);
+        incident.StackTrace.ShouldBe(cause.ToString());
+    }
+
+    /// <summary>
+    /// vnext#1268: an exception outside any step — here a step's directive mutation, which runs in the
+    /// executor's own loop — is caught by the executor's outer catch and kept the same way.
+    /// </summary>
+    [Fact]
+    public async Task RunAsync_WhenTheExecutorLoopThrows_TheFaultIncidentKeepsTheStackTrace()
+    {
+        var context = CreateTransitionExecutionContext();
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        var thrown = new InvalidOperationException("directive mutation failed");
+        _mockSteps[1].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<StepOutcome>.Ok(StepOutcome.With(_ => throw thrown))));
+
+        await _pipeline.RunAsync(CreateWorkflowExecutionContext(context), CancellationToken.None);
+
+        var incident = context.Instance.GetLoadedIncidents().ShouldHaveSingleItem();
+        incident.ErrorCode.ShouldBe("PipelineException");
+        incident.StackTrace.ShouldBe(thrown.ToString());
+    }
+
+    /// <summary>vnext#1268: the fault's log line carries the same exception the incident keeps.</summary>
+    [Fact]
+    public async Task RunAsync_WhenAStepRecordsAFailureCause_TheFaultLogCarriesTheException()
+    {
+        var context = CreateTransitionExecutionContext();
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        _mockLogger.IsEnabled(Arg.Any<LogLevel>()).Returns(true);
+        var cause = new ArgumentException("the transition mapping found no customer");
+        _mockSteps[1].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                call.Arg<TransitionExecutionContext>().FailureCause = cause;
+                return Task.FromResult(Result<StepOutcome>.Fail(Error.Failure("Execution:200002", "mapping failed")));
+            });
+
+        await _pipeline.RunAsync(CreateWorkflowExecutionContext(context), CancellationToken.None);
+
+        _mockLogger.Received(1).Log(
+            LogLevel.Warning,
+            Arg.Is<EventId>(e => e.Id == 10130),
+            Arg.Any<Arg.AnyType>(),
+            cause,
+            Arg.Any<Func<Arg.AnyType, Exception?, string>>());
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenAStepFailsWithoutAnException_TheFaultIncidentHasNoStackTrace()
+    {
+        var context = CreateTransitionExecutionContext();
+        SetupContextFactory(context);
+        SetupStepsToSucceed();
+        _mockSteps[1].ExecuteAsync(Arg.Any<TransitionExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Result<StepOutcome>.Fail(Error.Failure("step.failed", "boom"))));
+
+        await _pipeline.RunAsync(CreateWorkflowExecutionContext(context), CancellationToken.None);
+
+        context.Instance.GetLoadedIncidents().ShouldHaveSingleItem().StackTrace.ShouldBeNull();
+    }
+
     [Fact]
     public async Task RunAsync_WhenStepFails_ShouldMarkInstanceFaultedWithSuccessResult()
     {

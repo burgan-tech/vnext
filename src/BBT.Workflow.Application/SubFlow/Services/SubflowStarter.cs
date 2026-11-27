@@ -92,7 +92,7 @@ public sealed class SubflowStarter(
             inputMappingResult,
             subFlowConfig.HasTimeoutOverride ? subFlowConfig.Overrides!.Timeout : null,
             subFlowConfig.Overrides,
-            context?.Headers is null ? null : context.GetHeadersAsDictionary(),
+            context?.Headers is null ? null : context.GetTransportHeadersAsDictionary(),
             activity,
             cancellationToken);
     }

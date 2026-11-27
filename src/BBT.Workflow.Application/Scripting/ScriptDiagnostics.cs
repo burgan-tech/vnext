@@ -1,3 +1,5 @@
+using BBT.Aether.Results;
+
 namespace BBT.Workflow.Scripting;
 
 /// <summary>
@@ -34,6 +36,23 @@ public static class ScriptDiagnostics
             return $"{DynamicAnonymousGuidance} Original error: {exception.Message}";
 
         return exception.Message;
+    }
+
+    /// <summary>
+    /// The error a task reports when one of its scripts throws — <c>"{failure}: {Explain}"</c>, the
+    /// message executors have always built — with the exception kept on <paramref name="context"/>
+    /// for the incident's stack trace (vnext#1268). The task engine takes it after the run. A
+    /// cancellation is not the script's failure: it is reported the same way but leaves no cause.
+    /// </summary>
+    /// <param name="context">The script context the failed script ran on.</param>
+    /// <param name="exception">The exception the script threw.</param>
+    /// <param name="failure">What failed, e.g. <c>"Http task input handler failed"</c>.</param>
+    public static Error TaskScriptError(ScriptContext context, Exception exception, string failure)
+    {
+        if (exception is not OperationCanceledException)
+            context.FailureCause = exception;
+
+        return Error.Failure(WorkflowErrorCodes.TaskExecution, $"{failure}: {Explain(exception)}");
     }
 
     private static bool MatchesOpenGenericAnonymous(Exception exception)
