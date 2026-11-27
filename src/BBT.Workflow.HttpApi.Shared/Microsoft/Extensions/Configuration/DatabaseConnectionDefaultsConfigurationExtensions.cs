@@ -11,6 +11,15 @@ namespace Microsoft.Extensions.Configuration;
 /// the connection string wins, and nothing else in the string is changed.
 /// </para>
 /// <para>
+/// A host may also name a <b>connection role</b> (<see cref="InboxRole"/>, <see cref="OutboxRole"/>,
+/// <see cref="MigratorRole"/>). When <c>ConnectionStrings:&lt;role&gt;</c> is set — in the shared Vault
+/// secret or any other source — it replaces <c>ConnectionStrings:Default</c> for that process only, so
+/// every consumer of <c>Default</c> (DbContexts, the Postgres lock provider, the attribute index, health
+/// checks) uses the same string and one unit of work never mixes two connection strings. Without the
+/// role key the host uses <c>ConnectionStrings:Default</c>, as before. <c>ConnectionStrings:Domains:*</c>
+/// entries are not affected.
+/// </para>
+/// <para>
 /// Pool sizing is deliberately left to the connection string and the deployment: in production the
 /// hosts connect through PgBouncer, which owns the server-side connection limit, so a client-side
 /// default here would only second-guess it.
@@ -18,16 +27,33 @@ namespace Microsoft.Extensions.Configuration;
 /// </summary>
 public static class DatabaseConnectionDefaultsConfigurationExtensions
 {
+    /// <summary>Connection role of the Inbox worker: <c>ConnectionStrings:Inbox</c>.</summary>
+    public const string InboxRole = "Inbox";
+
+    /// <summary>Connection role of the Outbox worker: <c>ConnectionStrings:Outbox</c>.</summary>
+    public const string OutboxRole = "Outbox";
+
+    /// <summary>Connection role of the DbMigrator: <c>ConnectionStrings:Migrator</c>.</summary>
+    public const string MigratorRole = "Migrator";
+
+    private const string DefaultKey = "ConnectionStrings:Default";
+
     /// <summary>
-    /// Applies the application name to <c>ConnectionStrings:Default</c> and every
-    /// <c>ConnectionStrings:Domains:*</c> entry and layers the result over the existing sources.
-    /// Call after every source that may supply a connection string (secret store included).
+    /// Resolves the host's connection role (when given), then applies the application name to
+    /// <c>ConnectionStrings:Default</c> and every <c>ConnectionStrings:Domains:*</c> entry and layers the
+    /// result over the existing sources. Call after every source that may supply a connection string
+    /// (secret store included).
     /// </summary>
     /// <param name="configuration">The host's configuration manager.</param>
     /// <param name="fallbackApplicationName">Used when neither OTEL_SERVICE_NAME nor DAPR_APP_ID is set.</param>
+    /// <param name="connectionRole">
+    /// Optional role key; a non-empty <c>ConnectionStrings:&lt;role&gt;</c> replaces
+    /// <c>ConnectionStrings:Default</c> in this process. Null keeps <c>Default</c>.
+    /// </param>
     public static IConfigurationManager ApplyDatabaseConnectionDefaults(
         this IConfigurationManager configuration,
-        string fallbackApplicationName)
+        string fallbackApplicationName,
+        string? connectionRole = null)
     {
         var applicationName = FirstNonEmpty(
             configuration["OTEL_SERVICE_NAME"],
@@ -35,7 +61,7 @@ public static class DatabaseConnectionDefaultsConfigurationExtensions
             fallbackApplicationName);
 
         var overrides = new Dictionary<string, string?>();
-        Normalise("ConnectionStrings:Default");
+        NormaliseDefault();
         foreach (var entry in configuration.GetSection("ConnectionStrings:Domains").GetChildren())
         {
             Normalise(entry.Path);
@@ -47,6 +73,22 @@ public static class DatabaseConnectionDefaultsConfigurationExtensions
         }
 
         return configuration;
+
+        void NormaliseDefault()
+        {
+            var roleValue = string.IsNullOrWhiteSpace(connectionRole)
+                ? null
+                : configuration[$"ConnectionStrings:{connectionRole}"];
+
+            if (string.IsNullOrWhiteSpace(roleValue))
+            {
+                Normalise(DefaultKey);
+                return;
+            }
+
+            // The role's string wins for the whole process; an explicit Application Name in it is kept.
+            overrides[DefaultKey] = Apply(roleValue, applicationName);
+        }
 
         void Normalise(string key)
         {
