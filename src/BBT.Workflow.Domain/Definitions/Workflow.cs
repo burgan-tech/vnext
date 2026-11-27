@@ -1,5 +1,4 @@
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 using BBT.Aether;
 using BBT.Aether.Auditing;
 using BBT.Aether.Results;
@@ -119,7 +118,7 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
     /// Semantic version
     /// </summary>
     public string SemanticVersion =>
-        Version.Contains('+') ? Regex.Match(Version, @"^([^+]+)").Groups[1].Value : Version;
+        Version.IndexOf('+') is var plus and >= 0 ? Version[..plus] : Version;
 
     public static string ComponentTypeKey => RuntimeSysSchemaInfo.Flows;
     public string ComponentKey => ComponentTypeKey;
@@ -498,6 +497,16 @@ public sealed class Workflow : IDomainEntity, IReference, IReferenceSetter, IHas
         key is not null
         && (key.Equals(WellKnownTransitionKeys.UpdateData, StringComparison.OrdinalIgnoreCase)
             || UpdateData?.Key.Equals(key, StringComparison.OrdinalIgnoreCase) == true);
+
+    /// <summary>
+    /// True when the key is this workflow's cancel transition, by reserved alias or by configured key
+    /// (OrdinalIgnoreCase). The one key a Faulted instance still admits — see
+    /// <c>docs/domain/well-known-transitions.md</c>.
+    /// </summary>
+    public bool IsCancelKey(string? key) =>
+        key is not null
+        && (key.Equals(WellKnownTransitionKeys.Cancel, StringComparison.OrdinalIgnoreCase)
+            || Cancel?.Key.Equals(key, StringComparison.OrdinalIgnoreCase) == true);
 
     /// <summary>
     /// True when the key names a well-known workflow-level transition, whether by reserved alias or by

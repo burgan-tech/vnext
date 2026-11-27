@@ -8,6 +8,8 @@ namespace BBT.Workflow.Instances;
 /// <inheritdoc cref="IInstanceBusyManager" />
 public sealed class InstanceBusyManager(
     IInstanceRepository instanceRepository,
+    IInstanceIncidentRepository instanceIncidentRepository,
+    IInstanceTransitionRepository instanceTransitionRepository,
     IUnitOfWorkManager uowManager,
     IInstanceCommandGateway instanceCommandGateway,
     ILogger<InstanceBusyManager> logger) : IInstanceBusyManager
@@ -35,6 +37,48 @@ public sealed class InstanceBusyManager(
         }
 
         return flipped;
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> TryUnfaultIntoBusyAsync(Instance instance, CancellationToken cancellationToken = default)
+    {
+        var (taken, resolvedIncidents, closedTransitions) = await TakeOverInOneTransactionAsync(instance, cancellationToken);
+        if (!taken)
+            return false;
+
+        // Only now, with the takeover's own unit of work closed, does the repository resolve the caller's: its
+        // copy still holds the Faulted baseline, and its commit would otherwise write the pre-takeover columns
+        // again — over a fault the cancel itself may still end in.
+        await instanceRepository.AcceptPersistedStatusAsync(instance, cancellationToken);
+
+        logger.FaultedInstanceTakenOverForCancel(instance.Id, resolvedIncidents, closedTransitions);
+        return true;
+    }
+
+    /// <summary>
+    /// One transaction: a cancel that took the instance over must never leave it Active with its incidents
+    /// resolved and nothing running (the half-done retry of #1338), and a lost race must leave it exactly as it
+    /// was. The two CASes guard on the status they expect, so a concurrent retry or cancel wins or loses
+    /// cleanly; the second cannot lose once the first won, because this transaction holds the row.
+    /// </summary>
+    private async Task<(bool Taken, int ResolvedIncidents, int ClosedTransitions)> TakeOverInOneTransactionAsync(
+        Instance instance, CancellationToken cancellationToken)
+    {
+        await using var uow = uowManager.Begin(
+            new UnitOfWorkOptions { Scope = UnitOfWorkScopeOption.RequiresNew, IsTransactional = true });
+
+        await instanceRepository.LoadActiveIncidentsAsync(instance, cancellationToken);
+        if (!await instanceRepository.TryUnfaultAsync(instance, cancellationToken)
+            || !await instanceRepository.TryMarkBusyAsync(instance, cancellationToken))
+        {
+            return (false, 0, 0);
+        }
+
+        var resolvedIncidents = await instanceIncidentRepository.ResolveAllAsync(
+            instance.Id, DateTime.UtcNow, cancellationToken);
+        var closedTransitions = await instanceTransitionRepository.FailOpenAsync(instance.Id, cancellationToken);
+        await uow.CommitAsync(cancellationToken);
+        return (true, resolvedIncidents, closedTransitions);
     }
 
     /// <inheritdoc />

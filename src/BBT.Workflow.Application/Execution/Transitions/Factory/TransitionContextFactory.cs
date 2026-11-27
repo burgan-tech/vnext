@@ -67,9 +67,19 @@ public sealed class TransitionContextFactory(
     {
         return ResolveWorkflowAsync(input, cancellationToken)
             .BindAsync(workflow =>
-                LoadInstanceAsync(input.InstanceId, cancellationToken)
+                LoadInstanceAsync(input.InstanceId, AdmitsFaulted(workflow, input), cancellationToken)
                     .MapAsync(instance => (workflow, instance)));
     }
+
+    /// <summary>
+    /// A Faulted instance admits the reserved cancel only, and only to run inline (vnext#1252). The intake forces
+    /// such a cancel to sync from its snapshot; an async request still reaching a Faulted row here faulted after
+    /// that snapshot, and admitting it would queue a job the fault's own cleanup cancels — it is refused as before,
+    /// and sent again it runs inline. A transition job re-enters with <c>sync: true</c>, so a queued cancel is
+    /// still taken over in the pipeline.
+    /// </summary>
+    private static bool AdmitsFaulted(Definitions.Workflow workflow, WorkflowExecutionContext input)
+        => workflow.IsCancelKey(input.TransitionKey) && input.Mode != ExecMode.Async;
 
     /// <summary>
     /// Uses the definition the caller already resolved for these coordinates when it supplied one,
@@ -92,10 +102,17 @@ public sealed class TransitionContextFactory(
     /// Loads the active instance by identifier, wrapped in its own span so instance-load
     /// latency is attributable independent of the flow-cache lookup that precedes it.
     /// </summary>
-    private async Task<Result<Instance>> LoadInstanceAsync(string instanceId, CancellationToken cancellationToken)
+    /// <param name="instanceId">The instance identifier.</param>
+    /// <param name="admitsFaulted">True for the reserved cancel, the one request a Faulted instance
+    /// admits (vnext#1252); the pipeline takes such an instance over before the cancel runs.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    private async Task<Result<Instance>> LoadInstanceAsync(
+        string instanceId, bool admitsFaulted, CancellationToken cancellationToken)
     {
         using var activity = PipelineStepActivityHelper.StartOperationActivity("Instance.Load");
-        var result = await instanceRepository.GetActiveAsync(instanceId, cancellationToken);
+        var result = admitsFaulted
+            ? await instanceRepository.GetActiveOrFaultedAsync(instanceId, cancellationToken)
+            : await instanceRepository.GetActiveAsync(instanceId, cancellationToken);
         if (!result.IsSuccess)
         {
             activity?.SetStatus(ActivityStatusCode.Error, result.Error.Message);
