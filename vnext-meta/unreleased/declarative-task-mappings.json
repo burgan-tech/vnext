@@ -14,7 +14,7 @@
       "resourceLockKeyExpression": {
         "since": "next",
         "status": "stable",
-        "description": "A transition resourceLock.keyExpression with location \"dynamicExpresso\" is a Dynamic Expresso expression over the standard slot variables (data, input, instance, now, user, context) whose string result is the lock key (the cache-key evaluator); no .csx needed. A dynamicExpresso-labelled C# key from before (the label used to be ignored) that does not evaluate as an expression still runs as a script, with the warning ResourceLockKeyExpressionRanAsScript (10273)."
+        "description": "A transition resourceLock.keyExpression with location \"dynamicExpresso\" is a Dynamic Expresso expression over the standard slot variables (data, input, instance, now, user, context) whose string result is the lock key (the cache-key evaluator); no .csx needed. A dynamicExpresso-labelled C# key from before (the label used to be ignored) that does not evaluate as an expression still runs as a script, with the warning ResourceLockKeyExpressionRanAsScript (10283)."
       },
       "valueSlotDynamicExpresso": {
         "since": "next",
@@ -64,7 +64,7 @@
       "removedAt": null,
       "replacement": "Rewrite the script as a Dynamic Expresso expression, or label the C# script with its file location",
       "severity": "warning",
-      "message": "A C# script labelled location dynamicExpresso in a transition timer, workflow or SubFlow-override timeout mapping, agent prompt, agent decision mapping or resource-lock keyExpression is now evaluated as an expression first; when that fails it still runs as C# (warning 10274, 10273 for a lock key). The fallback will be removed in a later release."
+      "message": "A C# script labelled location dynamicExpresso in a transition timer, workflow or SubFlow-override timeout mapping, agent prompt, agent decision mapping or resource-lock keyExpression is now evaluated as an expression first; when that fails it still runs as C# (warning 10274, 10283 for a lock key). The fallback will be removed in a later release."
     }
   ]
 }

@@ -39,8 +39,8 @@ namespace BBT.Workflow.Tasks.Mapping;
 /// </summary>
 public sealed class DeclarativeTaskMappingRunnerTests
 {
-    private const int TaskDeclarativeMappingFailedEventId = 10271;
-    private const int TaskDeclarativeMappingEntrySkippedEventId = 10272;
+    private const int TaskDeclarativeMappingFailedEventId = 10281;
+    private const int TaskDeclarativeMappingEntrySkippedEventId = 10282;
 
     private readonly FakeTimeProvider _clock = new(new DateTimeOffset(2026, 11, 24, 10, 0, 0, TimeSpan.Zero));
 

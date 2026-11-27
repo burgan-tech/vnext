@@ -802,8 +802,9 @@ public sealed class InstanceCommandAppService(
         }
 
         // Terminal check the aggregate load used to perform (GetActiveAsync). IsTerminal, not
-        // IsCompleted: Faulted and Passive are terminal for admission too.
-        if (snapshot.IsTerminal)
+        // IsCompleted: Faulted and Passive are terminal for admission too — except for the reserved
+        // cancel on a Faulted instance (vnext#1252).
+        if (IsRefusedAsTerminal(snapshot, workflowDefinition!, transitionKey))
         {
             return Result<TransitionOutput>.Fail(Error.Validation(
                 WorkflowErrorCodes.InstanceCompleted,
@@ -872,6 +873,16 @@ public sealed class InstanceCommandAppService(
 
 
     /// <summary>
+    /// Whether a terminal instance refuses the transition: Completed and Passive refuse every key, Faulted
+    /// all but the reserved cancel — the one way to close an instance a failed hop left Faulted when retrying
+    /// it is not wanted, or cannot succeed (vnext#1252).
+    /// </summary>
+    private static bool IsRefusedAsTerminal(
+        InstanceExecutionSnapshot snapshot, Definitions.Workflow workflow, string transitionKey)
+        => snapshot.IsTerminal
+           && !(snapshot.Status.Equals(InstanceStatus.Faulted) && workflow.IsCancelKey(transitionKey));
+
+    /// <summary>
     /// Builds execution context for transition using instance's Flow and FlowVersion (not from request).
     /// </summary>
     private static WorkflowExecutionContext BuildTransitionContext(
@@ -886,6 +897,16 @@ public sealed class InstanceCommandAppService(
         // (SuppressResponseEnrichment: the subflow forward, the cross-domain relay, the proxy) carry
         // the mode decided one level up as the sync flag and are not re-resolved here.
         var (callerMode, effectiveMode) = TransitionRequestMode.Resolve(workflow, transitionKey, input);
+
+        // A Faulted instance reaches here only for the reserved cancel (IsRefusedAsTerminal), and that cancel
+        // always runs inline (vnext#1252). Queued, it would wait as a job on an instance that is still Faulted,
+        // and the fault's own cleanup — outbox → Inbox, often a moment later — cancels every active job of a
+        // Faulted instance, the cancel's included: the caller got 202 and the instance stayed Faulted.
+        if (snapshot.Status.Equals(InstanceStatus.Faulted))
+        {
+            effectiveMode = ExecMode.Sync;
+            TransitionRequestMode.Tag(callerMode, effectiveMode, transitionExecutionType: null, flowExecutionType: null);
+        }
 
         return new WorkflowExecutionContext
         {
