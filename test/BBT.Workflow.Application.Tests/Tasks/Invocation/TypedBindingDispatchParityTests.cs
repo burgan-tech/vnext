@@ -327,6 +327,10 @@ public sealed class TypedBindingDispatchParityTests
                 var t when t == typeof(int) => 77,
                 var t when t == typeof(bool) => !(bool)property.GetValue(binding)!,
                 var t when t == typeof(IReadOnlyList<string>) => new List<string> { "418" },
+                var t when t == typeof(IReadOnlyList<HttpMultipartPartBinding>) => new List<HttpMultipartPartBinding>
+                {
+                    new() { Name = "file", Content = [0x25, 0xFF], FileName = "f.pdf", ContentType = "application/pdf" }
+                },
                 _ => throw new InvalidOperationException(
                     $"Populate does not know how to fill {typeof(T).Name}.{property.Name} ({property.PropertyType}); extend it.")
             };
