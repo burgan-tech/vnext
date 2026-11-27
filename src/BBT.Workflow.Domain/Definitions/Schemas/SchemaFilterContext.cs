@@ -79,14 +79,9 @@ public sealed class SchemaFilterContext
             return true;
 
         var prefix = fieldPath + ".";
-        foreach (var path in RestrictedPaths)
-        {
-            if (path.StartsWith(prefix, StringComparison.Ordinal) ||
-                fieldPath.StartsWith(path + ".", StringComparison.Ordinal))
-                return true;
-        }
-
-        return false;
+        return RestrictedPaths.Any(path =>
+            path.StartsWith(prefix, StringComparison.Ordinal) ||
+            fieldPath.StartsWith(path + ".", StringComparison.Ordinal));
     }
 
     /// <summary>

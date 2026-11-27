@@ -38,6 +38,7 @@ public sealed class InstanceListRepositoryIntegrationTests(AttributeIndexPostgre
     private string _connection = null!;
     private readonly ServiceProvider _services = new ServiceCollection().BuildServiceProvider();
     private static readonly DateTime CreatedAt = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+    private static readonly string[] BothCategories = ["A", "B"];
 
     public async Task InitializeAsync()
     {
@@ -151,7 +152,7 @@ public sealed class InstanceListRepositoryIntegrationTests(AttributeIndexPostgre
 
         // Unbound: the stored values are handed out.
         var leakedKeys = await repository.GetPagedResultsWithGroupsAsync(1, 10, null, groupByCategory, null, null, open);
-        Assert.Equal(new[] { "A", "B" }, leakedKeys.Groups!.Select(group => group.Keys["attributes.category"]));
+        Assert.Equal(BothCategories, leakedKeys.Groups!.Select(group => group.Keys["attributes.category"]));
         var leakedMax = await repository.GetPagedResultsWithGroupsAsync(1, 10, null, maxCategoryByAmount, null, null, open);
         Assert.Contains(leakedMax.Groups!, group => Equals(group.Max, "B"));
 

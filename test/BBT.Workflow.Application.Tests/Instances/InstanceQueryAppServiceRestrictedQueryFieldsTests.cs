@@ -45,6 +45,8 @@ namespace BBT.Workflow.Instances;
 /// </summary>
 public sealed class InstanceQueryAppServiceRestrictedQueryFieldsTests : IDisposable
 {
+    private static readonly JsonSerializerOptions CaseInsensitive = new() { PropertyNameCaseInsensitive = true };
+
     private const string Domain = "test-domain";
     private const string WorkflowKey = "wf-key";
 
@@ -307,8 +309,7 @@ public sealed class InstanceQueryAppServiceRestrictedQueryFieldsTests : IDisposa
     {
         // Default version: 'assignedUser' is an ordinary field. A later version guards it.
         StubSchema(OpenSchema);
-        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-        var guarded = JsonSerializer.Deserialize<SchemaDefinition>(GuardedSchema, options)!;
+        var guarded = JsonSerializer.Deserialize<SchemaDefinition>(GuardedSchema, CaseInsensitive)!;
         guarded.SetReference(new Reference("sch", Domain, RuntimeSysSchemaInfo.Schemas, "2.0.0"));
         _cache.GetSchemaAsync(Domain, "sch", "2.0.0", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(Result<SchemaDefinition>.Ok(guarded)));
@@ -379,7 +380,6 @@ public sealed class InstanceQueryAppServiceRestrictedQueryFieldsTests : IDisposa
 
     private void StubSchema(string schemaJson)
     {
-        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
         var workflow = JsonSerializer.Deserialize<WorkflowDefinition>("""
             {
               "type": "F",
@@ -393,10 +393,10 @@ public sealed class InstanceQueryAppServiceRestrictedQueryFieldsTests : IDisposa
               "startTransition": {"key": "start", "target": "init"},
               "schema": {"key":"sch","domain":"test-domain","flow":"sys-schemas","version":"1.0.0"}
             }
-            """, options)!;
+            """, CaseInsensitive)!;
         workflow.SetReference(new Reference(WorkflowKey, Domain, RuntimeSysSchemaInfo.Flows, "1.0.0"));
 
-        var schema = JsonSerializer.Deserialize<SchemaDefinition>(schemaJson, options)!;
+        var schema = JsonSerializer.Deserialize<SchemaDefinition>(schemaJson, CaseInsensitive)!;
         schema.SetReference(new Reference("sch", Domain, RuntimeSysSchemaInfo.Schemas, "1.0.0"));
 
         _cache.GetFlowAsync(Domain, WorkflowKey, null, Arg.Any<CancellationToken>())
