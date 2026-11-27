@@ -148,6 +148,70 @@ public abstract class InstanceTransitionRepositoryTests<TEntry> : DomainTestBase
     }
 
     /// <summary>
+    /// vnext#1252: the reserved cancel that takes over a Faulted instance closes the failed hop's open record as
+    /// failed — a finish time, no target state — so retry no longer finds it. Finished records of the instance and
+    /// open records of other instances are left alone.
+    /// </summary>
+    [Fact]
+    public async Task FailOpenAsync_ClosesOnlyTheInstancesOpenRecords_AsFailed()
+    {
+        var instance = await CreateTestInstanceAsync();
+        var other = await CreateTestInstanceAsync("other-key");
+        var finished = NewTransition(instance.Id, "advanced");
+        finished.Completed("Next");
+        await Repository.InsertAsync(finished, true);
+        var open = NewTransition(instance.Id, "failed-hop");
+        await Repository.InsertAsync(open, true);
+        var otherOpen = NewTransition(other.Id, "failed-hop");
+        await Repository.InsertAsync(otherOpen, true);
+        await ForgetTrackedEntitiesAsync();
+
+        var closed = await Repository.FailOpenAsync(instance.Id, CancellationToken.None);
+
+        closed.ShouldBe(1);
+        await ForgetTrackedEntitiesAsync();
+        var failed = await Repository.GetAsync(open.Id);
+        failed.FinishedAt.ShouldNotBeNull();
+        failed.Duration.ShouldNotBeNull();
+        failed.ToState.ShouldBeNull();
+        (await Repository.GetLatestIncompleteAsync(instance.Id, CancellationToken.None)).ShouldBeNull();
+        (await Repository.GetAsync(finished.Id)).ToState.ShouldBe("Next");
+        (await Repository.GetLatestIncompleteAsync(other.Id, CancellationToken.None))!.Id.ShouldBe(otherOpen.Id);
+    }
+
+    [Fact]
+    public async Task FailOpenAsync_WithNothingOpen_ClosesNothing()
+    {
+        var instance = await CreateTestInstanceAsync("nothing-open");
+
+        (await Repository.FailOpenAsync(instance.Id, CancellationToken.None)).ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task ForgetAsync_OfARecordWhoseSaveFailed_LeavesNothingForTheNextSave()
+    {
+        var instance = await CreateTestInstanceAsync("forget-key");
+        var record = NewTransition(instance.Id, "failed-hop");
+        await Repository.InsertAsync(record, false);
+
+        await Repository.ForgetAsync(record);
+        await InstanceRepository.UpdateAsync(instance, true);
+
+        await ForgetTrackedEntitiesAsync();
+        (await Repository.FindAsync(record.Id)).ShouldBeNull();
+    }
+
+    private static InstanceTransition NewTransition(Guid instanceId, string transitionKey) =>
+        InstanceTransition.Create(
+            Guid.NewGuid(),
+            instanceId,
+            transitionKey,
+            "InitialState",
+            TriggerType.Manual,
+            JsonData.CreateFrom("{}"),
+            JsonData.CreateFrom("{}"));
+
+    /// <summary>
     /// Drops every entity the implementation tracks, so a following read reflects only what reached the
     /// store. No-op for implementations without a change tracker.
     /// </summary>
@@ -156,9 +220,9 @@ public abstract class InstanceTransitionRepositoryTests<TEntry> : DomainTestBase
     /// <summary>
     /// Helper method to create a test instance for transition tests.
     /// </summary>
-    private async Task<Instance> CreateTestInstanceAsync()
+    private async Task<Instance> CreateTestInstanceAsync(string key = "test-key")
     {
-        var instance = Instance.Create(Guid.NewGuid(), "test-workflow", "1.0.0","test-key");
+        var instance = Instance.Create(Guid.NewGuid(), "test-workflow", "1.0.0", key);
         await InstanceRepository.InsertAsync(instance, true);
         return instance;
     }

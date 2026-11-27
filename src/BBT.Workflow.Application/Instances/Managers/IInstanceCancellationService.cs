@@ -17,6 +17,21 @@ public interface IInstanceCancellationService
     Task<Result> ProcessCancellationAsync(
         Guid instanceId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <see cref="ProcessCancellationAsync"/> for the cleanup of a fault: it runs only while the instance still
+    /// rests in that fault (<paramref name="faultedAt"/> is the event's <c>FaultedAt</c>). Once a retry or the
+    /// reserved cancel has taken the instance over, or it faulted again, the late cleanup changes nothing —
+    /// the jobs and resource locks it would release belong to the instance's new life (vnext#1252).
+    /// </summary>
+    /// <param name="instanceId">The ID of the faulted instance.</param>
+    /// <param name="faultedAt">When the fault being cleaned up was written.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A result indicating success or failure of the cleanup.</returns>
+    Task<Result> ProcessFaultCleanupAsync(
+        Guid instanceId,
+        DateTime faultedAt,
+        CancellationToken cancellationToken = default);
     
     /// <summary>
     /// Processes cancellation for specific state transitions by cleaning up their jobs.

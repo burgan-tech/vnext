@@ -461,6 +461,32 @@ instance — and nothing is capped inline any more, because no surface embeds th
   then settled the instance back to `Active`, which left it unfinished and permanently unretryable —
   a client that worked around this by treating `F`-with-`Active` as terminal should drop that
   workaround.
+- Retry re-runs the instance's latest **unfinished transition record**. A hop that fails before its
+  record is saved — its `mapping` throws, the merged data fails the master schema, the instance key is
+  taken — now saves that record unfinished first (best effort), so retry re-runs it (vnext#1252). Earlier builds
+  saved nothing and retry answered `400` with `Instance:100028`. This covers the hops a caller asks
+  for: manual transitions, `updateData` and the reserved `cancel`. An automatic, scheduled or event hop
+  is still not re-run by retry (vnext#1338).
+- The re-run hop gets the **retry's** body, never the failed request's: a mapping runs on what the
+  retry sends. The failed request's body stays on its record (`GET …/transitions`) for a client that
+  wants to send it again.
+
+### Reserved `cancel` on a Faulted instance
+
+- The reserved `cancel` is the one transition a **Faulted** instance admits (vnext#1252); every other
+  key still answers `400` with `Instance:100018`, as do Completed and Passive instances for every key,
+  `cancel` included.
+- It closes the instance (Completed, in the cancel's target state), resolving its open incidents; its
+  `availableIn`, schema, `mapping` and tasks apply as on an Active instance, and it also cancels the SubFlow
+  children the parent's fault left Faulted. It always runs synchronously: `200` with the outcome, even for
+  `sync=false`.
+- A cancel that fails ends Faulted again, with its own incident and record: retry re-runs the cancel. One
+  that loses the race to a retry or another cancel answers `409` (`Instance:100002`); send it again.
+- The state body of a Faulted instance lists no `availableTransitions`, so the cancel is not offered
+  there.
+- A failed hop's sync answer reports the instance as it now rests: `"status": "F"`. Earlier builds
+  answered `"status": "A"` for a failed `updateData` or `cancel`, while the instance was Faulted.
+- Mechanism: [Well-Known Transitions](../domain/well-known-transitions.md#cancel-on-a-faulted-instance).
 
 ### Client-facing hrefs and the `UrlTemplates` section
 

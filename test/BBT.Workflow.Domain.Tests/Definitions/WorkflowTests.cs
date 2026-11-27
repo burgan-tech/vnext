@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using BBT.Workflow.Definitions;
+using Shouldly;
 using Xunit;
 
 namespace BBT.Workflow.Definitions;
@@ -72,6 +73,31 @@ public class WorkflowTests : DomainTestBase<DomainEntryPoint>
 
         // Act & Assert
         Assert.Equal(expectedIsSub, workflow.IsSub);
+    }
+
+    [Theory]
+    [InlineData("cancel", true)]
+    [InlineData("CANCEL", true)]
+    [InlineData("close-order", true)]
+    [InlineData("Close-Order", true)]
+    [InlineData("exit", false)]
+    [InlineData("approve", false)]
+    [InlineData(null, false)]
+    public void IsCancelKey_MatchesTheReservedAliasAndTheConfiguredKey(string? key, bool expected)
+    {
+        var workflow = Workflow.Create();
+        workflow.SetCancel(Transition.Create("close-order", null, "closed", TriggerType.Manual, "Patch"));
+
+        workflow.IsCancelKey(key).ShouldBe(expected);
+    }
+
+    [Fact]
+    public void IsCancelKey_WithoutAConfiguredCancel_StillMatchesTheReservedAlias()
+    {
+        var workflow = Workflow.Create();
+
+        workflow.IsCancelKey("cancel").ShouldBeTrue();
+        workflow.IsCancelKey("close-order").ShouldBeFalse();
     }
 
     [Fact]

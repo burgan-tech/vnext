@@ -156,6 +156,15 @@ public sealed class TransitionExecutionContext
     public bool OwnsStatus { get; set; }
 
     /// <summary>
+    /// True when this execution — the reserved cancel — took a Faulted instance over (vnext#1252): the
+    /// takeover already resolved its incidents and closed the failed hop's record, so the instance is no
+    /// longer Faulted and retryable on its own. A refusal that would normally hand the status back
+    /// untouched has to fault it again instead; releasing it would leave it Active with nothing to show
+    /// for the failure.
+    /// </summary>
+    public bool TookOverFaultedInstance { get; set; }
+
+    /// <summary>
     /// Gets or sets the transition record id this execution RETRIES. Set only by the retry
     /// entry point (<c>RetryInfo.TransitionId</c>): <c>CreateTransitionRecordStep</c> then
     /// reuses the original record instead of creating a fresh one, so the task journal
