@@ -1,14 +1,16 @@
 # AGENTS.md
 
-Session bootstrap for every coding agent in this repo (Codex, Cursor, Copilot and Gemini CLI read it
+Session bootstrap for every coding agent in this repo (Codex, Cursor and Copilot read it
 directly; Claude Code imports it from `CLAUDE.md`). It holds only what the code cannot tell you; the
 layout of the AI guidance is at the [end](#ai-guidance-layout).
 
 ## Project rules
 
-Authoritative for all work here. The two code rules load automatically in Claude Code and Cursor once
-code under `src/`, the hosts, `workers/`, `modules/`, `test/` or `vnext-meta/` is open; other agents,
-and any design question asked before code is open, read them explicitly.
+Authoritative for how to work here; for what the runtime does, the code wins, then the current
+`/docs` page, then these files. The two code rules load automatically in Claude Code and Cursor once
+code under `src/`, the hosts, `workers/`, `modules/`, `tools/` or `test/` is open (the workflow card
+also for `vnext-meta/`); other agents, and any design question asked before code is open, read them
+explicitly.
 
 - [Agent onboarding](docs/agent-onboarding.md) — source-of-truth order, where-is-X, pitfalls. Code wins over every doc (`LifecycleOrder.cs`, `PipelineExecutionProfile.cs`).
 - [.NET / Aether coding standards](.claude/rules/dotnet-coding-standards.md) *(code)* — Aether, Result pattern, `WorkflowLogs.cs`, event checklist, multi-schema, tests.
@@ -16,8 +18,9 @@ and any design question asked before code is open, read them explicitly.
 - [Agent Council](.claude/rules/agent-council-plan-mode.md) — a non-trivial decision gets an evidence-backed council verdict before implementation.
 - [Graphify first](.claude/rules/graphify-navigation.md) — with `graphify-out/graph.json`, query the graph before grepping broadly.
 - [MCP verification](.claude/rules/mcp-observability-verification.md) — confirm a locally exercised change with traces, logs and rows; a green test is not evidence alone.
-- **Friction** — when a documented command, flag, step or doc fights you twice, record it with the
-  [`papercut`](.claude/skills/papercut/SKILL.md) procedure and continue with the workaround.
+- **Friction** — when a documented command, flag, step or doc proves wrong, or the same environment
+  failure repeats with no progress, record it with the [`papercut`](.claude/skills/papercut/SKILL.md)
+  procedure (plain steps, no tool needed) and continue with the workaround.
 
 ## Build, run, test
 
@@ -30,10 +33,13 @@ cd etc/docker && ./run-docker.sh --help   # infra only (default), dev, stage, up
 Ports: Orchestration 4201, Execution 4202, Outbox 4401, Inbox 4501 (other domains at `+offset`; what is
 running: `ai-docs/local-environments/<domain>.md`). Agents bring a domain up by the
 [local-environment runbook](docs/runtime/local-environment.md): pass every argument explicitly, never
-`down` a stack another compose file owns, `wf domain use X` before every `wf sync`.
+`down` a stack another compose file owns, `wf domain use X` before every `wf sync`. **Who starts it:**
+run `run-docker.sh up/status/down` yourself when the user asked for it or the integration-test policy
+requires the run; in every other case (a council session, a hunch, a borderline test) offer and wait.
 
 - **Unit tests are always green.** `test/` holds unit tests only; every PR leaves zero failing tests,
-  including reds it did not cause — no known-red list, no `Skip`. Run projects one at a time
+  including reds it did not cause — no known-red list, no `Skip` to get green (a skip needs a reason
+  and an issue reference). Run projects one at a time
   (`dotnet test test/<Project> -c Release`): [unit-tests](docs/testing/unit-tests.md).
 - **Integration tests** live in sibling **vnext-example** (`tests/Core.IntegrationTests`, on
   `VNext.Testing.Sdk` from **vnext-integration-test**) and run against the **locally built** runtime,

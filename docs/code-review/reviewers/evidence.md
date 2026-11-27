@@ -19,7 +19,7 @@ These are mechanical, fast, and each one is CRITICAL because CI or a later reade
 - [ ] `evidence/guard-local-paths` — no absolute machine path (`/Volumes/...`, `/Users/...`, `C:\...`) in a committed file. Sibling repos are referenced as `../<repo>`.
 - [ ] `evidence/guard-secrets` — no token, password, connection string with credentials, or API key in a committed file, including `.http` files and test fixtures.
 - [ ] `evidence/guard-ai-docs` — nothing under `ai-docs/` or a `CLAUDE.local.md` is staged.
-- [ ] `evidence/guard-debug-leftovers` — no `Console.WriteLine`, commented-out block of the code being replaced, `// TODO` without an issue reference, or skipped/`Skip = "..."` test added by this PR without a stated reason.
+- [ ] `evidence/guard-debug-leftovers` — no `Console.WriteLine`, commented-out block of the code being replaced, `// TODO` without an issue reference, or skipped/`Skip = "..."` test added by this PR without a stated reason and an issue reference.
 
 ## 2. Unit tests (`evidence/unit-*`)
 

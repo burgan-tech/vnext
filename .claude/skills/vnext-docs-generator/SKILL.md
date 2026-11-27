@@ -1,6 +1,6 @@
 ---
 name: vnext-docs-generator
-description: Generate or update vNext platform documentation for the vnext-docs Docusaurus site. Use when the user says "döküman oluştur", "create docs", "document this feature", or asks to update/sync documentation after a code change.
+description: "Generate or update vNext platform documentation for the vnext-docs Docusaurus site. Use when the user says \"döküman oluştur\", \"create docs\", \"document this feature\", or asks to update/sync documentation after a code change."
 ---
 
 # vNext Docs Generator
@@ -113,7 +113,7 @@ ai-docs/vnext-docs/i18n-en/<category>/<filename>.md   # English (if needed)
 | No local clone | `../vnext-docs` absent | Ask once to clone; read-only `gh api` fallback only then |
 | New page not visible in the site | Not registered in the sidebar | Add the entry (REFERENCE.md § Sidebar Registration) |
 
-A failure not in this table: file it with the `papercut` skill.
+A failure not in this table that meets the `papercut` conditions (guidance or environment at fault, not your change): file it.
 
 ## Checklist
 

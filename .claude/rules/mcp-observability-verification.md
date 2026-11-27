@@ -14,8 +14,9 @@ integration-test run, a load script. Governs what counts as evidence that the ch
   component definition before calling a duration a regression.
 - **A server is unreachable → say so**, name the check that did not run, and label the result ("tests
   passed, not confirmed against traces"). Use the on-disk fallbacks; timing claims have no fallback.
-  Offer to bring the infra up rather than starting it unasked, and never take down a stack owned by
-  another compose file. A server that failed at session start stays down for the session (`/mcp`).
+  Bring the infra up yourself only when the user asked or the integration-test policy requires the run
+  (`AGENTS.md` § Build, run, test), otherwise offer; never take down a stack owned by another compose
+  file. `run-docker.sh up` does not start `openobserve` / `elasticsearch` — see the runbook. A server that failed at session start stays down for the session (`/mcp`).
 - **OpenObserve:** org `default`, stream **`vnext`** (logs and traces), top-level `type` parameter,
   times in microseconds, message column `body`. `postgres` `CONNECT_TIMEOUT` usually means core's
   DbMigrator has not created `Aether_WorkflowDb` yet — list the databases before suspecting the server.

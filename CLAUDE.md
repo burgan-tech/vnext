@@ -17,7 +17,7 @@ on a core-process change that needs end-to-end proof.
 `agent-council` · `pr-review` · `workflow-code-review` · `domain-performance-audit` ·
 `runtime-integration-test` · `cross-domain-lab` · `create-github-issue` · `create-github-pr` ·
 `git-commit-message` · `vnext-docs-generator` · `vnext-meta-validator` (also after any `vnext-meta/`
-edit) · `vnext-meta-matrix` · `papercut` (also unasked, on repeated friction). When to use which, with examples: `docs/ai-capabilities.md`.
+edit) · `vnext-meta-matrix` · `papercut` (also unasked — conditions in `AGENTS.md` § Project rules). When to use which, with examples: `docs/ai-capabilities.md`.
 
 ## Project subagents (`.claude/agents/`)
 
@@ -29,8 +29,9 @@ are read-only specialists started in parallel by `pr-review`.
 ## Project MCP servers (`.mcp.json`)
 
 `openobserve` (logs + traces: org `default`, stream `vnext`), `postgres` (restricted access mode),
-`redis`, `elasticsearch` (APM, full docker profile). They only answer while the docker infra is up
-(`etc/docker/run-docker.sh status`); the `openobserve` header is the compose-file root login. During
+`redis`, `elasticsearch` (APM). They only answer while their backend is up: `run-docker.sh up` starts
+postgres and redis only — `openobserve` and `elasticsearch` need the extra services in
+`docs/runtime/local-environment.md` § What `up` starts; the `openobserve` header is the compose-file root login. During
 local development and test debugging, query them instead of guessing from host stdout. `redis`
 exposes write tools (`set`, `delete`, `publish`, …) — use only the read tools unless the user asks.
 Query mechanics, traps and the `postgres` connect-timeout cause:

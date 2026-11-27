@@ -14,8 +14,10 @@ though — as noted under *Authoring rule* below — nothing currently enforces 
 about state-level subflow machinery therefore describes `S`; see *Authoring rule* under
 [`S` and `P` Semantics](#s-and-p-semantics).
 
-All runtime-generated child start, active-child forward, and child retry calls currently use
-`sync=true`, regardless of the parent request mode or the authored `S`/`P` type. Here, synchronous
+Runtime-generated child start and child retry calls use `sync=true`, regardless of the parent
+request mode or the authored `S`/`P` type. An active-child forward goes through the
+[transition proxy](subflow-transition-proxy.md) in the parent's resolved mode (an async request stays
+async); only the legacy forward job forces `sync=true`. Here, synchronous
 means the command awaits the child's current pipeline activation until it reaches a rest point; it
 does not wait through future human input or external events.
 

@@ -4,6 +4,15 @@ The procedure an agent follows to run a domain locally. Entry point: `etc/docker
 (`--help` lists everything); ports and the other modes: `AGENTS.md` § Build, run, test. Related:
 [integration testing](../testing/integration-testing.md), [multi-domain hosting](multi-domain-hosting.md).
 
+**What `up` starts.** Only `postgres`, `redis`, `vault`, `dapr-scheduler` and `otel-collector`, plus the
+domain's sidecars and hosts. The observability backends the MCP servers read — `openobserve`,
+`elasticsearch`, `kibana`, `apm-server` — are services of the same `etc/docker/docker-compose.yml` but
+are **not** started by `up` (this is the "full docker profile" the SessionStart hook mentions). Start
+them beside a running domain with
+`docker compose -f etc/docker/docker-compose.yml up -d openobserve elasticsearch kibana apm-server`,
+or run plain `./run-docker.sh` (the whole compose file, attached). Without them, report results as
+"not confirmed against traces" ([observability verification](../testing/observability-verification.md)).
+
 Commands run without a terminal, so the script never prompts — pass everything explicitly.
 
 1. `cd etc/docker && ./run-docker.sh status` and read `ai-docs/local-environments/README.md` (if present):

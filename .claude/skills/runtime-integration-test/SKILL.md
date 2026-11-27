@@ -101,7 +101,7 @@ Cluster reds by error signature first; most "regressions" have been environment.
 | `wf update` did not publish a new flow | `wf update` only republishes git-changed tracked files | `POST api/v1/definitions/publish` + `publish/completed` |
 | `postgres` MCP `CONNECT_TIMEOUT` | `Aether_WorkflowDb` not created yet | Bring core up; list databases before suspecting the server |
 
-A failure not in this table: file it with the `papercut` skill.
+A failure not in this table that meets the `papercut` conditions (guidance or environment at fault, not your change): file it.
 
 ## Red flags — stop
 

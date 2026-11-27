@@ -25,7 +25,7 @@ It is empty in git and is not a source of truth.
 
 | File | Role |
 | --- | --- |
-| [AGENTS.md](../AGENTS.md) | Session bootstrap for every agent: hosts, layers, events, concept map, platform repos. `CLAUDE.md` imports it and adds Claude wiring. |
+| [AGENTS.md](../AGENTS.md) | Session bootstrap for every agent: rule links, build/test policy, one-paragraph architecture, concept map, platform repos. `CLAUDE.md` imports it and adds Claude wiring. |
 | [.claude/rules/dotnet-coding-standards.md](../.claude/rules/dotnet-coding-standards.md) | Aether usage, Result pattern, logging, event checklist, tests (path-scoped). |
 | [.claude/rules/vnext-workflow-developer.md](../.claude/rules/vnext-workflow-developer.md) | Runtime quick-reference card; each section links its `/docs` page (path-scoped). |
 | [architecture/workflow-execution-pipeline.md](architecture/workflow-execution-pipeline.md) | Ordered steps, profiles, inline auto-chain, post-commit boundaries. |
@@ -45,11 +45,11 @@ Content lives in exactly one place; each tool has a thin entry point that points
 | `.cursor/rules/*.mdc` | One pointer per rule; `@`-includes its `.claude/rules/` file with the same scope | only when a rule file is added/renamed |
 | `.claude/skills/*/SKILL.md` | On-demand skills — **single source**; Cursor loads `.claude/skills/` directly | yes |
 | `.claude/agents/*.md` | Claude Code subagents — **thin shells** over `docs/code-review/reviewers/*.md` | yes |
-| `docs/agent-council/` | Council contract (`README.md`), roles, Chair, two templates, the committed decision log | yes |
-| `.github/ai/*.md`, `scripts/ai/` | CI agent prompts and the trusted scripts that validate and apply their answers | yes, with tests |
+| `docs/agent-council/` | Council contract (`README.md`), roles, Chair, two templates, regression cases (`evals.md`), the committed decision log | yes |
+| `.github/ai/*.md` + `*.json`, `scripts/ai/` | CI agent prompts, their path/gate configuration and the trusted scripts that validate and apply their answers | yes, with tests |
 | `docs/` | Implementation docs, indexed from `docs/README.md` | yes |
 | `ai-docs/` (`superpowers/`, `agent-council/sessions/`, `handoff/`, `papercuts/`, `local-environments/`) | Git-ignored local scratch: dated decision records, handoffs, machine records — never a source of truth | local |
-| `CLAUDE.local.md` | Machine-local, git-ignored notes (repo paths, ports) — policy never lives here | personal |
+| `CLAUDE.local.md` | Machine-local, git-ignored notes (repo paths, machine facts) — policy never lives here; ports of running domains are in `ai-docs/local-environments/` | personal |
 
 The two code rules load only once code is open: before answering a design question cold, read the
 workflow card first. If a rule ever disagrees with the code, the code wins.
@@ -60,14 +60,13 @@ workflow card first. If a rule ever disagrees with the code, the code wins.
   commit. A **new** rule file also gets a short pointer in `.cursor/rules/`
   (copy an existing one, change the `@` path, keep `alwaysApply`/`globs` in step
   with the rule's `paths:`); a new skill needs nothing.
-- **Bootstrap fact for every agent** (ports, layers, commands, concept map) →
+- **Bootstrap fact for every agent** (ports, commands, test policy, concept map) →
   `AGENTS.md`. `CLAUDE.md` only carries Claude-specific wiring.
 - **Runtime fact** (step order, profile exclusions, event modes) → the owning
   `/docs` page, plus at most a one-line rule in
   `.claude/rules/vnext-workflow-developer.md` that links it; do not paste the same
   table or paragraph into a second file.
-- **Decision record** (why something was done) → local scratch (`ai-docs/`, git-ignored; layout in
-  `AGENTS.md`); a council decision additionally gets one row in `docs/agent-council/sessions/README.md`.
+- **Decision record** (why something was done) → local scratch (`ai-docs/`, git-ignored; layout [above](#ai-guidance-layout)); a council decision additionally gets one row in `docs/agent-council/sessions/README.md`.
 - **Long task about to run out of context** → write `ai-docs/handoff/<task>.md` (goal, decisions taken,
   files touched, what is verified, next step) before compaction, and resume from it; a summary loses the
   details a handoff keeps. Advice, not a gate.
@@ -88,7 +87,7 @@ every skill/agent `description`. Keep them lean:
 - **Code-only rules are path-scoped** (`paths:` frontmatter; the Cursor pointer
   uses `globs` + `alwaysApply: false`). Only rules that apply to every kind of
   session (council, MCP verification core, graphify) stay always-on.
-- **Skill/agent descriptions stay ≤ 350 characters** (the script's limit), are quoted YAML strings,
+- **Skill/agent descriptions stay ≤ 350 characters** (the script warns above it), are quoted YAML strings,
   and carry the trigger phrases — nowhere else repeats them.
 - **Judgment cues, not blanket bans.** "Match the surrounding style" beats "never write comments": a
   ban that collides with a later request costs reasoning and is often followed instead of the request.
@@ -103,15 +102,15 @@ every skill/agent `description`. Keep them lean:
 - `SKILL.md` body stays under ~500 lines (the script warns); details the run needs only sometimes go in
   linked sibling files read by the step that needs them.
 - Numbered steps, one objective each, each with a concrete command or check and how to tell it worked.
-- A skill that runs commands ends with **When it fails**: a table of known failures and their fixes
-  (from real runs — "try again" is not a fix).
+- A skill that runs commands gets a **When it fails** table as soon as a real failure is known: known
+  failures and their fixes, from real runs or papercuts — never invented, and "try again" is not a fix.
 - A step that never varies is a script, not prose for the model to re-derive.
 - A skill earns its place by beating no skill on real prompts — see the ablation method in
   [agent-council/evals.md](agent-council/evals.md#method).
 - **Run `scripts/check-ai-guidance.sh`** after editing guidance: frontmatter
   parses, relative links resolve, every rule has a Cursor pointer, no duplicate
-  headings, the council verdicts match their single source, and the always-loaded,
-  path-scoped and council-run sets stay under budget. The `AI Guidance` workflow runs
+  headings and matching council verdicts are errors; description length, the
+  always-loaded, path-scoped and council-run budgets and a long `SKILL.md` are warnings. The `AI Guidance` workflow runs
   it on every PR that touches guidance.
 
 ## Where is X

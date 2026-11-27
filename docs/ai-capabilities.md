@@ -23,7 +23,7 @@ phrase against the skill's frontmatter `description`. Cursor reads the same `.cl
 | Write product documentation | [`vnext-docs-generator`](#7-vnext-meta-and-documentation) |
 | Verify a change through traces and logs | [MCP servers + `scripts/trace-profile.py`](#4-testing-and-verification) |
 | Check that the AI guidance itself is healthy | [`scripts/check-ai-guidance.sh`](#9-always-on-guards-no-invocation-needed) |
-| Report friction (a command, doc or skill that fights you) / turn reports into fixes | [`papercut`](#9-always-on-guards-no-invocation-needed) |
+| Report friction (a command, doc or skill that fights you) / turn reports into fixes | [`papercut`](#6-github-and-git) |
 
 ## 2. Decision — Agent Council
 
@@ -38,7 +38,7 @@ phrase against the skill's frontmatter `description`. Cursor reads the same `.cl
   every such answer opens by stating whether the council ran.
 - **Run:** *"council: should we add a post-commit relay for event X?"* · *"full council: …"* ·
   *"chair queue"*
-- **Produces / boundary:** a session folder under `ai-docs/agent-council/sessions/<id>/` (git-ignored)
+- **Produces / boundary:** a session folder under `ai-docs/agent-council/sessions/<YYYY-MM-DD-slug>/` (git-ignored)
   and one row in [the committed log](agent-council/sessions/README.md). Planning only — it never writes
   code and its output is not implementation approval.
 
@@ -132,7 +132,7 @@ the vnext-ai-toolkit plugin's **`domain-check`** (canonical checks, scanner and 
 
 - **Does:** a static performance audit of a **domain package** (a vnext-template repo such as
   vnext-onboarding) — workflows, tasks, extensions, functions, views, scripts — against the current
-  runtime, then a short prioritised report (in Turkish, since it goes to the domain team).
+  runtime, then a short prioritised report (the skill asks where the report goes and follows the target repo's convention).
 - **When:** "domain performans", "performans incele", "bu domaini incele", "domain audit".
 - **Run:** `/vnext-ai-toolkit:domain-check <domain-root>` with the plugin installed; otherwise the scan
   step is `python3 <vnext-ai-toolkit>/skills/domain-check/scan.py <domain-root> [--json]`. From this
@@ -210,17 +210,28 @@ and opens the draft PR; model `AI_DEVELOPER_MODEL`. Locally: `node scripts/ai/de
 `node scripts/ai/director/collect.mjs --issue <n>` then `apply.mjs --print`. Tests:
 `node --test "scripts/ai/test/*.test.mjs"` (also in the `Unit Tests` workflow).
 
+**`papercut`** — [skill](../.claude/skills/papercut/SKILL.md) (feedback on the guidance itself; filed
+here because triage ends in doc, skill or issue changes)
+
+- **Does:** files a friction report to git-ignored `ai-docs/papercuts/` when a documented command,
+  flag, step or doc proves wrong or the same environment failure repeats, then continues with the
+  workaround. *"papercut triage"* groups open reports into proposed fixes (a skill's **When it fails**
+  row, a doc/rule correction, a script fix, an eval case), applied only on approval.
+- **When:** unasked, on the conditions in the skill; on request, *"papercut"* / *"papercut triage"*.
+
 ## 7. vnext-meta and documentation
 
 | Skill | Does | When | Produces |
 |---|---|---|---|
 | [`vnext-meta-validator`](../.claude/skills/vnext-meta-validator/SKILL.md) | Schema, version and codebase alignment of the `vnext-meta/` JSON files ([checks](../.claude/skills/vnext-meta-validator/CHECKS.md)) | "meta kontrol", "validate meta"; after any `vnext-meta/` edit | A findings report |
 | [`vnext-meta-matrix`](../.claude/skills/vnext-meta-matrix/SKILL.md) | Feature / deprecation / known-issue / component / limit matrix by version | "meta matrix", "meta rapor" | `ai-docs/vnext-meta-matrix.md` (local) |
-| [`vnext-docs-generator`](../.claude/skills/vnext-docs-generator/SKILL.md) | Creates or updates pages of the vnext-docs Docusaurus portal ([reference](../.claude/skills/vnext-docs-generator/REFERENCE.md)) | "döküman oluştur", "create docs" | Edits in the local `../vnext-docs` clone; `gh api` only when there is no clone |
+| [`vnext-docs-generator`](../.claude/skills/vnext-docs-generator/SKILL.md) | Creates or updates pages of the vnext-docs Docusaurus portal ([reference](../.claude/skills/vnext-docs-generator/REFERENCE.md)) | "döküman oluştur", "create docs" | Drafts under `ai-docs/vnext-docs/` in this repo for review (reads the local `../vnext-docs` clone; `gh api` only when there is no clone) — never edits the clone itself |
 
 ## 8. Machine-level plugins and tools (if installed)
 
 Not part of this repository — they are installed per user and may be missing on another machine.
+`.claude/settings.json` enables four Claude Code plugins for this project when they are installed
+(`code-review`, `context-mode`, `frontend-design`, `supabase`); no rule or skill here depends on them.
 
 - **vnext-ai-toolkit** — domain-package development (not this runtime):
   - design: `vnext-design-process` (multi-turn workflow design), `workflow-scaffold` (workflow JSON + `.csx` + `.http`);
@@ -245,10 +256,9 @@ Not part of this repository — they are installed per user and may be missing o
 | [Council plan mode](../.claude/rules/agent-council-plan-mode.md) | Council-shaped questions disclose council status; decisions before implementation |
 | [MCP verification](../.claude/rules/mcp-observability-verification.md) | A green test is not evidence; say when a server was unavailable |
 | [Graphify first](../.claude/rules/graphify-navigation.md) | Query the graph before reading broadly |
-| [Workflow card](../.claude/rules/vnext-workflow-developer.md) and [.NET standards](../.claude/rules/dotnet-coding-standards.md) | Path-scoped: load once code under `src/`, the hosts, `workers/`, `modules/`, `test/` or `vnext-meta/` is open |
+| [Workflow card](../.claude/rules/vnext-workflow-developer.md) and [.NET standards](../.claude/rules/dotnet-coding-standards.md) | Path-scoped: load once code under `src/`, the hosts, `workers/`, `modules/`, `tools/` or `test/` is open (the workflow card also for `vnext-meta/`) |
 | [`check-mcp-infra.sh`](../.claude/hooks/check-mcp-infra.sh) | SessionStart: lists unreachable MCP backends; starts nothing |
-| [`scripts/check-ai-guidance.sh`](../scripts/check-ai-guidance.sh) | Run after editing AI guidance (CI runs it too: `ai-guidance.yml`): frontmatter, links, Cursor pointers, duplicate headings, catalog coverage, council verdict vocabulary, always-loaded / path-scoped / council-run budgets |
-| [`papercut`](../.claude/skills/papercut/SKILL.md) skill | Any agent files a friction report to git-ignored `ai-docs/papercuts/` when a documented command, flag, step or doc fights it, then continues; *"papercut triage"* groups open reports into fixes (a skill's **When it fails** row, a doc/rule correction, a script fix, an eval case) applied only on approval |
+| [`scripts/check-ai-guidance.sh`](../scripts/check-ai-guidance.sh) | Run after editing AI guidance (CI runs it too: `ai-guidance.yml`). **Errors:** frontmatter, relative links (not `#fragments`), Cursor pointers, duplicate headings, catalog coverage, council verdict vocabulary. **Warnings only:** description length, the always-loaded / path-scoped / council-run budgets, `SKILL.md` over 500 lines |
 
 ## 10. Adding a new capability
 

@@ -72,7 +72,7 @@ and §7. Port offsets and the domain runbook are in `docs/runtime/local-environm
 | Partner tests skip | `VNEXT_PARTNER_BASE_URL` not set | Set it beside `VNEXT_BASE_URL` |
 | Partner components missing in external mode | `OnAfterEnvironmentReadyAsync` is never called | Publish the partner in the collection fixture |
 
-A failure not in this table: file it with the `papercut` skill.
+A failure not in this table that meets the `papercut` conditions (guidance or environment at fault, not your change): file it.
 
 ## Lab-specific facts (when writing assertions)
 

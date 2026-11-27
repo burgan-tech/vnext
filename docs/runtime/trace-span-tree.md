@@ -286,7 +286,7 @@ name is also readable as `BackgroundJob.Arm/{type}/{key}`, but the full unique n
 `Instance.Activation/{key}` answers "how long from the request until the flow was available" — the
 one number the trace could not previously give, because the APM transaction (the server span)
 closes at the 202 and every later hop starts under an already-ended parent
-([Trace Lanes § Known cosmetic effect](trace-lanes.md#known-cosmetic-effect)).
+([Trace Lanes § Async timing shape](trace-lanes.md#async-timing-shape)).
 
 **Why it cannot be a real parent span.** A .NET `Activity`'s span id is minted at `Start()`. A span
 that is the real parent of the hops must exist — with a known id — at accept time; a span that

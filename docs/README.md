@@ -137,7 +137,7 @@ Common commands:
 ```bash
 dotnet restore
 dotnet build
-dotnet test
+dotnet test test/BBT.Workflow.Domain.Tests -c Release   # one project at a time (testing/unit-tests.md)
 ```
 
 API hosts:

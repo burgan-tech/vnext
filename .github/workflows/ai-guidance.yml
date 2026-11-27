@@ -15,6 +15,7 @@ on:
       - 'docs/agent-onboarding.md'
       - 'docs/ai-capabilities.md'
       - 'docs/code-review/**'
+      - 'docs/runtime/local-environment.md'
       - 'scripts/ai/lib/council.mjs'
       - 'scripts/check-ai-guidance.sh'
 

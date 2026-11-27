@@ -16,7 +16,7 @@ guidance through triage.
 File when **any** holds — and the cause is the environment or the guidance, not the change you are
 making:
 
-- the same error twice with no progress, or more than a few turns spent on one tool;
+- the same environment or tool failure twice with no progress, or more than a few turns spent on one tool;
 - a documented command, flag, port, path or step does not work as written;
 - a doc, rule or skill says something the code contradicts;
 - a tool or script reports success while it failed, or fails without saying why.
@@ -42,7 +42,8 @@ Steps:
 
    No secrets, tokens, personal data or customer data in a report; redact them.
 3. Tell the user in one line that a papercut was filed, then continue the task with the workaround.
-   Filing never blocks the task and never edits guidance on its own.
+   Filing never blocks the task and never edits guidance on its own. In a CI run there is no user and
+   no durable scratch: name the friction in the run's notes/output instead of writing a file.
 
 ## Triage (on request)
 

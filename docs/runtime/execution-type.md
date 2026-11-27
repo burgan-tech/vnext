@@ -132,7 +132,7 @@ proxy still runs in the parent's resolved `executionType`, unchanged.
   enrichment and 200-vs-202 all follow the EFFECTIVE mode (`context.Mode`), and `CallerMode` keeps the
   requested one. It is resolved ONLY for genuine external requests — `BuildTransitionContext` and the
   start path skip it when `input.SuppressResponseEnrichment` is set, so runtime-internal subflow
-  start/forward keep their forced `sync=true`. Full guide: `docs/runtime/execution-type.md`.
+  start and descended retry keep their forced `sync=true` (the proxy forward: next bullets). Full guide: `docs/runtime/execution-type.md`.
 - Automatic continuations always execute inline and are awaited. An async request uses one initial
   `flow.transition` job; no Scheduler job is created for each automatic hop.
 - A parent with an active SubFlow resolves the mode once (transition `executionType` > flow
