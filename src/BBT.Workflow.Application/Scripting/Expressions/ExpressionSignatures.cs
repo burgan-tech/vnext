@@ -104,9 +104,12 @@ public static class ExpressionSignatures
         ["urlEncode"] = (Func<object?, string?>)UrlEncode
     };
 
-    private static readonly ExpressionSignature MappingCondition = BuildMapping("mapping-condition", phase: null);
+    private static readonly ExpressionSignature MappingCondition = BuildMapping("mapping-condition", ScopeKind.Condition);
     private static readonly ExpressionSignature MappingInput = BuildMapping("mapping-input", ScopeKind.MappingInput);
     private static readonly ExpressionSignature MappingOutput = BuildMapping("mapping-output", ScopeKind.MappingOutput);
+    private static readonly ExpressionSignature TransitionOutput = BuildMapping("transition-output", ScopeKind.TransitionOutput);
+    private static readonly ExpressionSignature SubFlowInput = BuildMapping("subflow-input", ScopeKind.SubFlowInput);
+    private static readonly ExpressionSignature SubFlowOutput = BuildMapping("subflow-output", ScopeKind.SubFlowOutput);
 
     /// <summary>
     /// Value slots outside task mappings (transition timer, workflow timeout, SubFlow timeout override, agent prompt):
@@ -144,8 +147,10 @@ public static class ExpressionSignatures
     /// <c>now</c> (<see cref="DateTimeOffset"/>), <c>user</c> (<see cref="ExpressionUser"/>), <c>context</c>
     /// (<see cref="ExpressoRuleContext"/>); in both mapping phases also <c>task</c> (<see cref="RuleJsonDynamic"/>, the task's
     /// <c>config</c>), <c>config</c> (<see cref="ExpressionConfig"/>) and the <c>urlEncode</c> function; plus <c>result</c>
-    /// (<see cref="RuleJsonDynamic"/>) for <see cref="ScopeKind.MappingOutput"/> only; and last, in every kind, <c>headers</c>
-    /// (<see cref="ExpressionHeaders"/>, the incoming request's headers). <see cref="object"/> out, assignment
+    /// (<see cref="RuleJsonDynamic"/>) for <see cref="ScopeKind.MappingOutput"/> and <see cref="ScopeKind.SubFlowOutput"/>;
+    /// and last, in every kind, <c>headers</c> (<see cref="ExpressionHeaders"/>, the incoming request's headers).
+    /// <see cref="ScopeKind.TransitionOutput"/> and <see cref="ScopeKind.SubFlowInput"/> are the condition variables
+    /// (no <c>task</c>, <c>config</c>, <c>urlEncode</c> or <c>result</c>). <see cref="object"/> out, assignment
     /// operators disabled (<see cref="AssignmentOperators.None"/>). Each kind has its own
     /// signature name, so the compile cache never mixes them.
     /// </summary>
@@ -154,6 +159,9 @@ public static class ExpressionSignatures
         ScopeKind.Condition => MappingCondition,
         ScopeKind.MappingInput => MappingInput,
         ScopeKind.MappingOutput => MappingOutput,
+        ScopeKind.TransitionOutput => TransitionOutput,
+        ScopeKind.SubFlowInput => SubFlowInput,
+        ScopeKind.SubFlowOutput => SubFlowOutput,
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null)
     };
 
@@ -169,23 +177,24 @@ public static class ExpressionSignatures
         new(ExpressionScope.ContextVariable, typeof(ExpressoRuleContext))
     ];
 
-    private static ExpressionSignature BuildMapping(string name, ScopeKind? phase)
+    private static ExpressionSignature BuildMapping(string name, ScopeKind kind)
     {
         var parameters = MappingVariables();
-        if (phase is not null)
+        var isTask = kind is ScopeKind.MappingInput or ScopeKind.MappingOutput;
+        if (isTask)
         {
             parameters.Add(new Parameter(ExpressionScope.TaskVariable, typeof(RuleJsonDynamic)));
             parameters.Add(new Parameter(ExpressionScope.ConfigVariable, typeof(ExpressionConfig)));
         }
 
-        if (phase == ScopeKind.MappingOutput)
+        if (kind is ScopeKind.MappingOutput or ScopeKind.SubFlowOutput)
             parameters.Add(new Parameter(ExpressionScope.ResultVariable, typeof(RuleJsonDynamic)));
 
         parameters.Add(HeadersParameter);
 
         // Assignment is off: `data.x = 1` would write through a borrowed view instead of producing a value.
         return new ExpressionSignature(
-            name, parameters, typeof(object), phase is null ? NoFunctions : MappingFunctions, AssignmentOperators.None);
+            name, parameters, typeof(object), isTask ? MappingFunctions : NoFunctions, AssignmentOperators.None);
     }
 
     /// <summary>

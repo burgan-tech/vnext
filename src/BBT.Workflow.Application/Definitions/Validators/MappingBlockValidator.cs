@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
+using BBT.Workflow.Scripting.Declarative;
 using BBT.Workflow.Scripting.Expressions;
 using BBT.Workflow.Scripting.Rules;
 using BBT.Workflow.Shared.Json;
@@ -76,6 +77,7 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
             switch (componentType)
             {
                 case RuntimeSysSchemaInfo.Flows:
+                    ValidateTransitionInputMembers(attributes, result.ValidationErrors);
                     if (attributes.Deserialize<Workflow>(JsonSerializerConstants.JsonOptions) is { } workflow)
                         ValidateWorkflow(workflow, result);
                     break;
@@ -117,6 +119,7 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
             var statePath = $"states[{state.Key}]";
             ValidateBindings(state.OnEntries, $"{statePath}.onEntries", r);
             ValidateBindings(state.OnExits, $"{statePath}.onExits", r);
+            ValidateSubFlowBlocks(state.SubFlow, $"{statePath}.subFlow", r);
             ValidateValueSlot(state.SubFlow?.Overrides?.Timeout?.Mapping, $"{statePath}.subFlow.overrides.timeout.mapping",
                 ValueSlotKind.Timer, r);
             if (state.Agent?.Prompt is { IsScript: true } prompt)
@@ -140,6 +143,95 @@ public sealed class MappingBlockValidator(IExpressionCompiler compiler)
             return;
         ValidateValueSlot(transition.Timer, $"{path}.timer", ValueSlotKind.Timer, r);
         ValidateBindings(transition.OnExecutionTasks, $"{path}.onExecutionTasks", r);
+
+        if (transition.Output is null)
+            return;
+        if (transition.Mapping is not null)
+            Add(r.ValidationErrors, path, "'mapping' and 'output' are mutually exclusive");
+        ValidatePlan(transition.Output, DeclarativeSiteKind.TransitionOutput, $"{path}.output", r.ValidationErrors);
+    }
+
+    /// <summary>
+    /// A SubFlow state's <c>input</c>/<c>output</c> blocks: exclusive with <c>mapping</c>, valid for an <c>S</c> SubFlow only,
+    /// and checked by the same plan builder the runtime uses (target, select and expression rules).
+    /// </summary>
+    private void ValidateSubFlowBlocks(SubFlow? subFlow, string path, ComponentValidationResult r)
+    {
+        if (subFlow is null || (subFlow.Input is null && subFlow.Output is null))
+            return;
+        if (subFlow.Mapping is not null)
+            Add(r.ValidationErrors, path, "'mapping' and the declarative 'input'/'output' blocks are mutually exclusive");
+        if (subFlow.Type != SubFlowType.SubFlow)
+        {
+            Add(r.ValidationErrors, path,
+                "declarative 'input'/'output' blocks apply to a SubFlow ('S') only; a SubProcess ('P') is started by its own task.");
+            return;
+        }
+
+        if (subFlow.Input is not null)
+            ValidatePlan(subFlow.Input, DeclarativeSiteKind.SubFlowInput, $"{path}.input", r.ValidationErrors);
+        if (subFlow.Output is not null)
+            ValidatePlan(subFlow.Output, DeclarativeSiteKind.SubFlowOutput, $"{path}.output", r.ValidationErrors);
+    }
+
+    // The plan builder is the single target / select / compile check of the non-task sites.
+    // An empty block is rejected here (not on a task binding, whose empty block is shipped behaviour): an empty
+    // transition output would silently drop the whole payload, an empty SubFlow block would do nothing at all.
+    private void ValidatePlan(MappingBlock block, DeclarativeSiteKind kind, string path, IList<ValidationResult> errors)
+    {
+        if (block.Select is null && block.Into is null && (block.Set is null || block.Set.Count == 0))
+        {
+            Add(errors, path, "the block is empty: give it a 'select', an 'into' or a 'set' entry, or remove it.");
+            return;
+        }
+
+        var plan = DeclarativeMappingPlan.Build(compiler, block, kind);
+        if (!plan.IsSuccess)
+            Add(errors, path, plan.Error.Message ?? "The declarative block is invalid.");
+    }
+
+    /// <summary>
+    /// A transition takes only <c>output</c>. Deserialization drops an unknown <c>input</c> member silently, so it is
+    /// found on the raw attributes of every transition holder.
+    /// </summary>
+    private static void ValidateTransitionInputMembers(JsonElement attributes, IList<ValidationResult> errors)
+    {
+        if (attributes.ValueKind != JsonValueKind.Object)
+            return;
+
+        foreach (var name in new[] { "startTransition", "cancel", "updateData", "exit" })
+        {
+            if (attributes.TryGetProperty(name, out var single))
+                CheckInput(single, name, errors);
+        }
+
+        if (attributes.TryGetProperty("sharedTransitions", out var shared) && shared.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var t in shared.EnumerateArray())
+                CheckInput(t, $"sharedTransitions[{KeyOf(t)}]", errors);
+        }
+
+        if (!attributes.TryGetProperty("states", out var states) || states.ValueKind != JsonValueKind.Array)
+            return;
+        foreach (var state in states.EnumerateArray())
+        {
+            if (state.ValueKind != JsonValueKind.Object
+                || !state.TryGetProperty("transitions", out var transitions) || transitions.ValueKind != JsonValueKind.Array)
+                continue;
+            foreach (var t in transitions.EnumerateArray())
+                CheckInput(t, $"states[{KeyOf(state)}].transitions[{KeyOf(t)}]", errors);
+        }
+    }
+
+    private static string? KeyOf(JsonElement element) =>
+        element.ValueKind == JsonValueKind.Object && element.TryGetProperty("key", out var key) && key.ValueKind == JsonValueKind.String
+            ? key.GetString()
+            : null;
+
+    private static void CheckInput(JsonElement transition, string path, IList<ValidationResult> errors)
+    {
+        if (transition.ValueKind == JsonValueKind.Object && transition.TryGetProperty("input", out _))
+            Add(errors, path, "'input' is not supported on a transition; use 'output'.");
     }
 
     /// <summary>

@@ -319,4 +319,152 @@ public class MappingBlockValidatorTests
             "output":{"into":"$.response"}
             """).ShouldBeEmpty();
     }
+
+    // ---- Transition / SubFlow declarative blocks (Phase C1) ----
+
+    private const string Lbl = "\"labels\": [{\"label\": \"L\", \"language\": \"en\"}]";
+
+    private List<string> FlowErrors(
+        string stateTransitionExtra = "", string startExtra = "", string cancelExtra = "", string updateDataExtra = "",
+        string exitExtra = "", string sharedExtra = "", string subFlowExtra = "", string subFlowType = "S")
+    {
+        string Tr(string key, string target, string extra) =>
+            "{\"key\":\"" + key + "\",\"target\":\"" + target + "\",\"triggerType\":\"manual\"," + Lbl
+            + (extra.Length == 0 ? "" : "," + extra) + "}";
+        var flow = JsonDocument.Parse($$"""
+        {
+            "type": "F",
+            {{Lbl}},
+            "states": [
+                { "key": "review", "stateType": "initial", {{Lbl}},
+                  "transitions": [ {{Tr("submit", "wait", stateTransitionExtra)}} ] },
+                { "key": "wait", "stateType": "subflow", {{Lbl}},
+                  "subFlow": { "type": "{{subFlowType}}", "process": {{TaskRef}}{{(subFlowExtra.Length == 0 ? "" : "," + subFlowExtra)}} },
+                  "transitions": [] },
+                { "key": "done", "stateType": "finish", {{Lbl}}, "transitions": [] }
+            ],
+            "startTransition": {{Tr("start", "review", startExtra)}},
+            "cancel": {{Tr("cancel", "done", cancelExtra)}},
+            "updateData": {{Tr("upd", "$self", updateDataExtra)}},
+            "exit": {{Tr("exit", "done", exitExtra)}},
+            "sharedTransitions": [ {{Tr("note", "$self", "\"availableIn\": [\"review\"]" + (sharedExtra.Length == 0 ? "" : "," + sharedExtra))}} ]
+        }
+        """).RootElement;
+        var r = new ComponentValidationResult();
+        _sut.Validate(RuntimeSysSchemaInfo.Flows, flow, r);
+        return r.ValidationErrors.Select(e => e.ErrorMessage!).ToList();
+    }
+
+    private static string ScriptMapping => "\"mapping\":{\"location\":\"./src/M.csx\",\"code\":\"" +
+        Convert.ToBase64String(Encoding.UTF8.GetBytes("class M {}")) + "\"}";
+
+    [Fact]
+    public void Transition_ScriptAndOutput_IsError()
+    {
+        var errors = FlowErrors(stateTransitionExtra: ScriptMapping + ",\"output\":{\"set\":{\"$.a\":\"1\"}}");
+        errors.ShouldHaveSingleItem().ShouldBe(
+            "states[review].transitions[submit]: 'mapping' and 'output' are mutually exclusive");
+    }
+
+    [Fact]
+    public void Transition_InputBlock_IsError()
+    {
+        var errors = FlowErrors(stateTransitionExtra: "\"input\":{\"set\":{\"$.a\":\"1\"}}");
+        errors.ShouldHaveSingleItem().ShouldBe(
+            "states[review].transitions[submit]: 'input' is not supported on a transition; use 'output'.");
+    }
+
+    [Fact]
+    public void Transition_ValidOutput_NoErrors() =>
+        FlowErrors(stateTransitionExtra: "\"output\":{\"select\":\"$.input.x\",\"into\":\"$.y\",\"set\":{\"$.z\":\"data.a\"}}")
+            .ShouldBeEmpty();
+
+    [Fact]
+    public void Transition_OutputBadExpression_IsError()
+    {
+        var errors = FlowErrors(stateTransitionExtra: "\"output\":{\"set\":{\"$.z\":\"nope(\"}}");
+        errors.ShouldHaveSingleItem().ShouldStartWith("states[review].transitions[submit].output: ");
+    }
+
+    [Fact]
+    public void StartTransition_OutputBlock_Validated()
+    {
+        FlowErrors(startExtra: "\"output\":{\"set\":{\"$.z\":\"data.a\"}}").ShouldBeEmpty();
+        FlowErrors(startExtra: "\"output\":{\"set\":{\"$.z[0]\":\"1\"}}")
+            .ShouldHaveSingleItem().ShouldStartWith("startTransition.output: ");
+        FlowErrors(startExtra: ScriptMapping + ",\"output\":{\"set\":{\"$.a\":\"1\"}}")
+            .ShouldHaveSingleItem().ShouldBe("startTransition: 'mapping' and 'output' are mutually exclusive");
+        FlowErrors(startExtra: "\"input\":{}")
+            .ShouldHaveSingleItem().ShouldBe("startTransition: 'input' is not supported on a transition; use 'output'.");
+    }
+
+    [Theory]
+    [InlineData("cancel")]
+    [InlineData("updateData")]
+    [InlineData("exit")]
+    [InlineData("sharedTransitions[note]")]
+    public void WellKnownAndSharedTransitions_OutputBlock_Validated(string location)
+    {
+        string Bad(string extra) => location switch
+        {
+            "cancel" => FlowErrors(cancelExtra: extra).Single(),
+            "updateData" => FlowErrors(updateDataExtra: extra).Single(),
+            "exit" => FlowErrors(exitExtra: extra).Single(),
+            _ => FlowErrors(sharedExtra: extra).Single()
+        };
+        Bad("\"output\":{\"set\":{\"$.z[0]\":\"1\"}}").ShouldStartWith($"{location}.output: ");
+        Bad("\"input\":{}").ShouldBe($"{location}: 'input' is not supported on a transition; use 'output'.");
+    }
+
+    [Fact]
+    public void SubFlow_ScriptAndBlock_IsError()
+    {
+        var errors = FlowErrors(subFlowExtra: ScriptMapping + ",\"output\":{\"set\":{\"$.a\":\"1\"}}");
+        errors.ShouldHaveSingleItem().ShouldBe(
+            "states[wait].subFlow: 'mapping' and the declarative 'input'/'output' blocks are mutually exclusive");
+    }
+
+    [Fact]
+    public void SubFlow_InputTargetOutsideDocument_IsError()
+    {
+        var errors = FlowErrors(subFlowExtra: "\"input\":{\"set\":{\"$.foo\":\"1\"}}");
+        var e = errors.ShouldHaveSingleItem();
+        e.ShouldStartWith("states[wait].subFlow.input: ");
+        e.ShouldContain("$.foo");
+    }
+
+    [Fact]
+    public void SubFlow_InputSelectWithoutInto_AndIntoWithoutSelect_AreErrors()
+    {
+        FlowErrors(subFlowExtra: "\"input\":{\"select\":\"$.data.x\"}")
+            .ShouldHaveSingleItem().ShouldStartWith("states[wait].subFlow.input: ");
+        FlowErrors(subFlowExtra: "\"input\":{\"into\":\"$.attributes\"}")
+            .ShouldHaveSingleItem().ShouldStartWith("states[wait].subFlow.input: ");
+        FlowErrors(subFlowExtra: "\"input\":{\"select\":\"$.data.x\",\"into\":\"$.attributes\"}").ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void SubFlow_OutputReadsResultStatus_Compiles() =>
+        FlowErrors(subFlowExtra: "\"output\":{\"set\":{\"$.childStatus\":\"result.status\"}}").ShouldBeEmpty();
+
+    [Fact]
+    public void EmptyBlocks_OnTransitionOutput_AndSubFlowInputOutput_AreErrors()
+    {
+        const string empty = "the block is empty: give it a 'select', an 'into' or a 'set' entry, or remove it.";
+        FlowErrors(stateTransitionExtra: "\"output\":{}")
+            .ShouldHaveSingleItem().ShouldBe($"states[review].transitions[submit].output: {empty}");
+        FlowErrors(startExtra: "\"output\":{\"set\":{}}")
+            .ShouldHaveSingleItem().ShouldBe($"startTransition.output: {empty}");
+        FlowErrors(subFlowExtra: "\"input\":{}")
+            .ShouldHaveSingleItem().ShouldBe($"states[wait].subFlow.input: {empty}");
+        FlowErrors(subFlowExtra: "\"output\":{}")
+            .ShouldHaveSingleItem().ShouldBe($"states[wait].subFlow.output: {empty}");
+    }
+
+    [Fact]
+    public void SubFlow_BlockOnSubProcess_IsError()
+    {
+        var errors = FlowErrors(subFlowType: "P", subFlowExtra: "\"output\":{\"set\":{\"$.a\":\"1\"}}");
+        errors.ShouldContain("states[wait].subFlow: declarative 'input'/'output' blocks apply to a SubFlow ('S') only; a SubProcess ('P') is started by its own task.");
+    }
 }

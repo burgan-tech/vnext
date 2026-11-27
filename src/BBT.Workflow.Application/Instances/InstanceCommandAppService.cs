@@ -462,6 +462,9 @@ public sealed class InstanceCommandAppService(
                 input.Headers,
                 onScriptFailure: ex => logger.StartTransitionMappingFailed(
                     data.Workflow.Key, data.Workflow.StartTransition.Key, data.Instance.Id, ex),
+                // The start hop's actor, as ToExecutionContext leaves it for the start pipeline (User): a declarative
+                // output block's `user` is the starting caller.
+                actor: Shared.ExecutionActor.User,
                 cancellationToken: cancellationToken)
             .TapAsync(async mappedData =>
             {
@@ -740,7 +743,7 @@ public sealed class InstanceCommandAppService(
         // The request opened the activation episode (seeded by the request middleware from the
         // server span); name it. An entry point that already classified itself — an event
         // delivery, a relayed subflow forward — keeps its trigger, only the key is refreshed.
-        using var episode = WorkflowTraceLane.UseEpisode(TelemetryConstants.ActivationTriggers.Manual, transitionKey);
+        using var episode = WorkflowTraceLane.UseEpisode(TelemetryConstants.ActivationTriggers.Manual, transitionKey); // skipcq: CS-W1100 — the episode scope ends on dispose
 
         // 1) Light Busy check FIRST — a single-row projection (no DataList, no includes) so a
         //    Busy rejection never pays the full aggregate load. The snapshot also carries the

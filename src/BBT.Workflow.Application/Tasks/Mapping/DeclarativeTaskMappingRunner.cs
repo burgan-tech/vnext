@@ -1,32 +1,15 @@
-using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
-using BBT.Workflow.Scripting.Caller;
+using BBT.Workflow.Scripting.Declarative;
 using BBT.Workflow.Scripting.Expressions;
 using BBT.Workflow.Scripting.Rules;
-using BBT.Workflow.Shared.Json;
 using BBT.Workflow.Tasks.Executors;
-using DynamicExpresso;
-using Microsoft.CSharp.RuntimeBinder;
 using Microsoft.Extensions.Configuration;
-using InputFn = System.Func<
-    BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Rules.RuleJsonDynamic,
-    BBT.Workflow.Scripting.Expressions.ExpressionInstance, System.DateTimeOffset,
-    BBT.Workflow.Scripting.Expressions.ExpressionUser, BBT.Workflow.Scripting.Rules.ExpressoRuleContext,
-    BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Expressions.ExpressionConfig,
-    BBT.Workflow.Scripting.Expressions.ExpressionHeaders, object>;
-using OutputFn = System.Func<
-    BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Rules.RuleJsonDynamic,
-    BBT.Workflow.Scripting.Expressions.ExpressionInstance, System.DateTimeOffset,
-    BBT.Workflow.Scripting.Expressions.ExpressionUser, BBT.Workflow.Scripting.Rules.ExpressoRuleContext,
-    BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Expressions.ExpressionConfig,
-    BBT.Workflow.Scripting.Rules.RuleJsonDynamic, BBT.Workflow.Scripting.Expressions.ExpressionHeaders, object>;
 
 namespace BBT.Workflow.Tasks.Mapping;
 
@@ -79,8 +62,6 @@ public sealed class DeclarativeTaskMappingRunner(
     private const string InputPhase = "input";
     private const string OutputPhase = "output";
 
-    internal static readonly JsonPath DefaultOutputSelect = JsonPath.Parse("$.body").Value;
-
     /// <inheritdoc />
     public async Task<Result<ScriptResponse?>> PrepareInputAsync(
         WorkflowTask task, TaskExecutorContext ctx, CancellationToken ct, TaskMappingSite? site = null)
@@ -123,7 +104,7 @@ public sealed class DeclarativeTaskMappingRunner(
     private async Task<Result> ApplyInputAsync(
         WorkflowTask task, TaskExecutorContext ctx, MappingBlock block, TaskMappingSite site, CancellationToken ct)
     {
-        var planResult = GetOrBuildPlan(ctx, block, ScopeKind.MappingInput, site);
+        var planResult = GetOrBuildPlan(ctx, block, DeclarativeSiteKind.TaskInput, site);
         if (!planResult.IsSuccess)
             return Result.Fail(planResult.Error);
         var plan = planResult.Value!;
@@ -143,31 +124,18 @@ public sealed class DeclarativeTaskMappingRunner(
 
             var scope = ExpressionScope.Create(ctx.ScriptContext, clock, ctx.Caller, ScopeKind.MappingInput)
                 .WithTask(task.Config, configuration);
-            if (plan.Into is not null || plan.Select is not null)
-            {
-                if (plan.Into is null || plan.SelectVariable is null)
-                    return Fail(site, InputPhase, "an input 'select' and 'into' must be authored together.");
-
-                var selected = await ReadInputSelectAsync(plan, scope, site);
-                if (!selected.IsSuccess)
-                    return Result.Fail(selected.Error);
-                if (selected.Value is not null)
-                    plan.Into.Set(request, selected.Value);
-                else
-                    LogSkipped(site, task, InputPhase, plan.Select!.Text, MissingSelectReason);
-            }
-
-            var set = await ApplySetAsync(task, plan, scope, request, site, InputPhase, ct);
-            if (!set.IsSuccess)
-                return set;
+            var applied = await DeclarativeBlockEngine.ApplyAsync(
+                plan, scope, request, result: null, Site(site, task, InputPhase), ct);
+            if (!applied.IsSuccess)
+                return applied;
 
             if (request[HeadersField] is JsonObject headers)
                 request[HeadersField] = HeadersAsStrings(headers);
             task.ApplyConfig(JsonSerializer.SerializeToElement(request));
         }
-        catch (Exception ex) when (!IsCancellation(ex, ct))
+        catch (Exception ex) when (!DeclarativeBlockEngine.IsCancellation(ex, ct))
         {
-            return Fail(site, InputPhase, Unwrap(ex).Message);
+            return Fail(site, InputPhase, DeclarativeBlockEngine.Unwrap(ex).Message);
         }
 
         return Result.Ok();
@@ -177,7 +145,7 @@ public sealed class DeclarativeTaskMappingRunner(
         WorkflowTask task, TaskExecutorContext ctx, MappingBlock block, TaskInvocationResult result, TaskMappingSite site,
         CancellationToken ct)
     {
-        var planResult = GetOrBuildPlan(ctx, block, ScopeKind.MappingOutput, site);
+        var planResult = GetOrBuildPlan(ctx, block, DeclarativeSiteKind.TaskOutput, site);
         if (!planResult.IsSuccess)
             return Result<JsonObject?>.Fail(planResult.Error);
         var plan = planResult.Value!;
@@ -192,150 +160,27 @@ public sealed class DeclarativeTaskMappingRunner(
                 resultView is null ? null : RuleJsonDynamic.BorrowObject(resultView))
                 .WithTask(task.Config, configuration);
 
-            if (plan.ResultSelect is { } selector)
-            {
-                var source = plan.Select ?? DefaultOutputSelect;
-                var selected = resultView!.TryRead(selector, out var element)
-                    ? DeclarativeValues.ToNode(element)
-                    : null;
-                if (selected is not null)
-                {
-                    if (plan.Into is not null)
-                    {
-                        plan.Into.Set(delta, selected);
-                    }
-                    else if (selected is JsonObject selectedObject)
-                    {
-                        foreach (var (name, value) in selectedObject.ToArray())
-                        {
-                            selectedObject.Remove(name);
-                            delta[name] = value;
-                        }
-                    }
-                    else
-                    {
-                        return Result<JsonObject?>.Fail(FailureError(site, OutputPhase,
-                            $"'select' {source.Text} without 'into' must select a JSON object to merge at the data root, " +
-                            $"but selected a {selected.GetValueKind()}."));
-                    }
-                }
-                else
-                {
-                    LogSkipped(site, task, OutputPhase, source.Text, MissingSelectReason);
-                }
-            }
-
-            var set = await ApplySetAsync(task, plan, scope, delta, site, OutputPhase, ct);
-            if (!set.IsSuccess)
-                return Result<JsonObject?>.Fail(set.Error);
+            var applied = await DeclarativeBlockEngine.ApplyTaskOutputAsync(
+                plan, scope, delta, resultView, Site(site, task, OutputPhase), ct);
+            if (!applied.IsSuccess)
+                return Result<JsonObject?>.Fail(applied.Error);
         }
-        catch (Exception ex) when (!IsCancellation(ex, ct))
+        catch (Exception ex) when (!DeclarativeBlockEngine.IsCancellation(ex, ct))
         {
-            return Result<JsonObject?>.Fail(FailureError(site, OutputPhase, Unwrap(ex).Message));
+            return Result<JsonObject?>.Fail(FailureError(site, OutputPhase, DeclarativeBlockEngine.Unwrap(ex).Message));
         }
 
         return Result<JsonObject?>.Ok(delta.Count == 0 ? null : delta);
     }
 
-    private static async Task<Result> ApplySetAsync(
-        WorkflowTask task, DeclarativeMappingPlan plan, ExpressionScope scope, JsonObject root, TaskMappingSite site, string phase,
-        CancellationToken ct)
-    {
-        for (var i = 0; i < plan.Set.Count; i++)
-        {
-            var entry = plan.Set[i];
-            ct.ThrowIfCancellationRequested();
-            var prepared = await scope.PrepareAsync(entry.UsedIdentifiers);
-            if (!prepared.IsSuccess)
-                return prepared; // caller roles could not be resolved: kept as its own (retryable) error
-
-            JsonNode? value;
-            try
-            {
-                var args = scope.Bind(plan.Parameters, entry.UsedIdentifiers);
-                value = DeclarativeValues.ToNode(entry.Invoke(args));
-            }
-            catch (Exception ex) when (!IsCancellation(ex, ct))
-            {
-                var cause = Unwrap(ex);
-                switch (cause)
-                {
-                    case RuntimeBinderException binder when IsMemberAccessOnNull(binder):
-                        // RF-1: a member read through a missing intermediate (data.customer.id with no customer) is a
-                        // missing source, not an error — the entry writes nothing.
-                        LogSkipped(site, task, phase, $"set['{entry.Key}']", MissingIntermediateReason);
-                        continue;
-                    case CallerRolesUnavailableException:
-                        // The expression read user.roles / user.hasRole on a hop with no caller (a System hop): a
-                        // deterministic authoring error, not a transient one — retrying the same hop fails the same way.
-                        // A provider failure never reaches here: PrepareAsync reports it (Authorization:110006).
-                        return Result.Fail(FailureError(site, phase, $"set['{entry.Key}']: {NoCallerDetail}"));
-                    default:
-                        return Result.Fail(FailureError(site, phase, $"set['{entry.Key}']: {cause.Message}"));
-                }
-            }
-
-            if (value is not null)
-                entry.Target.Set(root, value);
-        }
-
-        return Result.Ok();
-    }
-
-    /// <summary>
-    /// True for the binder's "Cannot perform runtime binding on a null reference": a member or index read on a value
-    /// that is null — in a declarative scope, a path through a missing intermediate. Every other binder failure (a member
-    /// that does not exist on a CLR type, a bad conversion) stays an error.
-    /// </summary>
-    private static bool IsMemberAccessOnNull(RuntimeBinderException exception) =>
-        exception.Message.Contains("null reference", StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>A cancellation of this mapping's own token propagates; anything else becomes a Result failure.</summary>
-    private static bool IsCancellation(Exception exception, CancellationToken ct) =>
-        exception is OperationCanceledException && ct.IsCancellationRequested;
-
-    private static async Task<Result<JsonNode?>> ReadInputSelectAsync(
-        DeclarativeMappingPlan plan, ExpressionScope scope, TaskMappingSite site)
-    {
-        var variable = plan.SelectVariable!;
-        var used = plan.SelectUsed!;
-        var prepared = await scope.PrepareAsync(used);
-        if (!prepared.IsSuccess)
-            return Result<JsonNode?>.Fail(prepared.Error);
-
-        var value = scope.Bind([variable], used)[0];
-        if (value is ExpressionUser user)
-        {
-            // `user` is read member by member: `$.user.available` never needs roles, and a roles read with no caller is
-            // the same deterministic failure as in a `set` expression (never an empty set, never a missing source).
-            var tail = plan.SelectTail!;
-            if (tail.FirstSegment == "available")
-                return Result<JsonNode?>.Ok(tail.TryRead(new JsonObject { ["available"] = user.available }, out var flag) ? flag : null);
-            if (!user.available)
-                return Result<JsonNode?>.Fail(FailureError(site, InputPhase, $"'select' {plan.Select!.Text}: {NoCallerDetail}"));
-            var userNode = new JsonObject
-            {
-                ["available"] = true,
-                ["roles"] = new JsonArray(user.roles.Select(role => (JsonNode?)JsonValue.Create(role)).ToArray())
-            };
-            return Result<JsonNode?>.Ok(tail.TryRead(userNode, out var read) ? read : null);
-        }
-
-        if (value is RuleJsonDynamic dynamicValue)
-        {
-            return Result<JsonNode?>.Ok(plan.SelectTail!.TryRead(dynamicValue.AsJsonElement(), out var element)
-                ? DeclarativeValues.ToNode(element)
-                : null);
-        }
-
-        var node = DeclarativeValues.ToNode(value);
-        return Result<JsonNode?>.Ok(node is not null && plan.SelectTail!.TryRead(node, out var found) ? found : null);
-    }
+    /// <summary>The engine's view of this binding: the task key in skip logs, <c>"{TaskType} task"</c> in failures.</summary>
+    private static DeclarativeSite Site(TaskMappingSite site, WorkflowTask task, string phase) =>
+        new(task.Key, phase) { Logger = site.Logger, ErrorSubject = site.TaskTypeName + " task" };
 
     private Result<DeclarativeMappingPlan> GetOrBuildPlan(
-        TaskExecutorContext ctx, MappingBlock block, ScopeKind kind, TaskMappingSite site)
+        TaskExecutorContext ctx, MappingBlock block, DeclarativeSiteKind kind, TaskMappingSite site)
     {
-        var phase = kind == ScopeKind.MappingInput ? InputPhase : OutputPhase;
+        var phase = kind == DeclarativeSiteKind.TaskInput ? InputPhase : OutputPhase;
         ctx.CompiledDeclarativeMappings ??= new Dictionary<(MappingBlock Block, string Phase), object>(BlockPhaseComparer.Instance);
         if (ctx.CompiledDeclarativeMappings.TryGetValue((block, phase), out var memo))
             return Result<DeclarativeMappingPlan>.Ok((DeclarativeMappingPlan)memo);
@@ -386,27 +231,12 @@ public sealed class DeclarativeTaskMappingRunner(
         return copy;
     }
 
-    /// <summary>The exception an expression threw, without the reflection wrapper a dynamic invoke adds.</summary>
-    private static Exception Unwrap(Exception ex) =>
-        ex is TargetInvocationException { InnerException: { } inner } ? inner : ex;
-
     private static Result Fail(TaskMappingSite site, string phase, string detail) =>
         Result.Fail(FailureError(site, phase, detail));
 
     private static Error FailureError(TaskMappingSite site, string phase, string detail) =>
         Error.Failure(WorkflowErrorCodes.TaskExecution,
             $"{site.TaskTypeName} task declarative {phase} mapping failed: {detail}");
-
-    private const string MissingSelectReason = "select path not found";
-    private const string MissingIntermediateReason = "missing intermediate";
-
-    private const string NoCallerDetail =
-        "user.roles / user.hasRole was read on a hop with no caller (a System hop: a timer, an automatic chain, an event); " +
-        "guard the read with user.available.";
-
-    /// <summary>RF-1 skip at Debug: the task, phase and the path or set key — never the value.</summary>
-    private static void LogSkipped(TaskMappingSite site, WorkflowTask task, string phase, string path, string reason) =>
-        site.Logger?.TaskDeclarativeMappingEntrySkipped(task.Key, phase, path, reason);
 
     private static void Log(TaskMappingSite site, WorkflowTask task, TaskExecutorContext ctx, string phase, Error error) =>
         site.Logger?.TaskDeclarativeMappingFailed(
@@ -427,232 +257,4 @@ internal sealed class BlockPhaseComparer : IEqualityComparer<(MappingBlock Block
 
     public int GetHashCode((MappingBlock Block, string Phase) obj) =>
         HashCode.Combine(RuntimeHelpers.GetHashCode(obj.Block), obj.Phase);
-}
-
-/// <summary>
-/// One <see cref="MappingBlock"/> compiled for one phase: parsed paths, the task-config fields written inside and every <c>set</c>
-/// expression compiled through the shared <see cref="IExpressionCompiler"/>. Immutable once built.
-/// </summary>
-internal sealed class DeclarativeMappingPlan
-{
-    private DeclarativeMappingPlan(
-        IReadOnlyList<Parameter> parameters, JsonPath? select, JsonPath? into, SetEntry[] set,
-        bool needsResult, Parameter? selectVariable, JsonPath? selectTail, IReadOnlySet<string> partiallyTargeted,
-        TaskResultView.Selector? resultSelect)
-    {
-        ResultSelect = resultSelect;
-        PartiallyTargeted = partiallyTargeted;
-        Parameters = parameters;
-        Select = select;
-        Into = into;
-        Set = set;
-        NeedsResult = needsResult;
-        SelectVariable = selectVariable;
-        SelectTail = selectTail;
-        SelectUsed = selectVariable is null ? null : new HashSet<string>(StringComparer.Ordinal) { selectVariable.Name };
-    }
-
-    /// <summary>The signature's parameters, in delegate order.</summary>
-    public IReadOnlyList<Parameter> Parameters { get; }
-
-    /// <summary>The <c>select</c> path (input: from the variable scope; output: from <c>result</c>).</summary>
-    public JsonPath? Select { get; }
-
-    /// <summary>The <c>into</c> path.</summary>
-    public JsonPath? Into { get; }
-
-    /// <summary>The <c>set</c> entries in declaration order.</summary>
-    public IReadOnlyList<SetEntry> Set { get; }
-
-    /// <summary>Input only: the task-config fields some target writes a path INSIDE of (not the field as a whole).</summary>
-    public IReadOnlySet<string> PartiallyTargeted { get; }
-
-    /// <summary>Output only: whether the <c>result</c> document must be built.</summary>
-    public bool NeedsResult { get; }
-
-    /// <summary>
-    /// Output only: the <c>select</c> (or the default <c>$.body</c> when only <c>into</c> is authored) split at its first
-    /// segment for <see cref="TaskResultView"/>; null when the block has neither.
-    /// </summary>
-    public TaskResultView.Selector? ResultSelect { get; }
-
-    /// <summary>Input only: the variable an input <c>select</c> reads.</summary>
-    public Parameter? SelectVariable { get; }
-
-    /// <summary>Input only: the <c>select</c> path inside that variable.</summary>
-    public JsonPath? SelectTail { get; }
-
-    /// <summary>Input only: the used-identifier set naming <see cref="SelectVariable"/>.</summary>
-    public IReadOnlySet<string>? SelectUsed { get; }
-
-    /// <summary>One compiled <c>set</c> entry.</summary>
-    internal sealed record SetEntry(
-        string Key, JsonPath Target, Func<object?[], object?> Invoke, IReadOnlySet<string> UsedIdentifiers);
-
-    public static Result<DeclarativeMappingPlan> Build(IExpressionCompiler compiler, MappingBlock block, ScopeKind kind)
-    {
-        var isInput = kind == ScopeKind.MappingInput;
-        var signature = ExpressionSignatures.Mapping(kind);
-        var partial = new HashSet<string>(StringComparer.Ordinal);
-
-        JsonPath? select = null;
-        Parameter? selectVariable = null;
-        JsonPath? selectTail = null;
-        if (block.Select is not null)
-        {
-            var parsed = Parse(block.Select, "select");
-            if (!parsed.IsSuccess)
-                return Result<DeclarativeMappingPlan>.Fail(parsed.Error);
-            select = parsed.Value!;
-            if (isInput)
-            {
-                selectVariable = signature.Parameters.FirstOrDefault(
-                    p => p.Name == select.FirstSegment && IsSelectable(p.Name));
-                if (selectVariable is null)
-                    return Invalid($"input 'select' {select.Text} must start at a JSON variable ({string.Join(", ", SelectableInputVariables(signature))}).");
-                selectTail = select.WithoutFirstSegment();
-            }
-        }
-
-        JsonPath? into = null;
-        if (block.Into is not null)
-        {
-            var target = Target(block.Into, "into", isInput, partial);
-            if (!target.IsSuccess)
-                return Result<DeclarativeMappingPlan>.Fail(target.Error);
-            into = target.Value!;
-        }
-
-        var entries = new List<SetEntry>();
-        var needsResult = !isInput && (select is not null || into is not null);
-        foreach (var (key, expression) in block.Set ?? new Dictionary<string, string>())
-        {
-            var target = Target(key, $"set['{key}']", isInput, partial);
-            if (!target.IsSuccess)
-                return Result<DeclarativeMappingPlan>.Fail(target.Error);
-
-            if (string.IsNullOrWhiteSpace(expression)
-                || expression.Length > ConditionScriptLocations.MaxDynamicExpressoExpressionLength)
-                return Invalid($"set['{key}']: the expression is empty or longer than {ConditionScriptLocations.MaxDynamicExpressoExpressionLength} characters.");
-
-            SetEntry entry;
-            if (isInput)
-            {
-                var compiled = compiler.Compile<InputFn>(expression, signature);
-                if (!compiled.IsSuccess)
-                    return Invalid($"set['{key}']: the expression does not compile: {compiled.Error.Message}");
-                var fn = compiled.Value!.Invoke;
-                entry = new SetEntry(key, target.Value!,
-                    a => fn((RuleJsonDynamic?)a[0], (RuleJsonDynamic?)a[1], (ExpressionInstance?)a[2],
-                        (DateTimeOffset)a[3]!, (ExpressionUser?)a[4], (ExpressoRuleContext?)a[5],
-                        (RuleJsonDynamic?)a[6], (ExpressionConfig?)a[7], (ExpressionHeaders?)a[8]),
-                    compiled.Value.UsedIdentifiers);
-            }
-            else
-            {
-                var compiled = compiler.Compile<OutputFn>(expression, signature);
-                if (!compiled.IsSuccess)
-                    return Invalid($"set['{key}']: the expression does not compile: {compiled.Error.Message}");
-                var fn = compiled.Value!.Invoke;
-                entry = new SetEntry(key, target.Value!,
-                    a => fn((RuleJsonDynamic?)a[0], (RuleJsonDynamic?)a[1], (ExpressionInstance?)a[2],
-                        (DateTimeOffset)a[3]!, (ExpressionUser?)a[4], (ExpressoRuleContext?)a[5],
-                        (RuleJsonDynamic?)a[6], (ExpressionConfig?)a[7], (RuleJsonDynamic?)a[8], (ExpressionHeaders?)a[9]),
-                    compiled.Value.UsedIdentifiers);
-                needsResult |= compiled.Value.UsedIdentifiers.Contains(ExpressionScope.ResultVariable);
-            }
-
-            entries.Add(entry);
-        }
-
-        return Result<DeclarativeMappingPlan>.Ok(new DeclarativeMappingPlan(
-            signature.Parameters, select, into, entries.ToArray(), needsResult,
-            selectVariable, selectTail, partial,
-            !isInput && (select is not null || into is not null)
-                ? TaskResultView.Selector.For(select ?? DeclarativeTaskMappingRunner.DefaultOutputSelect)
-                : null));
-    }
-
-    /// <summary>
-    /// The variables an input <c>select</c> may start at: every JSON-shaped one — not <c>config</c>, not <c>headers</c>
-    /// (read a header with a <c>set</c> expression, <c>headers["x-channel"]</c>).
-    /// </summary>
-    internal static IEnumerable<string> SelectableInputVariables(ExpressionSignature signature) =>
-        signature.Parameters.Select(p => p.Name).Where(IsSelectable);
-
-    private static bool IsSelectable(string name) =>
-        name is not (ExpressionScope.ConfigVariable or ExpressionScope.HeadersVariable);
-
-    private static Result<JsonPath> Target(string text, string what, bool isInput, HashSet<string> partial)
-    {
-        var parsed = Parse(text, what);
-        if (!parsed.IsSuccess)
-            return parsed;
-        var path = parsed.Value!;
-        if (!path.IsWritable || path.FirstSegment.Length == 0)
-            return Result<JsonPath>.Fail(Error.Validation(WorkflowErrorCodes.TaskExecution,
-                $"{what} {text} is not a writable property path."));
-
-        if (isInput && path.WithoutFirstSegment().Text != "$")
-            partial.Add(path.FirstSegment);
-
-        return parsed;
-    }
-
-    private static Result<JsonPath> Parse(string text, string what)
-    {
-        var parsed = JsonPath.Parse(text);
-        return parsed.IsSuccess
-            ? parsed
-            : Result<JsonPath>.Fail(Error.Validation(WorkflowErrorCodes.TaskExecution,
-                $"{what} {text} is not a valid JSON path: {parsed.Error.Message}"));
-    }
-
-    private static Result<DeclarativeMappingPlan> Invalid(string message) =>
-        Result<DeclarativeMappingPlan>.Fail(Error.Validation(WorkflowErrorCodes.TaskExecution, message));
-}
-
-/// <summary>
-/// Turns what an expression returned into an owned <see cref="JsonNode"/> — never a view over a borrowed document — so
-/// the value outlives the evaluation scope: a <see cref="RuleJsonDynamic"/> or <see cref="JsonElement"/> is copied from
-/// its raw text, a <see cref="JsonNode"/> deep-cloned, anything else (strings, numbers, booleans, dates as the runtime's
-/// normal ISO-8601 text, arrays) serialized with <see cref="JsonSerializerConstants.JsonOptions"/>. JSON null and
-/// "missing" become null, which the runner skips.
-/// </summary>
-internal static class DeclarativeValues
-{
-    public static JsonNode? ToNode(object? value) => value switch
-    {
-        null => null,
-        RuleJsonDynamic dynamicValue => ToNode(dynamicValue.AsJsonElement()),
-        JsonElement element => element.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
-            ? null
-            : FromOwnedElement(CopySubtree(element)),
-        JsonNode node => node.DeepClone(),
-        string text => JsonValue.Create(text),
-        _ => JsonSerializer.SerializeToNode(value, value.GetType(), JsonSerializerConstants.JsonOptions)
-    };
-
-    /// <summary>
-    /// A subtree-sized, owned copy of <paramref name="element"/>: its raw UTF-8 bytes parsed into a new, non-pooled
-    /// document. Unlike <see cref="JsonElement.Clone"/> — a no-op for an element of a non-disposable document, such as
-    /// the <c>JsonElement</c> an HTTP or Dapr invoker returns — the copy never references the source document, so a
-    /// small selected value does not pin a large task response for the life of the delta.
-    /// </summary>
-    private static JsonElement CopySubtree(JsonElement element)
-    {
-        var reader = new Utf8JsonReader(JsonMarshal.GetRawUtf8Value(element));
-        return JsonElement.ParseValue(ref reader);
-    }
-
-    /// <summary>
-    /// The node <c>JsonNode.Parse(element.GetRawText())</c> would build — an object, array or value over the element —
-    /// without the text round trip, over an element <see cref="CopySubtree"/> already made independent of its source.
-    /// </summary>
-    private static JsonNode? FromOwnedElement(JsonElement element) => element.ValueKind switch
-    {
-        JsonValueKind.Object => JsonObject.Create(element),
-        JsonValueKind.Array => JsonArray.Create(element),
-        _ => JsonValue.Create(element)
-    };
 }

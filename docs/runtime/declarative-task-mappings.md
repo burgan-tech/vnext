@@ -1,6 +1,6 @@
 # Declarative Task Mappings
 
-A task binding (`onExecuteTask` entry of a state `onEntries`/`onExits`, a transition `onExecutionTasks`, a function `task` / `onExecutionTasks`, an extension `task`) can shape its request and write its result without a Roslyn `.csx` mapping. The component contract is extended compatibly: no new format version, every existing binding keeps its meaning. Code: `DeclarativeTaskMappingRunner`, `MappingBlockValidator`, `ExpressionScope`, `JsonPath`.
+A task binding (`onExecuteTask` entry of a state `onEntries`/`onExits`, a transition `onExecutionTasks`, a function `task` / `onExecutionTasks`, an extension `task`) can shape its request and write its result without a Roslyn `.csx` mapping. The component contract is extended compatibly: no new format version, every existing binding keeps its meaning. Code: `DeclarativeTaskMappingRunner`, `MappingBlockValidator`, `ExpressionScope`, `JsonPath`. The same blocks also shape a transition's result and a SubFlow's start request and result: see [Blocks outside task bindings](#blocks-outside-task-bindings).
 
 ## Contract
 
@@ -443,6 +443,91 @@ Publish validates both like a binding's blocks (`TaskComponentValidator` for the
 `sourceInput.…` / `sourceOutput.…`; `AgentComponentValidator` for the agent, errors at `Agent.tools[i].binding.input.…`)
 and rejects a script and blocks together. A definition stored with both before that check existed runs the script (its
 legacy meaning), the same rule as a task binding. The CacheAside `sourceOutput` result is what is cached.
+
+## Blocks outside task bindings
+
+Three more sites take a declarative block in place of a C# `mapping` script: a transition's `output`, a SubFlow state's `input` and its `output`. The block grammar (`select`, `into`, `set`) and the expression rules are those of a task binding; what differs is the variables, the target document and where the result goes.
+
+- `input` builds what goes **to** a callee, `output` writes what comes **back**. A single-block site rejects the other block at publish: a transition carrying an `input` member is a publish error (`'input' is not supported on a transition; use 'output'.`).
+- `select` reads `result` when the site has one, otherwise the variables except `headers` (`$.data…`, `$.input…`); `headers` is never a `select` root, as for a task binding (see [Headers](#headers)) — read a header with a `set` expression.
+- A block and a C# `mapping` on the same site is a publish error; a stored definition holding both runs the script.
+- An empty block (no `select`, no `into`, no `set` entry) is a publish error at these three sites (`the block is empty: give it a 'select', an 'into' or a 'set' entry, or remove it.`): an empty transition `output` would drop the whole request. A task binding's empty block keeps its shipped meaning.
+
+| Site | Variables | `select` root | Target | Delta starts | Result goes to |
+|---|---|---|---|---|---|
+| Transition `output` | `data`, `input`, `instance`, `now`, `user`, `context`, `headers` | variables except `headers` (no `result`) | instance data | empty; `"select": "$.input"` keeps the whole request | transition record body, the single data append, `CurrentTransition.Data` |
+| SubFlow `input` | the same set | variables except `headers` | the child's start document `{ attributes, headers, key, tags }` | empty | the child start request |
+| SubFlow `output` | the same set plus `result`; `input` is null; `headers` / `user` are the child settler's (see [carried headers](../architecture/subflow-execution.md#carried-headers-from-the-child)) | `result`, default `$.data` | instance data | empty | the single data append of the parent |
+
+`result` of a SubFlow output is `{ data, status }` with `status` either `"completed"` or `"faulted"`.
+
+### Transition `output`
+
+Applies to `transitions[]`, `startTransition`, shared transitions and the well-known `cancel` / `updateData` / `exit`. Automatic and scheduled transitions reject `output`, like `mapping`: an automatic hop has no request to map. An empty delta is no data version (as a script returning null).
+
+```json
+{
+  "key": "submit",
+  "target": "review",
+  "output": {
+    "select": "$.input.customer",
+    "into": "$.customer",
+    "set": { "$.submittedAt": "now", "$.reviewedByAuditor": "user.available && user.hasRole(\"auditor\")" }
+  }
+}
+```
+
+### SubFlow `input`
+
+For `type: S` only; a `P` SubProcess rejects both blocks (it is started by its own task). The target document is `{ attributes, headers, key, tags }`:
+
+- `select` needs `into`; `key` must be a string and `tags` an array of strings, anything else fails the start before a child is created. **`key` must be a string; convert a number with `.ToString()`** (`"\"kyc-\" + data.customer.id.ToString()"`) — a JSON number written into `$.key` is not converted.
+- `$.headers.sub` written blank stays blank (the [instance-call credential rule](../architecture/subflow-execution.md)).
+- `input` is the request of the hop that entered the SubFlow state: null on an automatic chain and on a retry restart (the restart carries no data; its actor is the retrying requester, so `user` and `headers` are theirs), as for the script.
+
+```json
+"subFlow": {
+  "type": "S",
+  "process": { "key": "kyc-check", "domain": "core", "version": "1.0.0", "flow": "sys-flows" },
+  "input": {
+    "set": {
+      "$.attributes.customerId": "data.customer.id",
+      "$.attributes.amount": "input.amount",
+      "$.headers.x-channel": "\"web\"",
+      "$.key": "\"kyc-\" + data.customer.id.ToString()",
+      "$.tags": "new string[] { \"kyc\" }"
+    }
+  }
+}
+```
+
+### SubFlow `output`
+
+Runs on completion **and** on fault; `result.status` tells them apart (a script cannot today). Child data arrives in plaintext, as for the script. Script `Mutations` have no block equivalent.
+
+```json
+"subFlow": {
+  "type": "S",
+  "process": { "key": "kyc-check", "domain": "core", "version": "1.0.0", "flow": "sys-flows" },
+  "output": {
+    "select": "$.data.score",
+    "into": "$.kyc.score",
+    "set": { "$.kyc.outcome": "result.status", "$.kyc.settledAt": "now" }
+  }
+}
+```
+
+### Failures
+
+Each site fails with the error its script fails with, under the same `Script.Execute` span, and logs a new event:
+
+| Site | Error code | Span kind | Log event |
+|---|---|---|---|
+| Transition `output` | `Execution` transition mapping error (`ExecutionStepFailed`) | transition mapping | 10277 `TransitionDeclarativeOutputFailed` |
+| SubFlow `input` | `SubFlowInputMappingFailed` | SubFlow input mapping | 10278 `SubFlowDeclarativeInputFailed` |
+| SubFlow `output` | `SubFlowOutputMappingFailed` | `subflowOutputMapping` | 10279 `SubFlowDeclarativeOutputFailed` |
+
+A caller-roles provider failure stays `Authorization:110006` (retryable; on the SubFlow output completion path the event is redelivered); reading `user.roles` with no caller is a permanent failure.
 
 ## Publish validation
 
