@@ -39,8 +39,9 @@ public sealed class GetInstancesTaskExecutor : TriggerTaskExecutorBase<GetInstan
         IInstanceQueryGateway instanceQueryGateway,
         IDomainDiscoveryResolver endpointResolver,
         ICurrentUser currentUser,
-        ILogger<GetInstancesTaskExecutor> logger)
-        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
+        ILogger<GetInstancesTaskExecutor> logger,
+        ITaskMappingRunner? mappingRunner = null)
+        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger, mappingRunner)
     {
         _instanceQueryGateway = instanceQueryGateway;
         _endpointResolver = endpointResolver;

@@ -123,6 +123,15 @@ public abstract class WorkflowTask : IDomainEntity, ITaskReference, IReferenceSe
         Config = config;
     }
 
+    /// <summary>
+    /// Re-reads this task from <paramref name="config"/> through the type's own <see cref="Configure"/> parser, as if
+    /// the task definition had carried it: <see cref="Config"/> becomes <paramref name="config"/> and every field the
+    /// type reads is set from it. Used by declarative input mappings, which edit a copy of <see cref="Config"/>; call it
+    /// only on the per-execution copy of a task, never on a cached definition.
+    /// </summary>
+    /// <param name="config">The complete configuration object.</param>
+    public void ApplyConfig(JsonElement config) => Configure(config);
+
     public void SetReference(IReference reference)
     {
         SetKey(reference.Key);

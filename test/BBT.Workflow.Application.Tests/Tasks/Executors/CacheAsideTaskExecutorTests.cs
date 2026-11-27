@@ -65,6 +65,43 @@ public sealed class CacheAsideTaskExecutorTests
         ((bool)result.Value.Metadata!["Refreshed"]).ShouldBeTrue();
     }
 
+    private static readonly Dictionary<string, object?> SourceBlocks = new()
+    {
+        ["sourceInput"] = new Dictionary<string, object> { ["set"] = new Dictionary<string, string> { ["$.url"] = "\"https://x/\" + data.id" } },
+        ["sourceOutput"] = new Dictionary<string, object> { ["select"] = "$.body.profile", ["into"] = "$.profile" }
+    };
+
+    [Fact]
+    public async Task SourceBlocks_ArePassedToTheSourceBinding_AndRouteDeclaratively()
+    {
+        var harness = new Harness(withSourceMapping: false, extraConfig: SourceBlocks);
+
+        var result = await harness.ExecuteAsync();
+
+        result.IsSuccess.ShouldBeTrue();
+        var binding = harness.SourceContexts.ShouldHaveSingleItem().OnExecuteTask;
+        binding.Input.ShouldNotBeNull();
+        binding.Input!.Set!["$.url"].ShouldBe("\"https://x/\" + data.id");
+        binding.Output.ShouldNotBeNull();
+        binding.Output!.Select.ShouldBe("$.body.profile");
+        binding.Output.Into.ShouldBe("$.profile");
+        BBT.Workflow.Tasks.Mapping.TaskMappingRouter.InputKind(binding).ShouldBe(BBT.Workflow.Tasks.Mapping.TaskMappingKind.Declarative);
+        BBT.Workflow.Tasks.Mapping.TaskMappingRouter.OutputKind(binding).ShouldBe(BBT.Workflow.Tasks.Mapping.TaskMappingKind.Declarative);
+    }
+
+    [Fact]
+    public async Task SourceMappingAndBlocks_TheScriptWins()
+    {
+        var harness = new Harness(withSourceMapping: true, extraConfig: SourceBlocks);
+
+        await harness.ExecuteAsync();
+
+        var binding = harness.SourceContexts.ShouldHaveSingleItem().OnExecuteTask;
+        binding.Mapping.ShouldBe(harness.Task.SourceMapping);
+        BBT.Workflow.Tasks.Mapping.TaskMappingRouter.InputKind(binding).ShouldBe(BBT.Workflow.Tasks.Mapping.TaskMappingKind.Script);
+        BBT.Workflow.Tasks.Mapping.TaskMappingRouter.OutputKind(binding).ShouldBe(BBT.Workflow.Tasks.Mapping.TaskMappingKind.Script);
+    }
+
     [Fact]
     public async Task Hit_DoesNotRunSourceExecutor()
     {
@@ -85,6 +122,38 @@ public sealed class CacheAsideTaskExecutorTests
         harness.Registry.ReceivedCalls().ShouldBeEmpty();
         await harness.Gateway.DidNotReceiveWithAnyArgs().SetWithResultAsync(
             default!, default, default, default, default, default!, default, default);
+    }
+
+    [Theory]
+    [InlineData(true, "cached")]
+    [InlineData(false, "shaped")]
+    public async Task DeclarativeOutput_RunsOnHitAndMiss_OverTheCachedOrFreshValue(bool hit, string expected)
+    {
+        // CacheAside overrides PrepareInputAsync but files its result through the base output path: a declarative output
+        // block must see the same `result` either way — the cached value on a hit, the source's shaped value on a miss.
+        var harness = new Harness
+        {
+            OuterOutput = new MappingBlock("$.body.name", "$.profile.name", new OrderedStringMap(
+            [
+                new KeyValuePair<string, string>("$.profile.status", "result.statusCode"),
+                new KeyValuePair<string, string>("$.profile.echo", "result.body.name")
+            ]))
+        };
+        if (hit)
+        {
+            harness.SetReadResult(new CacheGetResult(true, true, JsonSerializer.SerializeToElement(new { name = "cached" })));
+        }
+
+        var result = await harness.ExecuteAsync();
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        result.Value!.IsSuccess.ShouldBeTrue();
+        ((bool)result.Value.Metadata!["CacheHit"]).ShouldBe(hit);
+        JsonSerializer.Serialize((object?)result.Value.Data, JsonSerializerConstants.JsonOptions)
+            .ShouldBe("""{"profile":{"name":"__N__","status":200,"echo":"__N__"}}"""
+                .Replace("__N__", expected));
+        harness.SourceContexts.Count.ShouldBe(hit ? 0 : 1);
+        harness.ScriptEngine.ReceivedCalls().ShouldBeEmpty(); // no script compile on either path
     }
 
     [Fact]
@@ -429,13 +498,17 @@ public sealed class CacheAsideTaskExecutorTests
 
         private ScriptCode _outerMapping = ScriptCode.FromNative(string.Empty);
 
+        /// <summary>A declarative output block on the CacheAside binding (no task-level script then).</summary>
+        public MappingBlock? OuterOutput { get; set; }
+
         public Harness(
             bool withSourceMapping = true,
             bool bypassOnCacheError = true,
             bool forceRefresh = false,
             string? keyScriptCode = null,
             string staticKey = StaticKey,
-            bool withSourceTask = true)
+            bool withSourceTask = true,
+            IReadOnlyDictionary<string, object?>? extraConfig = null)
         {
             TaskFactory.CreateExecutionTaskAsync(Arg.Any<IReference>(), Arg.Any<CancellationToken>())
                 .Returns(Result<WorkflowTask>.Ok(SourceTask));
@@ -480,6 +553,9 @@ public sealed class CacheAsideTaskExecutorTests
             {
                 config["key"] = new { location = "./src/Key.csx", code = keyScriptCode, encoding = "NAT" };
             }
+
+            foreach (var (name, value) in extraConfig ?? new Dictionary<string, object?>())
+                config[name] = value;
 
             Task = CacheAsideTask.Create(JsonSerializer.SerializeToElement(config));
             Task.SetReference(new Reference("customer-cache", "core", "sys-tasks", "1.0.0"));
@@ -532,7 +608,9 @@ public sealed class CacheAsideTaskExecutorTests
                 .SetRuntime(Substitute.For<IRuntimeInfoProvider>())
                 .SetInstance(instance)
                 .Build();
-            var onExecute = OnExecuteTask.Create(1, Task, _outerMapping);
+            var onExecute = OuterOutput is null
+                ? OnExecuteTask.Create(1, Task, _outerMapping)
+                : OnExecuteTask.Create(1, Task, null, output: OuterOutput);
             var context = new TaskExecutorContext(
                 Task, onExecute, OuterScriptContext, null, TaskTrigger.OnExecute, TaskExecutionOrigin.Flow);
             return Executor.ExecuteAsync(context, cancellationToken);

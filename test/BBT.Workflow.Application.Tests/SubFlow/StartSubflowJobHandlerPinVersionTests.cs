@@ -9,6 +9,7 @@ using BBT.Workflow.Execution.PostCommit.Handlers;
 using BBT.Workflow.Instances;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Shared;
 using BBT.Workflow.SubFlow;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -42,12 +43,20 @@ public class StartSubflowJobHandlerPinVersionTests
         IInstanceCorrelationRepository Repository,
         CapturingLogger Logger,
         IInstanceRepository Instances,
-        TransitionExecutionContext Context);
+        TransitionExecutionContext Context)
+    {
+        public ISubflowStarter Starter { get; init; } = default!;
+
+        /// <summary>The script context's hop input as the starter saw it (the context is disposed after the start).</summary>
+        public (bool Bound, object? Value) HopInputSeen { get; init; }
+    }
 
     private static async Task<Run> RunAsync(
         string? resolvedVersion,
         Action<IInstanceCorrelationRepository>? configureRepository = null,
-        ExecMode callerMode = ExecMode.Async)
+        ExecMode callerMode = ExecMode.Async,
+        object? hopInput = null,
+        ExecutionActor actor = ExecutionActor.User)
     {
         var workflow = WorkflowFactory.CreateDefault();
         var parent = Instance.Create(Guid.NewGuid(), workflow.Key, workflow.Version, "parent");
@@ -78,9 +87,11 @@ public class StartSubflowJobHandlerPinVersionTests
         factory.NewBuilder(instances).Returns(builder);
 
         var starter = Substitute.For<ISubflowStarter>();
+        (bool Bound, object? Value) hopInputSeen = default;
         starter.StartAsync(Arg.Any<Definitions.Workflow>(), Arg.Any<Instance>(), Arg.Any<State>(),
-                Arg.Any<Transition>(), Arg.Any<InstanceCorrelation>(), Arg.Any<ScriptContext>(),
-                Arg.Any<ExecMode>(), Arg.Any<CancellationToken>())
+                Arg.Any<Transition>(), Arg.Any<InstanceCorrelation>(),
+                Arg.Do<ScriptContext>(c => hopInputSeen = (c.HasHopInput, c.HopInput)),
+                Arg.Any<ExecMode>(), Arg.Any<ExecutionActor?>(), Arg.Any<CancellationToken>())
             .Returns(Result<string?>.Ok(resolvedVersion));
 
         var correlations = Substitute.For<IInstanceCorrelationRepository>();
@@ -98,7 +109,9 @@ public class StartSubflowJobHandlerPinVersionTests
             Workflow = workflow,
             Instance = parent,
             Transition = TransitionFactory.CreateDefault(),
-            CallerMode = callerMode
+            CallerMode = callerMode,
+            HopInput = hopInput,
+            Actor = actor
         };
 
         var result = await handler.HandleAsync(
@@ -106,7 +119,29 @@ public class StartSubflowJobHandlerPinVersionTests
             context, CancellationToken.None);
 
         result.IsSuccess.ShouldBeTrue();
-        return new Run(correlation, correlations, logger, instances, context);
+        return new Run(correlation, correlations, logger, instances, context) { Starter = starter, HopInputSeen = hopInputSeen };
+    }
+
+    /// <summary>
+    /// A SubFlow's declarative <c>input</c> block reads <c>input</c> (the hop request that entered the SubFlow state) and
+    /// <c>user</c> (the parent hop's caller): the handler binds the hop input on the script context and hands the
+    /// starter the hop's actor.
+    /// </summary>
+    [Theory]
+    [InlineData(ExecutionActor.User)]
+    [InlineData(ExecutionActor.System)]
+    public async Task Start_HandsTheStarterTheHopInputAndActor(ExecutionActor actor)
+    {
+        var hopInput = new { amount = 5 };
+
+        var run = await RunAsync("1.0.3", hopInput: hopInput, actor: actor);
+
+        await run.Starter.Received(1).StartAsync(
+            Arg.Any<Definitions.Workflow>(), Arg.Any<Instance>(), Arg.Any<State>(), Arg.Any<Transition>(),
+            Arg.Any<InstanceCorrelation>(),
+            Arg.Any<ScriptContext>(), Arg.Any<ExecMode>(), actor, Arg.Any<CancellationToken>());
+        run.HopInputSeen.Bound.ShouldBeTrue();
+        run.HopInputSeen.Value.ShouldBeSameAs(hopInput);
     }
 
     [Fact]

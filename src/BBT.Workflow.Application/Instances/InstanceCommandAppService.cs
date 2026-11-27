@@ -122,7 +122,7 @@ public sealed class InstanceCommandAppService(
                 .ThenAsync(async output =>
                 {
                     await ScheduleWorkflowTimeoutIfConfiguredAsync(
-                        data.Workflow, data.Instance, input.Instance.ExtraProperties, cancellationToken);
+                        data.Workflow, data.Instance, input.Instance.ExtraProperties, input.Instance.Attributes, cancellationToken);
                     return Result<StartInstanceOutput>.Ok(output);
                 }))
             .OnSuccess(output =>
@@ -462,6 +462,9 @@ public sealed class InstanceCommandAppService(
                 input.Headers,
                 onScriptFailure: ex => logger.StartTransitionMappingFailed(
                     data.Workflow.Key, data.Workflow.StartTransition.Key, data.Instance.Id, ex),
+                // The start hop's actor, as ToExecutionContext leaves it for the start pipeline (User): a declarative
+                // output block's `user` is the starting caller.
+                actor: Shared.ExecutionActor.User,
                 cancellationToken: cancellationToken)
             .TapAsync(async mappedData =>
             {
@@ -573,6 +576,7 @@ public sealed class InstanceCommandAppService(
         Definitions.Workflow workflow,
         Instance instance,
         ExtraPropertyDictionary extraProperties,
+        JsonElement? startInput,
         CancellationToken cancellationToken)
     {
         // The SubFlow override (if any) wins over the workflow's own timeout — resolved through the
@@ -619,7 +623,7 @@ public sealed class InstanceCommandAppService(
             };
 
             var resolvedSchedule = await ResolveTimeoutScheduleAsync(
-                effectiveTimeout, workflow, instance, cancellationToken);
+                effectiveTimeout, workflow, instance, startInput, cancellationToken);
 
             // One instant feeds the scheduler arming, the timeoutAt metadata and the persisted
             // ExecuteAt — separate clock reads would make the three disagree for Duration schedules.
@@ -680,6 +684,7 @@ public sealed class InstanceCommandAppService(
         WorkflowTimeout effectiveTimeout,
         Definitions.Workflow workflow,
         Instance instance,
+        JsonElement? startInput,
         CancellationToken cancellationToken)
     {
         if (effectiveTimeout.Mapping != null)
@@ -690,7 +695,9 @@ public sealed class InstanceCommandAppService(
                 .WithRuntime(runtimeInfoProvider)
                 .WithTransition(effectiveTimeout.Key)
                 .WithBody(instance.LatestData?.Data ?? new JsonData("{}"))
-                .BuildAsync(cancellationToken);
+                .BuildAsync(cancellationToken)
+                // Armed by the start hop: `input` is the start request's attributes.
+                .WithHopInputAsync(startInput);
 
             var mappingResult = await timerEvaluator.EvaluateAsync(
                 effectiveTimeout.Mapping, scriptContext, cancellationToken);
@@ -736,7 +743,7 @@ public sealed class InstanceCommandAppService(
         // The request opened the activation episode (seeded by the request middleware from the
         // server span); name it. An entry point that already classified itself — an event
         // delivery, a relayed subflow forward — keeps its trigger, only the key is refreshed.
-        using var episode = WorkflowTraceLane.UseEpisode(TelemetryConstants.ActivationTriggers.Manual, transitionKey);
+        using var episode = WorkflowTraceLane.UseEpisode(TelemetryConstants.ActivationTriggers.Manual, transitionKey); // skipcq: CS-W1100 — the episode scope ends on dispose
 
         // 1) Light Busy check FIRST — a single-row projection (no DataList, no includes) so a
         //    Busy rejection never pays the full aggregate load. The snapshot also carries the

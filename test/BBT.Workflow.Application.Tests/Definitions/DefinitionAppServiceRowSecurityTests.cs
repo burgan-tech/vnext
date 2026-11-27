@@ -65,6 +65,7 @@ public sealed class DefinitionAppServiceRowSecurityTests
             new WorkflowCastProcessor([castHandler]),
             Substitute.For<IDomainCacheContext>(),
             new RowSecurityPublishCheck(_cache, NullLogger<RowSecurityPublishCheck>.Instance),
+            new MappingBlockValidator(new BBT.Workflow.Scripting.Expressions.ExpressionCompiler(16)),
             provider.GetRequiredService<IServiceScopeFactory>(),
             provider);
     }

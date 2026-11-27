@@ -1,0 +1,510 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using System.Text.Json;
+using System.Threading.Tasks;
+using BBT.Workflow.Instances;
+using BBT.Workflow.Logging;
+using BBT.Workflow.Scripting;
+using BBT.Workflow.Scripting.Caller;
+using BBT.Workflow.Scripting.Expressions;
+using BBT.Workflow.Scripting.Rules;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
+using Shouldly;
+using Xunit;
+
+namespace BBT.Workflow.Application.Tests.Scripting.Expressions;
+
+using InputFn = Func<RuleJsonDynamic, RuleJsonDynamic, ExpressionInstance, DateTimeOffset, ExpressionUser, ExpressoRuleContext, RuleJsonDynamic, ExpressionConfig, ExpressionHeaders, object>;
+using OutputFn = Func<RuleJsonDynamic, RuleJsonDynamic, ExpressionInstance, DateTimeOffset, ExpressionUser, ExpressoRuleContext, RuleJsonDynamic, ExpressionConfig, RuleJsonDynamic, ExpressionHeaders, object>;
+
+public sealed class ExpressionScopeTests
+{
+    private const string InstanceJson = """{"x":42,"customer":{"name":"Ada"}}""";
+
+    private readonly ExpressionCompiler _compiler = new(64);
+    private readonly FakeTimeProvider _clock = new(new DateTimeOffset(2026, 11, 24, 10, 0, 0, TimeSpan.Zero));
+
+    // ---- helpers ----
+
+    private sealed class TransitionSpy
+    {
+        public int DataReads;
+        public int HeaderReads;
+
+        public ScriptTransitionRequest Create(object? data) => new(
+            () => { DataReads++; return data; },
+            () => { HeaderReads++; return new Dictionary<string, object?> { ["h"] = "1" }; });
+    }
+
+    private sealed class CallerSpy(bool available, IReadOnlyList<string>? roles, bool fail = false) : ICallerAccessor
+    {
+        public int Resolutions;
+        public bool IsAvailable => available;
+        public bool ResolutionFailed { get; private set; }
+        public bool? RolesFromHeader => null;
+
+        public Task<IReadOnlyList<string>> RolesAsync()
+        {
+            if (!available)
+                throw new CallerRolesUnavailableException("unavailable");
+            Resolutions++;
+            if (fail)
+            {
+                ResolutionFailed = true;
+                throw new CallerRolesUnavailableException("provider down");
+            }
+
+            return Task.FromResult(roles!);
+        }
+
+        public async Task<bool> HasRoleAsync(string role) => (await RolesAsync()).Contains(role);
+    }
+
+    private static Instance InstanceWithData(string json)
+    {
+        var instance = Instance.Create(Guid.NewGuid(), "scope-flow", "1.0.0", "scope-key");
+        var row = new InstanceData(Guid.NewGuid(), instance.Id, "1.0.0", new JsonData(json), true);
+        typeof(InstanceData).GetProperty(nameof(InstanceData.VersionNo))!.SetValue(row, 1L);
+        instance.AcceptPersistedData(row);
+        return instance;
+    }
+
+    private static ScriptContext Context(TransitionSpy? spy = null, object? input = null, object? body = null) =>
+        new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
+            .SetInstance(InstanceWithData(InstanceJson))
+            .SetBody(body ?? new Dictionary<string, object> { ["fromBody"] = true })
+            .SetCurrentTransition((spy ?? new TransitionSpy()).Create(input ?? new Dictionary<string, object> { ["amount"] = 7 }))
+            .Build();
+
+    private ExpressionScope Scope(ScriptContext ctx, ICallerAccessor? caller = null, ScopeKind kind = ScopeKind.MappingInput,
+        JsonElement? result = null) =>
+        ExpressionScope.Create(ctx, _clock, caller ?? NullCallerAccessor.Instance, kind, result);
+
+    private async Task<object?> EvalAsync(ExpressionScope scope, string text)
+    {
+        var signature = ExpressionSignatures.Mapping(ScopeKind.MappingInput);
+        var compiled = _compiler.Compile<InputFn>(text, signature);
+        compiled.IsSuccess.ShouldBeTrue(compiled.IsSuccess ? null : compiled.Error.Message);
+        var prepared = await scope.PrepareAsync(compiled.Value.UsedIdentifiers);
+        prepared.IsSuccess.ShouldBeTrue();
+        var args = scope.Bind(signature.Parameters, compiled.Value.UsedIdentifiers);
+        try
+        {
+            return compiled.Value.Invoke.DynamicInvoke(args);
+        }
+        catch (TargetInvocationException ex) when (ex.InnerException is not null)
+        {
+            throw ex.InnerException;
+        }
+    }
+
+    // ---- signature ----
+
+    [Fact]
+    public void Mapping_DeclaresVariables_ResultOnlyForOutput()
+    {
+        ExpressionSignatures.Mapping(ScopeKind.MappingInput).Parameters.Select(p => p.Name)
+            .ShouldBe(["data", "input", "instance", "now", "user", "context", "task", "config", "headers"]);
+        ExpressionSignatures.Mapping(ScopeKind.MappingOutput).Parameters.Select(p => p.Name)
+            .ShouldBe(["data", "input", "instance", "now", "user", "context", "task", "config", "result", "headers"]);
+        ExpressionSignatures.Mapping(ScopeKind.Condition).Parameters.Select(p => p.Name)
+            .ShouldBe(["data", "input", "instance", "now", "user", "context", "headers"]);
+        ExpressionSignatures.Mapping(ScopeKind.MappingInput).Functions.Keys.ShouldBe(["urlEncode"]);
+        ExpressionSignatures.Mapping(ScopeKind.Condition).Functions.ShouldBeEmpty();
+        ExpressionSignatures.Mapping(ScopeKind.MappingInput).ReturnType.ShouldBe(typeof(object));
+        ExpressionSignatures.Mapping(ScopeKind.MappingInput).Parameters.Single(p => p.Name == "now").Type
+            .ShouldBe(typeof(DateTimeOffset));
+        ExpressionSignatures.Mapping(ScopeKind.MappingOutput).Name
+            .ShouldNotBe(ExpressionSignatures.Mapping(ScopeKind.MappingInput).Name);
+    }
+
+    // ---- laziness ----
+
+    [Fact]
+    public void Bind_OnlyDataUsed_DoesNotBuildContextOrInput()
+    {
+        var spy = new TransitionSpy();
+        var scope = Scope(Context(spy));
+        var data = ExpressionSignatures.Mapping(ScopeKind.MappingInput).Parameters.Where(p => p.Name == "data").ToList();
+
+        var args = scope.Bind(data);
+
+        args.Length.ShouldBe(1);
+        args[0].ShouldBeOfType<RuleJsonDynamic>().ToString().ShouldContain("Ada");
+        spy.DataReads.ShouldBe(0);
+        spy.HeaderReads.ShouldBe(0);
+    }
+
+    [Fact]
+    public void Bind_WithUsedSet_LeavesUnusedSlotsDefault()
+    {
+        var spy = new TransitionSpy();
+        var scope = Scope(Context(spy));
+        var signature = ExpressionSignatures.Mapping(ScopeKind.MappingInput);
+
+        var args = scope.Bind(signature.Parameters, new HashSet<string> { "data", "Int32" });
+
+        args.Length.ShouldBe(signature.Parameters.Count);
+        args[0].ShouldNotBeNull();
+        args[1].ShouldBeNull();      // input
+        args[2].ShouldBeNull();      // instance
+        args[3].ShouldBe(default(DateTimeOffset));
+        args[5].ShouldBeNull();      // context
+        spy.DataReads.ShouldBe(0);
+        spy.HeaderReads.ShouldBe(0);
+    }
+
+    [Fact]
+    public void Bind_SameNameTwice_MaterializesOnce()
+    {
+        var spy = new TransitionSpy();
+        var scope = Scope(Context(spy));
+        var input = ExpressionSignatures.Mapping(ScopeKind.MappingInput).Parameters.Where(p => p.Name == "input").ToList();
+
+        var first = scope.Bind(input)[0];
+        var second = scope.Bind(input)[0];
+
+        ReferenceEquals(first, second).ShouldBeTrue();
+        spy.DataReads.ShouldBe(1);
+    }
+
+    [Fact]
+    public void Now_IsStableWithinOneScope()
+    {
+        var scope = Scope(Context());
+        var now = ExpressionSignatures.Mapping(ScopeKind.MappingInput).Parameters.Where(p => p.Name == "now").ToList();
+
+        var first = scope.Bind(now)[0];
+        _clock.Advance(TimeSpan.FromMinutes(5));
+        var second = scope.Bind(now)[0];
+
+        second.ShouldBe(first);
+        first.ShouldBe(new DateTimeOffset(2026, 11, 24, 10, 0, 0, TimeSpan.Zero));
+    }
+
+    // ---- variable meanings ----
+
+    [Fact]
+    public async Task Data_ReadsInstanceLatestData()
+    {
+        (await EvalAsync(Scope(Context()), "data.customer.name.ToString()")).ShouldBe("Ada");
+    }
+
+    [Fact]
+    public async Task Input_IsTransitionRequestBody_NotBody()
+    {
+        var scope = Scope(Context(body: new Dictionary<string, object> { ["amount"] = 999 }));
+
+        (await EvalAsync(scope, "input.amount.ToString()")).ShouldBe("7");
+    }
+
+    [Fact]
+    public async Task Input_NoCurrentTransition_IsNull_NoBodyFallback()
+    {
+        var ctx = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
+            .SetBody(new Dictionary<string, object> { ["amount"] = 999 })
+            .Build();
+
+        (await EvalAsync(Scope(ctx), "input == null")).ShouldBe(true);
+    }
+
+    // ---- input: the hop's raw request payload (ScriptContext.HopInput) ----
+
+    private static ScriptContext HopContext(object? hopInput, ScriptTransitionRequest? currentTransition = null)
+    {
+        var builder = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
+            .SetInstance(InstanceWithData(InstanceJson))
+            .SetBody(new Dictionary<string, object> { ["seat"] = "from-body" })
+            .SetHopInput(hopInput);
+        if (currentTransition is not null)
+            builder.SetCurrentTransition(currentTransition);
+        return builder.Build();
+    }
+
+    [Fact]
+    public async Task Input_ConditionScope_ReadsHopInput_WithoutAnyTransitionRecord()
+    {
+        // Resource-lock key / automatic rule on a hop where no task step attached the transition record.
+        var ctx = HopContext(JsonDocument.Parse("""{"seat":"12A"}""").RootElement);
+
+        (await EvalAsync(Scope(ctx, kind: ScopeKind.Condition), "input.seat.ToString()")).ShouldBe("12A");
+    }
+
+    [Fact]
+    public async Task Input_ConditionScope_NullHopInput_IsNull_EvenWithARecordAndABody()
+    {
+        // Automatic continuation / fired timer / SubFlow resume: the hop carries no request payload. A record body
+        // (CurrentTransition) and context.Body never stand in for it.
+        var ctx = HopContext(null, new TransitionSpy().Create(new Dictionary<string, object> { ["seat"] = "stale" }));
+
+        (await EvalAsync(Scope(ctx, kind: ScopeKind.Condition), "input == null")).ShouldBe(true);
+    }
+
+    [Fact]
+    public async Task Input_TaskMapping_KeepsTheTransitionRecordBody_ExactlyAsBefore()
+    {
+        // Pins task mappings: with the record attached they read CurrentTransition.Data, as they always did.
+        var spy = new TransitionSpy();
+        var ctx = HopContext(
+            JsonDocument.Parse("""{"amount":1}""").RootElement,
+            spy.Create(new Dictionary<string, object> { ["amount"] = 7 }));
+
+        (await EvalAsync(Scope(ctx, kind: ScopeKind.MappingInput), "input.amount.ToString()")).ShouldBe("7");
+        (await EvalAsync(Scope(ctx, kind: ScopeKind.MappingOutput), "input.amount.ToString()")).ShouldBe("7");
+    }
+
+    [Fact]
+    public async Task Input_TaskMapping_WithoutRecord_ReadsHopInput()
+    {
+        // The hop's shared context was built by a step before the record existed (e.g. the resource lock).
+        var ctx = HopContext(JsonDocument.Parse("""{"amount":3}""").RootElement);
+
+        (await EvalAsync(Scope(ctx, kind: ScopeKind.MappingInput), "input.amount.ToString()")).ShouldBe("3");
+    }
+
+    [Fact]
+    public async Task Input_ReadPath_NoHopInputNoRecord_IsNull()
+    {
+        // View / state / data function / long-poll / notification contexts bind no hop input.
+        var ctx = new ScriptContext.Builder(NullLogger<ScriptContext>.Instance)
+            .SetInstance(InstanceWithData(InstanceJson))
+            .SetBody(new Dictionary<string, object> { ["amount"] = 999 })
+            .Build();
+
+        ctx.HasHopInput.ShouldBeFalse();
+        (await EvalAsync(Scope(ctx, kind: ScopeKind.Condition), "input == null")).ShouldBe(true);
+    }
+
+    [Fact]
+    public async Task Input_ParallelBranch_CarriesTheHopInput()
+    {
+        var ctx = HopContext(JsonDocument.Parse("""{"seat":"7C"}""").RootElement);
+        var branch = ctx.CreateParallelBranch();
+
+        branch.HasHopInput.ShouldBeTrue();
+        (await EvalAsync(Scope(branch, kind: ScopeKind.Condition), "input.seat.ToString()")).ShouldBe("7C");
+    }
+
+    [Fact]
+    public async Task Instance_ExposesIdentityAndState_CamelCase()
+    {
+        var ctx = Context();
+        var instance = ctx.Instance!;
+
+        (await EvalAsync(Scope(ctx), "instance.key")).ShouldBe("scope-key");
+        (await EvalAsync(Scope(ctx), "instance.id")).ShouldBe(instance.Id);
+        (await EvalAsync(Scope(ctx), "instance.flow")).ShouldBe("scope-flow");
+        (await EvalAsync(Scope(ctx), "instance.version")).ShouldBe("1.0.0");
+        (await EvalAsync(Scope(ctx), "instance.currentState")).ShouldBe(instance.CurrentState);
+        (await EvalAsync(Scope(ctx), "instance.effectiveState")).ShouldBe(instance.EffectiveState);
+        (await EvalAsync(Scope(ctx), "instance.effectiveStatus")).ShouldBe(instance.GetEffectiveStatus.Code);
+        (await EvalAsync(Scope(ctx), "instance.type")).ShouldBe("R");
+        (await EvalAsync(Scope(ctx), "instance.data.x.AsInt32()")).ShouldBe(42);
+    }
+
+    // ---- task / config / urlEncode ----
+
+    private static IConfiguration Configuration(params (string Key, string Value)[] values) =>
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(values.Select(v => new KeyValuePair<string, string?>(v.Key, v.Value)))
+            .Build();
+
+    [Fact]
+    public async Task Task_ReadsTheTaskConfig()
+    {
+        using var config = JsonDocument.Parse("""{"url":"API_BASEURL/api/customers","method":"GET"}""");
+        var scope = Scope(Context()).WithTask(config.RootElement, null);
+
+        (await EvalAsync(scope, "task.url.ToString()")).ShouldBe("API_BASEURL/api/customers");
+        (await EvalAsync(scope, "task.nope == null")).ShouldBe(true);
+    }
+
+    [Fact]
+    public async Task Config_ReadsHostConfiguration_WithFallback()
+    {
+        using var task = JsonDocument.Parse("{}");
+        var scope = Scope(Context()).WithTask(task.RootElement, Configuration(("Api:BaseUrl", "https://api.test")));
+
+        (await EvalAsync(scope, "config.get(\"Api:BaseUrl\")")).ShouldBe("https://api.test");
+        (await EvalAsync(scope, "config.get(\"Api:Missing\")")).ShouldBeNull();
+        (await EvalAsync(scope, "config.get(\"Api:Missing\", \"http://localhost:3001\")")).ShouldBe("http://localhost:3001");
+        await Should.ThrowAsync<ArgumentException>(() => EvalAsync(scope, "config.get(\" \")"));
+    }
+
+    [Fact]
+    public async Task Config_WithoutConfiguration_ReadsAsUnset()
+    {
+        using var task = JsonDocument.Parse("{}");
+        var scope = Scope(Context()).WithTask(task.RootElement, null);
+
+        (await EvalAsync(scope, "config.get(\"Api:BaseUrl\", \"fallback\")")).ShouldBe("fallback");
+    }
+
+    [Fact]
+    public async Task Url_IsComposedFromTaskConfigAndHostConfig()
+    {
+        using var task = JsonDocument.Parse("""{"url":"API_BASEURL/api/customers/"}""");
+        var scope = Scope(Context()).WithTask(task.RootElement, Configuration(("Api:BaseUrl", "https://api.test")));
+
+        (await EvalAsync(scope,
+                "task.url.ToString().Replace(\"API_BASEURL\", config.get(\"Api:BaseUrl\")) + urlEncode(data.customer.name) + \"?q=\" + urlEncode(\"a b&c\")"))
+            .ShouldBe("https://api.test/api/customers/Ada?q=a%20b%26c");
+    }
+
+    [Theory]
+    [InlineData("urlEncode(data.x)", "42")]
+    [InlineData("urlEncode(\"ç/ş\")", "%C3%A7%2F%C5%9F")]
+    [InlineData("urlEncode(data.missing) == null", "True")]
+    public async Task UrlEncode_EncodesOneComponent(string expression, string expected)
+    {
+        (await EvalAsync(Scope(Context()), expression))!.ToString().ShouldBe(expected);
+    }
+
+    [Theory]
+    [InlineData("\"\" + task.amount", "1250.5")]
+    [InlineData("urlEncode(task.amount)", "1250.5")]
+    [InlineData("task.amount.AsDouble().ToString(\"0.00\")", "1250,50")]
+    public async Task NumberSplicing_JsonTextIsCultureFree_FormattedNumberFollowsTheCulture(string expression, string expected)
+    {
+        using var task = JsonDocument.Parse("""{"amount":1250.5}""");
+        var previous = System.Globalization.CultureInfo.CurrentCulture;
+        System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("tr-TR");
+        try
+        {
+            var scope = Scope(Context()).WithTask(task.RootElement, null);
+            (await EvalAsync(scope, expression))!.ToString().ShouldBe(expected);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = previous;
+        }
+    }
+
+    [Fact]
+    public void TaskAndConfig_AreNotConditionVariables()
+    {
+        _compiler.Compile<Func<RuleJsonDynamic, RuleJsonDynamic, ExpressionInstance, DateTimeOffset, ExpressionUser, ExpressoRuleContext, ExpressionHeaders, object>>(
+                "task.url", ExpressionSignatures.Mapping(ScopeKind.Condition))
+            .IsSuccess.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Instance_PascalCaseMembers_DoNotCompile()
+    {
+        // The mapping surface spells every member the way the JSON variables do (camelCase); the legacy
+        // PascalCase view stays reachable only through context.Instance.
+        var compiled = _compiler.Compile<InputFn>("instance.CurrentState", ExpressionSignatures.Mapping(ScopeKind.MappingInput));
+
+        compiled.IsSuccess.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Instance_LegacyContextView_StaysPascalCase()
+    {
+        (await EvalAsync(Scope(Context()), "context.Instance.Key")).ShouldBe("scope-key");
+    }
+
+    [Fact]
+    public async Task Result_OutputPhase_WrapsStandardResponse()
+    {
+        using var doc = JsonDocument.Parse("""{"body":{"ok":true},"headers":{"h":"v"},"statusCode":200}""");
+        var scope = Scope(Context(), kind: ScopeKind.MappingOutput, result: doc.RootElement);
+        var signature = ExpressionSignatures.Mapping(ScopeKind.MappingOutput);
+        var compiled = _compiler.Compile<OutputFn>("result.statusCode.AsInt32() == 200 && result.body.ok.AsBoolean()", signature);
+        compiled.IsSuccess.ShouldBeTrue(compiled.IsSuccess ? null : compiled.Error.Message);
+        (await scope.PrepareAsync(compiled.Value.UsedIdentifiers)).IsSuccess.ShouldBeTrue();
+
+        var value = compiled.Value.Invoke.DynamicInvoke(scope.Bind(signature.Parameters, compiled.Value.UsedIdentifiers));
+
+        value.ShouldBe(true);
+    }
+
+    [Fact]
+    public async Task Context_LegacyMembers_StillResolve()
+    {
+        var scope = Scope(Context());
+
+        (await EvalAsync(scope, "context.Instance.Data[\"x\"].AsInt32()")).ShouldBe(42);
+        (await EvalAsync(scope, "context.Body.fromBody.AsBoolean()")).ShouldBe(true);
+        (await EvalAsync(scope, "context.CurrentTransition.Data.amount.AsInt32()")).ShouldBe(7);
+    }
+
+    // ---- user (D-3) ----
+
+    [Fact]
+    public async Task User_HasRole_ResolvesOnceOnlyWhenUsed()
+    {
+        var caller = new CallerSpy(available: true, roles: ["a", "b"]);
+        var scope = Scope(Context(), caller);
+
+        (await EvalAsync(scope, "data.x.AsInt32()")).ShouldBe(42);
+        caller.Resolutions.ShouldBe(0);
+
+        (await EvalAsync(scope, "user.hasRole(\"a\")")).ShouldBe(true);
+        (await EvalAsync(scope, "user.roles.Length")).ShouldBe(2);
+        caller.Resolutions.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task User_Unavailable_RolesReadFails()
+    {
+        var scope = Scope(Context(), NullCallerAccessor.Instance);
+
+        await Should.ThrowAsync<CallerRolesUnavailableException>(() => EvalAsync(scope, "user.hasRole(\"a\")"));
+        await Should.ThrowAsync<CallerRolesUnavailableException>(() => EvalAsync(scope, "user.roles.Length"));
+    }
+
+    [Fact]
+    public async Task User_Available_GuardsSystemHop()
+    {
+        var scope = Scope(Context(), NullCallerAccessor.Instance);
+
+        (await EvalAsync(scope, "user.available ? user.hasRole(\"a\") : false")).ShouldBe(false);
+    }
+
+    [Fact]
+    public async Task User_ProviderFailure_PrepareFailsClosed()
+    {
+        var caller = new CallerSpy(available: true, roles: null, fail: true);
+        var scope = Scope(Context(), caller);
+
+        var prepared = await scope.PrepareAsync(new HashSet<string> { "user" });
+
+        prepared.IsSuccess.ShouldBeFalse();
+        prepared.Error.Code.ShouldBe(WorkflowErrors.CallerRolesUnavailable().Code);
+    }
+
+    [Fact]
+    public void User_AvailableCaller_PrepareSkipped_HasRoleThrows()
+    {
+        // An available caller whose roles were never resolved must not read as "holds no role": skipping PrepareAsync
+        // is a caller bug and fails loudly instead.
+        var caller = new CallerSpy(available: true, roles: ["a"]);
+        var scope = Scope(Context(), caller);
+        var signature = ExpressionSignatures.Mapping(ScopeKind.MappingInput);
+        var compiled = _compiler.Compile<InputFn>("user.hasRole(\"a\")", signature);
+        var args = scope.Bind(signature.Parameters, compiled.Value.UsedIdentifiers);
+
+        var thrown = Should.Throw<TargetInvocationException>(() => compiled.Value.Invoke.DynamicInvoke(args));
+
+        thrown.InnerException.ShouldBeOfType<InvalidOperationException>();
+        caller.Resolutions.ShouldBe(0);
+    }
+
+    [Fact]
+    public void Bind_UnusedDateTimeOffsetSlot_ReusesOneBoxedDefault()
+    {
+        var parameters = ExpressionSignatures.Mapping(ScopeKind.MappingInput).Parameters;
+        var none = new HashSet<string>();
+
+        var first = Scope(Context()).Bind(parameters, none)[3];
+        var second = Scope(Context()).Bind(parameters, none)[3];
+
+        first.ShouldBe(default(DateTimeOffset));
+        ReferenceEquals(first, second).ShouldBeTrue();
+    }
+}

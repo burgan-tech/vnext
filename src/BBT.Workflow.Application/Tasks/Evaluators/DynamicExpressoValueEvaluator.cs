@@ -1,41 +1,65 @@
-using System.Collections.Concurrent;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using BBT.Aether.Results;
 using BBT.Workflow.Definitions;
+using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Scripting.Expressions;
 using BBT.Workflow.Scripting.Rules;
-using DynamicExpresso;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Tasks.Evaluators;
 
 /// <summary>
-/// Evaluates a Dynamic Expresso expression (a <see cref="ScriptCode"/> with
-/// <c>location = "dynamicExpresso"</c>) to a <see cref="string"/> against the allowlisted
-/// <see cref="ExpressoRuleContext"/>. Used to compute a cache key from the request/script context
-/// without a full Roslyn <c>.csx</c> mapping — the same interpreter the condition rules use.
+/// Evaluates a Dynamic Expresso expression (a <see cref="ScriptCode"/> with <c>location = "dynamicExpresso"</c>) to a
+/// <see cref="string"/> key — CacheAside <c>key</c>, function cache <c>keyExpression</c> / <c>generationKeyExpression</c>,
+/// transition <c>resourceLock.keyExpression</c> — without a Roslyn <c>.csx</c> mapping. The expression sees the
+/// condition-kind scope (<see cref="ExpressionSignatures.Key"/>): <c>data</c>, <c>input</c>, <c>instance</c>, <c>now</c>,
+/// <c>user</c>, <c>headers</c> and the legacy <c>context</c>, plus the <c>sha256</c> and <c>varyKey</c> functions.
 /// </summary>
 public interface IDynamicExpressoValueEvaluator
 {
     /// <summary>
-    /// Evaluates the expression to a string. Fails when the script is not a Dynamic Expresso expression,
-    /// is empty/too long, cannot be decoded, or throws during evaluation.
+    /// Evaluates the expression to a string. Fails when the script is not a Dynamic Expresso expression, is empty/too
+    /// long, cannot be decoded, or throws during evaluation (<c>TaskExecution</c>); fails with
+    /// <c>Authorization:110006</c> when it reads the caller's roles and the role provider could not answer.
     /// </summary>
-    Result<string> Evaluate(ScriptCode script, ScriptContext context);
+    Task<Result<string>> EvaluateAsync(ScriptCode script, ScriptContext context, CancellationToken cancellationToken = default);
 }
 
 /// <inheritdoc />
-public sealed class DynamicExpressoValueEvaluator(ILogger<DynamicExpressoValueEvaluator> logger)
-    : IDynamicExpressoValueEvaluator
+public sealed class DynamicExpressoValueEvaluator : IDynamicExpressoValueEvaluator
 {
-    private static readonly ConcurrentDictionary<string, Func<ExpressoRuleContext, string>> CompiledExpressions =
-        new(StringComparer.Ordinal);
+    private readonly ILogger<DynamicExpressoValueEvaluator> logger;
+    private readonly IExpressionCompiler compiler;
+    private readonly TimeProvider clock;
+
+    /// <summary>Creates the evaluator on the shared process-wide <see cref="ExpressionCompiler"/> and the system clock.</summary>
+    public DynamicExpressoValueEvaluator(ILogger<DynamicExpressoValueEvaluator> logger)
+        : this(logger, ExpressionCompiler.Shared, TimeProvider.System)
+    {
+    }
+
+    /// <summary>Creates the evaluator on the given compiler and the system clock.</summary>
+    public DynamicExpressoValueEvaluator(ILogger<DynamicExpressoValueEvaluator> logger, IExpressionCompiler compiler)
+        : this(logger, compiler, TimeProvider.System)
+    {
+    }
+
+    /// <summary>Creates the evaluator on the given compiler and clock (the DI constructor).</summary>
+    public DynamicExpressoValueEvaluator(
+        ILogger<DynamicExpressoValueEvaluator> logger, IExpressionCompiler compiler, TimeProvider clock)
+    {
+        this.logger = logger;
+        this.compiler = compiler;
+        this.clock = clock;
+    }
 
     /// <inheritdoc />
-    public Result<string> Evaluate(ScriptCode script, ScriptContext context)
+    public async Task<Result<string>> EvaluateAsync(
+        ScriptCode script, ScriptContext context, CancellationToken cancellationToken = default)
     {
         if (!ConditionScriptLocations.IsDynamicExpresso(script.Location))
         {
@@ -72,37 +96,41 @@ public sealed class DynamicExpressoValueEvaluator(ILogger<DynamicExpressoValueEv
 
         try
         {
-            var ruleContext = ExpressoRuleContextMapper.FromScriptContext(context);
-            var fn = CompiledExpressions.GetOrAdd(expression, CompileExpression);
-            var value = fn(ruleContext);
+            var compiled = compiler.Compile<KeyDelegate>(expression, ExpressionSignatures.Key);
+            if (!compiled.IsSuccess)
+                throw new InvalidOperationException(compiled.Error.Message);
+
+            // Lazy: only the variables the expression names are materialized (a context-only key builds the legacy
+            // rule context and nothing else, and never resolves the caller's roles).
+            var used = compiled.Value!.UsedIdentifiers;
+            var scope = ExpressionScope.Create(context, clock, context.Caller, ScopeKind.Condition);
+            var prepared = await scope.PrepareAsync(used);
+            if (!prepared.IsSuccess)
+            {
+                logger.DynamicExpressoValueEvaluationFailed(prepared.Error.Message ?? prepared.Error.Code);
+                return Result<string>.Fail(prepared.Error); // Authorization:110006, never an empty role set
+            }
+
+            var a = scope.Bind(ExpressionSignatures.Key.Parameters, used);
+            var value = compiled.Value.Invoke(
+                (RuleJsonDynamic?)a[0], (RuleJsonDynamic?)a[1], (ExpressionInstance?)a[2], (DateTimeOffset)a[3]!,
+                (ExpressionUser?)a[4], (ExpressoRuleContext?)a[5], (ExpressionHeaders?)a[6]);
             return Result<string>.Ok(value);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
-            logger.LogWarning("Dynamic Expresso value evaluation failed: {Error}", ex.Message);
+            var message = ex is System.Reflection.TargetInvocationException { InnerException: { } inner } ? inner.Message : ex.Message;
+            logger.DynamicExpressoValueEvaluationFailed(message);
             return Result<string>.Fail(Error.Failure(
                 WorkflowErrorCodes.TaskExecution,
-                $"Dynamic Expresso evaluation failed: {ex.Message}"));
+                $"Dynamic Expresso evaluation failed: {message}"));
         }
-    }
-
-    private static Func<ExpressoRuleContext, string> CompileExpression(string expression)
-    {
-        var interpreter = new Interpreter(InterpreterOptions.Default);
-        // Deterministic hash helper for building bounded, vary-by-correct cache keys, e.g.
-        // "cfg:" + context.Instance.Key + ":" + sha256(varyKey(context)).
-        interpreter.SetFunction("sha256", (Func<string?, string>)Sha256Hex);
-        // Canonical vary-by string builder (see VaryKey). Because DynamicExpresso cannot express list
-        // operations (no LINQ / array literals), the header-name set is assembled in C# here.
-        interpreter.SetFunction("varyKey", (Func<ExpressoRuleContext, string>)VaryKey);
-        var lambda = interpreter.Parse(expression, typeof(string), new Parameter("context", typeof(ExpressoRuleContext)));
-        return lambda.Compile<Func<ExpressoRuleContext, string>>();
     }
 
     /// <summary>
     /// Lowercase hex SHA-256 of the UTF-8 bytes of <paramref name="input"/> (empty string for null).
     /// </summary>
-    private static string Sha256Hex(string? input)
+    internal static string Sha256Hex(string? input)
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(input ?? string.Empty));
         return Convert.ToHexString(bytes).ToLowerInvariant();
@@ -133,7 +161,7 @@ public sealed class DynamicExpressoValueEvaluator(ILogger<DynamicExpressoValueEv
     /// selector (query param <c>version</c>, default <c>latest</c>) is prepended as <c>v=&lt;version&gt;|…</c>.
     /// The result is intended to be hashed by the caller via <c>sha256(...)</c>. Generic and reusable.
     /// </summary>
-    private static string VaryKey(ExpressoRuleContext context)
+    internal static string VaryKey(ExpressoRuleContext context)
     {
         var headers = AsElement(context.Headers);
 

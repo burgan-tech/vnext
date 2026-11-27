@@ -63,7 +63,7 @@ async job is queued, before a start persists the instance row). Both failures an
 Order at intake: transition schema → state-machine policy → master-schema preview. The preview runs
 last on purpose: it reads the stored document, so a request the policy refuses (wrong state,
 unauthorized actor) never reaches it and is never answered with a master-schema message. If the
-preview itself fails unexpectedly it accepts and logs `IntakeMasterSchemaPreviewSkipped` (10268) —
+preview itself fails unexpectedly it accepts and logs `IntakeMasterSchemaPreviewSkipped` (10276) —
 the write funnel validates the same content.
 
 | Layer | Schema | Validates | Where |

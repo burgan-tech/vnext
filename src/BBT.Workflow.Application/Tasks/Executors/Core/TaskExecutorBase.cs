@@ -6,6 +6,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Coordinator;
+using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Tasks.Executors;
@@ -21,11 +22,79 @@ namespace BBT.Workflow.Tasks.Executors;
 /// 6. ProcessOutput - Custom output mapping (virtual)
 /// 7. CreateResponse - Build StandardTaskResponse
 /// </summary>
+/// <remarks>
+/// Mapping (steps 2 and 6) is not executor code: an executor built with an <see cref="ITaskMappingRunner"/> gets the
+/// default <see cref="PrepareInputAsync"/> / <see cref="ProcessOutputAsync"/>, which run the binding's script or
+/// declarative mapping through that runner. An executor keeps only its type-specific behaviour, through the hooks
+/// (<see cref="InputMappingFailurePrefix"/>, <see cref="FilesResponseWithoutOutputMapping"/>,
+/// <see cref="UnmappedOutput"/>, ...) or by overriding a phase and calling <c>base</c>. An executor built without a
+/// runner keeps the no-mapping defaults (input null, output <c>Data</c>).
+/// </remarks>
 /// <typeparam name="TTask">The specific WorkflowTask type this executor handles.</typeparam>
-public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
+public abstract class TaskExecutorBase<TTask> : ITaskExecutor
     where TTask : WorkflowTask
 {
-    protected readonly ILogger Logger = logger;
+    protected readonly ILogger Logger;
+
+    private TaskMappingSite? _mappingSite;
+
+    /// <summary>An executor without a mapping runner: its phases map nothing unless it overrides them.</summary>
+    protected TaskExecutorBase(ILogger logger)
+    {
+        Logger = logger;
+    }
+
+    /// <summary>An executor whose mapping phases run through <paramref name="mappingRunner"/>.</summary>
+    protected TaskExecutorBase(ILogger logger, ITaskMappingRunner mappingRunner)
+        : this(logger)
+    {
+        MappingRunner = mappingRunner;
+    }
+
+    /// <summary>The runner of this executor's binding mappings; null for an executor that maps nothing.</summary>
+    protected ITaskMappingRunner? MappingRunner { get; }
+
+    /// <summary>
+    /// Prefix of a failed script input mapping's message, kept from the executor's former mapping block. Default
+    /// <c>"{TaskType} task input handler failed: "</c>.
+    /// </summary>
+    protected virtual string InputMappingFailurePrefix => $"{TaskType} task input handler failed: ";
+
+    /// <summary>Prefix of a failed script output mapping's message. Default <c>"{TaskType} task output handler failed: "</c>.</summary>
+    protected virtual string OutputMappingFailurePrefix => $"{TaskType} task output handler failed: ";
+
+    /// <summary>Whether a failed script input mapping raises <c>TaskInputHandlerFailed</c> on <see cref="Logger"/>.</summary>
+    protected virtual bool LogsScriptInputMappingFailures => true;
+
+    /// <summary>Whether a failed script output mapping raises <c>TaskOutputHandlerFailed</c> on <see cref="Logger"/>.</summary>
+    protected virtual bool LogsScriptOutputMappingFailures => true;
+
+    /// <summary>Whether the script mapping compiles through the per-execution memo (<see cref="GetOrCompileMappingAsync{T}"/>).</summary>
+    protected virtual bool MemoizesScriptMappingCompile => true;
+
+    /// <summary>
+    /// Whether the task response is filed on the script context (<see cref="UpdateScriptContextWithResponse"/>) even
+    /// when the binding maps no output. A mapped output always files it first. Default false.
+    /// </summary>
+    protected virtual bool FilesResponseWithoutOutputMapping => false;
+
+    /// <summary>The output <c>Data</c> when the binding maps no output. Default <see cref="TaskInvocationResult.Data"/>.</summary>
+    protected virtual object? UnmappedOutput(TaskInvocationResult invocationResult) => invocationResult.Data;
+
+    /// <summary>
+    /// Whether this executor runs a binding's declarative <c>input</c>/<c>output</c> blocks. Default: it has a mapping
+    /// runner. An executor without one (FanOut, Notification, Human) fails a binding that carries blocks.
+    /// </summary>
+    protected virtual bool SupportsDeclarativeMapping => MappingRunner is not null;
+
+    /// <summary>This executor's labels, logger and flags for the mapping runner.</summary>
+    protected TaskMappingSite MappingSite => _mappingSite ??= new TaskMappingSite(
+        Logger, TaskType.ToString(), InputMappingFailurePrefix, OutputMappingFailurePrefix)
+    {
+        LogsScriptInputFailures = LogsScriptInputMappingFailures,
+        LogsScriptOutputFailures = LogsScriptOutputMappingFailures,
+        MemoizesScriptCompile = MemoizesScriptMappingCompile
+    };
 
     /// <inheritdoc />
     public abstract TaskType TaskType { get; }
@@ -49,6 +118,16 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
 
         var task = (TTask)context.Task;
         var taskTypeStr = context.Task.GetTaskType().ToString();
+
+        // A declarative input/output block on a task type that cannot run it must fail, never be silently ignored.
+        if (context.OnExecuteTask.RunsDeclarativeMapping && !SupportsDeclarativeMapping)
+        {
+            var phase = context.OnExecuteTask.Input is not null ? "input" : "output";
+            var message = $"task type {TaskType} does not support declarative input/output blocks";
+            Logger.TaskDeclarativeMappingFailed(
+                taskKey, TaskType.ToString(), phase, context.ScriptContext.Instance?.Id ?? Guid.Empty, message);
+            return Result<StandardTaskResponse>.Fail(Error.Failure(WorkflowErrorCodes.TaskExecution, message));
+        }
 
         // 2. PrepareInput (virtual - custom per executor)
         Result<ScriptResponse?> inputResult;
@@ -170,15 +249,17 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
     }
 
     /// <summary>
-    /// Prepares input data and runs input mapping scripts.
-    /// Override to implement custom input logic.
+    /// Runs the binding's input mapping (script or declarative) through <see cref="MappingRunner"/>; null when the
+    /// binding maps no input or the executor has no runner. Override to add type-specific input behaviour.
     /// </summary>
     protected virtual Task<Result<ScriptResponse?>> PrepareInputAsync(
         TTask task,
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        return Task.FromResult(Result<ScriptResponse?>.Ok(null));
+        return MappingRunner is null
+            ? Task.FromResult(Result<ScriptResponse?>.Ok(null))
+            : MappingRunner.PrepareInputAsync(task, context, cancellationToken, MappingSite);
     }
 
     /// <summary>
@@ -216,9 +297,10 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
     }
 
     /// <summary>
-    /// Processes output data and runs output mapping scripts.
-    /// Override to implement custom output logic.
-    /// Returns optional transformed data.
+    /// Runs the binding's output mapping (script or declarative) through <see cref="MappingRunner"/> and returns the
+    /// output <c>Data</c>. A mapped output first files the task response on the script context; an unmapped one files
+    /// it only when <see cref="FilesResponseWithoutOutputMapping"/> and returns <see cref="UnmappedOutput"/>. Without a
+    /// runner the result's <c>Data</c> passes through. Override to add type-specific output behaviour.
     /// </summary>
     protected virtual Task<Result<object?>> ProcessOutputAsync(
         TTask task,
@@ -226,7 +308,18 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        return Task.FromResult(Result<object?>.Ok(invocationResult.Data));
+        if (MappingRunner is null)
+            return Task.FromResult(Result<object?>.Ok(invocationResult.Data));
+
+        if (TaskMappingRouter.OutputKind(context.OnExecuteTask) == TaskMappingKind.PassThrough)
+        {
+            if (FilesResponseWithoutOutputMapping)
+                UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext, context.ResponseVariableKey);
+            return Task.FromResult(Result<object?>.Ok(UnmappedOutput(invocationResult)));
+        }
+
+        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext, context.ResponseVariableKey);
+        return MappingRunner.ProcessOutputAsync(task, invocationResult, context, cancellationToken, MappingSite);
     }
 
     /// <summary>
@@ -291,47 +384,16 @@ public abstract class TaskExecutorBase<TTask>(ILogger logger) : ITaskExecutor
     }
 
     /// <summary>
-    /// Compiles the task's mapping once per task execution and hands out a FRESH instance per call.
-    /// The compiled factory is memoized on the <see cref="TaskExecutorContext"/> (keyed by mapping +
-    /// target type), so PrepareInput and ProcessOutput/Invoke asking for the same mapping share a
-    /// single engine call instead of each paying their own compile-cache lookup; instance-per-phase
-    /// semantics are unchanged — a user script holding instance fields observes exactly today's
-    /// behaviour, one fresh instance per phase.
+    /// Compiles the task's mapping once per task execution and hands out a FRESH instance per call (the memo lives on
+    /// the <see cref="TaskExecutorContext"/>). Moved to <see cref="ScriptTaskMappingRunner.GetOrCompileMappingAsync{T}"/>;
+    /// kept here for executors that compile the binding's mapping outside the mapping phases (the Script task's invoke).
     /// </summary>
-    /// <remarks>
-    /// No lock guards the memo dictionary: a single task execution runs its phases sequentially on
-    /// one <see cref="TaskExecutorContext"/> within one thread (the pipeline does not fan phases of
-    /// the SAME task out concurrently), so there is no concurrent writer to race against.
-    /// CONSTRAINT: this helper compiles <c>context.OnExecuteTask.Mapping</c> and NOTHING else. A
-    /// call site holding a different <see cref="ScriptCode"/> (e.g. the
-    /// notification state-channel mapping or CacheAside's key script) must NOT route through here — it would silently compile
-    /// the wrong script; keep such sites on the engine's <c>CompileToInstanceAsync</c> overloads.
-    /// </remarks>
-    protected static async Task<T> GetOrCompileMappingAsync<T>(
+    protected static Task<T> GetOrCompileMappingAsync<T>(
         IScriptEngine scriptEngine,
         TaskExecutorContext context,
         CancellationToken cancellationToken)
-        where T : class
-    {
-        var mapping = context.OnExecuteTask.Mapping;
-        var key = (mapping, typeof(T));
-        context.CompiledMappingFactories ??= new Dictionary<(ScriptCode, Type), object>();
-        if (!context.CompiledMappingFactories.TryGetValue(key, out var boxed))
-        {
-            boxed = await scriptEngine.CompileToFactoryAsync<T>(
-                mapping, context.ScriptContext.Workflow?.Scripts, cancellationToken);
-            context.CompiledMappingFactories[key] = boxed;
-        }
-        else
-        {
-            // A memo hit means the engine is never called, so no Script.Compile span is produced at all.
-            // Without this counter the trace shows no compile and no reuse — indistinguishable from a task
-            // that has no mapping.
-            Activity.Current.IncrementCounterTag(TelemetryConstants.TagNames.MappingFactoryMemoHits);
-        }
-
-        return ((Func<T>)boxed)();
-    }
+        where T : class =>
+        ScriptTaskMappingRunner.GetOrCompileMappingAsync<T>(scriptEngine, context, cancellationToken);
 
     /// <summary>
     /// Updates script context with response data for output handler processing.

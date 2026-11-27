@@ -185,6 +185,53 @@ public class TaskComponentValidatorTests
         result.IsValid.ShouldBeTrue();
     }
 
+    private static string CacheAsideJson(string extra) => $$"""
+        {
+            "type": "18",
+            "config": {
+                "key": "customer-profile",
+                "sourceTask": {"key": "t", "domain": "d", "flow": "sys-tasks", "version": "1.0.0"}{{extra}}
+            }
+        }
+        """;
+
+    private const string SourceBlocks = """
+        , "sourceInput": { "set": { "$.url": "\"https://crm/\" + data.customerId" } },
+          "sourceOutput": { "select": "$.body.profile", "into": "$.profile" }
+        """;
+
+    [Fact]
+    public void Validate_CacheAsideSourceBlocks_Pass()
+    {
+        var result = _validator.Validate(JsonDocument.Parse(CacheAsideJson(SourceBlocks)).RootElement);
+
+        result.ValidationErrors.Select(e => e.ErrorMessage).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Validate_CacheAsideSourceMappingAndBlocks_AreRejected()
+    {
+        var mapping = """, "sourceMapping": { "location": "./src/CacheMapping.csx", "code": "cmV0dXJuIHRydWU7" }""";
+
+        var result = _validator.Validate(JsonDocument.Parse(CacheAsideJson(SourceBlocks + mapping)).RootElement);
+
+        result.ValidationErrors.ShouldHaveSingleItem().ErrorMessage!.ShouldContain("cannot carry both a 'sourceMapping'");
+    }
+
+    [Fact]
+    public void Validate_CacheAsideInvalidSourceBlock_IsRejectedAtItsPath()
+    {
+        var bad = """, "sourceOutput": { "into": "$.profile[0]" }, "sourceInput": { "set": { "$.url": "data.x." } }""";
+
+        var result = _validator.Validate(JsonDocument.Parse(CacheAsideJson(bad)).RootElement);
+
+        var messages = result.ValidationErrors.Select(e => e.ErrorMessage!).ToList();
+        messages.Count.ShouldBe(2);
+        messages.ShouldContain(m => m.StartsWith("sourceOutput.into: "));
+        messages.ShouldContain(m => m.StartsWith("sourceInput.set['$.url']: ") && m.Contains("does not compile"));
+        result.ValidationErrors.ShouldContain(e => e.MemberNames.Contains("CacheAsideTask.sourceOutput.into"));
+    }
+
     [Fact]
     public void Validate_ShouldReturnError_ForInvalidJson()
     {

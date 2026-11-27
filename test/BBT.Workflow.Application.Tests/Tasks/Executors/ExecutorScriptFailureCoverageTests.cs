@@ -10,7 +10,8 @@ namespace BBT.Workflow.Application.Tests.Tasks.Executors;
 /// <summary>
 /// vnext#1268: every task script's failure reaches the incident's stack trace only because the
 /// executor reports it through <c>ScriptDiagnostics.TaskScriptError</c>, which keeps the exception on
-/// the script context. An executor that builds the <c>Error</c> from the exception itself loses the
+/// the script context (for mapping handlers: the shared <c>ScriptTaskMappingRunner</c>). An executor that builds
+/// the <c>Error</c> from the exception itself loses the
 /// trace silently — no behaviour test of another executor would notice — so the source is checked.
 /// </summary>
 public sealed partial class ExecutorScriptFailureCoverageTests
@@ -31,9 +32,15 @@ public sealed partial class ExecutorScriptFailureCoverageTests
 
         offenders.ShouldBeEmpty(
             "these build an Error from a script exception and drop its stack trace; use ScriptDiagnostics.TaskScriptError");
+
+        // Every executor's script input/output mapping runs through the one ScriptTaskMappingRunner (no executor
+        // carries its own mapping block any more), so the helper must be used there for BOTH phases.
+        var runner = File.ReadAllText(Path.Combine(tasksDirectory, "Mapping", "ScriptTaskMappingRunner.cs"));
+        Regex.Matches(runner, Regex.Escape("ScriptDiagnostics.TaskScriptError(")).Count
+            .ShouldBe(2, "the central script mapping runner reports input and output failures through the helper");
         Directory.EnumerateFiles(tasksDirectory, "*.cs", SearchOption.AllDirectories)
             .Count(file => File.ReadAllText(file).Contains("ScriptDiagnostics.TaskScriptError(", StringComparison.Ordinal))
-            .ShouldBeGreaterThanOrEqualTo(16, "every executor family with mapping handlers reports through the helper");
+            .ShouldBeGreaterThanOrEqualTo(4, "the mapping runner, the Script task, FanOut and the cache key evaluator report through the helper");
     }
 
     private static string RepositoryRoot()

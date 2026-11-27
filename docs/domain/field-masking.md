@@ -89,6 +89,7 @@ var tckn = await context.Instance.DecryptAsync("identityNumber", cancellationTok
 | `context.Body` of a SubFlow's output mapping in the parent | the child's data in clear (the parent cannot open the child's tokens) |
 | `context.Instance.LatestData.Data` / `FindData(version).Data` | token — the row as stored |
 | DynamicExpresso rules and function-cache `varyBy` | token; no await, so no `DecryptAsync` — write a C# condition script instead |
+| Dynamic Expresso `input` (the hop's request payload, every expression site) | the plaintext the client sent — copying it to an unprotected path stores plaintext ([Declarative task mappings](../runtime/declarative-task-mappings.md#input-per-trigger)) |
 
 `DecryptAsync` takes a **path** of the instance's own latest data, never a value: it returns `null` for a plain field, an
 unknown path, a value that cannot be opened, or a token string passed as if it were a path — so nothing that reached the

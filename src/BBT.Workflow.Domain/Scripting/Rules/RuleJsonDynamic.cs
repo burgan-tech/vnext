@@ -12,10 +12,30 @@ public sealed class RuleJsonDynamic : DynamicObject
 {
     private readonly JsonElement _element;
 
-    private RuleJsonDynamic(JsonElement element)
+    // True for a Borrow view: the element is not cloned, and every nested value it hands out borrows too.
+    private readonly bool _borrowed;
+
+    // Set for a BorrowObject view: an object whose top-level members are resolved on demand; the whole object is
+    // materialized only when the view is used as a value (ToString, AsJsonElement, conversion).
+    private readonly IRuleJsonObjectSource? _source;
+
+    private RuleJsonDynamic(JsonElement element, bool borrowed = false)
     {
-        _element = element.Clone();
+        _element = borrowed ? element : element.Clone();
+        _borrowed = borrowed;
     }
+
+    private RuleJsonDynamic(IRuleJsonObjectSource source)
+    {
+        _source = source;
+        _borrowed = true;
+    }
+
+    // The element this view stands for; for a BorrowObject view the source's materialized object.
+    private JsonElement Element => _source is null ? _element : _source.Materialize();
+
+    // The value kind without materializing a BorrowObject view (always an object).
+    private JsonValueKind Kind => _source is null ? _element.ValueKind : JsonValueKind.Object;
 
     /// <summary>
     /// Empty JSON object <c>{}</c>.
@@ -34,16 +54,42 @@ public sealed class RuleJsonDynamic : DynamicObject
     public static RuleJsonDynamic FromJsonElement(JsonElement element) => new(element);
 
     /// <summary>
-    /// Returns the underlying (cloned, read-only) <see cref="JsonElement"/> for callers that need to
+    /// Builds a view over <paramref name="element"/> WITHOUT cloning it; nested values reached through the
+    /// view are borrowed the same way. For one expression-evaluation scope only: the view (and anything read
+    /// through it) is valid only while the <see cref="JsonDocument"/> that owns the element is alive — after
+    /// that document is disposed every read throws <see cref="ObjectDisposedException"/>. Never store a
+    /// borrowed view beyond the scope; use <see cref="FromJsonElement"/> when the value must outlive it.
+    /// A borrowed view is also lenient where a legacy view fails: a member of a non-object, or an index that is out
+    /// of range or of the wrong kind, reads as missing (<c>null</c>) — a declarative mapping's missing source writes
+    /// nothing (RF-1). A call of a method the view does not declare (<c>input.name.Substring(1)</c>) is not lenient: it
+    /// throws <see cref="InvalidOperationException"/> telling the author to convert first (<c>.ToString()</c>).
+    /// Views from <see cref="FromJsonElement"/> / <see cref="FromObject"/> keep failing as before.
+    /// </summary>
+    public static RuleJsonDynamic Borrow(JsonElement element) => new(element, borrowed: true);
+
+    /// <summary>
+    /// A <see cref="Borrow"/> view of a JSON object whose top-level members <paramref name="source"/> resolves on
+    /// demand: a member read (<c>result.body.x</c>) walks only that member's element, and the whole object is built by
+    /// <see cref="IRuleJsonObjectSource.Materialize"/> only when the view itself is used as a value. Reads behave
+    /// exactly as a <see cref="Borrow"/> view over the materialized object would; the same lifetime rule applies.
+    /// </summary>
+    public static RuleJsonDynamic BorrowObject(IRuleJsonObjectSource source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        return new RuleJsonDynamic(source);
+    }
+
+    /// <summary>
+    /// Returns the underlying (read-only; cloned unless this view was made by <see cref="Borrow"/>) <see cref="JsonElement"/> for callers that need to
     /// enumerate object properties or array items — operations the dynamic surface does not expose.
     /// </summary>
-    public JsonElement AsJsonElement() => _element;
+    public JsonElement AsJsonElement() => Element;
 
     /// <summary>
     /// Numeric JSON value as <see cref="double"/> for use in expressions (e.g. comparisons).
     /// </summary>
     public double AsDouble() =>
-        _element.ValueKind == JsonValueKind.Number
+        Kind == JsonValueKind.Number
             ? _element.GetDouble()
             : throw new InvalidOperationException("JSON value is not a number.");
 
@@ -51,7 +97,7 @@ public sealed class RuleJsonDynamic : DynamicObject
     /// Numeric JSON value as <see cref="int"/> for use in expressions.
     /// </summary>
     public int AsInt32() =>
-        _element.ValueKind == JsonValueKind.Number
+        Kind == JsonValueKind.Number
             ? _element.GetInt32()
             : throw new InvalidOperationException("JSON value is not a number.");
 
@@ -59,7 +105,7 @@ public sealed class RuleJsonDynamic : DynamicObject
     /// JSON array length; use in expressions instead of relying on dynamic <c>Count</c>.
     /// </summary>
     public int AsArrayLength() =>
-        _element.ValueKind == JsonValueKind.Array
+        Kind == JsonValueKind.Array
             ? _element.GetArrayLength()
             : throw new InvalidOperationException("JSON value is not an array.");
 
@@ -67,7 +113,7 @@ public sealed class RuleJsonDynamic : DynamicObject
     /// JSON boolean (or string-parseable boolean).
     /// </summary>
     public bool AsBoolean() =>
-        _element.ValueKind switch
+        Kind switch
         {
             JsonValueKind.True => true,
             JsonValueKind.False => false,
@@ -92,33 +138,36 @@ public sealed class RuleJsonDynamic : DynamicObject
     /// Returns a form suitable for rule comparisons: JSON strings as their text (no quotes),
     /// numbers and booleans as in <see cref="JsonElement.GetRawText"/>, objects and arrays as compact JSON.
     /// </summary>
-    public override string ToString() =>
-        _element.ValueKind switch
+    public override string ToString()
+    {
+        var element = Element;
+        return element.ValueKind switch
         {
-            JsonValueKind.String => _element.GetString() ?? string.Empty,
+            JsonValueKind.String => element.GetString() ?? string.Empty,
             JsonValueKind.Null => string.Empty,
             JsonValueKind.Undefined => string.Empty,
-            JsonValueKind.Number => _element.GetRawText(),
-            JsonValueKind.True => _element.GetRawText(),
-            JsonValueKind.False => _element.GetRawText(),
-            _ => _element.GetRawText()
+            JsonValueKind.Number => element.GetRawText(),
+            JsonValueKind.True => element.GetRawText(),
+            JsonValueKind.False => element.GetRawText(),
+            _ => element.GetRawText()
         };
+    }
 
     /// <inheritdoc />
     public override bool TryGetMember(GetMemberBinder binder, out object? result)
     {
         result = null;
 
-        if (binder.Name == "Count" && _element.ValueKind == JsonValueKind.Array)
+        if (binder.Name == "Count" && Kind == JsonValueKind.Array)
         {
             result = _element.GetArrayLength();
             return true;
         }
 
-        if (_element.ValueKind != JsonValueKind.Object)
-            return false;
+        if (Kind != JsonValueKind.Object)
+            return _borrowed; // a Borrow (declarative scope) view reads a member of a non-object as missing (null)
 
-        if (TryGetPropertyIgnoreCase(_element, binder.Name, out var prop))
+        if (TryGetProperty(binder.Name, out var prop))
         {
             result = Wrap(prop);
             return true;
@@ -135,9 +184,9 @@ public sealed class RuleJsonDynamic : DynamicObject
         if (indexes.Length != 1)
             return false;
 
-        if (indexes[0] is string key && _element.ValueKind == JsonValueKind.Object)
+        if (indexes[0] is string key && Kind == JsonValueKind.Object)
         {
-            if (TryGetPropertyIgnoreCase(_element, key, out var prop))
+            if (TryGetProperty(key, out var prop))
             {
                 result = Wrap(prop);
                 return true;
@@ -147,15 +196,16 @@ public sealed class RuleJsonDynamic : DynamicObject
             return true;
         }
 
-        if (indexes[0] is int idx && _element.ValueKind == JsonValueKind.Array)
+        if (indexes[0] is int idx && Kind == JsonValueKind.Array)
         {
             if (idx < 0 || idx >= _element.GetArrayLength())
-                return false;
+                return _borrowed;
             result = Wrap(_element[idx]);
             return true;
         }
 
-        return false;
+        // A Borrow (declarative scope) view reads an index that does not apply as missing (null); legacy views fail.
+        return _borrowed;
     }
 
     /// <inheritdoc />
@@ -164,9 +214,17 @@ public sealed class RuleJsonDynamic : DynamicObject
         result = null;
         args ??= Array.Empty<object?>();
 
-        if (_element.ValueKind != JsonValueKind.Array || !string.Equals(binder.Name, "Contains", StringComparison.OrdinalIgnoreCase) ||
+        if (Kind != JsonValueKind.Array || !string.Equals(binder.Name, "Contains", StringComparison.OrdinalIgnoreCase) ||
             args.Length != 1)
+        {
+            // A Borrow (declarative scope) view fails here: returning false would fall back to a member read, which a
+            // borrowed view answers with null, and invoking null reads as a missing source — the call silently skipped.
+            // The declared CLR methods (AsDouble, ToString, …) bind before this runs; legacy views keep the binder error.
+            if (_borrowed)
+                throw new InvalidOperationException(
+                    $"'{binder.Name}' is not a method of this JSON {Kind} value; convert it first, e.g. .ToString().{binder.Name}(...)");
             return base.TryInvokeMember(binder, args, out result);
+        }
 
         var needle = args[0];
         foreach (var item in _element.EnumerateArray())
@@ -186,24 +244,25 @@ public sealed class RuleJsonDynamic : DynamicObject
     public override bool TryConvert(ConvertBinder binder, out object? result)
     {
         result = null;
+        var element = Element; // a BorrowObject view converts its materialized object
 
         try
         {
             if (binder.Type == typeof(bool))
             {
-                if (_element.ValueKind == JsonValueKind.True)
+                if (element.ValueKind == JsonValueKind.True)
                 {
                     result = true;
                     return true;
                 }
 
-                if (_element.ValueKind == JsonValueKind.False)
+                if (element.ValueKind == JsonValueKind.False)
                 {
                     result = false;
                     return true;
                 }
 
-                if (_element.ValueKind == JsonValueKind.String && bool.TryParse(_element.GetString(), out var b))
+                if (element.ValueKind == JsonValueKind.String && bool.TryParse(element.GetString(), out var b))
                 {
                     result = b;
                     return true;
@@ -212,55 +271,55 @@ public sealed class RuleJsonDynamic : DynamicObject
 
             if (binder.Type == typeof(double))
             {
-                if (_element.ValueKind == JsonValueKind.Number)
+                if (element.ValueKind == JsonValueKind.Number)
                 {
-                    result = _element.GetDouble();
+                    result = element.GetDouble();
                     return true;
                 }
             }
 
             if (binder.Type == typeof(decimal))
             {
-                if (_element.ValueKind == JsonValueKind.Number)
+                if (element.ValueKind == JsonValueKind.Number)
                 {
-                    result = _element.GetDecimal();
+                    result = element.GetDecimal();
                     return true;
                 }
             }
 
             if (binder.Type == typeof(long))
             {
-                if (_element.ValueKind == JsonValueKind.Number)
+                if (element.ValueKind == JsonValueKind.Number)
                 {
-                    result = _element.GetInt64();
+                    result = element.GetInt64();
                     return true;
                 }
             }
 
             if (binder.Type == typeof(int))
             {
-                if (_element.ValueKind == JsonValueKind.Number)
+                if (element.ValueKind == JsonValueKind.Number)
                 {
-                    result = _element.GetInt32();
+                    result = element.GetInt32();
                     return true;
                 }
             }
 
             if (binder.Type == typeof(string))
             {
-                if (_element.ValueKind == JsonValueKind.String)
+                if (element.ValueKind == JsonValueKind.String)
                 {
-                    result = _element.GetString();
+                    result = element.GetString();
                     return true;
                 }
 
-                if (_element.ValueKind == JsonValueKind.Null)
+                if (element.ValueKind == JsonValueKind.Null)
                 {
                     result = null;
                     return true;
                 }
 
-                result = _element.GetRawText();
+                result = element.GetRawText();
                 return true;
             }
         }
@@ -270,6 +329,35 @@ public sealed class RuleJsonDynamic : DynamicObject
         }
 
         return base.TryConvert(binder, out result);
+    }
+
+    // A member of this (object) view: exact name first, then the first case-insensitive match in member order.
+    private bool TryGetProperty(string name, out JsonElement value)
+    {
+        if (_source is null)
+            return TryGetPropertyIgnoreCase(_element, name, out value);
+
+        var names = _source.MemberNames;
+        for (var i = 0; i < names.Count; i++)
+        {
+            if (string.Equals(names[i], name, StringComparison.Ordinal))
+            {
+                value = _source.GetMember(i);
+                return true;
+            }
+        }
+
+        for (var i = 0; i < names.Count; i++)
+        {
+            if (string.Equals(names[i], name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = _source.GetMember(i);
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
     }
 
     private static bool TryGetPropertyIgnoreCase(JsonElement obj, string name, out JsonElement value)
@@ -290,13 +378,13 @@ public sealed class RuleJsonDynamic : DynamicObject
         return false;
     }
 
-    private static object? Wrap(JsonElement e)
+    private object? Wrap(JsonElement e)
     {
         return e.ValueKind switch
         {
             JsonValueKind.Null => null,
             JsonValueKind.Undefined => null,
-            _ => new RuleJsonDynamic(e)
+            _ => new RuleJsonDynamic(e, _borrowed)
         };
     }
 
@@ -333,4 +421,21 @@ public sealed class RuleJsonDynamic : DynamicObject
             return false;
         }
     }
+}
+
+/// <summary>
+/// Supplies a <see cref="RuleJsonDynamic.BorrowObject"/> view: a JSON object with a fixed list of top-level members,
+/// each resolved on demand, and the whole object only when it is used as a value. Elements are borrowed — the source
+/// owns (and eventually disposes) whatever documents back them.
+/// </summary>
+public interface IRuleJsonObjectSource
+{
+    /// <summary>The object's member names, in document order (distinct, ordinal).</summary>
+    IReadOnlyList<string> MemberNames { get; }
+
+    /// <summary>The member at <paramref name="index"/> of <see cref="MemberNames"/>; JSON null as a <see cref="JsonValueKind.Null"/> element.</summary>
+    JsonElement GetMember(int index);
+
+    /// <summary>The whole object, built once on first call.</summary>
+    JsonElement Materialize();
 }

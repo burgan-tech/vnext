@@ -127,7 +127,9 @@ public sealed class ScheduleTransitionsStep(
             .WithTransition(scheduledTransition)
             .WithHeaders(context.Headers.ToDictionary(kvp => kvp.Key, kvp => kvp.Value))
             .WithRouteValues(context.RouteValues.ToDictionary(kvp => kvp.Key, kvp => kvp.Value))
-            .BuildAsync(cancellationToken);
+            .BuildAsync(cancellationToken)
+            // A timer armed by this hop reads this hop's `input` (the hop that fires it later has none).
+            .WithHopInputAsync(context.HopInput);
     }
 
     /// <summary>

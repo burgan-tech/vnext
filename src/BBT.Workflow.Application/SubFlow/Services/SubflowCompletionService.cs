@@ -331,6 +331,7 @@ public sealed class SubflowCompletionService(
                         parentWorkflow,
                         mappingPreparation.Value!,
                         completedInput.InstanceData,
+                        SubflowSettlement.Completed,
                         completedInput.CarriedHeaders,
                         cancellationToken)
                         : Result.Fail(mappingPreparation.Error);

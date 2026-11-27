@@ -24,18 +24,22 @@ public interface ISubflowOutputMappingService
     /// Executes a previously prepared mapping against authoritative locked state.
     /// <paramref name="carriedHeaders"/> are the headers carried on the child's terminal event; they
     /// are re-filtered and exposed to the script only when the carried-header policy allows it.
+    /// <paramref name="settlement"/> is how the child settled; a declarative <c>output</c> block reads it as
+    /// <c>result.status</c> (<c>completed</c> / <c>faulted</c>), the script does not see it.
     /// </summary>
     Task<Result> ApplyPreparedAsync(
         Instance parentInstance,
         Definitions.Workflow parentWorkflow,
         SubflowOutputMappingPlan plan,
         JsonElement? childInstanceData,
+        SubflowSettlement settlement,
         IReadOnlyDictionary<string, string?>? carriedHeaders,
         CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Executes the parent SubFlow state's <see cref="Scripting.ISubFlowMapping.OutputHandler"/> with the child data
-    /// as the script body, then persists mapped data and script mutations on the parent instance.
+    /// as the script body — or, without a script, its declarative <c>output</c> block — then persists mapped data
+    /// and script mutations on the parent instance.
     /// Returns <see cref="Result.Ok()"/> on success or <see cref="Result.Fail"/> when the OutputHandler throws,
     /// so callers can decide whether to fault the instance instead of silently continuing.
     /// </summary>
@@ -44,12 +48,14 @@ public interface ISubflowOutputMappingService
         Definitions.Workflow parentWorkflow,
         string parentStateKey,
         JsonElement? childInstanceData,
+        SubflowSettlement settlement,
         CancellationToken cancellationToken = default,
         IReadOnlyDictionary<string, string?>? carriedHeaders = null);
 
     /// <summary>
     /// Resolves the caller's roles for <paramref name="plan"/>'s output mapping BEFORE the per-sub-item terminal
-    /// lock is taken, when the mapping script references <c>Caller</c>: the provider call (up to its timeout) then
+    /// lock is taken, when the mapping script references <c>Caller</c> (or the declarative <c>output</c> block reads
+    /// <c>user</c>): the provider call (up to its timeout) then
     /// never runs while the lock is held — a duplicate delivery waits only about a second for it. The answer is
     /// memoized per request scope, so the read inside the mapping is free. Throws
     /// <see cref="ExceptionHandling.CallerRolesUnavailableTransientException"/> when the provider cannot answer.
@@ -61,4 +67,25 @@ public interface ISubflowOutputMappingService
         CancellationToken cancellationToken = default) => Task.CompletedTask;
 }
 
-public sealed record SubflowOutputMappingPlan(State? ParentState, object? MappingInstance);
+/// <summary>
+/// A prepared SubFlow output mapping: the parent SubFlow state and its compiled mapping script instance (null when the
+/// state has no script). Without a script, <see cref="OutputBlock"/> carries the compiled declarative <c>output</c> block.
+/// </summary>
+public sealed record SubflowOutputMappingPlan(State? ParentState, object? MappingInstance)
+{
+    /// <summary>The compiled declarative <c>output</c> block, when the state has one and no script.</summary>
+    internal Scripting.Declarative.DeclarativeMappingPlan? OutputBlock { get; init; }
+}
+
+/// <summary>
+/// How the child of a SubFlow settled, as the parent's output mapping sees it: a declarative <c>output</c> block reads
+/// it as <c>result.status</c>. Passed by the completion (<see cref="Completed"/>) and fault (<see cref="Faulted"/>) services.
+/// </summary>
+public enum SubflowSettlement
+{
+    /// <summary>The child completed (<c>result.status</c> = <c>"completed"</c>).</summary>
+    Completed,
+
+    /// <summary>The child faulted (<c>result.status</c> = <c>"faulted"</c>).</summary>
+    Faulted
+}
