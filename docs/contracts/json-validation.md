@@ -63,7 +63,7 @@ async job is queued, before a start persists the instance row). Both failures an
 Order at intake: transition schema → state-machine policy → master-schema preview. The preview runs
 last on purpose: it reads the stored document, so a request the policy refuses (wrong state,
 unauthorized actor) never reaches it and is never answered with a master-schema message. If the
-preview itself fails unexpectedly it accepts and logs `IntakeMasterSchemaPreviewSkipped` (10268) —
+preview itself fails unexpectedly it accepts and logs `IntakeMasterSchemaPreviewSkipped` (10276) —
 the write funnel validates the same content.
 
 | Layer | Schema | Validates | Where |
@@ -107,8 +107,11 @@ the instance is reserved.
 
 This is a recorded gap, **subject to change and not a contract** — do not build on the faulted outcome.
 Decision: council session `2026-11-23-mapped-transition-master-schema-preview`
-([decision log](../agent-council/sessions/README.md)). Getting a faulted instance out of that state is
-vnext#1252; preventing the fault for mapped transitions is a separate task.
+([decision log](../agent-council/sessions/README.md)). Getting a faulted instance out of that state:
+`retry` re-runs the hop with the retry's body, and the reserved `cancel` closes it (vnext#1252,
+[Retry](api-and-service-contracts.md#retry-post-instancesinstanceretry) and
+[Reserved `cancel` on a Faulted instance](api-and-service-contracts.md#reserved-cancel-on-a-faulted-instance)).
+Preventing the fault for mapped transitions is a separate task.
 
 `WorkflowExecution:InstanceDataWrite:IntakeMasterSchemaPreview` (default `true`) switches layer 2
 off; the funnel's validation is unaffected. The validation runs under the `Schema.ValidateMaster`

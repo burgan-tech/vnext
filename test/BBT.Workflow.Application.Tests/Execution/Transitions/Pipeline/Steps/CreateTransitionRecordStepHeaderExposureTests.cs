@@ -12,7 +12,6 @@ using BBT.Workflow.Execution.Pipeline.Steps;
 using BBT.Workflow.Execution.Transitions.Services;
 using BBT.Workflow.Headers;
 using BBT.Workflow.Instances;
-using BBT.Workflow.Runtime;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -36,8 +35,8 @@ public class CreateTransitionRecordStepHeaderExposureTests
         var dataMapper = Substitute.For<ITransitionDataMapper>();
         dataMapper.MapTransitionDataAsync(
                 Arg.Any<object?>(), Arg.Any<Transition?>(), Arg.Any<Definitions.Workflow>(),
-                Arg.Any<Instance>(), Arg.Any<IRuntimeInfoProvider>(),
-                Arg.Any<Dictionary<string, string?>>(), Arg.Any<CancellationToken>())
+                Arg.Any<Instance>(),
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(), Arg.Any<Action<Exception>?>(), Arg.Any<BBT.Workflow.Shared.ExecutionActor?>(), Arg.Any<CancellationToken>())
             .Returns(Result<object?>.Ok(null));
 
         return new CreateTransitionRecordStep(
@@ -46,7 +45,6 @@ public class CreateTransitionRecordStepHeaderExposureTests
             Substitute.For<IInstanceDataWriteService>(),
             Substitute.For<IGuidGenerator>(),
             dataMapper,
-            Substitute.For<IRuntimeInfoProvider>(),
             BBT.Workflow.Application.Files.FileTestDoubles.PassThroughOffload(),
             Substitute.For<ILogger<CreateTransitionRecordStep>>(),
             headerExposureDenyList: new HeaderExposureDenyList(Options.Create(new HeaderExposureOptions { Deny = [.. deny] })));

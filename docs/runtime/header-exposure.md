@@ -29,6 +29,7 @@ mapping context (`context.Headers`). Issue vnext#1260.
 | Transition record (`CreateTransitionRecordStep`) | never written to `InstanceTransitions.Header` |
 | Transition history (`GET …/instances/{id}/transitions`) | removed from every row's `header`, including rows recorded **before** the list was configured — stored rows are never rewritten, so this is what protects them |
 | Script and mapping contexts (`context.Headers`) | absent for every script the runtime builds through `IScriptContextBuilder`: task and transition mappings, conditions and rules, schedule and resource-lock scripts, SubFlow input/output mappings, functions, extensions, views, events |
+| Dynamic Expresso `headers` variable (task mappings, condition rules, keys, timer / timeout / agent value slots) | absent: `headers` is a view over the same dictionary as `context.Headers`, so it follows the same list ([Declarative Task Mappings § Headers](declarative-task-mappings.md#headers)) |
 | `context.CurrentTransition.Header` | follows from the record (the record does not hold it) |
 | SubFlow carried headers (`Workflow:SubFlow:CarriedHeaders`) | not carried from the settling child to the parent's output mapping and resume request, in addition to that policy's own deny floor |
 

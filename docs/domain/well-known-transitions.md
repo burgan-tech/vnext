@@ -216,6 +216,44 @@ for at least one available transition. Since `exit` and `updateData` now count, 
 only caller-authorized transition is a role-less `exit` becomes visible where it previously was not.
 This already applied to `cancel`; it is accepted for consistency.
 
+## `cancel` on a Faulted instance
+
+Faulted is terminal for every transition except the reserved `cancel` (vnext#1252). Without that
+exception an instance a failed hop left Faulted had no way out but `retry`, and when a retry cannot
+succeed — the mapping throws on every attempt — only a database edit could close it. `exit` and
+`updateData` stay refused, as does every key on a Completed or Passive instance.
+
+| Where | What admits it |
+|-------|----------------|
+| Intake (`InstanceCommandAppService.TransitionAsync`) | the terminal check skips a Faulted instance when `Workflow.IsCancelKey(key)` |
+| Context load (`TransitionContextFactory`) | a cancel loads through `IInstanceRepository.GetActiveOrFaultedAsync` |
+| Admission (`TransitionPipeline`, BypassBusyCheck) | `IInstanceBusyManager.TryUnfaultIntoBusyAsync`: Faulted → Busy, open incidents resolved, open transition records closed as failed, one transaction; then the run's copy is aligned (`AcceptPersistedStatusAsync`) and marked `TookOverFaultedInstance` |
+
+Validation runs before the takeover, so a cancel refused by its `availableIn` state gate
+(`Transition:100024`) or its schema leaves the instance Faulted and retryable; `roles` scope discovery
+only, as for every transition. After the takeover the cancel runs exactly as on an Active instance —
+preflight, record, `mapping`, `onExecutionTasks`, `HandleFinishStep` → `Instance.Cancel` — and its
+`ChildSubflowCancelRequestedEvent` now also closes children the parent's fault left Faulted. A cancel
+that fails after the takeover faults the instance again with its own record, so `retry` re-runs the
+cancel; that includes a refusal that would normally hand the status back untouched
+(`ResourceLockRejected`). It always runs inline, whatever `sync` or the definition's `executionType`
+asks (the answer is `200` with the outcome, not `202`): queued, it would be a job on a still-Faulted
+instance, and the fault's own cleanup, arriving a moment later, cancels every active job of a Faulted
+instance. A job that still carries such a cancel is taken over in the pipeline as well, since the async
+accept's CAS (Active → Busy) cannot flip a Faulted row. Losing the race to a retry or another cancel
+answers `Instance:100002` (409); send it again.
+
+**Discovery.** The state body lists `availableTransitions` only for an Active instance, so a Faulted
+instance does not offer its cancel: a client sends it knowing the flow declares one, and asks
+`authorize` whether this caller may.
+
+**Late fault cleanup.** A fault's `InstanceFaultedCleanupEvent` reaches `cancel-cleanup` through the
+outbox and the Inbox, possibly after a retry or the cancel took the instance over and queued a job or
+armed a state's timers. It carries `FaultedAt` (stamped from the `CompletedAt` the fault wrote), and the
+cleanup runs only while the instance still rests in that fault
+(`IInstanceCancellationService.ProcessFaultCleanupAsync`): otherwise it would cancel the new run's jobs
+and release its resource locks. Completed and canceled cleanups sweep as before.
+
 ## Definition-time validation
 
 `WorkflowValidator` puts all three through `ValidateSingleTransition`, which covers:

@@ -140,6 +140,17 @@ public sealed class Transition : IHasKey
     [JsonInclude] public ScriptCode? Mapping { get; private set; }
 
     /// <summary>
+    /// Optional declarative block that files the transition's payload into instance data without a script.
+    /// </summary>
+    [JsonInclude]
+    [JsonPropertyName("output")]
+    public MappingBlock? Output { get; private set; }
+
+    /// <summary>True when the transition maps its payload, by script (<see cref="Mapping"/>) or block (<see cref="Output"/>).</summary>
+    [JsonIgnore]
+    public bool HasDataMapping => Mapping is not null || Output is not null;
+
+    /// <summary>
     /// Optional free-text description of when this transition applies (issue #1105). On an
     /// <see cref="StateType.AiAgent"/> state it is one source of the "when" text the agent sees for a
     /// candidate transition (after <c>decision.hintsMapping</c> and <c>decision.hints</c>). Never

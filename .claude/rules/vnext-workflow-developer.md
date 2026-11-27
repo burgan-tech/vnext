@@ -110,6 +110,9 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 - Retry loads no-tracking (`GetResultAsReadOnlyAsync`) and unfaults with the `TryUnfaultAsync` CAS,
   committed before `ExecuteRetryAsync`. Never mutate an ambient-tracked aggregate and leave the write
   to an inner `RequiresNew` scope (`Instance:100027`).
+- A status written in another unit of work is mirrored onto the run's copy and its baseline aligned
+  (`MirrorPersistedFault` / `AcceptPersistedStatusAsync`); a caller-requested hop failing in
+  `CreateTransitionRecordStep` saves its record unfinished first, so retry finds it.
 - Full guide: `docs/runtime/instance-incident-persistence.md`.
 
 ## Long-Polling / State Function
@@ -182,6 +185,8 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 - `roles` are enforced at discovery only, as for every transition type.
 - Execution gate: `WellKnownTransitionSpecification` (`Transition:100024`), keyed by
   `Workflow.IsWellKnownTransitionKey` (aliases AND configured custom keys).
+- Faulted admits the reserved `cancel` only (`IsCancelKey`): `GetActiveOrFaultedAsync`, then
+  `TryUnfaultIntoBusyAsync` after validation; a fault's late cleanup checks `FaultedAt`.
 - Full guide: `docs/domain/well-known-transitions.md`.
 
 ## `availableIn` (shared + cancel/updateData/exit)
@@ -226,7 +231,8 @@ The plan is built from `ExcludedStepOrders` alone (`TransitionExecutor.BuildExec
 
 - `sync=true` blocks to completion; `sync=false` (default) returns `{ id, status }` for polling.
 - A flow/transition `executionType` (`S`/`A`) overrides `sync` (transition > flow > query); never for
-  runtime-internal calls (`SuppressResponseEnrichment`). Automatic continuations always run inline.
+  runtime-internal calls (`SuppressResponseEnrichment`). Automatic continuations always run inline, and
+  so does a cancel on a Faulted instance — never queue a job for a Faulted instance.
 - Runtime-generated child start and descended retry always use `sync=true`; the SubFlow proxy forwards in
   the parent's resolved mode (async stays async), only the legacy forward job uses `sync=true`.
 - A sync response never evaluates extensions; `IInstanceExtensionService` stays out of
@@ -378,7 +384,7 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
 - `views[]` on states/transitions, first matching `IConditionMapping` rule wins; last rule-less entry
   is the fallback. `loadData: true` → instance data loaded with the view.
 - Transition `schemas[]` (rule-based, wins over `schema`): first match wins, declared but no match → 400 `Transition:100025`, none declared → accept — [function-contract-resolution § Transitions](../../docs/runtime/function-contract-resolution.md#transitions).
-- `context.Caller` (resolved caller roles): selection rules, plus auto rules / timer scripts on caller-driven hops and SubFlow output mappings (child settler); never task mappings or System hops. Provider failure: selection 503 / step fails / completion redelivered (`Authorization:110006`), never a fallback — `docs/runtime/script-caller-roles.md`.
+- `context.Caller` (resolved caller roles): selection rules, plus auto rules / timer scripts on caller-driven hops and SubFlow output mappings (child settler); never script task mappings or System hops (declarative task mappings have their own `user` variable — `docs/runtime/declarative-task-mappings.md`). Provider failure: selection 503 / step fails / completion redelivered (`Authorization:110006`), never a fallback — `docs/runtime/script-caller-roles.md`.
 
 ## TransitionExecutionContext
 

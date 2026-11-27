@@ -10,13 +10,7 @@ public static class TransitionExecutionContextExtensions
     /// Matches both the workflow's configured cancel key and the well-known reserved key.
     /// </summary>
     public static bool IsCancelTransition(this TransitionExecutionContext ctx)
-    {
-        var key = ctx.Transition?.Key;
-        if (key is null) return false;
-
-        return key.Equals(Definitions.WellKnownTransitionKeys.Cancel, StringComparison.OrdinalIgnoreCase)
-            || ctx.Workflow.Cancel?.Key.Equals(key, StringComparison.OrdinalIgnoreCase) == true;
-    }
+        => ctx.Workflow.IsCancelKey(ctx.Transition?.Key);
 
     /// <summary>
     /// Determines whether the current transition is an updateData transition.

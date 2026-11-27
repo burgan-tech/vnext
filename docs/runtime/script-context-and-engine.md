@@ -111,8 +111,10 @@ A script that throws is diagnosable from its stack trace (vnext#1268):
   119–343-line scripts): the loaded assembly is about 7.5–8.5 KB larger whatever the script's size,
   and the one-time compile takes about +0.3 ms. Running a script is unchanged (same optimized IL);
   rendering a thrown exception's trace costs about 6 µs instead of 5 µs.
-- **Where the trace goes.** An executor reports a failed script through
-  `ScriptDiagnostics.TaskScriptError(context, exception, failure)`: the message stays
+- **Where the trace goes.** A failed task script is reported through
+  `ScriptDiagnostics.TaskScriptError(context, exception, failure)` — for an input/output mapping by the one
+  `ScriptTaskMappingRunner` every executor shares, with the executor's label as `failure`
+  (`"Http task input handler failed"`, `"Input handler failed for DirectTrigger"`): the message stays
   `"{failure}: {Explain(exception)}"` and the exception is kept on the script context for the
   incident, never in the `Error`. The full table is in
   [Instance Incident Persistence § Stack traces](instance-incident-persistence.md#stack-traces).

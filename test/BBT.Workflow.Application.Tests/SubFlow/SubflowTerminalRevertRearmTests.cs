@@ -93,7 +93,7 @@ public sealed class SubflowTerminalRevertRearmTests
         _outputMappingService
             .Setup(x => x.ApplyPreparedAsync(
                 It.IsAny<Instance>(), It.IsAny<Definitions.Workflow>(),
-                It.IsAny<SubflowOutputMappingPlan>(), It.IsAny<JsonElement?>(),
+                It.IsAny<SubflowOutputMappingPlan>(), It.IsAny<JsonElement?>(), It.IsAny<SubflowSettlement>(),
                 It.IsAny<IReadOnlyDictionary<string, string?>?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result.Ok());

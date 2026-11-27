@@ -788,6 +788,43 @@ public class InstanceTests : DomainTestBase<DomainEntryPoint>
     }
 
     [Fact]
+    public void Fault_StampsTheCleanupEventsFaultedAt_WithTheCompletedAtItWrites()
+    {
+        // cancel-cleanup compares the two to skip a cleanup that arrives after a retry or the reserved cancel took
+        // the instance out of this fault (vnext#1252); if they diverged, every fault cleanup would be skipped.
+        var instance = InstanceFactory.CreateDefault();
+
+        instance.Fault("test-domain");
+
+        instance.GetDomainEvents().Select(e => e.Event).OfType<InstanceFaultedCleanupEvent>().Single()
+            .FaultedAt.ShouldBe(instance.CompletedAt!.Value);
+    }
+
+    [Fact]
+    public void MirrorPersistedFault_CopiesTheFaultWithoutRaisingItsEventsAgain()
+    {
+        // vnext#1252: the pipeline faults a reload; its own copy takes the persisted outcome, not the events.
+        var copy = InstanceFactory.CreateDefault();
+        copy.Busy();
+        var persisted = InstanceFactory.CreateDefault();
+        persisted.AddIncident(InstanceIncidentFactory.Create(
+            state: "review", transition: "approve", taskKey: null,
+            message: "mapping threw", errorCode: "Execution:200002", errorLayer: "Pipeline"));
+        persisted.Fault("test-domain");
+        var eventsBefore = copy.GetDomainEvents().Count;
+
+        copy.MirrorPersistedFault(persisted);
+
+        copy.Status.ShouldBe(InstanceStatus.Faulted);
+        copy.EffectiveStatus.ShouldBe(persisted.EffectiveStatus);
+        copy.CompletedAt.ShouldBe(persisted.CompletedAt);
+        copy.Duration.ShouldBe(persisted.Duration);
+        copy.ModifiedAt.ShouldBe(persisted.ModifiedAt);
+        copy.HasActiveIncident.ShouldBeTrue();
+        copy.GetDomainEvents().Count.ShouldBe(eventsBefore);
+    }
+
+    [Fact]
     public void Fault_WhenInstanceIsSubFlow_ShouldPublishFaultEventWithLatestDataAndIncidentMetadata()
     {
         // Arrange

@@ -27,7 +27,11 @@ Busy at the accept, and why `updateData` takes no lock at all.
   `(InstanceId, JobType, SourceState, TransitionKey)` tuple.
 - **cancel/exit/timeout flip Busy at the accept**, not in the pipeline. They stay exempt from the
   Busy 409, but they do change the status, so they take the same lock as everything else. The job
-  re-enters `IsPreReserved` and `TransitionPipeline` skips the second `TakeOverAsync`.
+  re-enters `IsPreReserved` and `TransitionPipeline` skips the second `TakeOverAsync`. Exception: the
+  reserved cancel on a **Faulted** instance always runs inline, and the pipeline takes the instance over
+  (Faulted → Busy) in one transaction with no status lock — both CASes guard on the status they expect, and
+  the accept's CAS (Active → Busy) could not flip a Faulted row anyway; see
+  [Well-Known Transitions](../domain/well-known-transitions.md#cancel-on-a-faulted-instance).
 - **updateData (`Unconditional`) takes NO lock and NO duplicate-job guard — on either path.** It is
   status-neutral (flip = None, nothing to serialize) and must accept parallel requests: N
   simultaneous updateData accepts share the same logical job identity yet are all legitimate, each

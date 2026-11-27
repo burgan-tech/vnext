@@ -38,6 +38,14 @@ the start context (`ExecuteStartTransitionAsync`, reading `workflow.StartTransit
 sets `WorkflowExecutionContext.Mode` — the **effective** mode the `ExecutionStrategyFactory` keys on to
 pick the sync inline pipeline or the async enqueue — while `CallerMode` keeps what the caller asked for.
 
+One case outranks every level: the reserved `cancel` on a **Faulted** instance always runs sync
+(vnext#1252). Queued, it would be a job on a still-Faulted instance, and the fault's own cleanup cancels
+every active job of a Faulted instance. `BuildTransitionContext` forces it from the intake snapshot and
+re-tags `vnext.execution.effective` (so a forced cancel also shows requested ≠ effective; it is the one
+such span without `vnext.execution.overridden`, unless a definition had already set it); the context factory refuses an async cancel that meets a Faulted row
+anyway (`Instance:100018`, it faulted after the snapshot). See
+[Well-Known Transitions](../domain/well-known-transitions.md#cancel-on-a-faulted-instance).
+
 ### Worked example
 
 Flow `A`, transition `S`, caller sends `?sync=false` (async):

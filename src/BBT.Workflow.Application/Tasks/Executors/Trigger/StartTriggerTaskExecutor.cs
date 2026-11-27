@@ -36,8 +36,9 @@ public sealed class StartTriggerTaskExecutor : TriggerTaskExecutorBase<StartTask
         IInstanceCommandGateway instanceCommandGateway,
         IDomainDiscoveryResolver endpointResolver,
         ICurrentUser currentUser,
-        ILogger<StartTriggerTaskExecutor> logger)
-        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger)
+        ILogger<StartTriggerTaskExecutor> logger,
+        ITaskMappingRunner? mappingRunner = null)
+        : base(scriptEngine, runtimeInfoProvider, remoteInvoker, logger, mappingRunner)
     {
         _instanceCommandGateway = instanceCommandGateway;
         _endpointResolver = endpointResolver;

@@ -185,6 +185,37 @@ public sealed class TransitionSchemaResolverTests
             Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task Context_BindsTheTransitionRequestBody_AsInput()
+    {
+        var transition = Transition($$""", "schemas": [ { "rule": {{RuleA}}, "schema": {{Ref("s1")}} } ]""");
+        ScriptContext? seen = null;
+        _conditionService
+            .ExecuteConditionAsync(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>())
+            .Returns(ci => { seen = ci.Arg<ScriptContext>(); return Result<bool>.Ok(true); });
+        var body = JsonDocument.Parse("""{"kind":"corporate"}""").RootElement;
+
+        var result = await _resolver.ResolveAsync(NewWorkflow(), NewInstance(), transition, null, body);
+
+        result.IsSuccess.ShouldBeTrue();
+        seen!.HasHopInput.ShouldBeTrue();
+        ((JsonElement)seen.HopInput!).GetProperty("kind").GetString().ShouldBe("corporate");
+    }
+
+    [Fact]
+    public async Task Context_ReadPath_WithoutBody_BindsNullInput()
+    {
+        var transition = Transition($$""", "schemas": [ { "rule": {{RuleA}}, "schema": {{Ref("s1")}} } ]""");
+        ScriptContext? seen = null;
+        _conditionService
+            .ExecuteConditionAsync(Arg.Any<ScriptCode>(), Arg.Any<ScriptContext>(), Arg.Any<CancellationToken>())
+            .Returns(ci => { seen = ci.Arg<ScriptContext>(); return Result<bool>.Ok(true); });
+
+        (await Resolve(transition)).IsSuccess.ShouldBeTrue();
+
+        seen!.HopInput.ShouldBeNull();
+    }
+
     private Task<Result<Reference?>> Resolve(Transition transition) =>
         _resolver.ResolveAsync(NewWorkflow(), NewInstance(), transition, null);
 

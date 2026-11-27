@@ -8,6 +8,7 @@ using BBT.Workflow.Scripting;
 using BBT.Workflow.Tasks.Evaluators;
 using BBT.Workflow.Tasks.Factory;
 using BBT.Workflow.Tasks.Invocation;
+using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -43,7 +44,6 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
     /// <summary>Component-type tag on the gateway's <c>Cache.Get</c>/<c>Cache.Set</c> spans.</summary>
     private const string CacheComponentType = "cacheaside";
 
-    private readonly IScriptEngine _scriptEngine;
     private readonly ITaskFactory _taskFactory;
     private readonly ICacheKeyEvaluator _keyEvaluator;
     private readonly IStateStoreCacheGateway _cacheGateway;
@@ -65,10 +65,10 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
         IStateStoreCacheGateway cacheGateway,
         IRemoteInvokerService remoteInvoker,
         IServiceProvider serviceProvider,
-        ILogger<CacheAsideTaskExecutor> logger)
-        : base(logger)
+        ILogger<CacheAsideTaskExecutor> logger,
+        ITaskMappingRunner? mappingRunner = null)
+        : base(logger, mappingRunner ?? RoutingTaskMappingRunner.CreateDefault(scriptEngine))
     {
-        _scriptEngine = scriptEngine;
         _taskFactory = taskFactory;
         _keyEvaluator = keyEvaluator;
         _cacheGateway = cacheGateway;
@@ -80,30 +80,29 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
     public override TaskType TaskType => TaskType.CacheAside;
 
     /// <inheritdoc />
+    /// <remarks>The former CacheAside mapping block returned script failures without logging them; kept.</remarks>
+    protected override bool LogsScriptInputMappingFailures => false;
+
+    /// <inheritdoc />
+    protected override bool LogsScriptOutputMappingFailures => false;
+
+    /// <inheritdoc />
+    protected override bool FilesResponseWithoutOutputMapping => true;
+
+    /// <inheritdoc />
     protected override async Task<Result<ScriptResponse?>> PrepareInputAsync(
         CacheAsideTask task,
         TaskExecutorContext context,
         CancellationToken cancellationToken)
     {
-        // 1. Standard input mapping (InputHandler) — may set the cache key, like the State Store task.
-        ScriptResponse? inputResponse = null;
-        var mapping = context.OnExecuteTask.Mapping;
-        if (mapping is not null && mapping.HasMappingCode)
+        // 1. Standard input mapping (base template) — may set the cache key, like the State Store task.
+        var result = await base.PrepareInputAsync(task, context, cancellationToken);
+        if (!result.IsSuccess)
         {
-            var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
-            {
-                var scriptRunner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
-
-                return await scriptRunner.InputHandler(task, context.ScriptContext);
-            }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "CacheAside task input handler failed"));
-
-            if (!result.IsSuccess)
-            {
-                return result;
-            }
-
-            inputResponse = result.Value;
+            return result;
         }
+
+        var inputResponse = result.Value;
 
         // 2. A key script (object form of 'key') computes the key and overrides it when non-blank.
         if (task.KeyScript is { HasMappingCode: true } keyScript)
@@ -249,29 +248,6 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
             metadata: BuildMetadata(task.CacheKey, write.Metadata, cacheHit: false, refreshed: true)));
     }
 
-    /// <inheritdoc />
-    protected override async Task<Result<object?>> ProcessOutputAsync(
-        CacheAsideTask task,
-        TaskInvocationResult invocationResult,
-        TaskExecutorContext context,
-        CancellationToken cancellationToken)
-    {
-        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext, context.ResponseVariableKey);
-
-        var mapping = context.OnExecuteTask.Mapping;
-        if (mapping is null || !mapping.HasMappingCode)
-        {
-            return Result<object?>.Ok(invocationResult.Data);
-        }
-
-        return await ResultExtensions.TryAsync<object?>(async ct =>
-        {
-            var runner = await GetOrCompileMappingAsync<IMapping>(_scriptEngine, context, ct);
-            var output = await runner.OutputHandler(context.ScriptContext);
-            return output.Data;
-        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "CacheAside task output handler failed"));
-    }
-
     /// <summary>
     /// Runs the source exactly like a task in <c>onExecutionTasks</c>: its own executor, with
     /// <c>sourceMapping</c> as its mapping (InputHandler → invoke → OutputHandler). The executor routes the
@@ -292,17 +268,24 @@ public sealed class CacheAsideTaskExecutor : TaskExecutorBase<CacheAsideTask>
                 taskType: TaskType.ToString());
         }
 
+        // sourceInput / sourceOutput run through the same mapping router as a binding's input / output blocks; a
+        // sourceMapping with code wins over them (its legacy meaning, the same rule as a task binding).
         var sourceOnExecute = OnExecuteTask.Create(
             context.OnExecuteTask.Order,
             task.SourceTask,
-            task.SourceMapping ?? ScriptCode.FromNative(string.Empty));
+            task.SourceMapping ?? ScriptCode.FromNative(string.Empty),
+            input: task.SourceInput,
+            output: task.SourceOutput);
 
         // Discarded, never merged back and not disposed — same convention as FanOutTaskExecutor's
         // per-item branch: the source's own response entries must not leak into the outer context;
         // only this task's result (set by ProcessOutputAsync) does.
         var sourceContext = new TaskExecutorContext(
             sourceTask, sourceOnExecute, context.ScriptContext.CreateParallelBranch(),
-            context.InstanceTransitionId, context.TaskTrigger, context.Origin);
+            context.InstanceTransitionId, context.TaskTrigger, context.Origin)
+        {
+            Caller = context.Caller
+        };
 
         var result = await executorResult.Value!.ExecuteAsync(sourceContext, cancellationToken);
         if (!result.IsSuccess)

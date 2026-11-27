@@ -1071,7 +1071,7 @@ public class WorkflowValidator
     /// <summary>
     /// Validates Auto (Automatic) transition rules:
     /// - Rule is required (except for DefaultAutoTransition which acts as fallback)
-    /// - Timer, Schema, View, and Mapping are not allowed
+    /// - Timer, Schema, View, Mapping and Output are not allowed
     /// </summary>
     private void ValidateAutoTransition(Transition transition, string basePath, WorkflowValidationResult result, bool agentDecided = false)
     {
@@ -1114,6 +1114,14 @@ public class WorkflowValidator
             result.AddError(new ValidationResult(
                 $"Auto transition '{transition.Key}' cannot have a mapping definition.",
                 [$"{basePath}.{nameof(Transition.Mapping)}"]));
+        }
+
+        // Output block is not allowed: an automatic hop has no request to map
+        if (transition.Output != null)
+        {
+            result.AddError(new ValidationResult(
+                $"Auto transition '{transition.Key}' cannot have an output definition.",
+                [$"{basePath}.output"]));
         }
 
         ValidateDynamicExpressoRule(transition, basePath, result);
@@ -1160,7 +1168,7 @@ public class WorkflowValidator
     /// <summary>
     /// Validates Scheduled transition rules:
     /// - Timer is required
-    /// - Rule, Schema, View, and Mapping are not allowed
+    /// - Rule, Schema, View, Mapping and Output are not allowed
     /// </summary>
     private void ValidateScheduledTransition(Transition transition, string basePath, WorkflowValidationResult result)
     {
@@ -1202,6 +1210,14 @@ public class WorkflowValidator
             result.AddError(new ValidationResult(
                 $"Scheduled transition '{transition.Key}' cannot have a mapping definition.",
                 [$"{basePath}.{nameof(Transition.Mapping)}"]));
+        }
+
+        // Output block is not allowed: a scheduled hop has no request to map
+        if (transition.Output != null)
+        {
+            result.AddError(new ValidationResult(
+                $"Scheduled transition '{transition.Key}' cannot have an output definition.",
+                [$"{basePath}.output"]));
         }
     }
 

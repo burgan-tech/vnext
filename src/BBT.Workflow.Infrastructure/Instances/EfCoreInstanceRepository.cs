@@ -744,6 +744,35 @@ public sealed class EfCoreInstanceRepository(
         effectiveStatus.IsModified = false;
     }
 
+    /// <inheritdoc />
+    public async Task AcceptPersistedStatusAsync(Instance instance, CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        var entry = context.Entry(instance);
+        if (entry.State == EntityState.Detached)
+        {
+            return;
+        }
+
+        foreach (var name in PersistedStatusColumns)
+        {
+            var property = entry.Property(name);
+            property.OriginalValue = property.CurrentValue;
+            property.IsModified = false;
+        }
+    }
+
+    /// <summary>The columns <see cref="AcceptPersistedStatusAsync"/> aligns.</summary>
+    private static readonly string[] PersistedStatusColumns =
+    [
+        nameof(Instance.Status),
+        nameof(Instance.EffectiveStatus),
+        nameof(Instance.CompletedAt),
+        nameof(Instance.Duration),
+        nameof(Instance.ModifiedAt),
+        nameof(Instance.HasActiveIncident),
+    ];
+
     /// <summary>
     /// The <see cref="AlignStatusBaselineAsync"/> counterpart for the unfault CAS, which writes four
     /// columns. Aligning only <c>Status</c> would leave <c>CompletedAt</c>, <c>Duration</c> and
@@ -1980,7 +2009,15 @@ public sealed class EfCoreInstanceRepository(
     }
 
 
-    public async Task<Result<Instance>> GetActiveAsync(string identifier, CancellationToken cancellationToken = default)
+    public Task<Result<Instance>> GetActiveAsync(string identifier, CancellationToken cancellationToken = default)
+        => GetUnfinishedAsync(identifier, admitFaulted: false, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<Result<Instance>> GetActiveOrFaultedAsync(string identifier, CancellationToken cancellationToken = default)
+        => GetUnfinishedAsync(identifier, admitFaulted: true, cancellationToken);
+
+    private async Task<Result<Instance>> GetUnfinishedAsync(
+        string identifier, bool admitFaulted, CancellationToken cancellationToken)
     {
         var instanceResult = await GetResultAsync(identifier, includeDetails: true, cancellationToken);
 
@@ -1991,7 +2028,7 @@ public sealed class EfCoreInstanceRepository(
 
         var instance = instanceResult.Value!;
 
-        if (instance.IsCompleted)
+        if (instance.IsCompleted && !(admitFaulted && instance.Status.Equals(InstanceStatus.Faulted)))
         {
             return Result<Instance>.Fail(Error.Validation(
                 WorkflowErrorCodes.InstanceCompleted,

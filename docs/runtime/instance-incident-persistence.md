@@ -88,6 +88,24 @@ the one-line imperatives.
   **commit before** `ExecuteRetryAsync`, because the pipeline's `GetActiveAsync` rejects a faulted
   instance. Pinned by
   `InstanceIncidentPersistenceTests.TryUnfaultAsync_FlipsFaultedToActiveAndLeavesNothingForAnAmbientCommitToOverwrite`.
+- **A fault written on a reload is mirrored onto the run's own copy** (vnext#1252). The pipeline
+  faults a reload in a `RequiresNew` unit of work, so the aggregate the run returns still said Busy — or
+  Active for an `updateData` or a `cancel`, which flip nothing in memory — and the sync response, built
+  from it, answered `"status": "A"` for a Faulted instance. `MarkInstanceFaultedAsync` now copies the
+  persisted status columns onto it (`Instance.MirrorPersistedFault`, no events) and aligns its change
+  tracker (`IInstanceRepository.AcceptPersistedStatusAsync`), so the run's commit cannot write a stale
+  status over the fault. The same alignment follows the reserved cancel's takeover of a Faulted instance
+  ([Well-Known Transitions](../domain/well-known-transitions.md#cancel-on-a-faulted-instance)). Pinned by
+  `InstanceIncidentPersistenceTests.MirroringThePersistedFault_LeavesTheCopyNothingToWrite` and
+  `…ACancelTakeoverAlignedOnTheCopy_IsNotWrittenOverAFaultThatFollows`.
+- **A hop that fails before its record is saved still leaves a record for retry** (vnext#1252).
+  `CreateTransitionRecordStep` runs the mapping, the key check and the data write (with the
+  master-schema check) before it saves the transition record. When one of them fails, it saves the
+  record unfinished first, then lets the failure travel on to the fault, so `retry` finds the hop
+  instead of answering `Instance:100028`. Only for hops retry can re-run: manual by definition, not an
+  error-boundary hop, not a retry's own re-run (its original record is still open), not `history: none`.
+  The save is best effort: when it fails, `FailedTransitionRecordNotSaved` (10272) is logged, retry still
+  answers `Instance:100028`, and the reserved cancel is the way out.
 
 ## Stack traces
 
@@ -125,7 +143,7 @@ incident like this (vnext#1268):
   hop's cause whatever it is, a cancellation included.
 - **Script line numbers.** A script's frames carry the line in the author's own source; how, and
   what it costs: [Script Context and Engine § Observability](script-context-and-engine.md#observability).
-- **The same detail in the log.** `TaskScriptFailed` (10268) logs a task script's exception once, in
+- **The same detail in the log.** `TaskScriptFailed` (10273) logs a task script's exception once, in
   the engine; `InstanceFaultedDueToPipelineError` (10130) carries the hop's cause;
   `StartTransitionMappingFailed` (10269) logs a start mapping that fails — the start answers with the
   error and records no incident; `ConditionScriptFailed` (10270) logs a rule script that throws, which records no incident.

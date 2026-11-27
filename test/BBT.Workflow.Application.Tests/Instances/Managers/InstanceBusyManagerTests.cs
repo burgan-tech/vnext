@@ -34,6 +34,8 @@ public sealed class InstanceBusyManagerTests
     private InstanceBusyManager CreateSut() =>
         new(
             _instanceRepository.Object,
+            new Mock<IInstanceIncidentRepository>().Object,
+            new Mock<IInstanceTransitionRepository>().Object,
             _uowManager.Object,
             _instanceCommandGateway.Object,
             NullLogger<InstanceBusyManager>.Instance);

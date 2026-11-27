@@ -129,6 +129,7 @@ public sealed partial class AgentComponentValidator(IOptions<AiAgentOptions>? op
                     errors.Add(new ValidationResult("Task tool requires 'binding.task' (a sys-tasks reference).", [$"{path}.binding.task"]));
                 if (tool.Binding.Mapping is not null)
                     ScriptCodeValidator.Validate(tool.Binding.Mapping, $"{path}.binding.mapping", errors);
+                ValidateTaskToolBlocks(tool.Binding, path, errors);
                 break;
 
             case AgentToolKind.Script:
@@ -154,6 +155,31 @@ public sealed partial class AgentComponentValidator(IOptions<AiAgentOptions>? op
                 break;
         }
     }
+
+    /// <summary>
+    /// Kind 1 <c>binding.input</c> / <c>binding.output</c>: validated like a task binding's blocks (paths, compiled
+    /// <c>set</c> expressions); a <c>binding.mapping</c> beside them is rejected.
+    /// </summary>
+    private static void ValidateTaskToolBlocks(AgentToolBinding binding, string path, IList<ValidationResult> errors)
+    {
+        if (binding.Input is null && binding.Output is null)
+            return;
+
+        if (binding.Mapping is not null)
+        {
+            errors.Add(new ValidationResult(
+                "A task tool cannot carry both a 'binding.mapping' script and declarative 'binding.input'/'binding.output' blocks; use one.",
+                [$"{path}.binding"]));
+        }
+
+        if (binding.Task is null)
+            return; // reported above
+
+        var onExecute = OnExecuteTask.Create(0, binding.Task, mapping: null, input: binding.Input, output: binding.Output);
+        MappingBlocks.ValidateBinding(onExecute, $"{path}.binding", errors);
+    }
+
+    private static readonly MappingBlockValidator MappingBlocks = new(BBT.Workflow.Scripting.Expressions.ExpressionCompiler.Shared);
 
     private static void ValidatePolicy(AgentPolicy? policy, string path, IList<ValidationResult> errors, AiAgentOptions? ceilings)
     {

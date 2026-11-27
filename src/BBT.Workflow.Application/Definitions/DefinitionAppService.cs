@@ -30,6 +30,7 @@ public sealed class DefinitionAppService(
     WorkflowCastProcessor castProcessor,
     IDomainCacheContext cacheContext,
     RowSecurityPublishCheck rowSecurityPublishCheck,
+    MappingBlockValidator mappingBlockValidator,
     IServiceScopeFactory scopeFactory,
     IServiceProvider serviceProvider)
     : ApplicationService(serviceProvider), IDefinitionAppService
@@ -93,6 +94,11 @@ public sealed class DefinitionAppService(
     private async Task<Result> ValidateComponentAsync(PublishInput input, CancellationToken cancellationToken)
     {
         var validationResult = componentValidatorProcessor.Validate(input.Flow, input.Attributes);
+
+        // Declarative task-binding mappings: paths parsed and expressions compiled now, so an authoring
+        // error carries its JSON location instead of surfacing at run time.
+        if (MappingBlockValidator.AppliesTo(input.Flow))
+            mappingBlockValidator.Validate(input.Flow, input.Attributes, validationResult);
 
         if (input.Flow == RuntimeSysSchemaInfo.Flows && DeclaresRowSecurity(input.Attributes))
             await AddRowSecurityFindingsAsync(input, validationResult, cancellationToken);

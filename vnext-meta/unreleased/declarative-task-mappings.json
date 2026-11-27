@@ -1,0 +1,75 @@
+{
+  "releaseNote": {
+    "summary": "A task binding can shape its input and write its output with declarative input/output set, into and select blocks (Dynamic Expresso, no .csx).",
+    "breaking": false,
+    "docs": []
+  },
+  "features": {
+    "engine": {
+      "declarativeTaskMappings": {
+        "since": "next",
+        "status": "stable",
+        "description": "Optional input and output blocks on a task binding (onExecuteTask) with select, into and set over JSON paths; values are Dynamic Expresso expressions over data, input, instance, now, user, context, task (the task's config), config (host configuration, same reach as GetConfigValue) and (output phase) result, with a urlEncode function. Input targets are fields of the task's own config ($.url, $.body.x, $.headers.x, ...) re-read through the task type's Configure parser, so an environment-driven URL needs no .csx. One instance-data append per mapping, no Roslyn compile, publish-time validation. Mutually exclusive with a mapping script on the same binding."
+      },
+      "resourceLockKeyExpression": {
+        "since": "next",
+        "status": "stable",
+        "description": "A transition resourceLock.keyExpression with location \"dynamicExpresso\" is a Dynamic Expresso expression over the standard slot variables (data, input, instance, now, user, context) whose string result is the lock key (the cache-key evaluator); no .csx needed. A dynamicExpresso-labelled C# key from before (the label used to be ignored) that does not evaluate as an expression still runs as a script, with the warning ResourceLockKeyExpressionRanAsScript (10283)."
+      },
+      "valueSlotDynamicExpresso": {
+        "since": "next",
+        "status": "stable",
+        "description": "Transition timer, workflow attributes.timeout.mapping, SubFlow overrides.timeout.mapping, agent prompt and agent decision.mapping (mode script) honour location \"dynamicExpresso\": an inline expression over data, input, instance, now, user, context (the decision adds outcome and candidates). Timer value: TimeSpan (duration), DateTime/DateTimeOffset (instant), ISO-8601 duration or date-time string, null (immediate); numbers are rejected. A dynamicExpresso-labelled C# script that does not evaluate as an expression still runs as C#, with the warning ScriptLabelledDynamicExpressoRanAsScript (10274); publish reports a non-compiling one as a warning, never an error. Agent hintsMapping stays C#."
+      },
+      "nestedTaskDeclarativeBlocks": {
+        "since": "next",
+        "status": "stable",
+        "description": "Declarative input/output blocks for tasks run outside a binding: CacheAside config sourceInput / sourceOutput (beside sourceMapping) and agent tool kind 1 binding.input / binding.output (beside binding.mapping). Same runner and variables as a task binding; publish validates them and rejects a script and blocks together; a stored definition with both runs the script."
+      },
+      "dynamicExpressoSlotStandardVariables": {
+        "since": "next",
+        "status": "stable",
+        "description": "One variable standard for every Dynamic Expresso slot: condition rules (auto-transition, view, transition/function schemas[] and contract, long-poll, state-notification rule) and string keys (CacheAside key, function cache keyExpression / generationKeyExpression, resourceLock.keyExpression) bind data, input, instance (camelCase), now and user beside the unchanged legacy context, lazily (a context-only rule resolves nothing extra). Every existing context.* expression compiles and returns the same value; assignment operators are disabled in these slots. A failing rule does not select; a key fails as before; user.roles on a hop with no caller fails (never an empty set) and a role-provider failure keeps each site's Authorization:110006 outcome. sha256 and varyKey stay available in keys. Agent tool binding.code keeps args/data(ExpandoObject)/now."
+      },
+      "headersExpressionVariable": {
+        "since": "next",
+        "status": "stable",
+        "description": "Every Dynamic Expresso slot that binds the standard variables (task mapping input/output set expressions, condition rules, string keys, timer / timeout / agent prompt / agent decision value slots) has a headers variable: the incoming request's headers, read-only, headers[\"x-channel\"] (the value or null, case-insensitive name) and headers.has(\"x-channel\"). A view over the same dictionary as context.Headers, bound only when used, never copied: Workflow:HeaderExposure:Deny removes a name from both alike, and the runtime's transport headers are never reachable. Hyphenated names need the indexer. Not a select root (use a set expression). In a task mapping, task.headers is the task's configured outgoing headers, headers the incoming ones. context.Headers is unchanged; agent tool binding.code has no headers."
+      },
+      "uniformHopInput": {
+        "since": "next",
+        "status": "stable",
+        "description": "The expression variable input is one value per hop in every Dynamic Expresso slot: the raw request payload that triggered the hop (start attributes, transition / updateData body, the payload an event delivery hands the pipeline; a function's request body). It no longer depends on which step built the hop's context first: a resource-lock key and an automatic rule now see the request body on a transition without tasks (before: null), and a timer armed by the hop sees it too. Hops without a request payload (automatic continuation, fired timer, SubFlow resume) and read paths (view, state/data functions, long-poll, notification, schema read) see null. Transition schemas[] rules see the transition request body. Task mappings keep the transition record body exactly as before; context.Body is unchanged everywhere."
+      },
+      "declarativeTransitionAndSubFlowBlocks": {
+        "since": "next",
+        "status": "stable",
+        "description": "Declarative blocks beside the C# mapping on three more sites: a transition output (transitions, startTransition, shared, cancel/updateData/exit; not automatic or scheduled), a SubFlow input (start document attributes, headers, key, tags) and a SubFlow output (result = { data, status }, runs on completion and fault; status is \"completed\" or \"faulted\"). Delta starts empty, select reads result where the site has one; exclusive with mapping at publish, a stored definition with both runs the script. Failures keep the scripts' error codes and add log events 10277, 10278, 10279."
+      }
+    }
+  },
+  "deprecations": [
+    {
+      "id": "task-mapping-dynamic-expresso-location",
+      "type": "behavior",
+      "component": "task",
+      "path": "onExecuteTask.mapping.location",
+      "deprecatedSince": "next",
+      "removedAt": null,
+      "replacement": "Use the declarative input and output blocks (select, into, set) for expression-based mappings, or label the C# mapping script with its file location",
+      "severity": "warning",
+      "message": "The dynamicExpresso location on a task binding's mapping is ignored: the mapping runs as a C# IMapping script, as it always has (an empty one is a no-op). Publish now reports a warning for it; behaviour is unchanged."
+    },
+    {
+      "id": "value-slot-dynamic-expresso-csharp-script",
+      "type": "behavior",
+      "component": "workflow",
+      "path": "transitions[].timer.location",
+      "deprecatedSince": "next",
+      "removedAt": null,
+      "replacement": "Rewrite the script as a Dynamic Expresso expression, or label the C# script with its file location",
+      "severity": "warning",
+      "message": "A C# script labelled location dynamicExpresso in a transition timer, workflow or SubFlow-override timeout mapping, agent prompt, agent decision mapping or resource-lock keyExpression is now evaluated as an expression first; when that fails it still runs as C# (warning 10274, 10283 for a lock key). The fallback will be removed in a later release."
+    }
+  ]
+}

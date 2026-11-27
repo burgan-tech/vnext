@@ -33,6 +33,18 @@ public interface IInstanceBusyManager
     Task<bool> MarkBusyAsync(Guid instanceId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The reserved cancel's takeover of a Faulted instance (vnext#1252): Faulted → Busy, its open
+    /// incidents resolved and its open transition records closed as failed, all in one transaction, applied
+    /// in memory on <paramref name="instance"/> as well. Nothing is written when the instance is no longer
+    /// Faulted — a retry or another cancel took it first.
+    /// </summary>
+    /// <param name="instance">The caller's tracked copy, with its incidents loaded. After the takeover commits, its
+    /// change-tracker baseline is aligned (<c>IInstanceRepository.AcceptPersistedStatusAsync</c>), so the caller's
+    /// own commit does not write the pre-takeover columns again.</param>
+    /// <returns>True when this call took the instance over; false when it was no longer Faulted.</returns>
+    Task<bool> TryUnfaultIntoBusyAsync(Instance instance, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Marks an instance as Busy and propagates down the active SubFlow chain via the
     /// instance command gateway (cross-domain capable).
     /// Idempotent: silently no-ops when the instance is already Busy or Completed.

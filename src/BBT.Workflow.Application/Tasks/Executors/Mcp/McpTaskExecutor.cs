@@ -6,6 +6,7 @@ using BBT.Workflow.Definitions;
 using BBT.Workflow.Execution;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Tasks.Mapping;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -18,41 +19,28 @@ namespace BBT.Workflow.Tasks.Executors;
 /// The endpoint host is checked against <c>Mcp:AllowedHosts</c> on every call and secrets are resolved
 /// at call time, never read from the component.
 /// </summary>
+/// <param name="mappingRunner">The binding mapping runner (DI); null runs mappings over <paramref name="scriptEngine"/>.</param>
 public sealed class McpTaskExecutor(
     IMcpClientGateway gateway,
     ISecretResolver secretResolver,
     IScriptEngine scriptEngine,
     IOptions<McpOptions> options,
-    ILogger<McpTaskExecutor> logger)
-    : TaskExecutorBase<McpTask>(logger)
+    ILogger<McpTaskExecutor> logger,
+    ITaskMappingRunner? mappingRunner = null)
+    : TaskExecutorBase<McpTask>(logger, mappingRunner ?? RoutingTaskMappingRunner.CreateDefault(scriptEngine))
 {
     /// <inheritdoc />
     public override TaskType TaskType => TaskType.Mcp;
 
     /// <inheritdoc />
-    protected override async Task<Result<ScriptResponse?>> PrepareInputAsync(
-        McpTask task,
-        TaskExecutorContext context,
-        CancellationToken cancellationToken)
-    {
-        var mapping = context.OnExecuteTask.Mapping;
-        if (mapping is null || !mapping.HasMappingCode)
-            return Result<ScriptResponse?>.Ok(null);
+    protected override string InputMappingFailurePrefix => "MCP task input handler failed: ";
 
-        var result = await ResultExtensions.TryAsync<ScriptResponse?>(async ct =>
-        {
-            var runner = await GetOrCompileMappingAsync<IMapping>(scriptEngine, context, ct);
-            return await runner.InputHandler(task, context.ScriptContext);
-        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "MCP task input handler failed"));
+    /// <inheritdoc />
+    protected override string OutputMappingFailurePrefix => "MCP task output handler failed: ";
 
-        if (!result.IsSuccess)
-        {
-            Logger.TaskInputHandlerFailed(task.Key, TaskType.ToString(),
-                context.ScriptContext.Instance?.Id ?? Guid.Empty, result.Error.Message ?? "Unknown error");
-        }
-
-        return result;
-    }
+    /// <inheritdoc />
+    /// <remarks>The former MCP output block returned the failure without logging it; kept.</remarks>
+    protected override bool LogsScriptOutputMappingFailures => false;
 
     /// <inheritdoc />
     protected override async Task<Result<TaskInvocationResult>> InvokeAsync(
@@ -133,27 +121,6 @@ public sealed class McpTaskExecutor(
 
         (bool, McpCallResult, string?, int, long) Fail(string message, int status) =>
             (false, McpCallResult.Failure(message), message, status, (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds);
-    }
-
-    /// <inheritdoc />
-    protected override async Task<Result<object?>> ProcessOutputAsync(
-        McpTask task,
-        TaskInvocationResult invocationResult,
-        TaskExecutorContext context,
-        CancellationToken cancellationToken)
-    {
-        var mapping = context.OnExecuteTask.Mapping;
-        if (mapping is null || !mapping.HasMappingCode)
-            return Result<object?>.Ok(invocationResult.Data);
-
-        UpdateScriptContextWithResponse(task.Key, invocationResult, context.ScriptContext, context.ResponseVariableKey);
-
-        return await ResultExtensions.TryAsync<object?>(async ct =>
-        {
-            var runner = await GetOrCompileMappingAsync<IMapping>(scriptEngine, context, ct);
-            var output = await runner.OutputHandler(context.ScriptContext);
-            return output.Data;
-        }, cancellationToken, ex => ScriptDiagnostics.TaskScriptError(context.ScriptContext, ex, "MCP task output handler failed"));
     }
 
     private static TaskInvocationResult ToInvocationResult(McpCallResult call, string? error, int statusCode, long elapsedMs)

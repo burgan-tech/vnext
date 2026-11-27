@@ -22,6 +22,20 @@ public interface IInstanceTransitionRepository : IRepository<InstanceTransition,
     Task<InstanceTransition?> GetLatestIncompleteAsync(Guid instanceId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Closes every open (unfinished) record of the instance as failed (<see cref="InstanceTransition.Failed"/>:
+    /// a finish time, no target state), so retry no longer finds them. For a hop the instance abandons — the
+    /// failed hop of a Faulted instance that the reserved cancel closes.
+    /// </summary>
+    /// <returns>How many records were closed.</returns>
+    Task<int> FailOpenAsync(Guid instanceId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Stops tracking a record whose save failed, so the unit of work's own commit does not replay the INSERT.
+    /// For a best-effort save (the record of a hop that failed before its own save); a no-op for an untracked one.
+    /// </summary>
+    Task ForgetAsync(InstanceTransition transition);
+
+    /// <summary>
     /// Read-only (AsNoTracking) lookup by id. For callers that only compute values to feed a
     /// set-based write (<see cref="UpdateCompletedAsync"/>) — a tracked load would make the later
     /// ambient flush rewrite the same row a second time.
