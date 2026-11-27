@@ -108,7 +108,9 @@ public sealed class InstanceCommandAppService(
         if (existingInstanceResult.HasValue)
         {
             if (input.Sync && existingInstanceResult.Value.IsSuccess)
-                return await EnrichSyncOutputAsync(existingInstanceResult.Value.Value!, existingInstanceResult.Value.Value!.Id, workflow, new AuthorizationRequestContext(input.Headers), cancellationToken);
+                return await EnrichSyncOutputAsync(existingInstanceResult.Value.Value!, existingInstanceResult.Value.Value!.Id, workflow, input,
+                    // Idempotent answer: no hop ran here (nothing admitted or swapped), so there is no `input`.
+                    hopInput: null, cancellationToken);
             return existingInstanceResult.Value;
         }
 
@@ -562,7 +564,9 @@ public sealed class InstanceCommandAppService(
             // sync run returns the full instance, a forced-async accept returns identity only — so the body
             // matches the 200/202 the controller shapes from ExecutedAsync.
             .ThenAsync(output => context.Mode == ExecMode.Sync && !input.SuppressResponseEnrichment
-                ? EnrichSyncOutputAsync(output, output.Id, data.Workflow, new AuthorizationRequestContext(input.Headers), cancellationToken)
+                ? EnrichSyncOutputAsync(output, output.Id, data.Workflow, input,
+                    // Offloaded in place before the instance row (ApplyFileOffloadAsync): handles, never bytes.
+                    hopInput: input.Instance.Attributes, cancellationToken)
                 : Task.FromResult(Result<StartInstanceOutput>.Ok(output)));
     }
 
@@ -836,7 +840,8 @@ public sealed class InstanceCommandAppService(
             // meanwhile settled terminal); an async client and a runtime-internal relay get identity.
             if (proxiedOutput.ExecutedAsync != true && !input.SuppressResponseEnrichment)
                 return await EnrichSyncOutputAsync(proxiedOutput, proxiedOutput.Id, workflowDefinition,
-                    new AuthorizationRequestContext(input.Headers), cancellationToken);
+                    // The hop ran at the leaf (which also swapped the payload): no `input` here.
+                    input, hopInput: null, cancellationToken);
 
             proxiedOutput.Key = snapshot.Key;
             return proxyResult;
@@ -864,7 +869,12 @@ public sealed class InstanceCommandAppService(
                 // status. A runtime-internal relay (SuppressResponseEnrichment) awaits the pipeline like any
                 // sync caller but takes the identity-only response — see TransitionInput.
                 if (context.Mode == ExecMode.Sync && !input.SuppressResponseEnrichment)
-                    return EnrichSyncOutputAsync(output, output.Id, workflowDefinition, new AuthorizationRequestContext(input.Headers), cancellationToken);
+                    return EnrichSyncOutputAsync(output, output.Id, workflowDefinition, input,
+                        // The pipeline's hop input — the payload after the x-storage swap (FileAdmission writes the
+                        // handles back to context.Data), never TransitionInput.Data, which keeps the inline bytes.
+                        // A payload this instance did not admit (FileAdmission skipped it for the active SubFlow): no `input`.
+                        hopInput: context.HopPayloadNotAdmitted ? null : context.Data?.Attributes,
+                        cancellationToken);
                 output.Key = snapshot.Key;
                 // Identity-only relay that still ran sync: carry the state from the pipeline's own
                 // instance, no read (vnext#1182). Null when the pipeline answered from a ClientResponse.
@@ -982,32 +992,46 @@ public sealed class InstanceCommandAppService(
     /// <summary>
     /// Enriches a sync=true StartInstanceOutput with attributes (schema-filtered), etag, entityEtag and key.
     /// The instance is reloaded from the repository to ensure post-execution state is reflected.
+    /// <paramref name="input"/> is the start request: its actor and headers back a declarative output block's
+    /// <c>user</c> and <c>headers</c>; <paramref name="hopInput"/> is its <c>input</c> — the admitted (swapped)
+    /// payload of the hop this process ran, or null when none ran here.
     /// </summary>
     private Task<Result<StartInstanceOutput>> EnrichSyncOutputAsync(
         StartInstanceOutput output,
         Guid instanceId,
         Definitions.Workflow? workflow,
-        AuthorizationRequestContext? requestContext,
+        StartInstanceInput input,
+        object? hopInput,
         CancellationToken cancellationToken)
-        => EnrichOutputCoreAsync(output, instanceId, workflow, requestContext, cancellationToken);
+        => EnrichOutputCoreAsync(output, instanceId, workflow, new AuthorizationRequestContext(input.Headers),
+            // A start is always a user hop (the start transition's actor).
+            new WorkflowOutputHop(hopInput, Shared.ExecutionActor.User, input.Headers),
+            cancellationToken);
 
     /// <summary>
     /// Enriches a sync=true TransitionOutput with attributes (schema-filtered), etag, entityEtag and key.
     /// The instance is reloaded from the repository to ensure post-execution state is reflected.
+    /// <paramref name="input"/> is the transition request: its actor and headers back a declarative output block's
+    /// <c>user</c> and <c>headers</c>; <paramref name="hopInput"/> is its <c>input</c> — the admitted (swapped)
+    /// payload of the hop this process ran, or null when none ran here.
     /// </summary>
     private Task<Result<TransitionOutput>> EnrichSyncOutputAsync(
         TransitionOutput output,
         Guid instanceId,
         Definitions.Workflow? workflow,
-        AuthorizationRequestContext? requestContext,
+        TransitionInput input,
+        object? hopInput,
         CancellationToken cancellationToken)
-        => EnrichOutputCoreAsync(output, instanceId, workflow, requestContext, cancellationToken);
+        => EnrichOutputCoreAsync(output, instanceId, workflow, new AuthorizationRequestContext(input.Headers),
+            new WorkflowOutputHop(hopInput, input.Actor, input.Headers),
+            cancellationToken);
 
     private async Task<Result<TOutput>> EnrichOutputCoreAsync<TOutput>(
         TOutput output,
         Guid instanceId,
         Definitions.Workflow? workflow,
         AuthorizationRequestContext? requestContext,
+        WorkflowOutputHop? hop,
         CancellationToken cancellationToken)
         where TOutput : class
     {
@@ -1072,19 +1096,25 @@ public sealed class InstanceCommandAppService(
         // Workflow output mapping bypasses the standard envelope, but NEVER for subflow instances:
         // correlation forward (sub start) and subflow transitions rely on the standard model, so
         // output is ignored even when configured. With extensions gone it is the only consumer of
-        // the ScriptContext here, so building one is now gated on the script actually existing —
-        // ScriptContext construction serializes the instance's whole latest data.
-        if (workflow is not null && !instance.IsSubFlow && workflow.Output is { HasMappingCode: true })
+        // the ScriptContext here, so building one is now gated on an output (script or declarative
+        // block) actually existing — ScriptContext construction serializes the instance's whole latest data.
+        if (workflow is not null && !instance.IsSubFlow
+            && (workflow.Output is { HasMappingCode: true } || workflow.OutputBlock is not null))
         {
-            var scriptContext = await scriptContextFactory.NewBuilder(instanceRepository)
+            var builder = scriptContextFactory.NewBuilder(instanceRepository)
                 .WithWorkflow(workflow)
                 .WithInstance(instance)
                 .WithRuntime(runtimeInfoProvider)
                 .WithTransition(string.Empty)
-                .WithBody(latestData?.Data ?? new JsonData("{}"))
-                .BuildAsync(cancellationToken);
+                .WithBody(latestData?.Data ?? new JsonData("{}"));
 
-            var outputResult = await workflowOutputMappingService.ApplyAsync(workflow, scriptContext, cancellationToken);
+            // A block reads the request headers as `headers`; the script's context stays as it always was.
+            if (workflow.OutputBlock is not null && hop?.Headers is { } hopHeaders)
+                builder = builder.WithHeaders(new Dictionary<string, string?>(hopHeaders));
+
+            var scriptContext = await builder.BuildAsync(cancellationToken);
+
+            var outputResult = await workflowOutputMappingService.ApplyAsync(workflow, scriptContext, hop, cancellationToken);
             if (outputResult.IsSuccess && outputResult.Value is { } wo)
                 outputResponse = wo;
         }

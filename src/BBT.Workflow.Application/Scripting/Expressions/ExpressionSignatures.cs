@@ -110,6 +110,9 @@ public static class ExpressionSignatures
     private static readonly ExpressionSignature TransitionOutput = BuildMapping("transition-output", ScopeKind.TransitionOutput);
     private static readonly ExpressionSignature SubFlowInput = BuildMapping("subflow-input", ScopeKind.SubFlowInput);
     private static readonly ExpressionSignature SubFlowOutput = BuildMapping("subflow-output", ScopeKind.SubFlowOutput);
+    private static readonly ExpressionSignature EventInput = BuildMapping("event-input", ScopeKind.EventInput);
+    private static readonly ExpressionSignature WorkflowOutput = BuildMapping("workflow-output", ScopeKind.WorkflowOutput);
+    private static readonly ExpressionSignature FunctionOutput = BuildMapping("function-output", ScopeKind.FunctionOutput);
 
     /// <summary>
     /// Value slots outside task mappings (transition timer, workflow timeout, SubFlow timeout override, agent prompt):
@@ -147,10 +150,15 @@ public static class ExpressionSignatures
     /// <c>now</c> (<see cref="DateTimeOffset"/>), <c>user</c> (<see cref="ExpressionUser"/>), <c>context</c>
     /// (<see cref="ExpressoRuleContext"/>); in both mapping phases also <c>task</c> (<see cref="RuleJsonDynamic"/>, the task's
     /// <c>config</c>), <c>config</c> (<see cref="ExpressionConfig"/>) and the <c>urlEncode</c> function; plus <c>result</c>
-    /// (<see cref="RuleJsonDynamic"/>) for <see cref="ScopeKind.MappingOutput"/> and <see cref="ScopeKind.SubFlowOutput"/>;
+    /// (<see cref="RuleJsonDynamic"/>) for <see cref="ScopeKind.MappingOutput"/>, <see cref="ScopeKind.SubFlowOutput"/> and
+    /// <see cref="ScopeKind.FunctionOutput"/>;
     /// and last, in every kind, <c>headers</c> (<see cref="ExpressionHeaders"/>, the incoming request's headers).
-    /// <see cref="ScopeKind.TransitionOutput"/> and <see cref="ScopeKind.SubFlowInput"/> are the condition variables
-    /// (no <c>task</c>, <c>config</c>, <c>urlEncode</c> or <c>result</c>). <see cref="object"/> out, assignment
+    /// <see cref="ScopeKind.TransitionOutput"/>, <see cref="ScopeKind.SubFlowInput"/> and <see cref="ScopeKind.WorkflowOutput"/>
+    /// are the condition variables (no <c>task</c>, <c>config</c>, <c>urlEncode</c> or <c>result</c>);
+    /// <see cref="ScopeKind.FunctionOutput"/> adds <c>result</c> to them (its <c>user</c> is bound but never available: a
+    /// function output has no caller); <see cref="ScopeKind.EventInput"/> has only <c>input</c>, <c>now</c>, <c>context</c>
+    /// and <c>headers</c> (an event has no instance data, instance or caller).
+    /// <see cref="object"/> out, assignment
     /// operators disabled (<see cref="AssignmentOperators.None"/>). Each kind has its own
     /// signature name, so the compile cache never mixes them.
     /// </summary>
@@ -162,6 +170,9 @@ public static class ExpressionSignatures
         ScopeKind.TransitionOutput => TransitionOutput,
         ScopeKind.SubFlowInput => SubFlowInput,
         ScopeKind.SubFlowOutput => SubFlowOutput,
+        ScopeKind.EventInput => EventInput,
+        ScopeKind.WorkflowOutput => WorkflowOutput,
+        ScopeKind.FunctionOutput => FunctionOutput,
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null)
     };
 
@@ -179,6 +190,20 @@ public static class ExpressionSignatures
 
     private static ExpressionSignature BuildMapping(string name, ScopeKind kind)
     {
+        if (kind == ScopeKind.EventInput)
+        {
+            // An event mapping runs before any instance is resolved: no data, instance or user to read.
+            return new ExpressionSignature(
+                name,
+                [
+                    new Parameter(ExpressionScope.InputVariable, typeof(RuleJsonDynamic)),
+                    new Parameter(ExpressionScope.NowVariable, typeof(DateTimeOffset)),
+                    new Parameter(ExpressionScope.ContextVariable, typeof(ExpressoRuleContext)),
+                    HeadersParameter
+                ],
+                typeof(object), NoFunctions, AssignmentOperators.None);
+        }
+
         var parameters = MappingVariables();
         var isTask = kind is ScopeKind.MappingInput or ScopeKind.MappingOutput;
         if (isTask)
@@ -187,7 +212,7 @@ public static class ExpressionSignatures
             parameters.Add(new Parameter(ExpressionScope.ConfigVariable, typeof(ExpressionConfig)));
         }
 
-        if (kind is ScopeKind.MappingOutput or ScopeKind.SubFlowOutput)
+        if (kind is ScopeKind.MappingOutput or ScopeKind.SubFlowOutput or ScopeKind.FunctionOutput)
             parameters.Add(new Parameter(ExpressionScope.ResultVariable, typeof(RuleJsonDynamic)));
 
         parameters.Add(HeadersParameter);

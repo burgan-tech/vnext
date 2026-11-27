@@ -27,7 +27,16 @@ public enum ScopeKind
     SubFlowInput,
 
     /// <summary>A SubFlow's declarative output block (child completion): the condition variables plus <c>result</c>.</summary>
-    SubFlowOutput
+    SubFlowOutput,
+
+    /// <summary>An event's declarative input block: <c>input</c> (the event payload), <c>now</c>, <c>context</c>, <c>headers</c> only.</summary>
+    EventInput,
+
+    /// <summary>A workflow's declarative output block (the sync response): the condition variables.</summary>
+    WorkflowOutput,
+
+    /// <summary>A function's declarative output block: the condition variables plus <c>result</c> (every executed task's response).</summary>
+    FunctionOutput
 }
 
 /// <summary>
@@ -43,8 +52,10 @@ public enum ScopeKind
 /// (<see cref="ScriptContext.HopInput"/>; never the phase-dependent <see cref="ScriptContext.Body"/>), <c>instance</c> the read-only instance view,
 /// <c>now</c> one clock reading per scope, <c>user</c> the caller (fail-closed roles), <c>context</c> the
 /// legacy <see cref="ExpressoRuleContext"/>, <c>headers</c> the incoming request's headers (<see cref="ExpressionHeaders"/>, a
-/// view over <see cref="ScriptContext.Headers"/>: the <c>Workflow:HeaderExposure:Deny</c> names are absent), and in the output phase <c>result</c> the task's standard
-/// response (<c>body</c>, <c>headers</c>, <c>statusCode</c>). In both mapping phases <c>task</c> is the task's
+/// view over <see cref="ScriptContext.Headers"/>: the <c>Workflow:HeaderExposure:Deny</c> names are absent), and <c>result</c> on a result site: the task's standard
+/// response (<c>body</c>, <c>headers</c>, <c>statusCode</c>) for a task output mapping, <c>{ data, status }</c> for a SubFlow
+/// output, <c>{ &lt;task&gt;: { body, headers, statusCode } }</c> for a function output (none for an event input or a
+/// workflow output). In both mapping phases <c>task</c> is the task's
 /// <c>config</c> JSON and <c>config</c> the host configuration (<see cref="ExpressionConfig"/>), both given by
 /// <see cref="WithTask"/>. <c>data</c>, <c>instance.Data</c>, a
 /// <see cref="JsonElement"/> <c>input</c> and <c>result</c> are borrowed (<see cref="RuleJsonDynamic.Borrow"/>), never
@@ -130,7 +141,7 @@ public sealed class ExpressionScope
     /// <param name="context">The execution context the variables are read from.</param>
     /// <param name="clock">Source of <c>now</c> (read once per scope).</param>
     /// <param name="caller">Caller whose roles back <c>user</c>; <see cref="NullCallerAccessor"/> on System hops.</param>
-    /// <param name="kind">Expression family; <c>result</c> exists only for <see cref="ScopeKind.MappingOutput"/> and <see cref="ScopeKind.SubFlowOutput"/>.</param>
+    /// <param name="kind">Expression family; <c>result</c> exists only for <see cref="ScopeKind.MappingOutput"/>, <see cref="ScopeKind.SubFlowOutput"/> and <see cref="ScopeKind.FunctionOutput"/>.</param>
     /// <param name="result">The task's standard response (output phase); borrowed, so its document must outlive the scope.</param>
     public static ExpressionScope Create(
         ScriptContext context, TimeProvider clock, ICallerAccessor caller, ScopeKind kind, JsonElement? result = null)
@@ -149,7 +160,7 @@ public sealed class ExpressionScope
     /// <param name="context">The execution context the variables are read from.</param>
     /// <param name="clock">Source of <c>now</c> (read once per scope).</param>
     /// <param name="caller">Caller whose roles back <c>user</c>; <see cref="NullCallerAccessor"/> on System hops.</param>
-    /// <param name="kind">Expression family; <c>result</c> exists only for <see cref="ScopeKind.MappingOutput"/> and <see cref="ScopeKind.SubFlowOutput"/>.</param>
+    /// <param name="kind">Expression family; <c>result</c> exists only for <see cref="ScopeKind.MappingOutput"/>, <see cref="ScopeKind.SubFlowOutput"/> and <see cref="ScopeKind.FunctionOutput"/>.</param>
     /// <param name="result">The <c>result</c> variable (a borrowed view), or null.</param>
     public static ExpressionScope Create(
         ScriptContext context, TimeProvider clock, ICallerAccessor caller, ScopeKind kind, RuleJsonDynamic? result)
@@ -253,7 +264,7 @@ public sealed class ExpressionScope
         NowVariable => _now ??= _clock.GetUtcNow(),
         UserVariable => _user ??= new ExpressionUser(this),
         ContextVariable => _ruleContext ??= ExpressoRuleContextMapper.FromScriptContext(_context),
-        ResultVariable when _kind is ScopeKind.MappingOutput or ScopeKind.SubFlowOutput => ResultView(),
+        ResultVariable when _kind is ScopeKind.MappingOutput or ScopeKind.SubFlowOutput or ScopeKind.FunctionOutput => ResultView(),
         TaskVariable when IsTaskKind => TaskView(),
         ConfigVariable when IsTaskKind => _config ??= new ExpressionConfig(_configuration),
         // The script view (deny list applied), never TransportHeaders; wrapped, not copied.

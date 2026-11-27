@@ -15,7 +15,9 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
         Flow = RuntimeSysSchemaInfo.Functions;
     }
 
-    [JsonConstructor]
+    /// <summary>
+    /// Creates a function whose <c>output</c>, when given, is a C# output script.
+    /// </summary>
     public Function(
         TaskScope scope,
         OnExecuteTask? task,
@@ -27,12 +29,29 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
         List<string>? verbs = null,
         ExecutionLogSetting? executionLog = null,
         LanguageLabel[]? labels = null
+    ) : this(scope, task, onExecutionTasks, output is null ? null : new OutputDefinition(output, null),
+        roles, rawResponse, cache, verbs, executionLog, labels)
+    {
+    }
+
+    [JsonConstructor]
+    private Function(
+        TaskScope scope,
+        OnExecuteTask? task,
+        List<OnExecuteTask>? onExecutionTasks,
+        OutputDefinition? output,
+        List<RoleGrant>? roles,
+        bool rawResponse,
+        FunctionCache? cache,
+        List<string>? verbs,
+        ExecutionLogSetting? executionLog,
+        LanguageLabel[]? labels
     ) : this()
     {
         Scope = scope;
         Task = task;
         this.onExecutionTasks = onExecutionTasks ?? [];
-        Output = output;
+        this.output = output;
         this.roles = roles ?? [];
         RawResponse = rawResponse;
         Cache = cache;
@@ -83,12 +102,26 @@ public sealed class Function : IDomainEntity, IFunctionReference, IReferenceSett
     public IReadOnlyCollection<OnExecuteTask> OnExecutionTasks => onExecutionTasks.AsReadOnly();
 
     /// <summary>
+    /// The authored <c>output</c> member: a script or a declarative block (see <see cref="OutputDefinition"/>).
+    /// </summary>
+    [JsonInclude] [JsonPropertyName("output")]
+    private readonly OutputDefinition? output;
+
+    /// <summary>
     /// Optional output mapping script (implements <c>IOutputHandler</c>).
     /// When present, the script is compiled at runtime and its <c>OutputHandler</c> result
     /// is used as the function response. When absent, legacy single-task extraction is used.
+    /// <c>null</c> when <c>output</c> is a block.
     /// </summary>
-    [JsonInclude] [JsonPropertyName("output")]
-    public ScriptCode? Output { get; private set; }
+    [JsonIgnore]
+    public ScriptCode? Output => output?.Script;
+
+    /// <summary>
+    /// Optional declarative output block shaping the response document <c>{ data, statusCode, headers }</c>
+    /// without a script. <c>null</c> when <c>output</c> is a script or absent.
+    /// </summary>
+    [JsonIgnore]
+    public MappingBlock? OutputBlock => output?.Block;
 
     /// <summary>
     /// When <c>true</c>, the response data is returned as-is without wrapping it in

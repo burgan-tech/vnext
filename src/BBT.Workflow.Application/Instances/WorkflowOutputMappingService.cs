@@ -1,34 +1,77 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using BBT.Aether.Results;
+using BBT.Workflow.Authorization;
+using BBT.Workflow.Definitions;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Scripting.Caller;
+using BBT.Workflow.Scripting.Declarative;
+using BBT.Workflow.Scripting.Expressions;
 using Microsoft.Extensions.Logging;
 
 namespace BBT.Workflow.Instances;
 
 /// <inheritdoc cref="IWorkflowOutputMappingService" />
+/// <remarks>
+/// <para>
+/// Two shapes of the workflow <c>output</c>: a script (<see cref="IOutputHandler"/>) or, since Phase C2, a declarative
+/// block (<see cref="Definitions.Workflow.OutputBlock"/>). A stored definition holds one or the other (same JSON key).
+/// Both run under the same <c>Script.Execute</c> span (kind <c>workflowOutput</c>) and share the failure path: the
+/// failure is logged (<c>WorkflowOutputScriptFailed</c>), the span is marked as an error and the caller keeps the
+/// standard envelope. Registered scoped.
+/// </para>
+/// </remarks>
+/// <param name="scriptEngine">Compiles the <c>output</c> script.</param>
+/// <param name="logger">Logger for output mapping failures.</param>
+/// <param name="callerAccessorFactory">Resolves the hop's caller for the block's <c>user</c>; no caller when null.</param>
+/// <param name="expressionCompiler">Compiler for the block's expressions; the shared one when null.</param>
+/// <param name="clock">Source of the block's <c>now</c>; the system clock when null.</param>
 public sealed class WorkflowOutputMappingService(
     IScriptEngine scriptEngine,
-    ILogger<WorkflowOutputMappingService> logger)
+    ILogger<WorkflowOutputMappingService> logger,
+    ICallerAccessorFactory? callerAccessorFactory = null,
+    IExpressionCompiler? expressionCompiler = null,
+    TimeProvider? clock = null)
     : IWorkflowOutputMappingService
 {
+    private const string ScriptKind = "workflowOutput";
+    private const string OutputPhase = "output";
+
+    private readonly IExpressionCompiler _compiler = expressionCompiler ?? ExpressionCompiler.Shared;
+    private readonly TimeProvider _clock = clock ?? TimeProvider.System;
+
     /// <inheritdoc />
     public async Task<Result<WorkflowOutputResult?>> ApplyAsync(
         Definitions.Workflow workflow,
         ScriptContext scriptContext,
+        WorkflowOutputHop? hop,
         CancellationToken cancellationToken = default)
     {
-        // Not configured → signal "no output" so the caller keeps the standard envelope.
-        if (workflow.Output is null || !workflow.Output.HasMappingCode)
-            return Result<WorkflowOutputResult?>.Ok(null);
+        if (workflow.Output is { HasMappingCode: true } script)
+            return await ApplyScriptAsync(workflow, script, scriptContext, cancellationToken);
 
-        using var activity = ScriptActivityHelper.StartExecuteActivity("workflowOutput");
+        if (workflow.OutputBlock is { } block)
+            return await ApplyBlockAsync(workflow, block, scriptContext, hop, cancellationToken);
+
+        // Not configured → signal "no output" so the caller keeps the standard envelope.
+        return Result<WorkflowOutputResult?>.Ok(null);
+    }
+
+    private async Task<Result<WorkflowOutputResult?>> ApplyScriptAsync(
+        Definitions.Workflow workflow,
+        ScriptCode script,
+        ScriptContext scriptContext,
+        CancellationToken cancellationToken)
+    {
+        using var activity = ScriptActivityHelper.StartExecuteActivity(ScriptKind);
 
         try
         {
             var handler = await scriptEngine.CompileToInstanceAsync<IOutputHandler>(
-                workflow.Output,
+                script,
                 flowScripts: workflow.Scripts,
                 cancellationToken: cancellationToken);
 
@@ -48,12 +91,76 @@ public sealed class WorkflowOutputMappingService(
         }
         catch (Exception ex)
         {
-            logger.WorkflowOutputScriptFailed(workflow.Key, ex);
-            // The caller degrades to the standard envelope, but the script itself failed.
-            activity.SetError(ex);
-            // On failure fall back to the standard envelope (non-blocking).
-            return Result<WorkflowOutputResult?>.Ok(null);
+            return Fallback(workflow, activity, ex);
         }
+    }
+
+    /// <summary>
+    /// Runs the declarative <c>output</c> block into an empty document <c>{ data, statusCode, headers }</c>. Variables:
+    /// <c>data</c> (latest data as stored), <c>input</c> (the hop's request payload), <c>instance</c>, <c>now</c>,
+    /// <c>user</c> (the hop's caller), <c>context</c>, <c>headers</c>. Any failure — a plan that does not build, a
+    /// failing expression, a document of the wrong shape — takes the script's failure path.
+    /// </summary>
+    private async Task<Result<WorkflowOutputResult?>> ApplyBlockAsync(
+        Definitions.Workflow workflow,
+        MappingBlock block,
+        ScriptContext scriptContext,
+        WorkflowOutputHop? hop,
+        CancellationToken cancellationToken)
+    {
+        using var activity = ScriptActivityHelper.StartExecuteActivity(ScriptKind);
+
+        try
+        {
+            var plan = DeclarativePlanCache.GetOrBuild(_compiler, block, DeclarativeSiteKind.WorkflowOutput);
+            if (!plan.IsSuccess)
+                return Fallback(workflow, activity, BlockFailure(plan.Error));
+
+            scriptContext.BindHopInput(hop?.Input);
+            var caller = callerAccessorFactory is not null && hop is not null
+                ? callerAccessorFactory.ForHop(hop.Actor, hop.Headers, cancellationToken)
+                : NullCallerAccessor.Instance;
+            var scope = ExpressionScope.Create(scriptContext, _clock, caller, ScopeKind.WorkflowOutput);
+            var site = new DeclarativeSite(workflow.Key, OutputPhase)
+            {
+                Logger = logger,
+                ErrorSubject = $"output of workflow '{workflow.Key}'"
+            };
+
+            var document = new JsonObject();
+            var applied = await DeclarativeBlockEngine.ApplyAsync(
+                plan.Value!, scope, document, result: null, site, cancellationToken);
+            if (!applied.IsSuccess)
+                return Fallback(workflow, activity, BlockFailure(applied.Error));
+
+            var output = DeclarativeOutputDocument.Read(document, site);
+            return output.IsSuccess
+                ? Result<WorkflowOutputResult?>.Ok(
+                    new WorkflowOutputResult(output.Value!.Data, output.Value.StatusCode, output.Value.Headers))
+                : Fallback(workflow, activity, BlockFailure(output.Error));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return Fallback(workflow, activity, ex);
+        }
+    }
+
+    /// <summary>A block failure as the exception the script failure path logs.</summary>
+    private static InvalidOperationException BlockFailure(Error error) => new(error.Message ?? error.Code);
+
+    /// <summary>
+    /// The shared failure path: logged, the span marked as an error, and <c>null</c> so the caller degrades to the
+    /// standard envelope (non-blocking).
+    /// </summary>
+    private Result<WorkflowOutputResult?> Fallback(Definitions.Workflow workflow, Activity? activity, Exception ex)
+    {
+        logger.WorkflowOutputScriptFailed(workflow.Key, ex);
+        activity.SetError(ex);
+        return Result<WorkflowOutputResult?>.Ok(null);
     }
 
     /// <summary>

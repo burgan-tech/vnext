@@ -29,7 +29,7 @@ neither. A transition-level event has one extra requirement: the transition must
 
 ## Declaring events in the component JSON
 
-The `event` field has one property: a `mapping` script (same `ScriptCode` shape as task mappings —
+The `event` field takes a `mapping` script, or a declarative `input` block with no C# (see [Event `input`](../runtime/declarative-task-mappings.md#event-input-workflow-output-and-function-output); the two are mutually exclusive). The `mapping` script (same `ScriptCode` shape as task mappings —
 `location` + base64 `code`, or a reference).
 
 Workflow-level (enables `action=start`):

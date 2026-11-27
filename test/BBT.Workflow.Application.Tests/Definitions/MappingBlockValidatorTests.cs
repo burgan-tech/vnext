@@ -326,7 +326,8 @@ public class MappingBlockValidatorTests
 
     private List<string> FlowErrors(
         string stateTransitionExtra = "", string startExtra = "", string cancelExtra = "", string updateDataExtra = "",
-        string exitExtra = "", string sharedExtra = "", string subFlowExtra = "", string subFlowType = "S")
+        string exitExtra = "", string sharedExtra = "", string subFlowExtra = "", string subFlowType = "S",
+        string flowExtra = "")
     {
         string Tr(string key, string target, string extra) =>
             "{\"key\":\"" + key + "\",\"target\":\"" + target + "\",\"triggerType\":\"manual\"," + Lbl
@@ -348,6 +349,7 @@ public class MappingBlockValidatorTests
             "updateData": {{Tr("upd", "$self", updateDataExtra)}},
             "exit": {{Tr("exit", "done", exitExtra)}},
             "sharedTransitions": [ {{Tr("note", "$self", "\"availableIn\": [\"review\"]" + (sharedExtra.Length == 0 ? "" : "," + sharedExtra))}} ]
+            {{(flowExtra.Length == 0 ? "" : "," + flowExtra)}}
         }
         """).RootElement;
         var r = new ComponentValidationResult();
@@ -466,5 +468,139 @@ public class MappingBlockValidatorTests
     {
         var errors = FlowErrors(subFlowType: "P", subFlowExtra: "\"output\":{\"set\":{\"$.a\":\"1\"}}");
         errors.ShouldContain("states[wait].subFlow: declarative 'input'/'output' blocks apply to a SubFlow ('S') only; a SubProcess ('P') is started by its own task.");
+    }
+
+    // ---- Event input, workflow output and function output blocks (Phase C2) ----
+
+    private static string EventJson(string members) => "\"event\":{" + members + "}";
+
+    private const string ValidEventInput =
+        "\"input\":{\"select\":\"$.input\",\"into\":\"$.attributes\",\"set\":{\"$.key\":\"input.id\"}}";
+
+    [Fact]
+    public void Event_ScriptAndInput_IsError()
+    {
+        var both = EventJson(ScriptMapping + "," + ValidEventInput);
+
+        FlowErrors(flowExtra: both).ShouldHaveSingleItem()
+            .ShouldBe("event: 'mapping' and 'input' are mutually exclusive");
+        FlowErrors(stateTransitionExtra: both).ShouldHaveSingleItem()
+            .ShouldBe("states[review].transitions[submit].event: 'mapping' and 'input' are mutually exclusive");
+        FlowErrors(sharedExtra: both).ShouldHaveSingleItem()
+            .ShouldBe("sharedTransitions[note].event: 'mapping' and 'input' are mutually exclusive");
+        FlowErrors(startExtra: both).ShouldHaveSingleItem()
+            .ShouldBe("startTransition.event: 'mapping' and 'input' are mutually exclusive");
+    }
+
+    [Fact]
+    public void Event_ValidInput_ScriptOnly_OrNeither_NoErrors()
+    {
+        FlowErrors(flowExtra: EventJson(ValidEventInput)).ShouldBeEmpty();
+        FlowErrors(stateTransitionExtra: EventJson(ValidEventInput)).ShouldBeEmpty();
+        FlowErrors(flowExtra: EventJson(ScriptMapping)).ShouldBeEmpty();
+        // Neither: today's runtime answer (EventDefinitionMissing) stays; publish adds no new error.
+        FlowErrors(flowExtra: EventJson("")).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Event_InputReadsData_IsError()
+    {
+        var readsData = EventJson("\"input\":{\"set\":{\"$.key\":\"data.id\"}}");
+
+        var flowError = FlowErrors(flowExtra: readsData).ShouldHaveSingleItem();
+        flowError.ShouldStartWith("event.input: ");
+        flowError.ShouldContain("set['$.key']");
+
+        var transitionError = FlowErrors(stateTransitionExtra: readsData).ShouldHaveSingleItem();
+        transitionError.ShouldStartWith("states[review].transitions[submit].event.input: ");
+        transitionError.ShouldContain("set['$.key']");
+    }
+
+    [Fact]
+    public void Event_InputTargetOutsideDocument_AndUnpairedSelect_AreErrors()
+    {
+        FlowErrors(flowExtra: EventJson("\"input\":{\"set\":{\"$.instanceKey\":\"input.id\"}}"))
+            .ShouldHaveSingleItem().ShouldStartWith("event.input: ");
+        FlowErrors(flowExtra: EventJson("\"input\":{\"select\":\"$.input\"}"))
+            .ShouldHaveSingleItem().ShouldStartWith("event.input: ");
+    }
+
+    [Fact]
+    public void Workflow_OutputBlock_Validated()
+    {
+        FlowErrors(flowExtra: "\"output\":{\"select\":\"$.data.customer\",\"into\":\"$.data\",\"set\":{\"$.statusCode\":\"201\",\"$.headers.x-id\":\"\\\"a\\\"\"}}")
+            .ShouldBeEmpty();
+
+        var target = FlowErrors(flowExtra: "\"output\":{\"set\":{\"$.foo\":\"1\"}}").ShouldHaveSingleItem();
+        target.ShouldStartWith("output: ");
+        target.ShouldContain("$.foo");
+
+        FlowErrors(flowExtra: "\"output\":{\"select\":\"$.data\"}")
+            .ShouldHaveSingleItem().ShouldStartWith("output: ");
+        FlowErrors(flowExtra: "\"output\":{\"set\":{\"$.data.x\":\"nope(\"}}")
+            .ShouldHaveSingleItem().ShouldStartWith("output: ");
+        FlowErrors(flowExtra: "\"output\":{\"set\":{\"$.data.x\":\"result.body\"}}")
+            .ShouldHaveSingleItem().ShouldStartWith("output: ");
+    }
+
+    [Fact]
+    public void Workflow_ScriptOutput_IsNotValidatedAsABlock() =>
+        FlowErrors(flowExtra: ScriptMapping.Replace("\"mapping\"", "\"output\"")).ShouldBeEmpty();
+
+    private ComponentValidationResult FunctionResult(string output, bool? rawResponse = null)
+    {
+        var fn = JsonDocument.Parse("""
+            {"scope":"F",__RAW__"onExecutionTasks":[{"order":1,"task":__T__}],"output":__O__}
+            """.Replace("__T__", TaskRef).Replace("__O__", output)
+            .Replace("__RAW__", rawResponse is null ? "" : $"\"rawResponse\":{(rawResponse.Value ? "true" : "false")},"))
+            .RootElement;
+        var r = new ComponentValidationResult();
+        _sut.Validate(RuntimeSysSchemaInfo.Functions, fn, r);
+        return r;
+    }
+
+    [Fact]
+    public void Function_OutputBlock_Validated()
+    {
+        var ok = FunctionResult("""{"select":"$.t.body","into":"$.data","set":{"$.data.ok":"result.t.statusCode.AsInt32() == 200"}}""");
+        ok.ValidationErrors.ShouldBeEmpty();
+        ok.Warnings.ShouldBeEmpty();
+
+        FunctionResult("""{"set":{"$.foo":"1"}}""")
+            .ValidationErrors.ShouldHaveSingleItem().ErrorMessage!.ShouldStartWith("output: ");
+        FunctionResult("""{"select":"$.t.body"}""")
+            .ValidationErrors.ShouldHaveSingleItem().ErrorMessage!.ShouldStartWith("output: ");
+    }
+
+    [Theory]
+    [InlineData("""{"set":{"$.statusCode":"201"}}""", "output.set['$.statusCode']")]
+    [InlineData("""{"set":{"$.headers.x-id":"\"a\""}}""", "output.set['$.headers.x-id']")]
+    [InlineData("""{"select":"$.t.headers","into":"$.headers"}""", "output.into")]
+    public void Function_StatusCodeWithoutRawResponse_IsWarning(string output, string location)
+    {
+        foreach (var raw in new bool?[] { null, false })
+        {
+            var r = FunctionResult(output, raw);
+            r.ValidationErrors.ShouldBeEmpty();
+            var warning = r.Warnings.ShouldHaveSingleItem().ErrorMessage!;
+            warning.ShouldStartWith($"{location}: ");
+            warning.ShouldContain("rawResponse");
+        }
+
+        var rawTrue = FunctionResult(output, rawResponse: true);
+        rawTrue.ValidationErrors.ShouldBeEmpty();
+        rawTrue.Warnings.ShouldBeEmpty();
+    }
+
+    [Theory]
+    [InlineData("""{"set":{"$.data.admin":"user.hasRole(\"admin\")"}}""")]
+    [InlineData("""{"set":{"$.data.caller":"user.available"}}""")]
+    [InlineData("""{"select":"$.t.body","into":"$.data","set":{"$.data.roles":"user.roles"}}""")]
+    public void Function_OutputReadingUser_IsError(string output)
+    {
+        var r = FunctionResult(output, rawResponse: true);
+
+        r.ValidationErrors.ShouldHaveSingleItem().ErrorMessage
+            .ShouldBe($"output: {MappingBlockValidator.FunctionOutputNoCallerError}");
     }
 }

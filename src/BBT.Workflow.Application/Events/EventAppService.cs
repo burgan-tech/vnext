@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using BBT.Aether.Results;
 using BBT.Workflow.Caching;
 using BBT.Workflow.Definitions;
@@ -9,6 +10,9 @@ using BBT.Workflow.Execution.Pipeline;
 using BBT.Workflow.Logging;
 using BBT.Workflow.Runtime;
 using BBT.Workflow.Scripting;
+using BBT.Workflow.Scripting.Caller;
+using BBT.Workflow.Scripting.Declarative;
+using BBT.Workflow.Scripting.Expressions;
 using BBT.Workflow.Shared;
 using Microsoft.Extensions.Logging;
 
@@ -25,6 +29,12 @@ namespace BBT.Workflow.Events;
 /// the full schema + policy validation. The pipeline itself is policy-only, so this delegation
 /// is what keeps event delivery covered — do not bypass the command app service here.
 /// </para>
+/// <para>
+/// An event is mapped by its <see cref="Event.Mapping"/> script or, without one, by its declarative
+/// <see cref="Event.Input"/> block (target document <c>{ key, attributes }</c>; variables <c>input</c> — the unwrapped
+/// payload —, <c>now</c>, <c>context</c>, <c>headers</c>). Both run under the same <c>eventMapping</c> span and fail the
+/// same way (<c>EventMappingFailed</c>). A stored definition holding both runs the script.
+/// </para>
 /// </summary>
 /// <inheritdoc />
 public sealed class EventAppService(
@@ -35,10 +45,22 @@ public sealed class EventAppService(
     IInstanceCommandAppService instanceCommandAppService,
     IInstanceSelectorResolver instanceSelectorResolver,
     IRuntimeInfoProvider runtimeInfoProvider,
-    ILogger<EventAppService> logger) : IEventAppService
+    ILogger<EventAppService> logger,
+    IExpressionCompiler? expressionCompiler = null,
+    TimeProvider? clock = null) : IEventAppService
 {
+    /// <summary>The <c>Script.Execute</c> span's script kind, shared by the mapping script and the input block.</summary>
+    internal const string EventMappingScriptKind = "eventMapping";
+
+    private const string InputPhase = "input";
+    private const string AttributesMember = "attributes";
+    private const string KeyMember = "key";
+
+    private readonly IExpressionCompiler _compiler = expressionCompiler ?? ExpressionCompiler.Shared;
+    private readonly TimeProvider _clock = clock ?? TimeProvider.System;
+
     /// <inheritdoc />
-    public async Task<Result<object?>> HandleAsync(EventInput input, CancellationToken cancellationToken = default)
+    public async Task<Result<object?>> HandleAsync(EventInput input, CancellationToken cancellationToken = default) // skipcq: CS-R1140 — one event delivery, its resolve / map / start-or-transition branches in order
     {
         // A misrouted subscription is a permanent defect, so surface it as a Result the delivery mapper
         // can turn into a Dapr DROP. Letting NotFoundDomainException escape would produce a 500 that the
@@ -106,7 +128,9 @@ public sealed class EventAppService(
             eventDefinition = workflow.Event;
         }
 
-        if (eventDefinition?.Mapping is null)
+        // A script wins over a block: a stored definition with both (published before validation) runs the script.
+        var inputBlock = eventDefinition?.Mapping is null ? eventDefinition?.Input : null;
+        if (eventDefinition is null || (eventDefinition.Mapping is null && inputBlock is null))
         {
             logger.EventDefinitionMissing(input.Domain, input.Workflow, input.TransitionKey);
             return Result<object?>.Fail(Error.NotFound(
@@ -118,7 +142,11 @@ public sealed class EventAppService(
         // Normalize the delivery envelope before the mapping sees the payload.
         var payload = UnwrapCloudEvent(input.Payload);
 
-        // Compile + run the domain-authored mapping to obtain correlation key + body.
+        // The value the declarative block reads as `input`: the unwrapped payload, null for an empty body (as the
+        // script's event payload).
+        object? hopInput = payload.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null ? null : payload;
+
+        // Compile + run the domain-authored mapping (or the input block) to obtain correlation key + body.
         EventMappingResult? mapping;
         try
         {
@@ -134,20 +162,41 @@ public sealed class EventAppService(
                 .WithEventPayload(payload.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
                     ? null
                     : (object?)payload.ToDynamic())
-                .BuildAsync(cancellationToken);
+                .BuildAsync(cancellationToken)
+                .WithHopInputAsync(hopInput);
 
-            using var mappingActivity = ScriptActivityHelper.StartExecuteActivity("eventMapping");
+            using var mappingActivity = ScriptActivityHelper.StartExecuteActivity(EventMappingScriptKind);
             try
             {
-                var runner = await scriptEngine.CompileToInstanceAsync<IEventMapping>(
-                    eventDefinition.Mapping,
-                    flowScripts: workflow.Scripts,
-                    cancellationToken: cancellationToken);
+                if (inputBlock is not null)
+                {
+                    var blockResult = await RunInputBlockAsync(
+                        inputBlock, input, workflow, scriptContext, cancellationToken);
+                    if (!blockResult.IsSuccess)
+                    {
+                        // The script's failure path: same log, same error code, the span marked as failed.
+                        var message = blockResult.Error.Message ?? blockResult.Error.Code;
+                        mappingActivity.SetError(message);
+                        logger.EventMappingFailed(input.Domain, input.Workflow, input.TransitionKey, message);
+                        return Result<object?>.Fail(Error.Failure("EventMappingFailed", message));
+                    }
 
-                mapping = await runner.Handler(scriptContext);
+                    mapping = blockResult.Value;
+                }
+                else
+                {
+                    var runner = await scriptEngine.CompileToInstanceAsync<IEventMapping>(
+                        eventDefinition.Mapping!,
+                        flowScripts: workflow.Scripts,
+                        cancellationToken: cancellationToken);
+
+                    mapping = await runner.Handler(scriptContext);
+                }
             }
             catch (Exception ex)
             {
+                // Either branch (a thrown script, a cancelled block run): the span is marked as failed, then the
+                // outer handler logs EventMappingFailed once.
                 mappingActivity.SetError(ex);
                 throw;
             }
@@ -258,6 +307,60 @@ public sealed class EventAppService(
         return result.IsSuccess
             ? Result<object?>.Ok(result.Value)
             : Result<object?>.Fail(result.Error);
+    }
+
+    /// <summary>
+    /// Applies the event's input block to an empty document <c>{ key, attributes }</c> and converts it to the
+    /// <see cref="EventMappingResult"/> a mapping script returns: <c>key</c> → <c>InstanceKey</c> (a string, or absent),
+    /// <c>attributes</c> → <c>Body</c> (a <see cref="JsonElement"/>, null when absent). No caller: events have none.
+    /// </summary>
+    private async Task<Result<EventMappingResult>> RunInputBlockAsync(
+        MappingBlock block,
+        EventInput input,
+        Definitions.Workflow workflow,
+        ScriptContext context,
+        CancellationToken cancellationToken)
+    {
+        var planResult = DeclarativePlanCache.GetOrBuild(_compiler, block, DeclarativeSiteKind.EventInput);
+        if (!planResult.IsSuccess)
+            return Result<EventMappingResult>.Fail(planResult.Error);
+
+        var scope = ExpressionScope.Create(context, _clock, NullCallerAccessor.Instance, ScopeKind.EventInput);
+        var site = new DeclarativeSite(input.TransitionKey ?? workflow.Key, InputPhase)
+        {
+            Logger = logger,
+            ErrorSubject = input.TransitionKey is null
+                ? $"event of workflow '{workflow.Key}'"
+                : $"event of transition '{input.TransitionKey}'",
+            ErrorCode = "EventMappingFailed"
+        };
+
+        var document = new JsonObject();
+        var applied = await DeclarativeBlockEngine.ApplyAsync(
+            planResult.Value!, scope, document, result: null, site, cancellationToken);
+        if (!applied.IsSuccess)
+            return Result<EventMappingResult>.Fail(applied.Error);
+
+        var mapping = new EventMappingResult();
+
+        var keyNode = document[KeyMember];
+        switch (keyNode)
+        {
+            case null:
+                break;
+            case JsonValue value when value.TryGetValue<string>(out var key):
+                mapping.InstanceKey = key;
+                break;
+            default:
+                return Result<EventMappingResult>.Fail(
+                    site.Failure($"$.key is a JSON {keyNode.GetValueKind()}, not a string."));
+        }
+
+        // A JsonElement: ToAttributes serializes the body with its runtime type, so it passes through unchanged.
+        if (document[AttributesMember] is { } attributes)
+            mapping.Body = JsonSerializer.SerializeToElement(attributes);
+
+        return Result<EventMappingResult>.Ok(mapping);
     }
 
     private static JsonElement? ToAttributes(object? body)

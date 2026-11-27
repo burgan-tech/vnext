@@ -147,7 +147,7 @@ proxy still runs in the parent's resolved `executionType`, unchanged.
 
 - **A sync response never evaluates extensions** (0.0.93). `EnrichOutputCoreAsync` projects
   reload-or-reuse → schema field filter → (only when `workflow.Output` has mapping code and the
-  instance is not a subflow) script context + output mapping. `extensions` stays on the DTO as an
+  instance is not a subflow) script context + output mapping (a workflow `output` may also be a declarative block: [Workflow `output`](declarative-task-mappings.md#event-input-workflow-output-and-function-output)). `extensions` stays on the DTO as an
   always-empty map so the shape does not change, and the `?extensions=` query parameter is gone
   from start/transition. `IInstanceExtensionService` is no longer a dependency of
   `InstanceCommandAppService` — that is the kill switch, enforced by the compiler. Extensions run
