@@ -484,6 +484,17 @@ public sealed class InstanceCommandAppService(
     }
 
     /// <summary>
+    /// Whether <see cref="MapAndAppendInstanceDataAsync"/> stored the start payload exactly as the start hop will
+    /// carry it: there was a payload, the flow keeps history (a <c>history: none</c> creation writes no row), and the
+    /// start transition maps nothing, so the mapper handed the payload through unchanged. Only then is the hop's own
+    /// append a guaranteed no-op that may be skipped.
+    /// </summary>
+    internal static bool CreationStoredStartPayload(Definitions.Workflow workflow, StartInstanceInput input) =>
+        input.Instance.Attributes is not null
+        && !workflow.SuppressesHistory
+        && workflow.StartTransition is { HasDataMapping: false };
+
+    /// <summary>
     /// Step 4: Executes the start transition.
     /// Lock management is handled by TransitionPipeline for proper lifecycle scoping.
     /// Underlying service returns Result - unexpected exceptions propagate to middleware.
@@ -522,6 +533,7 @@ public sealed class InstanceCommandAppService(
         // persisted, which is earlier than any execution entry runs.
         context.ResolvedWorkflow = data.Workflow;
         context.PayloadSchemaValidated = true;
+        context.InitialDataPersisted = CreationStoredStartPayload(data.Workflow, input);
 
         // Creation is the reservation: a sub-item is persisted Busy at creation (IsSubItem seed
         // in CreateAndPrepareInstanceAsync), and this request — the one that just created the
@@ -546,7 +558,15 @@ public sealed class InstanceCommandAppService(
                     // dispatched on) so the controller shapes 200 vs 202 by what actually ran, not the caller's
                     // sync query parameter (#1003). Authoritative here — the output may have been built by the
                     // post-commit settle path (subflow start), which does not carry it.
-                    ExecutedAsync = context.Mode == ExecMode.Async
+                    ExecutedAsync = context.Mode == ExecMode.Async,
+                    // The committed instance the run ended with — the settlement's own reload when the start
+                    // handed off to a SubFlow (loaded with its latest data for a sync caller precisely so the
+                    // response can be projected from it). Enrichment reuses it unless it is Busy, exactly as
+                    // on the transition path; dropping it here made every sync start read the row again.
+                    // Only for a caller that asked for sync: the settlement loads the data row by the CALLER's
+                    // mode (PostCommitParentMutationService.NeedsLatestDataForSettle), so a start the definition
+                    // forced to sync (executionType S, caller sync=false) comes back without it and is read again.
+                    PipelineInstance = callerMode == ExecMode.Sync ? transitionOutput.PipelineInstance : null
                 };
 
                 // A runtime-internal sync start (cross-domain sub start) skips the enrichment below but
@@ -1024,8 +1044,8 @@ public sealed class InstanceCommandAppService(
         // A Busy snapshot may be stale — a sync subflow completion resumes and finalizes the
         // parent in its own scope — so re-read as no-tracking (this scope may already track the
         // row with pre-resume values) to reflect the settled state. Also falls back to the DB
-        // read when PipelineInstance is not set (e.g. idempotent existing-instance path, and the
-        // start path, whose output never carries one).
+        // read when PipelineInstance is not set (e.g. the idempotent existing-instance path, which
+        // ran no pipeline).
         var pipelineInstance = (output as InstanceOutputBase)?.PipelineInstance;
         var reusePipelineInstance = pipelineInstance is not null && !pipelineInstance.Status.Equals(InstanceStatus.Busy);
         activity?.SetTag(TelemetryConstants.TagNames.EnrichSource, reusePipelineInstance ? "pipeline" : "reload");

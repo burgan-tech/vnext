@@ -305,7 +305,9 @@ public sealed class CreateTransitionRecordStep(
             mappedData = await OffloadMappedFilesAsync(context, mappedData, cancellationToken);
         }
 
-        if (mappedData != null)
+        // The start hop of an unmapped start transition carries the very payload the instance's creation
+        // just stored as its initial version: appending it again can only dedup to no row.
+        if (mappedData != null && !context.InitialDataPersisted)
         {
             // updateData is the one transition whose outcome writes nothing to the instance row: it
             // does not own the status (no Busy flip of its own) and ChangeStateStep leaves its

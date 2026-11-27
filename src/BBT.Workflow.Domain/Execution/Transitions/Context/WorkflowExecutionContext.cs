@@ -66,6 +66,23 @@ public sealed class WorkflowExecutionContext
     public bool PayloadSchemaValidated { get; set; }
 
     /// <summary>
+    /// Set by the START path when creating the instance already stored this request's payload as the
+    /// initial data version, unchanged: the start transition maps nothing (no script, no output block),
+    /// so the payload it carries is byte for byte the delta that was just appended. The start hop then
+    /// skips its own append, which could only ever find "no change" — after a transaction, the
+    /// per-instance row lock, a head read and a commit.
+    /// <para>
+    /// A mapped start transition never sets it: its script runs again in the pipeline and may produce
+    /// something else (it sees the initial data the first run did not), so that append stays.
+    /// Transport-only, like <see cref="PayloadSchemaValidated"/>: never serialized, never mapped into
+    /// <c>TransitionJobPayload</c> (an async start's job re-entry appends as before) and never copied
+    /// onto a continuation hop.
+    /// </para>
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool InitialDataPersisted { get; set; }
+
+    /// <summary>
     /// The payload was produced by the runtime itself (subflow input mapping, trigger task), not by a
     /// client; <c>x-storage</c> references in it are kept as is. Copied from the input's server-only
     /// <c>TrustedPayload</c> flag. Transport-only, never serialized: a hop must not inherit another's trust.
