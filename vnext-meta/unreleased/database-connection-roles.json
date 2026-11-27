@@ -1,0 +1,7 @@
+{
+  "releaseNote": {
+    "summary": "Inbox, Outbox and DbMigrator can use their own database connection (ConnectionStrings:Inbox / Outbox / Migrator), falling back to ConnectionStrings:Default.",
+    "breaking": false,
+    "docs": []
+  }
+}
