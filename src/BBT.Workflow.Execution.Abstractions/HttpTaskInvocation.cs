@@ -598,29 +598,7 @@ public static class HttpTaskInvocation
                 new HttpMethod(binding.Method),
                 binding.Url);
 
-            // Add headers. Content-Type is a content header in .NET, not a request header, so it is
-            // captured here and applied to request.Content below instead of request.Headers.
-            string? headerContentType = null;
-            if (!string.IsNullOrEmpty(binding.Headers))
-            {
-                var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(binding.Headers);
-                if (headers != null)
-                {
-                    foreach (var header in headers)
-                    {
-                        if (string.Equals(header.Key, "Content-Type", StringComparison.OrdinalIgnoreCase))
-                        {
-                            headerContentType = header.Value;
-                            continue;
-                        }
-
-                        if (IsReservedTraceHeader(header.Key))
-                            continue;
-
-                        request.Headers.TryAddWithoutValidation(header.Key, header.Value);
-                    }
-                }
-            }
+            var headerContentType = ApplyHeaders(request, binding.Headers);
 
             ApplyTrustedCorrelationHeaders(request, traceContext);
 
@@ -629,6 +607,32 @@ public static class HttpTaskInvocation
 
             return (httpClient, request);
         }
+    }
+
+    /// <summary>
+    /// Copies the binding's headers onto the request and returns its Content-Type header, if any. Content-Type is
+    /// a content header in .NET, not a request header, so it is returned for the body instead of being added here;
+    /// reserved trace headers are skipped.
+    /// </summary>
+    private static string? ApplyHeaders(HttpRequestMessage request, string? headersJson)
+    {
+        if (string.IsNullOrEmpty(headersJson))
+            return null;
+
+        var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(headersJson);
+        if (headers == null)
+            return null;
+
+        string? headerContentType = null;
+        foreach (var header in headers)
+        {
+            if (string.Equals(header.Key, "Content-Type", StringComparison.OrdinalIgnoreCase))
+                headerContentType = header.Value;
+            else if (!IsReservedTraceHeader(header.Key))
+                request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        }
+
+        return headerContentType;
     }
 
     /// <summary>
