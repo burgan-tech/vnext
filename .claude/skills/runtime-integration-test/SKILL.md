@@ -82,6 +82,27 @@ Not repeated here — read the contract section that owns each one:
 - Aether change needed: propose first; local-feed procedure and revert in
   [§8](../../../docs/testing/integration-testing.md#8-aether-changes-during-development).
 
+## When it fails
+
+Cluster reds by error signature first; most "regressions" have been environment.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `Connection refused (localhost:3001)` on HTTP tasks | MockLab not started | `cd ../vnext-example && docker compose up -d` after the infra |
+| `Discovery:700002 … Service discovery is disabled` | The partner domain is not up | Bring it up or let the suite skip; not a runtime red |
+| `Task:Unknown:<key> — WorkflowTask not found in runtime backend` | System flows not loaded on this database | Publish them through the domain's init container (runbook step 5), poll the status URL |
+| "docker infra is running from another compose file" | Another lab owns the infra | Stop and report; never `down` it |
+| Results look like an older version | Hosts on :4201 come from another checkout (a deleted worktree served 0.0.96 on 2026-10-05) | `lsof -i :4201` → `ps`; restart from this checkout with `up` |
+| 409 `Instance:100002` on publish | Publish is version-immutable | Patch-bump the changed fixture/flow |
+| 409 `Failed to acquire lock` | Single-attempt status lock while the runtime finishes the same hop | Use `RunAsync` (retries that signature); never drop its status |
+| "Never reached state X" after 60 s, instance Busy | A parked auto-chain rests in Busy when no rule fires | Wait for the state, send the `updateData` that opens the gate |
+| Expected 403 from `state`/`data`/`view` | Read functions do not enforce `queryRoles` | Assert through `authorize?queryRoles=true` |
+| A mock answers the wrong route | MockLab matches routes by suffix | Give each route its own prefix |
+| `wf update` did not publish a new flow | `wf update` only republishes git-changed tracked files | `POST api/v1/definitions/publish` + `publish/completed` |
+| `postgres` MCP `CONNECT_TIMEOUT` | `Aether_WorkflowDb` not created yet | Bring core up; list databases before suspecting the server |
+
+A failure not in this table: file it with the `papercut` skill.
+
 ## Red flags — stop
 
 | Thought | Reality |

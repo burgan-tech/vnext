@@ -23,6 +23,7 @@ phrase against the skill's frontmatter `description`. Cursor reads the same `.cl
 | Write product documentation | [`vnext-docs-generator`](#7-vnext-meta-and-documentation) |
 | Verify a change through traces and logs | [MCP servers + `scripts/trace-profile.py`](#4-testing-and-verification) |
 | Check that the AI guidance itself is healthy | [`scripts/check-ai-guidance.sh`](#9-always-on-guards-no-invocation-needed) |
+| Report friction (a command, doc or skill that fights you) / turn reports into fixes | [`papercut`](#9-always-on-guards-no-invocation-needed) |
 
 ## 2. Decision — Agent Council
 
@@ -247,6 +248,7 @@ Not part of this repository — they are installed per user and may be missing o
 | [Workflow card](../.claude/rules/vnext-workflow-developer.md) and [.NET standards](../.claude/rules/dotnet-coding-standards.md) | Path-scoped: load once code under `src/`, the hosts, `workers/`, `modules/`, `test/` or `vnext-meta/` is open |
 | [`check-mcp-infra.sh`](../.claude/hooks/check-mcp-infra.sh) | SessionStart: lists unreachable MCP backends; starts nothing |
 | [`scripts/check-ai-guidance.sh`](../scripts/check-ai-guidance.sh) | Run after editing AI guidance (CI runs it too: `ai-guidance.yml`): frontmatter, links, Cursor pointers, duplicate headings, catalog coverage, council verdict vocabulary, always-loaded / path-scoped / council-run budgets |
+| [`papercut`](../.claude/skills/papercut/SKILL.md) skill | Any agent files a friction report to git-ignored `ai-docs/papercuts/` when a documented command, flag, step or doc fights it, then continues; *"papercut triage"* groups open reports into fixes (a skill's **When it fails** row, a doc/rule correction, a script fix, an eval case) applied only on approval |
 
 ## 10. Adding a new capability
 

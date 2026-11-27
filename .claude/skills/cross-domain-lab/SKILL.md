@@ -59,6 +59,21 @@ and §7. Port offsets and the domain runbook are in `docs/runtime/local-environm
    `Remote*` services fall back to registry `baseUrl` + HttpClient while `useDapr:true` tasks stay
    on Dapr (the provider does not drop a task's Dapr request). Plain `lab.sh up` returns to dapr.
 
+## When it fails
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Every invoke 500 `ERR_DIRECT_INVOKE` | App-id fell back to the convention: `RequireRegistryEntry` or `PreferRegistryAppId` missing from the overlay | Check `orchestration.overlay.env`; both flags on |
+| Sidecar logs "couldn't find name resolver nameformat/v1" | `nameformat` resolver used with daprd 1.16.x | Use explicit `mdns` in compose |
+| `daprio/daprd:latest` in `docker ps` | Stale lab, Dapr not pinned | `lab.sh down` → `lab.sh up` (`VNEXT_LAB_DAPR_VERSION`) |
+| Lab behaves like the old runtime | Images not rebuilt after a runtime change | `lab.sh images` → `down` → `up` |
+| Script task does nothing / empty compile | `.csx` written but `code` not encoded | `python3 labs/cross-domain/encode-scripts.py <folders>` |
+| `npm run validate`: "must match then schema" on `useDapr` | vnext-schema defines it only for task types 15/19 | Known schema lag — keep the field |
+| Partner tests skip | `VNEXT_PARTNER_BASE_URL` not set | Set it beside `VNEXT_BASE_URL` |
+| Partner components missing in external mode | `OnAfterEnvironmentReadyAsync` is never called | Publish the partner in the collection fixture |
+
+A failure not in this table: file it with the `papercut` skill.
+
 ## Lab-specific facts (when writing assertions)
 
 - **App-id resolution order:** `Dapr.DomainOverrides[domain]` → registry `appId` (only with

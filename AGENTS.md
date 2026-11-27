@@ -16,6 +16,8 @@ and any design question asked before code is open, read them explicitly.
 - [Agent Council](.claude/rules/agent-council-plan-mode.md) — a non-trivial decision gets an evidence-backed council verdict before implementation.
 - [Graphify first](.claude/rules/graphify-navigation.md) — with `graphify-out/graph.json`, query the graph before grepping broadly.
 - [MCP verification](.claude/rules/mcp-observability-verification.md) — confirm a locally exercised change with traces, logs and rows; a green test is not evidence alone.
+- **Friction** — when a documented command, flag, step or doc fights you twice, record it with the
+  [`papercut`](.claude/skills/papercut/SKILL.md) procedure and continue with the workaround.
 
 ## Build, run, test
 

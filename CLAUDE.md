@@ -17,7 +17,7 @@ on a core-process change that needs end-to-end proof.
 `agent-council` · `pr-review` · `workflow-code-review` · `domain-performance-audit` ·
 `runtime-integration-test` · `cross-domain-lab` · `create-github-issue` · `create-github-pr` ·
 `git-commit-message` · `vnext-docs-generator` · `vnext-meta-validator` (also after any `vnext-meta/`
-edit) · `vnext-meta-matrix`. When to use which, with examples: `docs/ai-capabilities.md`.
+edit) · `vnext-meta-matrix` · `papercut` (also unasked, on repeated friction). When to use which, with examples: `docs/ai-capabilities.md`.
 
 ## Project subagents (`.claude/agents/`)
 

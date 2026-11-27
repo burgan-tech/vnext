@@ -48,7 +48,7 @@ Content lives in exactly one place; each tool has a thin entry point that points
 | `docs/agent-council/` | Council contract (`README.md`), roles, Chair, two templates, the committed decision log | yes |
 | `.github/ai/*.md`, `scripts/ai/` | CI agent prompts and the trusted scripts that validate and apply their answers | yes, with tests |
 | `docs/` | Implementation docs, indexed from `docs/README.md` | yes |
-| `ai-docs/` (`superpowers/`, `agent-council/sessions/`, `handoff/`, `local-environments/`) | Git-ignored local scratch: dated decision records, handoffs, machine records — never a source of truth | local |
+| `ai-docs/` (`superpowers/`, `agent-council/sessions/`, `handoff/`, `papercuts/`, `local-environments/`) | Git-ignored local scratch: dated decision records, handoffs, machine records — never a source of truth | local |
 | `CLAUDE.local.md` | Machine-local, git-ignored notes (repo paths, ports) — policy never lives here | personal |
 
 The two code rules load only once code is open: before answering a design question cold, read the

@@ -104,6 +104,17 @@ ai-docs/vnext-docs/<category>/<filename>.md          # Turkish (primary)
 ai-docs/vnext-docs/i18n-en/<category>/<filename>.md   # English (if needed)
 ```
 
+## When it fails
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Doc says something the code does not do | vnext-docs lags the runtime | Code wins; write from the diff and the runtime `/docs` page |
+| Clone looks outdated | A stale or second local clone | Use the path in `CLAUDE.local.md`; `git -C <clone> pull --ff-only` only with the user's OK |
+| No local clone | `../vnext-docs` absent | Ask once to clone; read-only `gh api` fallback only then |
+| New page not visible in the site | Not registered in the sidebar | Add the entry (REFERENCE.md § Sidebar Registration) |
+
+A failure not in this table: file it with the `papercut` skill.
+
 ## Checklist
 
 Present this checklist to the user after generating docs:
