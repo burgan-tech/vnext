@@ -1,67 +1,75 @@
-# Architecture Council Decision
+# Council decision — <title>
 
-- Session ID:
-- Decision ID:
-- Task ID:
-- Version:
-- Author:
-- Created at (UTC):
-- Supersedes:
-- Status: Proposed | Awaiting Chair | Approved | Rejected | Superseded
-- Risk: Low | Medium | High | Critical
+- Session: <YYYY-MM-DD-slug> · Mode: Lite | Full · Risk: Low | Medium | High | Critical
+- Requester: · Facilitator (owns no proposal): · Date (UTC):
+- **Verdict:** `<one verdict from README § Verdicts>` · **Status:** Decided | Awaiting Chair | VOID | SUPERSEDED
+
+## Question and acceptance
+
+The real problem (no solution), what "done" means, what is in and out of scope.
+
+## Evidence
+
+- Verified facts (`file:line`):
+- Assumptions:
+- Open questions:
+
+## Council
+
+| Role | Why selected (blind spot) | Position (one line) | Vote |
+|---|---|---|---|
+
+Omitted roles and why:
+
+## Objections
+
+| By → against | Claim | Evidence | Resolution |
+|---|---|---|---|
 
 ## Decision
 
-## Selected Proposal
+The selected approach and the one-paragraph rationale. Rejected alternatives with one line each.
 
-- Proposal ID:
-- Owner:
+## Items (only when the question has several parts)
 
-## Rationale
+| Item | Verdict | Next action |
+|---|---|---|
 
-1.
-
-## Decision Matrix
-
-Scores are 0–5. `Total = sum(score / 5 * weight)`. Hard-constraint failures are not scored.
-
-| Proposal | Requirement | Architecture | Security/Reliability | Performance | Operational simplicity | Testability | Delivery cost | Reversibility | Total |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| | | | | | | | | | |
-
-## Rejected Alternatives
-
-| Proposal | Reason |
-|---|---|
-| | |
+The headline verdict above is the verdict of the items that move now.
 
 ## Dissent
 
-| Agent | Objection | Why not accepted | Follow-up |
-|---|---|---|---|
-| | | | |
+| Role | Argument | Why not accepted |
+|---|---|---|
 
-## Accepted Risks
+At least one row: the Devil's Advocate's strongest unresolved argument.
 
-| Risk | Owner | Due date | Mitigation |
-|---|---|---|---|
-| | | | |
+## Conditions
 
-## Verification
+| Id | Condition | Owner | Class | Due | Status |
+|---|---|---|---|---|---|
 
-- [ ] Functional acceptance criteria
-- [ ] Architecture tests
-- [ ] Security checks
-- [ ] Performance baseline/comparison
-- [ ] Rollback verification
-- [ ] Observability verification
+Class is `blocking`, `in-PR` or `follow-up`; only `blocking` holds the start back.
 
-## Chair Decision
+## Next action
 
-- Required: Yes | No
-- Decision:
-- Rationale:
-- Mandatory conditions:
-- Conditions owner/evidence/due date:
-- Chair:
-- Date:
+For a non-approval: the experiment (hypothesis, measurement, stop/go threshold, cost), the questions and
+who answers them, or the constraint that blocks. For an approval: the implementation task.
+
+## Verification and rollback
+
+How the result is proven (unit, vnext-example integration per `docs/testing/integration-testing.md`,
+traces per `docs/testing/observability-verification.md`) and how it is undone.
+
+## Chair
+
+Required: yes | no (why). At most five questions, each answerable yes/no:
+
+| # | Question | Recommended |
+|---|---|---|
+
+Ruling: `Chair YYYY-MM-DD: <verdict>` — conditions added or waived:
+
+## Amendments
+
+`Amendment YYYY-MM-DD: …` (newest last)

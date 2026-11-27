@@ -1,145 +1,74 @@
 ---
 name: agent-council
-description: "Runs the evidence-based Agent Council for non-trivial vNext decisions (architecture, technology, cross-service, data, security, reliability, performance) and logs the decision. Triggers: \"council\", \"karar verelim\", \"eklemeli miyim\", \"mimari karar\", or any question whose answer is a recommendation."
+description: "Runs the evidence-based Agent Council (Lite by default, Full on request or Critical risk) for non-trivial vNext decisions and logs the verdict; 'chair queue' lists and closes open Chair rulings. Triggers: \"council\", \"karar verelim\", \"eklemeli miyim\", \"mimari karar\", \"chair queue\", or any question whose answer is a recommendation."
 ---
 
 # Agent Council
 
-Planning and decision process only. It **never** implements code.
+The procedure. The contract — modes, roles, risk, verdicts, condition classes, Chair, amendments,
+boundary — is [`docs/agent-council/README.md`](../../../docs/agent-council/README.md); read it once per
+session and do not restate it. When the council fires and the disclosure duty:
+[`.claude/rules/agent-council-plan-mode.md`](../../rules/agent-council-plan-mode.md).
 
-Authority documents live in `docs/agent-council/`: `CHARTER.md`, `PROCESS.md`,
-`COUNCIL-SELECTION.md`, `GOVERNANCE.md`, `CHAIR.md`, `roles/*.md`, `templates/*.md`.
-Read `PROCESS.md` and the templates before producing artifacts — this skill is the
-procedure, those files are the contract.
+Pick the mode from the request: **chair queue** when the user asks for it ("chair queue", "bekleyen
+kararlar"); **Full** on "full council", Critical risk or an escalated Lite session; otherwise **Lite**.
 
-## Trigger, scope and mandatory disclosure
+## Lite (default)
 
-When the council applies (trigger phrases, the question *shape* that needs no phrase, the cases it
-does not apply to) and the obligation to open every qualifying answer with its council status are
-defined once, in the always-on rule
-[`.claude/rules/agent-council-plan-mode.md`](../../rules/agent-council-plan-mode.md) § Trigger and
-§ Mandatory disclosure. Read it there; it is not restated here. If unsure whether a question
-qualifies, say in one sentence that it looks council-shaped and ask.
+1. **Check the log.** `docs/agent-council/sessions/README.md` — an existing row on the same question is
+   amended, not re-decided.
+2. **Frame it.** Create `ai-docs/agent-council/sessions/<YYYY-MM-DD-slug>/DECISION.md` from
+   [`templates/DECISION.md`](../../../docs/agent-council/templates/DECISION.md); fill the question,
+   acceptance, risk ([README § Risk](../../../docs/agent-council/README.md#risk)) and the requester.
+3. **Evidence pack first.** Explore agents, the graph (`graphify`), `git log`/`git show --stat` for cost
+   precedents, the relevant `/docs` page, [CHAIR.md precedents](../../../docs/agent-council/CHAIR.md#standing-precedents).
+   Write verified facts (`file:line`) and assumptions into `DECISION.md`. **Test the premise** — a false
+   premise ends the session as `VOID` with the finding, which is a result, not a failure.
+4. **Independent proposals.** One `Agent` per role — Solution Architect, Pragmatic Engineer, Devil's
+   Advocate, plus at most one conditional role from the README table — **all in one message** so they
+   run in parallel and never see each other. Each prompt carries: its section of
+   [`roles.md`](../../../docs/agent-council/roles.md), the question, the same evidence pack and
+   [`templates/PROPOSAL.md`](../../../docs/agent-council/templates/PROPOSAL.md). Save each as
+   `PROPOSAL-<nn>-<role>.md`.
+5. **One objection round.** `SendMessage` each agent the other proposals; collect evidence-backed
+   objections (claim, evidence, impact, requested revision). No new evidence → no objection. Stop.
+6. **Decide.** Fill `DECISION.md`: one headline verdict, an item table if the question has parts,
+   dissent (at least the Devil's Advocate's strongest unresolved argument — no loop back), conditions
+   with class (`blocking` / `in-PR` / `follow-up`), the **next action**, verification and rollback.
+   Facilitator = you; you own no proposal.
+7. **Chair.** If the Chair is required, write at most five yes/no questions with a recommended answer;
+   the status is `Awaiting Chair`. Only an explicit ruling by the Chair named in `CHAIR.md` closes it —
+   record `Chair YYYY-MM-DD: <verdict>`; never infer a ruling from silence or from the request itself.
+8. **Log.** Append one row above `<!-- newest at the bottom … -->` in
+   `docs/agent-council/sessions/README.md`:
+   `| YYYY-MM-DD | [<slug>](../../../ai-docs/agent-council/sessions/<slug>/DECISION.md) | topic | risk | verdict (+ status) | selected approach | blocking conditions / follow-up |`.
+9. **Answer** the user: verdict, the next action, blocking conditions, Chair questions if any, the
+   dissent in one line, and the session path.
 
-## Workflow
+## Full
 
-### 1. CONTEXT_READY — write the task record
+As Lite, with these differences: roles by the README selection table (Test & Evidence included; High
+4–7 roles, Critical all applicable plus a human expert, each with the blind spot it closes); step 5 has
+a second round where each owner answers the objections against it with `ACCEPT | COUNTER |
+DEFER_TO_EXPERIMENT | ESCALATE`; the decision carries the scored matrix
+([README § Scoring](../../../docs/agent-council/README.md#scoring-full-optional-in-lite)). Reuse the
+same agents through `SendMessage` so their context stays intact.
 
-Create `ai-docs/agent-council/sessions/<task-id>/TASK.md` (git-ignored local scratch) from
-`templates/TASK.md`. `<task-id>` is `YYYY-MM-DD-<slug>`.
+## Chair queue
 
-Classify risk (`Low | Medium | High | Critical`). Separate **verified facts**
-(repository evidence) from **assumptions** and **open questions** — this split
-decides the verdict later.
+1. List the log rows whose verdict cell says `Awaiting Chair` and has no later `Chair YYYY-MM-DD` entry.
+2. For each, read the local `DECISION.md` if it exists and pull its Chair questions; when it is missing
+   (another machine) or predates the questions block, derive at most three questions from the row's
+   verdict and follow-up cells and say so.
+3. Present them in one `AskUserQuestion` round (one question per decision, the recommended answer
+   first); never decide for the Chair.
+4. Write each answer as `Chair YYYY-MM-DD: <verdict>` into the row (and `DECISION.md` when present).
+   A ruling that changes scope becomes a new Lite session instead.
 
-Also create `SESSION.md` from `templates/SESSION.md` and log the first transition.
-The session manifest is the state owner; every state change gets a row with actor,
-UTC time, reason and evidence.
+## Repository specifics
 
-### 2. COUNCIL_SELECTED — pick the smallest sufficient council
-
-Apply [`docs/agent-council/COUNCIL-SELECTION.md`](../../../docs/agent-council/COUNCIL-SELECTION.md)
-— the core roles, the conditional-role triggers and the size per risk level live there.
-
-**Record which blind spot each added role closes, and why each omitted role was
-omitted.** Do not select every role by default.
-
-**Include Devil's Advocate whenever the expected answer is "no".** Its job is then to
-argue the *for* case with evidence. A council where nobody argued the losing side did
-not happen.
-
-Separation of duties: the facilitator who writes `DECISION.md` must not also own a
-proposal. Record the check in `SESSION.md`.
-
-### 3. INDEPENDENT_ANALYSIS — parallel proposals, no cross-visibility
-
-Gather the evidence pack **first** (Explore agents, `git log`/`git show --stat` for
-cost precedents, the relevant `/docs` pages). Every role gets the *same* pack.
-
-Then launch one `Agent` per role, **all in a single message so they run in parallel**.
-Each prompt carries: the role file from `docs/agent-council/roles/`, `TASK.md`, the
-shared evidence pack, and `templates/PROPOSAL.md`.
-
-Each agent returns a proposal. They must not see each other's output — that is what
-makes the analysis independent.
-
-Write each to `PROPOSAL-<nn>-<role-slug>.md`.
-
-### 4. DEBATE — two rounds, via SendMessage
-
-**Round 1 (objections).** `SendMessage` each role agent the other proposals. Each
-returns objections in `templates/OBJECTION.md` shape: challenged claim, evidence,
-impact, requested revision, severity. An objection without evidence or new information
-is not an objection.
-
-**Round 2 (responses).** `SendMessage` each proposal owner the objections targeting
-its proposal. Each responds `ACCEPT | COUNTER | DEFER_TO_EXPERIMENT | ESCALATE` with
-rationale. Record responses in the same objection file.
-
-Reuse the same agents through `SendMessage` — their context stays intact and the role
-stays consistent across waves. Stop after two rounds or as soon as no new evidence is
-being produced.
-
-### 5. DECISION_PENDING — record the decision
-
-Write `DECISION.md` from `templates/DECISION.md`: decision, selected proposal,
-rationale, scored matrix, rejected alternatives, **dissent**, accepted risks,
-verification checklist, rollback.
-
-**An empty dissent table means the debate did not really run.** Go back to step 4.
-
-Verdict: `APPROVED` · `EXPERIMENT_REQUIRED` · `CLARIFICATION_REQUIRED` · `BLOCKED` ·
-`REJECTED`.
-
-**Append the decision to the log.** Add one row to `docs/agent-council/sessions/README.md`
-in the same shape as the existing rows:
-`| YYYY-MM-DD | [<task-id>](../../../ai-docs/agent-council/sessions/<task-id>/DECISION.md) | topic | risk | verdict | selected approach | follow-up |`.
-Keep each free-text cell to ~300 characters (decision + status + one-sentence rationale); the
-detail belongs in the local session folder.
-The log is the team's decision history; a session without a row is not recorded. If a later
-session changes the verdict, update the row and point `Follow-up` at the superseding session.
-
-### 6. Chair
-
-`CHAIR.md` gates service-boundary and data-ownership changes, new infrastructure,
-auth/secret changes, breaking cross-service contracts, production migrations and
-high-blast-radius changes.
-
-**If `CHAIR.md` has no configured identity, the decision closes as `Awaiting Chair`**
-and "name the Chair" is recorded as an open condition in `SESSION.md`. Do not treat an
-unconfigured Chair as an absent gate.
-
-## Hard gates
-
-- Missing workload, security, data-ownership, rollback or acceptance evidence is never
-  an approval. It is `CLARIFICATION_REQUIRED`, `EXPERIMENT_REQUIRED` or `BLOCKED`.
-- A hard constraint cannot be outvoted or outscored.
-- Never claim performance, recovery, security or compatibility without a reproducible
-  test, a measurement, repository evidence, or explicit human approval. An unmeasured
-  performance claim is `EXPERIMENT_REQUIRED`, not a rationale.
-- Where the requester's actual need was never established, the verdict cannot be a
-  clean `REJECTED` — it is at least `CLARIFICATION_REQUIRED`.
-- The implementer cannot be the final reviewer of the same change.
-
-## Boundary — this is not implementation approval
-
-The council may read any repository file and write **only** under
-`ai-docs/agent-council/sessions/` (git-ignored) — the session folder, plus one appended row in
-`docs/agent-council/sessions/README.md` (the decision log). It must not touch production source, tests,
-migrations, deployment manifests, generated contracts, `etc/`, `vnext-meta/` or
-project configuration.
-
-After a decision, implementation needs a *separate* task and explicit user direction.
-
-Do not start infrastructure or run expensive integration tests during council
-planning without explicit user approval (see `docs/testing/integration-testing.md` §1).
-
-## Repository-specific checks
-
-- Read `docs/agent-onboarding.md` before planning a vNext change.
-- Code is the source of truth for current behavior; `LifecycleOrder.cs` and
-  `PipelineExecutionProfile.cs` win over any doc.
-- Validation plans must follow the repo's Aether, outbox, multi-schema, logging and
-  Result-pattern policies, and the integration-test policy in `docs/testing/integration-testing.md`.
-- Task/component schemas live in the **external** `@burgan-tech/vnext-schema` package.
-  Any decision adding a component type must record that coordination cost.
+- Code wins over docs (`LifecycleOrder.cs`, `PipelineExecutionProfile.cs`, `PipelineProfileResolver.cs`).
+- Validation plans follow the Aether, outbox, multi-schema, logging and Result-pattern rules and the
+  integration-test policy (`docs/testing/integration-testing.md`).
+- A new component or task type records the coordination cost with the external
+  `@burgan-tech/vnext-schema` package, `vnext-meta` and the Helm chart.

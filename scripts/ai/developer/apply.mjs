@@ -21,7 +21,7 @@ import { extractResult } from '../../triage/lib/triage.mjs';
 import { toolPath } from '../lib/tools.mjs';
 import { readPlanData } from '../lib/director.mjs';
 import {
-  branchFor, validateResult, checkDiff, findSecrets, prLabels, developerLabels, extractCouncilRow, insertLogRow,
+  branchFor, validateResult, checkDiff, findSecrets, prLabels, developerLabels, extractCouncilRow, extractMergeChecks, insertLogRow,
   renderPrBody, updateRepairs, renderDeveloperComment, isDeveloperComment, parseNameStatusZ,
 } from '../lib/developer.mjs';
 
@@ -174,6 +174,7 @@ try {
         const body = renderPrBody({
           issue: n, result, plan: readPlanData(input.directorPlan), labels: input.labels, councilUrl: input.councilUrl,
           planUrl: input.directorPlanUrl, branch, runner, repairs: 0, maxRepairs: input.maxRepairs, e2eReason: E2E_REASON,
+          mergeChecks: input.labels.includes('ai:council-approved') ? extractMergeChecks(input.council) : [],
         });
         const create = ['pr', 'create', '--repo', repo, '--draft', '--base', 'master', '--head', branch, '--title', result.title, '--body-file', '-'];
         if (input.milestone) create.push('--milestone', input.milestone);

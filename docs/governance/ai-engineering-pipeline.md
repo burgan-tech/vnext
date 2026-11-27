@@ -47,13 +47,14 @@ request), else `ai:planned`. In `dry-run` the plan comment shows the labels it *
 **Council in CI** ([`ai-council.yml`](../../.github/workflows/ai-council.yml),
 [`scripts/ai/council/`](../../scripts/ai/council/), core in
 [`scripts/ai/lib/council.mjs`](../../scripts/ai/lib/council.mjs)). One agent run plays the council:
-it selects the roles by [COUNCIL-SELECTION](../agent-council/COUNCIL-SELECTION.md), writes each
-position independently, one objection round, at least two approaches, conditions, dissent. Before
+it runs the [council contract](../agent-council/README.md) in its Lite shape (three core roles plus
+triggered ones), writes each position independently, one objection round, at least two approaches, conditions, dissent. Before
 it runs, the collector leaves alone an issue that is `ai:blocked` or already `ai:council-approved`,
 skips one whose input (issue text, Director plan, human comments, semver / impact labels) has the
 same fingerprint as the last council comment, and answers an issue with no Director plan without
 the agent. After it, the writer can only make the verdict **stricter**: an approval with a
-human-owned condition or decision becomes `APPROVE_WITH_CONDITIONS`, a low-confidence approval or
+human-owned `blocking` condition or a human decision becomes `APPROVE_WITH_CONDITIONS` (human
+`in-PR` conditions travel to the PR body as merge checks, `follow-up` ones block nothing), a low-confidence approval or
 one missing a core role becomes `CLARIFICATION_REQUIRED`, a major change is `BLOCKED`; a missing
 answer is `INCONCLUSIVE` (no label change, retried by the sweep). The hourly sweep exists because
 the Director cannot re-trigger the council when `ai:council-required` is already on the issue.
@@ -113,8 +114,8 @@ Quality Gate finds the PR's diff exceeds the declared impact (§7.3).
 
 | Verdict | Next state |
 |---|---|
-| `APPROVED` (only developer-owned conditions, met inside the PR) | `ai:council-approved` + `ai:planned` — the Developer starts |
-| `APPROVE_WITH_CONDITIONS`, `CLARIFICATION_REQUIRED`, `EXPERIMENT_REQUIRED`, `BLOCKED`, `REJECTED` | `ai:blocked` — a human decides; once human conditions are met, a maintainer adds `ai:council-approved` + `ai:planned` |
+| `APPROVED` (no human-owned `blocking` condition or decision; `in-PR` conditions become merge checks in the PR body) | `ai:council-approved` + `ai:planned` — the Developer starts |
+| `APPROVE_WITH_CONDITIONS`, `CLARIFICATION_REQUIRED`, `EXPERIMENT_REQUIRED`, `BLOCKED`, `REJECTED` | `ai:blocked` — a human decides; once the `blocking` conditions are met, a maintainer adds `ai:council-approved` + `ai:planned` |
 
 In this pipeline a CI council `APPROVED` verdict **authorizes development**, not merge. The human
 gate sits on the PR. This is a deliberate, scoped exception to the Chair-approval rule in
@@ -233,10 +234,10 @@ sequenceDiagram
 | Workflow | Event | Filter | Concurrency |
 |---|---|---|---|
 | `issue-triage.yml` *(exists)* | `issues: opened, edited, reopened`, manual | author not a bot | per issue |
-| `ai-director.yml` *(dry-run)* | `issues: labeled`, hourly sweep (at most 3 issues, `ai:replan` first), manual | label is `ai:ready` / `ai:replan`; issue open | per issue |
-| `ai-council.yml` *(dry-run)* | `issues: labeled`, hourly sweep (at most 2 issues whose input changed), manual (`issue`, `force`) | label is `ai:council-required`; issue open | per issue |
-| `ai-developer.yml` *(dry-run)* | `issues: labeled`, manual (`issue`) | label is `ai:planned` / `ai:changes-required`; not `ai:blocked`, `ai:done`, `ai:human-approval`, `ai:semver-major`; with `ai:council-required` also `ai:council-approved` | per issue, never cancelled mid-push |
-| `ai-quality-gate.yml` *(dry-run)* | `workflow_run: completed` of `Unit Tests`, `SonarQube`, `PR Contract`; hourly sweep (2 PRs whose evidence changed); manual (`pr`, `force`) | PR open; base `master` / `release-v*` (`.github/ai/gate.json`) | per HEAD SHA, latest wins |
+| `ai-director.yml` | `issues: labeled`, hourly sweep (at most 3 issues, `ai:replan` first), manual | label is `ai:ready` / `ai:replan`; issue open | per issue |
+| `ai-council.yml` | `issues: labeled`, hourly sweep (at most 2 issues whose input changed), manual (`issue`, `force`) | label is `ai:council-required`; issue open | per issue |
+| `ai-developer.yml` | `issues: labeled`, manual (`issue`) | label is `ai:planned` / `ai:changes-required`; not `ai:blocked`, `ai:done`, `ai:human-approval`, `ai:semver-major`; with `ai:council-required` also `ai:council-approved` | per issue, never cancelled mid-push |
+| `ai-quality-gate.yml` | `workflow_run: completed` of `Unit Tests`, `SonarQube`, `PR Contract`; hourly sweep (2 PRs whose evidence changed); manual (`pr`, `force`) | PR open; base `master` / `release-v*` (`.github/ai/gate.json`) | per HEAD SHA, latest wins |
 | `ai-done.yml` | `pull_request: closed` | merged; linked issue carries an `ai:*` state | per issue |
 
 ### 7.1 Why labels are written with the GitHub App token

@@ -1,93 +1,38 @@
 # Agent Council Plan Mode
 
-## Scope
-
-This rule applies to architecture, technology-selection, cross-service, data-model,
-security, reliability, performance, and other non-trivial engineering decisions in
-this repository.
-
-The council is a **planning and decision process only**. It must not implement code,
-modify runtime behavior, create migrations, start infrastructure, commit changes,
-push branches, or open pull requests while the council session is active.
+Governs **when** the council runs and what an answer must disclose. **How** it runs is the
+`agent-council` skill (`.claude/skills/agent-council/`); verdicts, conditions, risk and the Chair are
+the contract in [`docs/agent-council/README.md`](../../docs/agent-council/README.md).
 
 ## Trigger
 
-The runnable procedure is the **`agent-council` skill** (`.claude/skills/agent-council/`).
-Invoke it through the `Skill` tool when either signal below fires. This rule states
-*when* and *why*; the skill states *how*.
+**Phrases**: "council", "council işlet", "karar verelim", "hangisini seçelim", "eklemeli miyim",
+"eklemeli miyiz", "yapmalı mıyız", "should we add", "should we build", "mimari karar", "hangi yaklaşım".
 
-**Phrases**: "council", "council işlet", "karar verelim", "hangisini seçelim",
-"eklemeli miyim", "eklemeli miyiz", "yapmalı mıyız", "should we add", "should we
-build", "mimari karar", "hangi yaklaşım".
+**Shape** — no phrase required. The honest answer is a *recommendation* rather than a fact, and the
+subject is a new component/task type, service or public contract; moving a responsibility between
+services; adopting or dropping a technology, broker or infrastructure dependency; a data-model, schema
+or consistency change; an auth/secret/PII boundary; a performance claim that would justify a change; or
+a deployment/recovery change. A request relayed from another team is a **strong** trigger: an outside
+party already holds a position nobody has argued against.
 
-**Shape** — no phrase required. The question's honest answer is a *recommendation*
-rather than a fact, and the subject is a new component/task type, service or public
-contract; moving a responsibility between services; adopting or dropping a technology,
-broker or infrastructure dependency; a data-model, schema or consistency change; an
-auth/secret/PII boundary; a performance claim that would justify a change; or a
-deployment/recovery change.
-
-A request relayed from another team is a **strong** trigger, not a weak one: an outside
-party already holds a position that nobody has argued against.
-
-**Does not apply to**: single-file or single-method fixes, renames, doc edits, test
-additions, purely informational questions, or carrying out a decision the user has
-already made. Answer those directly. If unsure, ask in one sentence — do not silently skip.
+**Does not apply to**: single-file or single-method fixes, renames, doc edits, test additions, purely
+informational questions, or carrying out a decision the user has already made. If unsure, ask in one
+sentence — do not silently skip. Lite is the default mode; Full only when the contract says so.
 
 ## Mandatory disclosure
 
-An answer to a qualifying question **must open by stating council status**: that the
-council ran (linking the session), or that it was skipped and why. Answering a
-council-shaped question silently from a single perspective is a violation of this rule,
-not a shortcut. The most common failure is producing a well-researched answer in which
-nobody argued the opposing side.
-
-## Required flow
-
-The procedure — task record, council selection (Solution Architect, Pragmatic Engineer and Test &
-Evidence always; Security, Data, Performance, Reliability and Devil's Advocate by risk), independent
-proposals before cross-exposure, at most two evidence-based objection rounds, a recorded decision with
-dissent, rollback and verification plan, and one of `APPROVED` / `EXPERIMENT_REQUIRED` /
-`CLARIFICATION_REQUIRED` / `BLOCKED` / `REJECTED` — is the `agent-council` skill. High/Critical and
-Chair-gated decisions stay blocked until the configured Chair approves. One scoped exception: in the
-CI AI pipeline an `APPROVED` council verdict authorizes development (not merge) — [pipeline §3](../../docs/governance/ai-engineering-pipeline.md).
-
-## Hard gates
-
-- Missing workload, security, data ownership, rollback, or acceptance evidence is not
-  an approval; it is `CLARIFICATION_REQUIRED`, `EXPERIMENT_REQUIRED`, or `BLOCKED`.
-- Hard constraints cannot be overridden by a score or majority vote.
-- `APPROVE_WITH_CONDITIONS` cannot authorize implementation until every mandatory
-  condition has an owner, due date, evidence reference, and `Satisfied` or `Waived`
-  status from an authorized approver.
-- The implementer cannot be the final reviewer of the same change.
-- Do not claim performance, recovery, security, or compatibility without a reproducible
-  test, measurement, repository evidence, or explicit human approval.
+An answer to a qualifying question **opens by stating council status**: that it ran (linking the
+session), or that it was skipped and why. A council-shaped question answered silently from a single
+perspective violates this rule — the usual failure is a well-researched answer in which nobody argued
+the opposing side.
 
 ## Plan-mode boundary
 
-During this process, the agent may inspect repository files and produce planning
-artifacts under `ai-docs/agent-council/sessions/` (git-ignored) or a user-specified planning location, plus the log row in `docs/agent-council/sessions/README.md`. The agent
-must not edit production source, tests, migrations, deployment manifests, generated
-contracts, or project configuration as part of the council decision.
-
-The council output is not implementation approval by itself. After approval, create a
-separate implementation task and obtain explicit user direction before making code
-changes. Keep the decision, dissent, evidence, and conditions linked to that task.
-
-## Repository-specific checks
-
-- Read `docs/agent-onboarding.md` before planning a vNext change.
-- Use code as the source of truth when current behavior matters.
-- Keep runtime and workflow claims aligned with `LifecycleOrder.cs`,
-  `PipelineExecutionProfile.cs`, and the relevant current `/docs` page.
-- Follow the repository's Aether, outbox, multi-schema, logging, Result-pattern,
-  testing, and integration-test policies when defining the validation plan.
-- Do not start infrastructure or expensive integration tests during council planning
-  without explicit user approval.
-
-## Required plan artifact
-
-The artifact checklist (context and acceptance criteria, composition and separation of duties,
-proposals, objections, decision matrix, dissent, experiment plan, rollback, Chair decision) is defined
-by the `agent-council` skill; a plan missing any of them is not a council output.
+While a session is active the agent reads anything and writes only the session folder under
+`ai-docs/agent-council/sessions/` and one row in `docs/agent-council/sessions/README.md`. No production
+source, tests, migrations, manifests, generated contracts or configuration; no infrastructure or
+expensive integration runs without the user's go-ahead. A decision is not implementation approval:
+implementation is a separate task with the user's explicit direction, linked to the decision. In the CI
+pipeline an `APPROVED` verdict authorizes development, not merge
+([pipeline §3](../../docs/governance/ai-engineering-pipeline.md)).

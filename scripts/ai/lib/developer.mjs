@@ -4,6 +4,7 @@
 // Dependency-free: Node built-ins only.
 import { sanitizeText } from '../../triage/lib/triage.mjs';
 import { BOT_LOGINS, readPlanData } from './director.mjs';
+import { readCouncilData } from './council.mjs';
 
 export const DEV_MARKER = '<!-- ai-developer:v1 -->';
 export const branchFor = (n) => `ai/issue-${n}`;
@@ -346,6 +347,15 @@ export function extractCouncilRow(councilBody) {
   return m ? m[1] : null;
 }
 
+/**
+ * The council's human-owned `in-PR` conditions (the comment's data line), sanitized again because the
+ * comment is read back from GitHub. Empty when there are none or the comment predates them.
+ */
+export function extractMergeChecks(councilBody) {
+  const merge = readCouncilData(councilBody)?.merge;
+  return (Array.isArray(merge) ? merge : []).map((m) => sanitizeText(m, 400)).filter(Boolean).slice(0, MAX_LIST);
+}
+
 /** Appends `row` to the sessions log above its closing comment; null when it is already there. */
 export function insertLogRow(readme, row) {
   const link = /\[(issue-\d+-council)\]/.exec(row)?.[1];
@@ -398,7 +408,7 @@ export function runnerWarning(runner) {
 
 /** The PR body: the template's sections plus the AI decision record (§9). */
 export function renderPrBody(ctx) {
-  const { issue, result, plan, labels, councilUrl, planUrl, branch, runner, repairs, maxRepairs, e2eReason } = ctx;
+  const { issue, result, plan, labels, councilUrl, planUrl, branch, runner, repairs, maxRepairs, e2eReason, mergeChecks = [] } = ctx;
   const council = labels.includes('ai:council-approved') && councilUrl
     ? `APPROVED — ${councilUrl}${result.conditions.length ? ` · conditions: ${result.conditions.map((c) => `${c.id} ${c.status}`).join(', ')}` : ''}`
     : `not required — ${plan?.council ? 'see the Director plan' : 'no council criterion matched in the Director plan'}`;
@@ -438,6 +448,7 @@ export function renderPrBody(ctx) {
     `- Classification: ${['semver', 'impact', 'risk'].map((g) => labels.find((l) => l.startsWith(`ai:${g}-`))?.slice(3) ?? `${g}-?`).join(' · ')}`,
     `  - Why: ${why ? `from the Director plan (${why})` : 'from the Director plan'}`,
     `- Council: ${council}`,
+    ...(mergeChecks.length ? ['  - Merge checks for the human reviewer (council `in-PR` conditions):', ...mergeChecks.map((m) => `    - [ ] ${m}`)] : []),
     `- Repair attempts: ${repairs}/${maxRepairs}`,
     `- Agent confidence: ${result.confidence}`,
     '',

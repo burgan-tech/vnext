@@ -24,8 +24,8 @@ comments): say what changed and whether it changes the verdict.
 
 ## How to run the council
 
-1. Read `AGENTS.md`, then the council contract: `docs/agent-council/PROCESS.md`,
-   `docs/agent-council/COUNCIL-SELECTION.md` and the role files in `docs/agent-council/roles/`.
+1. Read `AGENTS.md`, then the council contract `docs/agent-council/README.md` (verdicts, condition
+   classes, risk) and the role briefs in `docs/agent-council/roles.md`.
 2. Read the code and docs the plan names (code wins over docs: `LifecycleOrder.cs`,
    `PipelineExecutionProfile.cs`, the relevant `/docs` page). Spend at most ~40 tool calls. Every
    path you cite must exist; separate **verified facts** (file and line) from **assumptions**.
@@ -48,16 +48,26 @@ shape stays supported in parallel with a deprecation), rollout and rollback.
 | verdict | when |
 |---|---|
 | `APPROVED` | the design is sound, every hard constraint holds, nothing needs a human decision first |
-| `APPROVE_WITH_CONDITIONS` | sound, but conditions must be met by a human before development (an owner decision, a companion release, a measurement) |
+| `APPROVE_WITH_CONDITIONS` | sound, but a `blocking` condition must be met by a human before development (an owner decision, a companion release, an experiment result) |
 | `EXPERIMENT_REQUIRED` | a claim (performance, recovery, compatibility) needs a measurement first |
 | `CLARIFICATION_REQUIRED` | workload, data ownership, security, rollback or acceptance evidence is missing |
 | `BLOCKED` | a hard constraint is violated (breaking change without a parallel path, a security regression, an impossible dependency) |
 | `REJECTED` | the change should not be made |
 
-Conditions the Developer can satisfy inside its own PR (a test, a deprecation entry, a doc page)
-belong in `conditions` with `owner: "developer"` and still allow `APPROVED`. Anything that needs a
-person is `owner: "human"` and means `APPROVE_WITH_CONDITIONS` or stricter. A `major` (breaking)
-change is never approved for AI development — advise, then `BLOCKED`.
+Every condition has an `owner` and a `class`:
+
+- `blocking` — must be met **before** development starts (an owner decision, a companion release, an
+  experiment result). A `blocking` condition owned by a human means `APPROVE_WITH_CONDITIONS` or
+  stricter.
+- `in-PR` — proven inside the PR (a test, a deprecation entry, a doc page, a human's review of a
+  specific point at merge time). Does not stop development; the PR body lists it and the human reviewer
+  checks it before merge.
+- `follow-up` — a separate issue; blocks nothing.
+
+Conditions the Developer can satisfy itself are `owner: "developer"` (never `blocking`). A decision only
+a human can make before coding goes in `humanDecisions` and means `APPROVE_WITH_CONDITIONS`. When you
+are unsure of the class, use `blocking`. A `major` (breaking) change is never approved for AI
+development — advise, then `BLOCKED`.
 
 ## Output
 
@@ -79,7 +89,7 @@ Answer with exactly this JSON object and nothing else (no prose, no fences):
   "rollout": "migration / rollout and rollback strategy",
   "tests": ["unit tests and vnext-example e2e scenarios that prove it"],
   "risks": ["architectural risk"],
-  "conditions": [{ "id": "C-1", "text": "", "owner": "developer | human" }],
+  "conditions": [{ "id": "C-1", "text": "", "owner": "developer | human", "class": "blocking | in-PR | follow-up" }],
   "humanDecisions": ["decision only a human can make"],
   "dissent": ["role: what it disagreed with and why"],
   "confidence": "low | medium | high"

@@ -1,58 +1,37 @@
-# Proposal
+# Proposal — <role>
 
-- Session ID:
-- Proposal ID:
-- Version:
-- Agent:
-- Author actor ID:
-- Created at (UTC):
-- Supersedes:
-- Status:
-- Confidence: 0–100
+- Session: <YYYY-MM-DD-slug> · Proposal: P-<nn> · Confidence: 0–100
 
-## Proposed Approach
+## Approach
 
-## Why This Approach
+What to do, in a few sentences.
 
-## Change Surface
+## Why
 
-- Components:
-- Contracts:
-- Data model:
-- Operations:
+Verified facts with `file:line`. Assumptions listed separately.
 
-## Assumptions
+## Change surface
 
-1.
+Components · contracts · data model · operations · other repositories.
 
-## Trade-offs
+## Trade-offs and risks
 
-### Benefits
+| Risk | Impact | Mitigation |
+|---|---|---|
 
--
+## Alternatives considered
 
-### Costs
-
--
-
-## Risks And Mitigations
-
-| Risk | Probability | Impact | Mitigation |
-|---|---|---|---|
-| | | | |
-
-## Alternatives
-
-| Alternative | Why not selected |
+| Alternative | Why not |
 |---|---|
-| | |
 
-## Verification Plan
+## Verification
 
-- Claim:
-  - Evidence/test:
-  - Success threshold:
+| Claim | Evidence or test | Threshold |
+|---|---|---|
 
 ## Rollback
 
-## Open Questions
+## Conditions I would attach
+
+| Id | Condition | Owner | Class (`blocking` / `in-PR` / `follow-up`) |
+|---|---|---|---|

@@ -1,12 +1,13 @@
 # Agent Council — Decision Log
 
-Chronological index of every council session. Session folders live under `ai-docs/agent-council/sessions/<task-id>/` (git-ignored, local to the machine that ran the council); this index is the only committed record. One row per session,
-appended when `DECISION.md` is recorded (and updated if the verdict later changes). This is the
-history: read it first to find out whether a question has already been decided, then open the
-session folder for the evidence, dissent and conditions.
+One row per council session, newest at the bottom — the only committed record of council decisions.
+Read it first: the question may already be decided. Session folders (`DECISION.md`, proposals) live in
+git-ignored `ai-docs/agent-council/sessions/<task-id>/`, so the session link resolves only on the machine
+that ran it. Contract (verdicts, statuses, amendments): [../README.md](../README.md).
 
-Session folders are NOT committed (team decision 2026-09-07). Each free-text cell stays at ~300 characters or less — decision, status and a one-sentence rationale — so the row stands alone; the evidence, dissent and full conditions live in the session's `DECISION.md`;
-the folder link below resolves only on the machine that ran the session.
+Row rules: one headline verdict (the scope that moves now), each free-text cell ~300 characters or less,
+later rulings appended as `Chair YYYY-MM-DD: …` or `Amendment YYYY-MM-DD: …`. Rows before 2026-11-27
+predate this format and are kept as written.
 
 | Date | Session | Topic | Risk | Verdict | Selected approach | Follow-up |
 |------|---------|-------|------|---------|-------------------|-----------|
@@ -32,8 +33,8 @@ the folder link below resolves only on the machine that ran the session.
 | 2026-11-18 | [issue #1253](https://github.com/burgan-tech/vnext/issues/1253) | Guard Dapr-triggered endpoints (events, schedule, job) to own-sidecar deliveries | High | Requester direction 2026-11-18 (token-first; Chair confirmation in PR) | Token-first own-sidecar guard (`dapr-api-token` + no `dapr-caller-app-id`), `LogOnly` default; supersedes the #1253 CI council's loopback-first proposal | Phase 2 internal endpoints; Helm PR; e2e + cross-domain evidence pending |
 | 2026-11-20 | [2026-11-19-transition-history-exposure](../../../ai-docs/agent-council/sessions/2026-11-19-transition-history-exposure/DECISION.md) | Transition history serves unfiltered body, stored request headers (incl. Authorization) and actor ids (#1260 / client-sdk-core#112) | High | `APPROVE_WITH_CONDITIONS` — **Awaiting Chair** | PR-A: body via the read path, fail-closed when schema unavailable, roles once per request; headers fixed 2-name allow-list. PR-B same release: persist minus credential/identity floor, live headers on retry. Actor ids → Chair (KVKK). | Chair C-1…C-7 (A1 gateway check, breaking ruling, actor rule, row clean-up) |
 | 2026-11-20 | [2026-11-20-expression-rules-1228](../../../ai-docs/agent-council/sessions/2026-11-20-expression-rules-1228/DECISION.md) | Expression rules as an alternative to rule scripts (#1228, parent #1227) | High | **APPROVE_WITH_CONDITIONS — Awaiting Chair** | DynamicExpresso engine, vNext-owned strict grammar (VRE-1) for a bare-string rule in 7 condition slots only (= `location:"expression"`); legacy `dynamicExpresso` unchanged but assignment off; member allowlist; null only with `== != ?? ?.`; failure never selects; `user` roles only, no empty-set fallback | C-1 visitor spike (stop/go), G-1…G-8, runtime before schema + empty-rule guard, rollback runbook; dissent: DA/SG prefer `{expr}`, 3–3 on `!data.flag`. Amended 2026-11-24 by user direction: scope widened to declarative task mappings (input/output set/into/select, DynamicExpresso default, `user` in task mappings) — plan ai-docs/superpowers/plans/2026-11-23-expression-mappings.md |
-<!-- newest at the bottom; keep one line per session -->
 | 2026-11-23 | [2026-11-23-mapped-transition-master-schema-preview](../../../ai-docs/agent-council/sessions/2026-11-23-mapped-transition-master-schema-preview/DECISION.md) | Master-schema violation on a transition with a `mapping`: exempt from the intake preview of #1255, so it still faults the instance (review finding on PR #1327) | Medium | APPROVE_WITH_CONDITIONS | Keep the exemption in PR #1327, documented as a known gap, not a contract. Running the mapping at intake is rejected (scripts are not side-effect free). A non-faulting rejection is not approved as it stands: it would lose async work silently. Conditions open: characterization scenario before merge; a separate prevention issue with owner and due date. | PR #1327; prevention issue to be opened (not #1252) |
+<!-- newest at the bottom; keep one line per session -->
 
-Verdicts: `APPROVED` · `APPROVE_WITH_CONDITIONS` · `EXPERIMENT_REQUIRED` · `CLARIFICATION_REQUIRED` · `BLOCKED` · `REJECTED`.
-`Follow-up` links the implementation PR/issue, the superseding session, or `—`.
+Verdicts and statuses: [../README.md § Verdicts](../README.md#verdicts). `Follow-up` links the
+implementation PR/issue, the superseding session, or `—`.
