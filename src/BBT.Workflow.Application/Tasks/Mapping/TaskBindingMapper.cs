@@ -254,7 +254,7 @@ public static class TaskBindingMapper
     /// <summary>
     /// Maps the task's multipart parts to their wire form; null when the task has none.
     /// </summary>
-    private static IReadOnlyList<HttpMultipartPartBinding>? MapMultipart(IReadOnlyList<HttpMultipartPart>? parts)
+    private static List<HttpMultipartPartBinding>? MapMultipart(IReadOnlyList<HttpMultipartPart>? parts)
     {
         if (parts is not { Count: > 0 })
             return null;

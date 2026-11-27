@@ -624,21 +624,29 @@ public static class HttpTaskInvocation
 
             ApplyTrustedCorrelationHeaders(request, traceContext);
 
-            // Add body for non-GET requests. A multipart body wins and sets its own media type (the boundary);
-            // otherwise the resolution is: explicit ContentType → Content-Type header → json.
-            if (request.Method != HttpMethod.Get && binding.Multipart is { Count: > 0 } parts)
-            {
-                request.Content = BuildMultipartContent(parts);
-            }
-            else if (request.Method != HttpMethod.Get && !string.IsNullOrEmpty(binding.Body))
-            {
-                var contentType = HttpContentType.Resolve(binding.ContentType, headerContentType);
-                request.Content = new StringContent(binding.Body, Encoding.UTF8);
-                request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(contentType);
-            }
+            if (request.Method != HttpMethod.Get)
+                request.Content = BuildRequestContent(binding, headerContentType);
 
             return (httpClient, request);
         }
+    }
+
+    /// <summary>
+    /// Builds the body of a non-GET request, or null when there is none. A multipart body wins and sets its own
+    /// media type (the boundary); otherwise the resolution is: explicit ContentType → Content-Type header → json.
+    /// </summary>
+    private static HttpContent? BuildRequestContent(HttpTaskBinding binding, string? headerContentType)
+    {
+        if (binding.Multipart is { Count: > 0 } parts)
+            return BuildMultipartContent(parts);
+
+        if (string.IsNullOrEmpty(binding.Body))
+            return null;
+
+        var content = new StringContent(binding.Body, Encoding.UTF8);
+        content.Headers.ContentType =
+            MediaTypeHeaderValue.Parse(HttpContentType.Resolve(binding.ContentType, headerContentType));
+        return content;
     }
 
     /// <summary>
