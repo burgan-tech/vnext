@@ -1,0 +1,7 @@
+{
+  "releaseNote": {
+    "summary": "Instance queries that mix instance columns with attribute conditions under OR now let PostgreSQL serve the attribute conditions from the InstancesData GIN index.",
+    "breaking": false,
+    "docs": []
+  }
+}
