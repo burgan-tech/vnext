@@ -156,6 +156,53 @@ public sealed class InstanceCommandAppServiceExecutionTypeTests : IDisposable
     }
 
     /// <summary>
+    /// A transition the definition forces to sync, called with sync=false, is answered with the enriched body.
+    /// When it entered a SubFlow, the instance the run hands back is the post-commit settlement's reload, which
+    /// loads the data row by the CALLER's mode (async ⇒ none): projecting it answered 200 with no attributes.
+    /// The response must read the row instead.
+    /// </summary>
+    [Fact]
+    public async Task TransitionAsync_ForcedSyncForAnAsyncCaller_ReadsTheInstanceInsteadOfReusingTheSettlement()
+    {
+        SetupInstanceAndWorkflow(WithSharedTransition(ExecutionType.Sync));
+        var settled = SettledInstanceReturnedByTheRun();
+        _instanceRepository.FindByIdentifierAsReadOnlyAsync(settled.Id.ToString(), Arg.Any<CancellationToken>())
+            .Returns(settled);
+
+        var result = await _service.TransitionAsync(settled.Id.ToString(), "go", Input(sync: false), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        result.Value!.ExecutedAsync.ShouldBe(false);
+        await _instanceRepository.Received(1)
+            .FindByIdentifierAsReadOnlyAsync(settled.Id.ToString(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task TransitionAsync_SyncCaller_ProjectsTheInstanceTheRunReturned()
+    {
+        // The settlement loaded the data row for a sync caller, so its instance is projected as is.
+        SetupInstanceAndWorkflow(WithSharedTransition(ExecutionType.Sync));
+        var settled = SettledInstanceReturnedByTheRun();
+
+        var result = await _service.TransitionAsync(settled.Id.ToString(), "go", Input(sync: true), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        await _instanceRepository.DidNotReceiveWithAnyArgs().FindByIdentifierAsReadOnlyAsync(default!, default);
+    }
+
+    private Instance SettledInstanceReturnedByTheRun()
+    {
+        var settled = Instance.Create(Guid.NewGuid(), Flow, Version, "k");
+        _workflowExecutionService
+            .ExecuteTransitionAsync(Arg.Any<WorkflowExecutionContext>(), Arg.Any<CancellationToken>())
+            .Returns(Result<TransitionOutput>.Ok(new TransitionOutput
+            {
+                Id = settled.Id, Status = InstanceStatus.Active, PipelineInstance = settled
+            }));
+        return settled;
+    }
+
+    /// <summary>
     /// x-storage: a DirectTrigger transition carries a body the flow authored (TrustedPayload). The flag
     /// must reach the execution context, or its references are echo-checked as a client's and rejected.
     /// </summary>

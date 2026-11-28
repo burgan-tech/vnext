@@ -1,0 +1,7 @@
+{
+  "releaseNote": {
+    "summary": "A transition forced to sync by its definition (executionType S) that enters a SubFlow now answers a sync=false caller with its attributes; it returned 200 with none.",
+    "breaking": false,
+    "docs": []
+  }
+}
