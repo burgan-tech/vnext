@@ -484,6 +484,18 @@ public sealed class InstanceCommandAppService(
     }
 
     /// <summary>
+    /// The run's committed instance when the sync response may be projected from it, else null (the enrichment
+    /// then reads the row). The post-commit settlement — the instance a hop that entered a SubFlow hands back —
+    /// loads the latest data row by the CALLER's mode (<c>PostCommitParentMutationService.NeedsLatestDataForSettle</c>),
+    /// not the effective one. A start or transition the definition forces to sync (<c>executionType: S</c>) for a
+    /// caller that sent <c>sync=false</c> therefore comes back without its data, and projecting it answered
+    /// 200 with no <c>attributes</c>. The settle rule cannot use the effective mode instead: jobs and inline
+    /// continuations also run with <c>Mode = Sync</c> and would all load a row nobody projects.
+    /// </summary>
+    internal static Instance? ReusableForResponse(Instance? pipelineInstance, ExecMode callerMode) =>
+        callerMode == ExecMode.Sync ? pipelineInstance : null;
+
+    /// <summary>
     /// Whether <see cref="MapAndAppendInstanceDataAsync"/> stored the start payload exactly as the start hop will
     /// carry it: there was a payload, the flow keeps history (a <c>history: none</c> creation writes no row), and the
     /// start transition maps nothing, so the mapper handed the payload through unchanged. Only then is the hop's own
@@ -563,10 +575,7 @@ public sealed class InstanceCommandAppService(
                     // handed off to a SubFlow (loaded with its latest data for a sync caller precisely so the
                     // response can be projected from it). Enrichment reuses it unless it is Busy, exactly as
                     // on the transition path; dropping it here made every sync start read the row again.
-                    // Only for a caller that asked for sync: the settlement loads the data row by the CALLER's
-                    // mode (PostCommitParentMutationService.NeedsLatestDataForSettle), so a start the definition
-                    // forced to sync (executionType S, caller sync=false) comes back without it and is read again.
-                    PipelineInstance = callerMode == ExecMode.Sync ? transitionOutput.PipelineInstance : null
+                    PipelineInstance = ReusableForResponse(transitionOutput.PipelineInstance, callerMode)
                 };
 
                 // A runtime-internal sync start (cross-domain sub start) skips the enrichment below but
@@ -884,7 +893,10 @@ public sealed class InstanceCommandAppService(
                 // status. A runtime-internal relay (SuppressResponseEnrichment) awaits the pipeline like any
                 // sync caller but takes the identity-only response — see TransitionInput.
                 if (context.Mode == ExecMode.Sync && !input.SuppressResponseEnrichment)
+                {
+                    output.PipelineInstance = ReusableForResponse(output.PipelineInstance, context.CallerMode);
                     return EnrichSyncOutputAsync(output, output.Id, workflowDefinition, new AuthorizationRequestContext(input.Headers), cancellationToken);
+                }
                 output.Key = snapshot.Key;
                 // Identity-only relay that still ran sync: carry the state from the pipeline's own
                 // instance, no read (vnext#1182). Null when the pipeline answered from a ClientResponse.
