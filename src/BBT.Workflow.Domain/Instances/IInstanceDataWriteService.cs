@@ -60,6 +60,26 @@ public interface IInstanceDataWriteService
         bool touchInstance = false);
 
     /// <summary>
+    /// <see cref="AppendAsync"/> plus a write that must commit with it: <paramref name="inSameTransaction"/>
+    /// runs inside the row-lock transaction after the row is written (or deduplicated), so the data
+    /// row and the caller's write commit together — one commit instead of two. The task engine uses it
+    /// for the task's journal row. The callback must issue its statements on the shared context's
+    /// connection without <c>SaveChanges</c> (raw or set-based SQL), must not call back into this
+    /// service (the per-instance gate is not re-entrant) and must do no slow I/O: the instance row is
+    /// held <c>FOR UPDATE</c> while it runs. For a buffered (<c>history: none</c>) instance nothing is
+    /// written yet, and the callback runs on its own after the buffered append.
+    /// </summary>
+    /// <returns>The persisted row, or <c>null</c> when the merge produced no content change.</returns>
+    Task<InstanceData?> AppendWithAsync(
+        Instance instance,
+        JsonData delta,
+        VersionStrategy? versionStrategy,
+        Func<CancellationToken, Task> inSameTransaction,
+        CancellationToken cancellationToken = default,
+        Definitions.Workflow? workflow = null,
+        bool touchInstance = false);
+
+    /// <summary>
     /// Appends a row with an EXPLICIT, caller-authored version (the definition publish path):
     /// no merge — the payload is stored as authored. Under the same row lock, an existing row
     /// with the same version short-circuits (returns it, no write); otherwise the head

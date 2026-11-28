@@ -511,13 +511,12 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
     /// merged content. Extension/Function paths never persist instance data (unchanged
     /// behavior); a dedup no-op (identical merged content) leaves the snapshot as-is.
     /// </summary>
-    /// <returns>The materialized Data delta that was appended, or null when nothing was applied.</returns>
-    private async Task<JsonData?> ApplyOutputToContextAsync(
+    /// <returns>The materialized Data delta to append, or null when the task's output is not persisted.</returns>
+    private static JsonData? MaterializeOutputDelta(
         StandardTaskResponse response,
         TaskTrigger taskTrigger,
         TaskExecutionOrigin origin,
-        ScriptContext context,
-        CancellationToken cancellationToken)
+        ScriptContext context)
     {
         if (taskTrigger == TaskTrigger.Extension
             || origin != TaskExecutionOrigin.Flow
@@ -530,23 +529,41 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
         // Materialize the persisted text and the parsed element together. The append pipeline reads
         // delta.JsonElement immediately, so constructing JsonData from a string would force a parse
         // of the payload we just serialized.
-        var delta = JsonData.FromMaterializedObject(response.Data, JsonSerializerConstants.JsonOptions);
+        return JsonData.FromMaterializedObject(response.Data, JsonSerializerConstants.JsonOptions);
+    }
 
+    /// <summary>
+    /// Appends the materialized output delta to the instance's data line. With
+    /// <paramref name="inSameTransaction"/> the caller's write (the task journal row) runs inside the
+    /// append's row-lock transaction and commits with it.
+    /// </summary>
+    private async Task AppendOutputAsync(
+        JsonData delta,
+        ScriptContext context,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? inSameTransaction = null)
+    {
         // A task of an updateData transition writes data that IS the instance's modification —
         // updateData has no outcome write of its own — so its row stamps Instances.ModifiedAt, like
         // updateData's request body does. Any other transition's task output rides on that
         // transition's own outcome stamp.
         var touchInstance = context.Workflow?.IsUpdateDataKey(context.Transition?.Key) == true;
-        var persisted = await _instanceDataWriteService.AppendAsync(
-            context.Instance, delta, VersionStrategy.IncreasePatch, cancellationToken, context.Workflow, touchInstance);
 
-        // The service refreshed the aggregate it was given (the snapshot). Nothing else to do:
+        // The service refreshes the aggregate it is given (the snapshot). Nothing else to do:
         // the live aggregate in the pipeline scope is fixed up by EF when it shares the
         // DbContext, and synced from the snapshot at the step boundary otherwise — its data, not its
         // ModifiedAt. That is deliberate: the stamp is already in the database, and copying it onto the
         // tracked live aggregate would mark the column dirty and send a second UPDATE for it.
-        _ = persisted;
-        return delta;
+        if (inSameTransaction is null)
+        {
+            await _instanceDataWriteService.AppendAsync(
+                context.Instance!, delta, VersionStrategy.IncreasePatch, cancellationToken, context.Workflow, touchInstance);
+            return;
+        }
+
+        await _instanceDataWriteService.AppendWithAsync(
+            context.Instance!, delta, VersionStrategy.IncreasePatch, inSameTransaction, cancellationToken,
+            context.Workflow, touchInstance);
     }
 
     /// <summary>
@@ -716,26 +733,44 @@ public sealed class TaskExecutionEngine : ITaskExecutionEngine
 
         // Apply output to context (Flow origin: persisted immediately under the row lock).
         // Collect-only callers (FanOut items) suppress this: the batch has a single write point.
-        JsonData? appliedDelta = null;
-        if (!options.SuppressDataApply)
-        {
-            appliedDelta = await ApplyOutputToContextAsync(response, taskTrigger, origin, context, cancellationToken);
-        }
+        // The task has already returned: the row-lock transaction opens only now, so the task's
+        // own duration never holds a connection, a transaction or the instance row lock.
+        var delta = options.SuppressDataApply ? null : MaterializeOutputDelta(response, taskTrigger, origin, context);
 
         // Journal response: built only when it is persisted, and reusing the already-materialized
         // Data delta instead of serializing response.Data a second time.
         var responseJson = capturesJournal
-            ? SerializeJournalResponse(response, appliedDelta)
+            ? SerializeJournalResponse(response, delta)
             : JsonData.Empty;
 
-        // Mark task completed with business status
-        instanceTask.Completed(responseJson, isBusinessSuccess: response.IsSuccess);
-
-        // Persist completion
-        using (TaskExecutionActivityHelper.StartActivity(
-                   TaskExecutionActivityHelper.OperationJournalComplete, task.Key, taskTypeStr))
+        if (delta is not null && persistenceStrategy is { CompletesInCallerTransaction: true })
         {
-            await PersistCompletionAsync(persistenceStrategy, instanceTask, cancellationToken);
+            // One commit for the data row and the journal row: the journal is written inside the
+            // append's row-lock transaction, right after the data row.
+            await AppendOutputAsync(delta, context, cancellationToken, async ct =>
+            {
+                instanceTask.Completed(responseJson, isBusinessSuccess: response.IsSuccess);
+                using (TaskExecutionActivityHelper.StartActivity(
+                           TaskExecutionActivityHelper.OperationJournalComplete, task.Key, taskTypeStr))
+                {
+                    await persistenceStrategy.HandleCompletionInCallerTransactionAsync(instanceTask, ct);
+                }
+            });
+        }
+        else
+        {
+            if (delta is not null)
+                await AppendOutputAsync(delta, context, cancellationToken);
+
+            // Mark task completed with business status
+            instanceTask.Completed(responseJson, isBusinessSuccess: response.IsSuccess);
+
+            // Persist completion
+            using (TaskExecutionActivityHelper.StartActivity(
+                       TaskExecutionActivityHelper.OperationJournalComplete, task.Key, taskTypeStr))
+            {
+                await PersistCompletionAsync(persistenceStrategy, instanceTask, cancellationToken);
+            }
         }
 
         // 11. Handle business failure

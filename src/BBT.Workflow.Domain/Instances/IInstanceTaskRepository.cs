@@ -57,6 +57,19 @@ public interface IInstanceTaskRepository : IRepository<InstanceTask, Guid>
     Task MarkCompletedAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Inserts a completed task's journal row as ONE statement on the ambient unit of work's
+    /// connection, inside whatever transaction that context has open — never through
+    /// <c>SaveChanges</c>, which would also flush every other pending change tracked by the shared
+    /// context. Used to commit the row together with the task's data output (the InstanceData
+    /// append's row-lock transaction), so the task costs one commit instead of two. The entity is not
+    /// tracked. Like <see cref="MarkCompletedAsync"/>, no data-sink fan-out fires (no sink is
+    /// registered today; wire sinks here if that changes).
+    /// </summary>
+    /// <param name="instanceTask">The completed task whose values are written.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task InsertCompletedAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets a single instance task by its unique identifier.
     /// Non-tracking (AsNoTracking) — intended for read-only monitoring queries only.
     /// </summary>

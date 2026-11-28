@@ -137,6 +137,33 @@ public sealed class StandardTaskPersistenceStrategy(
         await uow.CommitAsync(cancellationToken);
     }
 
+    /// <inheritdoc />
+    public bool CompletesInCallerTransaction => true;
+
+    /// <summary>
+    /// The same single write as <see cref="HandleCompletionAsync"/> — an INSERT, or the set-based
+    /// UPDATE for a row a retry reused — issued inside the caller's open transaction (the task's
+    /// data-output append) on the shared context's connection, so the journal row and the data row
+    /// commit together: one commit and one WAL flush per task instead of two. No unit of work, no
+    /// <c>SaveChanges</c> (the shared context's other pending changes are not flushed) and no
+    /// bookkeeping writer (the caller's transaction owns the commit policy).
+    /// </summary>
+    /// <param name="instanceTask">The completed InstanceTask.</param>
+    /// <param name="cancellationToken">Cancellation token for async operation control.</param>
+    public async Task HandleCompletionInCallerTransactionAsync(
+        InstanceTask instanceTask,
+        CancellationToken cancellationToken = default)
+    {
+        if (PersistedRows.TryGetValue(instanceTask, out _))
+        {
+            await instanceTaskRepository.MarkCompletedAsync(instanceTask, cancellationToken);
+            return;
+        }
+
+        await instanceTaskRepository.InsertCompletedAsync(instanceTask, cancellationToken);
+        PersistedRows.AddOrUpdate(instanceTask, Persisted);
+    }
+
     private Task RunBookkeepingAsync(Func<CancellationToken, Task> write, CancellationToken cancellationToken) =>
         bookkeepingWriter is null ? write(cancellationToken) : bookkeepingWriter.RunAsync(write, cancellationToken);
 

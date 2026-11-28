@@ -83,13 +83,34 @@ public sealed class InstanceDataWriteService(
     // here would serialize this service against itself and against nothing else, and the collision
     // would come straight back. Splitting it back into two arrays reintroduces the bug.
     /// <inheritdoc />
-    public async Task<InstanceData?> AppendAsync(
+    public Task<InstanceData?> AppendAsync(
         Instance instance,
         JsonData delta,
         VersionStrategy? versionStrategy,
         CancellationToken cancellationToken = default,
         Definitions.Workflow? workflow = null,
-        bool touchInstance = false)
+        bool touchInstance = false) =>
+        AppendCoreWithAsync(instance, delta, versionStrategy, null, cancellationToken, workflow, touchInstance);
+
+    /// <inheritdoc />
+    public Task<InstanceData?> AppendWithAsync(
+        Instance instance,
+        JsonData delta,
+        VersionStrategy? versionStrategy,
+        Func<CancellationToken, Task> inSameTransaction,
+        CancellationToken cancellationToken = default,
+        Definitions.Workflow? workflow = null,
+        bool touchInstance = false) =>
+        AppendCoreWithAsync(instance, delta, versionStrategy, inSameTransaction, cancellationToken, workflow, touchInstance);
+
+    private async Task<InstanceData?> AppendCoreWithAsync(
+        Instance instance,
+        JsonData delta,
+        VersionStrategy? versionStrategy,
+        Func<CancellationToken, Task>? inSameTransaction,
+        CancellationToken cancellationToken,
+        Definitions.Workflow? workflow,
+        bool touchInstance)
     {
         // Before the gate: the master schema is loaded once (validation, x-encryption and x-storage all read it), and
         // the x-storage offload runs here — no binding I/O under the instance gate or the row lock, and the buffered
@@ -102,10 +123,16 @@ public sealed class InstanceDataWriteService(
         // A buffered (history: none) append writes nothing yet; the flush happens at the instance's
         // Finish, SubFlow handoff or fault, whose own outcome stamps it.
         if (instance.DataBuffer is { } buffer)
-            return await AppendBufferedAsync(instance, buffer, delta, versionStrategy, schema, cancellationToken);
+        {
+            var buffered = await AppendBufferedAsync(instance, buffer, delta, versionStrategy, schema, cancellationToken);
+            if (inSameTransaction is not null)
+                await inSameTransaction(cancellationToken);
+            return buffered;
+        }
 
         return await AppendCoreAsync(
-            instance, delta, versionStrategy, schema, cancellationToken, touchInstance: touchInstance);
+            instance, delta, versionStrategy, schema, cancellationToken,
+            afterPersist: inSameTransaction, touchInstance: touchInstance);
     }
 
     /// <inheritdoc />
