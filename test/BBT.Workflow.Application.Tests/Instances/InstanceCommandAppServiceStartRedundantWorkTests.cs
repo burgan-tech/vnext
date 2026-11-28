@@ -209,6 +209,38 @@ public class InstanceCommandAppServiceStartRedundantWorkTests : IDisposable
             .FindByIdentifierAsReadOnlyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task Sync_start_hands_the_created_instance_to_its_start_hop()
+    {
+        var result = await _service.StartAsync(CreateInput(withPayload: true), CancellationToken.None);
+
+        result.IsSuccess.ShouldBeTrue(result.IsSuccess ? null : result.Error.Message);
+        _captured!.CreatedInstance.ShouldNotBeNull();
+        _captured.CreatedInstance!.Id.ToString().ShouldBe(_captured.InstanceId);
+    }
+
+    [Fact]
+    public async Task Async_start_leaves_the_load_to_the_accept()
+    {
+        var input = CreateInput(withPayload: true);
+        input.Sync = false;
+
+        await _service.StartAsync(input, CancellationToken.None);
+
+        _captured!.CreatedInstance.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task History_none_start_leaves_the_load_to_the_hop()
+    {
+        // Its creation buffers the payload in memory; a loaded instance would not carry that buffer.
+        UseWorkflow(CreateWorkflow(historyNone: true, mapped: false));
+
+        await _service.StartAsync(CreateInput(withPayload: true), CancellationToken.None);
+
+        _captured!.CreatedInstance.ShouldBeNull();
+    }
+
     private void ReturnFromExecution(TransitionOutput output) =>
         _execution.ExecuteTransitionAsync(Arg.Do<WorkflowExecutionContext>(c => _captured = c), Arg.Any<CancellationToken>())
             .Returns(Result<TransitionOutput>.Ok(output));

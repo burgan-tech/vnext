@@ -1,0 +1,7 @@
+{
+  "releaseNote": {
+    "summary": "A sync start no longer reads back the instance it has just created: its start hop takes that instance, two SELECTs fewer per start and per SubFlow child.",
+    "breaking": false,
+    "docs": []
+  }
+}

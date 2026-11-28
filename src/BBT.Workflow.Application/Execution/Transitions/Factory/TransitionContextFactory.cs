@@ -29,7 +29,7 @@ public sealed class TransitionContextFactory(
             "Transition.LoadContext", input.TransitionKey);
         activity?.SetTag("vnext.context.source", "storage");
         var result = await ValidateDomain(input.Domain)
-            .BindAsync(_ => RehydrateInstanceAsync(input, cancellationToken))
+            .BindAsync(_ => RehydrateInstanceAsync(input, activity, cancellationToken))
             .ThenAsync(data => Task.FromResult(ResolveStateAndTransition(data, input)))
             .MapAsync(data => BuildExecutionContext(data, input));
 
@@ -63,12 +63,40 @@ public sealed class TransitionContextFactory(
     /// </summary>
     private Task<Result<(Definitions.Workflow Workflow, Instance Instance)>> RehydrateInstanceAsync(
         WorkflowExecutionContext input,
+        Activity? activity,
         CancellationToken cancellationToken)
     {
         return ResolveWorkflowAsync(input, cancellationToken)
             .BindAsync(workflow =>
-                LoadInstanceAsync(input.InstanceId, AdmitsFaulted(workflow, input), cancellationToken)
+                UseCreatedOrLoadInstanceAsync(input, workflow, activity, cancellationToken)
                     .MapAsync(instance => (workflow, instance)));
+    }
+
+    /// <summary>
+    /// The start hop of a request that has just created the instance takes that instance instead of
+    /// reading the row back (<see cref="WorkflowExecutionContext.CreatedInstance"/>): it is attached
+    /// Unchanged to this unit of work, then goes through the same post-load steps a loaded one does.
+    /// The carrier is cleared first, so it serves exactly one context; anything that keeps it from being
+    /// attached falls back to the load.
+    /// </summary>
+    private async Task<Result<Instance>> UseCreatedOrLoadInstanceAsync(
+        WorkflowExecutionContext input,
+        Definitions.Workflow workflow,
+        Activity? activity,
+        CancellationToken cancellationToken)
+    {
+        var created = input.CreatedInstance;
+        input.CreatedInstance = null;
+
+        if (created is not null
+            && created.Id.ToString() == input.InstanceId
+            && await instanceRepository.TryAttachCreatedAsync(created, cancellationToken))
+        {
+            activity?.SetTag("vnext.context.source", "created");
+            return await CompleteLoadAsync(created, cancellationToken);
+        }
+
+        return await LoadInstanceAsync(input.InstanceId, AdmitsFaulted(workflow, input), cancellationToken);
     }
 
     /// <summary>
@@ -119,17 +147,26 @@ public sealed class TransitionContextFactory(
             return result;
         }
 
+        return await CompleteLoadAsync(result.Value!, cancellationToken);
+    }
+
+    /// <summary>
+    /// What every instance the pipeline starts from goes through after it is tracked, whether it was
+    /// loaded or handed over by the start path.
+    /// </summary>
+    private async Task<Result<Instance>> CompleteLoadAsync(Instance instance, CancellationToken cancellationToken)
+    {
         // Incidents are never included with the aggregate; bring in the unresolved ones so the
         // pipeline (FinalizeTransitionStep resolve, Fault's upward payload, the script context's
         // Incident block) sees them. No query when the flag is false.
-        await instanceRepository.LoadActiveIncidentsAsync(result.Value, cancellationToken);
+        await instanceRepository.LoadActiveIncidentsAsync(instance, cancellationToken);
 
         // Cache the row's x-encryption secret in one query, so a script's DecryptAsync (and the write funnel) open
         // values without another round trip. The row itself is never decrypted here.
-        if (secretPreloader is not null && EncryptedValueFormat.MayContainToken(result.Value.LatestData?.Data.Json))
-            await secretPreloader.PreloadAsync([result.Value.Id], cancellationToken);
+        if (secretPreloader is not null && EncryptedValueFormat.MayContainToken(instance.LatestData?.Data.Json))
+            await secretPreloader.PreloadAsync([instance.Id], cancellationToken);
 
-        return result;
+        return Result<Instance>.Ok(instance);
     }
 
     /// <summary>

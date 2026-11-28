@@ -432,6 +432,21 @@ public interface IInstanceRepository : IRepository<Instance, Guid>
     Task AcceptPersistedBusyAsync(Instance instance, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Hands this unit of work an instance that a PREVIOUS, already committed unit of work created, so
+    /// the start hop does not read back the row it has just written. The aggregate and every entity
+    /// reachable from it (its data rows, its correlations) are attached <b>Unchanged</b>: the tracker's
+    /// baseline is the committed values, so the hop's later saves write only what it changes — the
+    /// same as for a loaded aggregate. A detached root must never reach <c>UpdateAsync</c> instead: its
+    /// Detached branch marks the whole graph Modified.
+    /// <para>
+    /// Returns false, attaching nothing, when the instance cannot stand in for a fresh load: this unit
+    /// of work already tracks an entity with one of its keys, or it still holds domain events (a save
+    /// would publish them a second time). The caller then loads the row as usual.
+    /// </para>
+    /// </summary>
+    Task<bool> TryAttachCreatedAsync(Instance instance, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Aggregate-aware counterpart of <see cref="TryReleaseBusyAsync(Guid,CancellationToken)"/>:
     /// CAS Busy → Active, then <c>Active()</c> in memory with the same change-tracker baseline
     /// alignment as <see cref="TryMarkBusyAsync(Instance,CancellationToken)"/>.

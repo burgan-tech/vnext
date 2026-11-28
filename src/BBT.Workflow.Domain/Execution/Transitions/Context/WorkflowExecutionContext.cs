@@ -83,6 +83,22 @@ public sealed class WorkflowExecutionContext
     public bool InitialDataPersisted { get; set; }
 
     /// <summary>
+    /// The instance this request has just created and committed, handed to its own sync start hop so
+    /// the hop does not read the row back. The context factory attaches it Unchanged to the hop's unit
+    /// of work (<c>IInstanceRepository.TryAttachCreatedAsync</c>) and clears this field, so it is used
+    /// once; when it cannot be attached the hop loads the row as before.
+    /// <para>
+    /// Set only by the start path, and only where nothing outside the mapped columns differs between
+    /// the created and a loaded instance: not for a <c>history: none</c> flow (its creation leaves the
+    /// payload in an in-memory buffer a load would not have). Transport-only like
+    /// <see cref="ResolvedWorkflow"/>: never serialized, never mapped into <c>TransitionJobPayload</c>
+    /// (an async start's job loads), never copied onto a continuation hop.
+    /// </para>
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public Instances.Instance? CreatedInstance { get; set; }
+
+    /// <summary>
     /// The payload was produced by the runtime itself (subflow input mapping, trigger task), not by a
     /// client; <c>x-storage</c> references in it are kept as is. Copied from the input's server-only
     /// <c>TrustedPayload</c> flag. Transport-only, never serialized: a hop must not inherit another's trust.
