@@ -117,11 +117,23 @@ public sealed class WorkflowExecutionOptions
     /// 20–40 ms first retry; the services also re-probe the correlation between attempts
     /// (<c>LockAcquireWait.KeepWaiting</c>) and stop waiting as soon as the holder has committed.
     /// </para>
+    /// <para>
+    /// 20 × 5 ms since the subflow transition cost work (morph-idm report, 2026-11-27): the holder
+    /// the RELAY delivery meets is usually not its backup but the child's creation-time
+    /// <c>sub:state-changed</c> (<c>SubflowStateService</c>, same per-sub-item key), which holds the
+    /// lock for one short transaction (4 ms p50 locally). The relay sits on the client's synchronous
+    /// request, so the 20–40 ms first retry was paid there in full: on subflow-cost-lab every waiting
+    /// relay waited on that holder, 24.8 ms p50 / 45 ms max with the 20 ms base, 9.5–10.6 ms p50 /
+    /// 16–20 ms max with this one. How often the two collide is a race (18–60 % of starts across
+    /// runs) that this setting does not change; removing it is a separate decision. The
+    /// budget stays ~1 s (<c>5·(1+…+19)</c> + jitter); a waiter whose holder really is the other
+    /// delivery still abandons through the re-probe, now after a few more short sleeps.
+    /// </para>
     /// </summary>
     public LockConflictRetryOptions SubItemTerminalLockRetry { get; set; } = new()
     {
-        MaxAttempts = 10,
-        BaseDelayMilliseconds = 20
+        MaxAttempts = 20,
+        BaseDelayMilliseconds = 5
     };
 
     /// <summary>
@@ -249,7 +261,7 @@ public sealed class InstanceDataWriteOptions
 /// Used by <c>TransitionJobHandler</c> for instance-lock conflicts (exponential backoff; worst
 /// case with its defaults: 100 + 200 + 400 + 800 = 1.5s across 5 attempts), and by the SubFlow
 /// terminal services for the per-subInstance lock (linear backoff plus jitter; worst case with
-/// its defaults: roughly 120 + 240 + 360 ms plus jitter across 4 attempts).
+/// its defaults: 5 + 10 + … + 95 ms plus jitter across 20 attempts, about 1 s).
 /// </para>
 /// </summary>
 public sealed class LockConflictRetryOptions

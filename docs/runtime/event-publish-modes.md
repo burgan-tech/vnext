@@ -156,7 +156,7 @@ Implementation notes for the coalescing:
 
 - **It takes the SAME per-sub-item lock the three terminal paths take**
   (`vnext:{domain}:{flow}:{parentId}:sub:{subId:N}`, bounded wait from
-  `WorkflowExecutionOptions.SubItemTerminalLockRetry`). Before that it was the only parent-mutation
+  `WorkflowExecutionOptions.SubItemStateLockRetry`). Before that it was the only parent-mutation
   path with no lock, which made its `SubFlowStateChangedAt` read-check-write a real TOCTOU: two
   deliveries could both read the same stamp, both pass the check, and the OLDER one land last.
 - **Do not "fix" this with a CAS on the correlation row placed before the parent load.** Every
@@ -178,10 +178,18 @@ Implementation notes for the coalescing:
   leaves an older watermark). A backup that loses the lock re-probes before throwing. Relay
   deliveries never probe.
 - **The state channel has its OWN lock backoff** (`WorkflowExecutionOptions.SubItemStateLockRetry`,
-  10 × 10 ms), not the terminal paths' (`SubItemTerminalLockRetry`, 10 × 20 ms): the wait is
+  10 × 10 ms), not the terminal paths' (`SubItemTerminalLockRetry`, 20 × 5 ms): the wait is
   `base*attempt + jitter(0..base)`, so the base decides the first retry. The terminal base used to be
   120 ms, and the first retry alone slept 120–240 ms for a lock held a few ms (measured max 241 ms on
-  the state channel; 154–169 ms backup waits on digital-investment).
+  the state channel; 154–169 ms backup waits on digital-investment); then 20 ms.
+- **The terminal RELAY usually collides with the child's creation-time `sub:state-changed`, not with
+  its backup.** A child that runs straight from its initial state to Finish publishes that
+  notification and its terminal event within milliseconds; both relays take the same per-sub-item
+  key, and the state change holds it for one short transaction (4 ms p50 locally). With a 20 ms base
+  the losing terminal relay slept 20–40 ms on the client's synchronous request; on subflow-cost-lab
+  its `Lock.Acquire` took 24.8 ms p50 / 45 ms max, and 9.5–10.6 ms p50 / 16–20 ms max with the 5 ms
+  base (same ~1 s budget). How often the two collide is a race (18–60 % of starts across runs) the
+  backoff does not change.
 - **The terminal paths re-probe between lock attempts** (`LockAcquireWait.KeepWaiting`, wired by
   `SubItemTerminalGuardExtensions.WhileCorrelationOpen`): after each backoff sleep the same lock-free
   correlation probe runs, and once it answers settled the wait is abandoned
