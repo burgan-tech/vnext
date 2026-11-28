@@ -2,12 +2,13 @@ using BBT.Workflow.BackgroundJobs.Options;
 using Shouldly;
 using Xunit;
 
-namespace BBT.Workflow.Application.Tests.BackgroundJobs.Options;
+namespace BBT.Workflow.Application.Tests.BackgroundJobs;
 
 /// <summary>
 /// Pins the per-sub-item terminal lock wait. The terminal RELAY sits on the client's synchronous
 /// request and usually meets the child's creation-time <c>sub:state-changed</c>, which holds the same
-/// key for about a millisecond — so the first retry, not the budget, is what the client pays.
+/// key for one short transaction (4 ms p50 locally) — so the first retry, not the budget, is what the
+/// client pays.
 /// </summary>
 public sealed class SubItemTerminalLockRetryDefaultsTests
 {
