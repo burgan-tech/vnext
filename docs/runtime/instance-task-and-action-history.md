@@ -143,3 +143,33 @@ interrupted by a crash leaves no row and is re-executed, which is also what the 
 Under `WorkflowExecution:Bookkeeping:AsynchronousCommit` the write commits with
 `synchronous_commit = off` (visible immediately, flushed by the WAL writer or the connection's next
 synchronous commit); see `BookkeepingWriteOptions`.
+
+### A task with data output: one commit for its data row and its journal row
+
+When the task's output is appended to the instance's data, the journal row is written **inside that
+append's transaction** (`IInstanceDataWriteService.AppendWithAsync`), right after the data row and under
+the same `Instances` row lock, and both commit together: one commit and one WAL flush per task instead
+of two.
+
+```
+Task.Invoke                     no connection, no transaction, no lock — the task's duration holds nothing
+── one transaction
+   SET LOCAL + Instances FOR UPDATE + head read      (Db.LockAndReadHead)
+   demote + INSERT InstancesData                     (Db.InsertInstanceData)
+   INSERT InstanceTasks  — or the set-based UPDATE of a retry's reused row   (Task.Journal.Complete)
+   COMMIT
+```
+
+- The transaction opens only after the task has returned; nothing is held while it runs. Do not widen
+  it to the invocation: a connection and the instance row lock would then be held for the length of an
+  HTTP call.
+- The journal statement goes to the shared context's connection without `SaveChanges`
+  (`IInstanceTaskRepository.InsertCompletedAsync`, `MarkCompletedAsync`): a `SaveChanges` there would
+  also flush the hop's other pending changes into this transaction. `TaskJournalCoCommitTests` pins the
+  hand-written insert against EF's mapping column by column.
+- Atomic: a crash or a failed journal write leaves neither row, and the retry re-executes the task.
+  Before, the data row could commit without its journal row.
+- `Bookkeeping:AsynchronousCommit` does not apply to these rows: the caller's transaction owns the
+  commit, and it is synchronous.
+- Unchanged, still one commit of its own: a task without data output (or whose output is collected by
+  a FanOut), a task that fails, an Extension/Function task, and `history: none` (no journal).

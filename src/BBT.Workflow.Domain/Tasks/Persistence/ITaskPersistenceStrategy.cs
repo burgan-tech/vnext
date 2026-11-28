@@ -52,4 +52,22 @@ public interface ITaskPersistenceStrategy
     /// <param name="instanceTask">The InstanceTask to be updated.</param>
     /// <param name="cancellationToken">Cancellation token for async operation control.</param>
     Task HandleCompletionAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <c>true</c> when <see cref="HandleCompletionInCallerTransactionAsync"/> is supported: the
+    /// completion row can be written inside a transaction the caller already holds (the task's
+    /// data-output append), so the two commit as one. <c>false</c> (default) keeps
+    /// <see cref="HandleCompletionAsync"/>, which commits on its own.
+    /// </summary>
+    bool CompletesInCallerTransaction => false;
+
+    /// <summary>
+    /// Writes the completion row on the ambient unit of work's connection, inside the transaction
+    /// the caller has open — no unit of work, commit or <c>SaveChanges</c> of its own. Called only
+    /// when <see cref="CompletesInCallerTransaction"/> is <c>true</c>.
+    /// </summary>
+    /// <param name="instanceTask">The completed InstanceTask.</param>
+    /// <param name="cancellationToken">Cancellation token for async operation control.</param>
+    Task HandleCompletionInCallerTransactionAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException($"{GetType().Name} does not complete inside a caller transaction.");
 }

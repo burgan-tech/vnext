@@ -1,0 +1,7 @@
+{
+  "releaseNote": {
+    "summary": "A task with data output commits its journal row in the same transaction as its data row: one commit per task instead of two.",
+    "breaking": false,
+    "docs": []
+  }
+}

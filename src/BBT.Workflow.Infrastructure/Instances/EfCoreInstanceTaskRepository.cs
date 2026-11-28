@@ -124,6 +124,45 @@ public class EfCoreInstanceTaskRepository(
     }
 
     /// <inheritdoc />
+    public async Task InsertCompletedAsync(InstanceTask instanceTask, CancellationToken cancellationToken = default)
+    {
+        var context = await GetDbContextAsync();
+        var schema = (context.CurrentSchemaName ?? "public").Replace("\"", "\"\"", StringComparison.Ordinal);
+
+        // The column list EF Core generates for this entity (see InstanceTaskJournalInsertParityTests,
+        // which pins this statement against an EF insert column by column). ExecuteSqlRaw runs on the
+        // context's connection and enlists in its current transaction without touching the tracker.
+        await context.Database.ExecuteSqlRawAsync(
+            $"INSERT INTO \"{schema}\".\"InstanceTasks\" " +
+            "(\"Id\", \"BusinessStatus\", \"CreatedAt\", \"Duration\", \"ExecutionKey\", \"FaultedTaskId\", \"FinishedAt\", " +
+            "\"Order\", \"StartedAt\", \"Status\", \"TaskId\", \"TaskTrigger\", \"TransitionId\", " +
+            "\"InvocationResult\", \"Request\", \"Response\") " +
+            "VALUES ({0}, {1}, {2}, {3}, {4}, {5}, {6}, {7}, {8}, {9}, {10}, {11}, {12}, " +
+            "CAST({13} AS jsonb), CAST({14} AS jsonb), CAST({15} AS jsonb))",
+            [
+                Parameter(instanceTask.Id),
+                Parameter((int)instanceTask.BusinessStatus),
+                Parameter(instanceTask.CreatedAt),
+                Parameter(instanceTask.Duration),
+                Parameter(instanceTask.ExecutionKey),
+                Parameter(instanceTask.FaultedTaskId),
+                Parameter(instanceTask.FinishedAt),
+                Parameter(instanceTask.Order),
+                Parameter(instanceTask.StartedAt),
+                Parameter((int)instanceTask.Status),
+                Parameter(instanceTask.TaskId),
+                Parameter<int?>(instanceTask.TaskTrigger is { } trigger ? (int)trigger : null),
+                Parameter(instanceTask.TransitionId),
+                Parameter(instanceTask.InvocationResult.Json),
+                Parameter(instanceTask.Request.Json),
+                Parameter(instanceTask.Response.Json)
+            ],
+            cancellationToken);
+    }
+
+    private static Npgsql.NpgsqlParameter Parameter<T>(T value) => new() { Value = (object?)value ?? DBNull.Value };
+
+    /// <inheritdoc />
     public async Task<List<InstanceTask>> GetByTransitionIdsAsync(
         IReadOnlyCollection<Guid> transitionIds,
         CancellationToken cancellationToken = default)

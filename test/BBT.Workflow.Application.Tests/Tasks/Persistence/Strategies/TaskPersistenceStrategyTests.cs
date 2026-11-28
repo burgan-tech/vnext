@@ -181,6 +181,72 @@ public class TaskPersistenceStrategyTests
     }
 
     [Fact]
+    public async Task StandardTaskPersistenceStrategy_CompletionInCallerTransaction_InsertsWithoutAUnitOfWorkOrWriter()
+    {
+        // Joined to the data append's transaction: one statement on the shared connection, no
+        // RequiresNew unit of work (its own connection and commit), no bookkeeping writer (the
+        // caller's transaction owns the commit policy), no SaveChanges-based InsertAsync.
+        var writer = Substitute.For<BBT.Workflow.Execution.Persistence.IBookkeepingWriter>();
+        var strategy = new StandardTaskPersistenceStrategy(_mockRepository, _unitOfWorkManager, writer);
+        strategy.CompletesInCallerTransaction.ShouldBeTrue();
+        _instanceTask.Completed(new JsonData("{}"), isBusinessSuccess: true);
+
+        await strategy.HandleCompletionInCallerTransactionAsync(_instanceTask, CancellationToken.None);
+
+        await _mockRepository.Received(1).InsertCompletedAsync(_instanceTask, CancellationToken.None);
+        await _mockRepository.DidNotReceiveWithAnyArgs().InsertAsync(default!, default, default);
+        await _mockRepository.DidNotReceiveWithAnyArgs().MarkCompletedAsync(default!, default);
+        _unitOfWorkManager.DidNotReceiveWithAnyArgs().Begin(default!);
+        await writer.DidNotReceiveWithAnyArgs().RunAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task StandardTaskPersistenceStrategy_CompletionInCallerTransaction_ReusedRow_UpdatesSetBased()
+    {
+        var existing = new InstanceTask(
+            Guid.NewGuid(), _instanceTask.TransitionId, _instanceTask.TaskId, TaskTrigger.OnExecute, 1);
+        _mockRepository.FindByTransitionAndTaskAsync(
+                _instanceTask.TransitionId, _instanceTask.TaskId, TaskTrigger.OnExecute, 1, CancellationToken.None)
+            .Returns(existing);
+        var strategy = CreateStandardStrategy();
+        var reused = await strategy.HandleCreationAsync(
+            _instanceTask, TaskTrigger.OnExecute, 1, cancellationToken: CancellationToken.None);
+        reused.Completed(new JsonData("{}"), isBusinessSuccess: true);
+
+        await strategy.HandleCompletionInCallerTransactionAsync(reused, CancellationToken.None);
+
+        await _mockRepository.Received(1).MarkCompletedAsync(reused, CancellationToken.None);
+        await _mockRepository.DidNotReceiveWithAnyArgs().InsertCompletedAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task StandardTaskPersistenceStrategy_CompletionInCallerTransaction_ThenAFaultOnRetry_UpdatesTheSameRow()
+    {
+        // Inserted in the caller's transaction, then the same entity faults later in the attempt
+        // (e.g. a boundary retry re-runs it): the row is known to exist, so it is updated.
+        var strategy = CreateStandardStrategy();
+        _instanceTask.Completed(new JsonData("{}"), isBusinessSuccess: true);
+        await strategy.HandleCompletionInCallerTransactionAsync(_instanceTask, CancellationToken.None);
+
+        _instanceTask.Faulted("later");
+        await strategy.HandleCompletionAsync(_instanceTask, CancellationToken.None);
+
+        await _mockRepository.Received(1).InsertCompletedAsync(_instanceTask, CancellationToken.None);
+        await _mockRepository.Received(1).MarkCompletedAsync(_instanceTask, CancellationToken.None);
+        await _mockRepository.DidNotReceiveWithAnyArgs().InsertAsync(default!, default, default);
+    }
+
+    [Fact]
+    public async Task ExtensionTaskPersistenceStrategy_CannotCompleteInACallerTransaction()
+    {
+        ITaskPersistenceStrategy strategy = new ExtensionTaskPersistenceStrategy();
+
+        strategy.CompletesInCallerTransaction.ShouldBeFalse();
+        await Should.ThrowAsync<NotSupportedException>(
+            () => strategy.HandleCompletionInCallerTransactionAsync(_instanceTask, CancellationToken.None));
+    }
+
+    [Fact]
     public void ExtensionTaskPersistenceStrategy_CanHandle_ShouldReturnTrueForNonPersistentOrigins()
     {
         // Arrange
