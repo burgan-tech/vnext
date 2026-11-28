@@ -1,0 +1,7 @@
+{
+  "releaseNote": {
+    "summary": "A SubFlow completion that meets the child's state-change notification on its lock now retries after 5-10 ms instead of 20-40 ms (WorkflowExecution:SubItemTerminalLockRetry 20 x 5 ms).",
+    "breaking": false,
+    "docs": []
+  }
+}
