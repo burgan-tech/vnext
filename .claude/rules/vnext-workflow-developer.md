@@ -390,7 +390,8 @@ Enum values (Instance Status, State Types, State Sub Types, Trigger Types): `AGE
 
 - Built by `TransitionContextFactory` (workflow from `IComponentCacheStore`, instance from `GetActiveAsync`).
 - Inline hops reuse via `CreateFromPreloaded(previous.Workflow, previous.Instance)`; never carry a
-  tracked instance across post-commit, subflow callback or retry boundaries.
+  tracked instance across post-commit, subflow callback or retry boundaries. Sole exception: a sync start
+  hop takes the instance its request just created, attached Unchanged (`TryAttachCreatedAsync`), never detached.
 - `Cache` is cleared at Finalize; `Directives` accumulate mutations; payload overlays `input.Data?.Attributes`.
 - Full guide: `docs/architecture/inline-chain-context-reuse.md`.
 

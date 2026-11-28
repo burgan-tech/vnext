@@ -324,6 +324,64 @@ public sealed class InstanceHopLoadShapeTests : IAsyncLifetime
             .ShouldContain("\"Status\"");
     }
 
+    /// <summary>
+    /// The start hop takes the instance its request has just committed instead of loading it
+    /// (<c>TryAttachCreatedAsync</c>). Attached Unchanged in the next unit of work, it must behave as a
+    /// loaded one: no read, and a later save writes only the column the hop changed — never the data
+    /// rows or correlations reachable from it.
+    /// </summary>
+    [Fact]
+    public async Task Created_instance_attached_in_the_next_unit_of_work_writes_only_what_the_hop_changes()
+    {
+        var created = await SeedAsync("attach-created", withCorrelations: false);
+        var recorder = new CommandRecorder();
+        await using var ctx = CreateContext(recorder);
+        var repository = CreateRepository(ctx, latestOnly: true);
+
+        (await repository.TryAttachCreatedAsync(created, CancellationToken.None)).ShouldBeTrue();
+
+        recorder.Commands.ShouldBeEmpty();
+        ctx.ChangeTracker.Entries().ShouldAllBe(e => e.State == EntityState.Unchanged);
+        ctx.ChangeTracker.Entries<InstanceData>().Count().ShouldBe(2);
+
+        created.SetStage("after-attach");
+        await repository.UpdateAsync(created, true, CancellationToken.None);
+
+        recorder.Commands.Count.ShouldBe(1);
+        recorder.Commands[0].ShouldStartWith("UPDATE");
+        recorder.Commands[0].ShouldContain("\"Stage\"");
+        recorder.Commands[0].ShouldNotContain("InstancesData");
+        await using var verify = CreateContext();
+        (await verify.Instances.AsNoTracking().SingleAsync(i => i.Id == created.Id)).Stage.ShouldBe("after-attach");
+    }
+
+    [Fact]
+    public async Task Created_instance_is_not_attached_over_a_copy_the_unit_of_work_already_tracks()
+    {
+        var created = await SeedAsync("attach-conflict", withCorrelations: false);
+        await using var ctx = CreateContext();
+        var repository = CreateRepository(ctx, latestOnly: true);
+        (await repository.FindByIdentifierAsync(created.Id.ToString(), CancellationToken.None)).ShouldNotBeNull();
+
+        (await repository.TryAttachCreatedAsync(created, CancellationToken.None)).ShouldBeFalse();
+
+        ctx.Entry(created).State.ShouldBe(EntityState.Detached);
+    }
+
+    [Fact]
+    public async Task Created_instance_with_events_left_on_it_is_not_attached()
+    {
+        // A save in this unit of work would publish them a second time.
+        var created = await SeedAsync("attach-events", withCorrelations: false);
+        created.Complete("test-domain");
+        await using var ctx = CreateContext();
+
+        (await CreateRepository(ctx, latestOnly: true).TryAttachCreatedAsync(created, CancellationToken.None))
+            .ShouldBeFalse();
+
+        ctx.Entry(created).State.ShouldBe(EntityState.Detached);
+    }
+
     private static string OrderByClause(string sql) => sql[sql.IndexOf("ORDER BY", StringComparison.Ordinal)..];
 
     private async Task<Instance> SeedAsync(string key, bool withCorrelations = true, string? modifiedBy = null)

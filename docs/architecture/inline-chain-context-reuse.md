@@ -76,6 +76,30 @@ The runtime must perform a fresh authoritative load after:
 post-commit work. If the parent continues afterward, the next stage enters a new scope and uses
 `CreateAsync`; it never carries the old tracked entity across DbContexts.
 
+### One exception: the start hop takes the instance its request created
+
+A sync start creates the instance in its own committed unit of work (`Instance.Create`) and then runs
+the start transition as stage 0 in a new scope. That stage used to read back the row it had just
+written — two SELECTs, the instance with its data row and its correlations. The start path now hands
+the created instance over (`WorkflowExecutionContext.CreatedInstance`, transport-only, used once) and
+`CreateAsync` attaches it **Unchanged** to the stage's DbContext
+(`IInstanceRepository.TryAttachCreatedAsync`) instead of loading it. This is not the forbidden carry:
+
+- nothing ran in between — the creation committed and nothing else has seen the row yet, so the
+  in-memory values are the committed ones (checked column by column against a fresh read on every
+  start of a full vnext-example integration run);
+- it is attached, never left detached: a detached root reaching `UpdateAsync` would take the Detached
+  branch and mark the whole graph Modified. Attached Unchanged, the stage's saves write only what the
+  hop changes (`InstanceHopLoadShapeTests.Created_instance_attached_in_the_next_unit_of_work_writes_only_what_the_hop_changes`);
+- the post-load steps run exactly as after a load (active incidents, x-encryption secret preload);
+- admission is unchanged: the reserve CAS still decides who owns the instance, as it did after a load.
+
+It falls back to the load when the instance still carries domain events (a save would publish them
+again), when the stage already tracks one of its keys, when the carried id does not match, for an
+async start (the accept and the job load), and for a `history: none` flow (its creation buffers the
+payload in memory, which a loaded instance would not carry). `Transition.LoadContext` reports
+`vnext.context.source=created` for the handover.
+
 ## Data Consistency
 
 `InstanceDataWriteService.PersistAsync` calls `Instance.AcceptPersistedData`, so data written by
@@ -107,8 +131,9 @@ Production SQL counts and end-to-end p50/p95 latency should be measured separate
 
 ## Observability and Verification
 
-`Transition.LoadContext` is tagged with `vnext.context.source=storage` for the first/fresh load and
-`vnext.context.source=preloaded` for a reused hop. There is no dedicated context metric meter.
+`Transition.LoadContext` is tagged with `vnext.context.source=storage` for the first/fresh load,
+`vnext.context.source=preloaded` for a reused hop and `vnext.context.source=created` for a sync start
+hop that took the instance its request created. There is no dedicated context metric meter.
 
 Run the focused tests with:
 

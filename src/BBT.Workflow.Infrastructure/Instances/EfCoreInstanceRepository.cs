@@ -573,6 +573,36 @@ public sealed class EfCoreInstanceRepository(
     }
 
     /// <inheritdoc />
+    public async Task<bool> TryAttachCreatedAsync(Instance instance, CancellationToken cancellationToken = default)
+    {
+        // Events left on the aggregate would ride this unit of work's next save and be published again.
+        if (instance.GetDomainEvents().Count > 0)
+            return false;
+
+        var context = await GetDbContextAsync();
+        if (context.Entry(instance).State != EntityState.Detached)
+            return true;
+
+        // A second tracked copy of any key in the graph would make Attach throw half way through.
+        var dataIds = instance.DataList.Select(d => d.Id).ToHashSet();
+        var correlationIds = instance.ChildCorrelations.Select(c => c.Id).ToHashSet();
+        var conflict = context.ChangeTracker.Entries().Any(e => e.Entity switch
+        {
+            Instance tracked => tracked.Id == instance.Id,
+            InstanceData row => dataIds.Contains(row.Id),
+            InstanceCorrelation correlation => correlationIds.Contains(correlation.Id),
+            _ => false
+        });
+        if (conflict)
+            return false;
+
+        // Attach walks the graph and marks every entity with a set key Unchanged; their current values,
+        // which are the committed ones, become the baseline the next save compares against.
+        context.Attach(instance);
+        return true;
+    }
+
+    /// <inheritdoc />
     public async Task AcceptPersistedBusyAsync(Instance instance, CancellationToken cancellationToken = default)
     {
         instance.Busy();

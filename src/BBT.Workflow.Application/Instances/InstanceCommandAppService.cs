@@ -496,6 +496,15 @@ public sealed class InstanceCommandAppService(
         callerMode == ExecMode.Sync ? pipelineInstance : null;
 
     /// <summary>
+    /// Whether the start hop may take the created instance instead of loading it
+    /// (<see cref="WorkflowExecutionContext.CreatedInstance"/>). Sync only: an async start's accept and its
+    /// job keep their own loads. Not for <c>history: none</c>: its creation buffers the payload in memory,
+    /// which a loaded instance would not carry, so the hop would see different data.
+    /// </summary>
+    internal static bool HandsCreatedInstanceToStartHop(Definitions.Workflow workflow, ExecMode mode) =>
+        mode == ExecMode.Sync && !workflow.SuppressesHistory;
+
+    /// <summary>
     /// Whether <see cref="MapAndAppendInstanceDataAsync"/> stored the start payload exactly as the start hop will
     /// carry it: there was a payload, the flow keeps history (a <c>history: none</c> creation writes no row), and the
     /// start transition maps nothing, so the mapper handed the payload through unchanged. Only then is the hop's own
@@ -554,6 +563,10 @@ public sealed class InstanceCommandAppService(
         // created Active and keep the normal reserve path. Applies uniformly to sync/async and
         // local/cross-domain subflow starts, since every start funnels through here.
         context.IsPreReserved = data.Instance.IsBusy;
+
+        // The sync start hop takes the instance this request has just committed instead of reading the
+        // row back (two SELECTs per start: the instance with its data row, and its correlations).
+        context.CreatedInstance = HandsCreatedInstanceToStartHop(data.Workflow, context.Mode) ? data.Instance : null;
 
         // Execute transition - lock is managed by TransitionPipeline
         return workflowExecutionService
